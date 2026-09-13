@@ -357,8 +357,8 @@ def test_plugin_registers_every_scouter_method():
             f"{method} has no entry in DEFAULT_TIMEOUTS, so it would fall back to "
             "the 15s FALLBACK_TIMEOUT; add an explicit budget"
         )
-    assert max(DEFAULT_TIMEOUTS.values()) < 300, (
-        "STALE_AGE_SECONDS (300) in the Lua plugin must stay above every client "
+    assert max(DEFAULT_TIMEOUTS.values()) < 600, (
+        "STALE_AGE_SECONDS (600) in the Lua plugin must stay above every client "
         "budget, or the sweep deletes live requests"
     )
 

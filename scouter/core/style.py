@@ -15,19 +15,48 @@ pass removed. It is not a confirmation gate: no `--yes` makes it work, so
 there is nothing to confirm (final review, should-fix 7). The bridge refuses
 it too, but that refusal arrives as a generic bridge failure after a round
 trip.
+
+`style.apply_set` (task 8) is the batched sibling: it never touches the
+darkroom view at all. The Lua handler for `style.apply` looks images up in
+`dt.database` and calls `image:apply_style` directly -- it does not read
+`view.current` or care whether darktable is showing the lighttable or the
+darkroom, on the target image or any other. So there is no "refuse if the
+darkroom is open on one of the target images" guard here: stated honestly,
+that guard would be theatre, because the Lua side applies styles from
+either view identically. Ruling 30's job-image guard (a darkroom WRITE
+refusing when `darkroom.current` differs from the job's last opened image)
+does not apply either -- a style application is not a darkroom write, it
+is a library-level history append.
 """
 
 from __future__ import annotations
 
+import json
+
 from scouter import metrics, paths
 from scouter.core import dtbridge, dtstyle
 from scouter.core import xmp as xmp_module
-from scouter.errors import NotInDarkroom, ScouterError, StylePartial, StyleWriteFailed, UsageError
+from scouter.errors import (
+    BridgeTimeout,
+    NotInDarkroom,
+    ScouterError,
+    StylePartial,
+    StyleWriteFailed,
+    UsageError,
+)
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
-from scouter.types import ResolvedImage, StyleResult
+from scouter.types import ResolvedImage, StyleResult, StyleSetResult
 
 MODES = ("append", "overwrite")
+
+#: `style.apply_set` batches ids through the bridge at this size (task 8);
+#: the batch loop stops after this many CONSECUTIVE batch-level failures
+#: (a `BridgeTimeout` on the whole batch, e.g. darktable stopped responding)
+#: so a stalled worker does not spin through every remaining batch one at a
+#: time, each waiting out the full `style.apply` timeout before giving up.
+DEFAULT_BATCH_SIZE = 25
+MAX_CONSECUTIVE_BATCH_FAILURES = 2
 
 
 class UnsupportedMode(ScouterError):
@@ -328,6 +357,269 @@ def apply(
     )
 
 
+def _images_from_job_slug(job_slug: str) -> list[str]:
+    """Every raw's absolute path from `<job>/.scouter/import.json`'s `files[].dest`.
+
+    Reads the manifest directly rather than through `scouter.core.library`
+    (task 3): that module is not on this branch, and this mirrors the same
+    shortcut task 13's `backup.verify` took for its `sampled_raws` check --
+    the format matches design 4.4/6's documented `import.json` shape,
+    `files: [{"dest": "raw/<name>", ...}, ...]`, relative to the job dir.
+    """
+    from scouter import config as config_module
+
+    cfg = config_module.load()
+    job_path = config_module.find_job(cfg, job_slug)
+    manifest_path = config_module.scouter_dir(job_path) / "import.json"
+    if not manifest_path.is_file():
+        raise UsageError(
+            f"no import.json for job {job_slug!r} at {manifest_path}: run "
+            "`scouter library import` first",
+            detail={"job_slug": job_slug, "path": str(manifest_path)},
+        )
+    manifest = json.loads(manifest_path.read_text())
+    return [str(job_path / f["dest"]) for f in manifest.get("files", [])]
+
+
+def _resolve_set(
+    job_slug: str | None, images: list[str | int] | None, exclude: list[str | int] | None
+) -> list[ResolvedImage]:
+    """`--images`, else every file in the job's `import.json`, minus `--exclude`.
+
+    Every candidate -- and every `--exclude` entry -- is resolved through
+    `image.lookup` (`dtbridge.resolve_image`, a pure read), same as a single
+    `style.apply`; `--exclude` is matched by resolved `image_id` rather than
+    by raw string/path equality, so a path and the id it resolves to exclude
+    the same frame either way.
+    """
+    if images:
+        raw = list(images)
+    elif job_slug:
+        raw = _images_from_job_slug(job_slug)
+    else:
+        raw = []
+    if not raw:
+        raise UsageError(
+            "no images to apply the style to: pass --images, or --job-slug "
+            "naming a job whose import.json lists files",
+            detail={"job_slug": job_slug, "images": images},
+        )
+    resolved = [dtbridge.resolve_image(item) for item in raw]
+    if exclude:
+        excluded_ids = {dtbridge.resolve_image(item).image_id for item in exclude}
+        resolved = [r for r in resolved if r.image_id not in excluded_ids]
+        if not resolved:
+            raise UsageError(
+                "every candidate image was excluded: nothing to apply the style to",
+                detail={"job_slug": job_slug, "excluded": sorted(excluded_ids)},
+            )
+    return resolved
+
+
+@metrics.instrumented("style.apply_set")
+def apply_set(
+    name: str,
+    *,
+    job_slug: str | None = None,
+    images: list[str | int] | None = None,
+    exclude: list[str | int] | None = None,
+    mode: str = "append",
+    batch: int = DEFAULT_BATCH_SIZE,
+    confirm: bool = False,
+    dry_run: bool = False,
+    job: str | None = None,
+) -> StyleSetResult:
+    """Apply one style to a whole set, in batches, keeping per-image results.
+
+    A partial set is a RESULT, not an exception: 280 of 300 applied is
+    information the caller needs, and phase 1's single-image `apply` raises
+    StylePartial, which would discard the payload. So `outcome="partial"` when
+    applied > 0 and failed > 0 (exit 9, the same code as style_partial, so one
+    shell branch covers "some of it worked"), and StylePartial only when
+    NOTHING applied.
+
+    Always gated: a set apply is inherently a bulk write (there is no
+    "safe by default" single-image case here, unlike `style.apply`), so
+    `confirm` is required regardless of how many images the set resolves to
+    -- the same reasoning `library.import` uses ("an import is always > 1
+    file, so it is always gated", design 3.1). Dry run, and a real call
+    without confirm, both resolve the full set and check `name` against
+    `list_styles` before returning the plan -- a typo costs no round trips
+    -- but make no `style.apply` call and touch nothing.
+
+    Never touches the darkroom view (see the module docstring): the Lua
+    `style.apply` handler applies from `dt.database` directly, so there is
+    no lighttable/darkroom guard to enforce here, stated honestly rather
+    than pretended.
+    """
+    job = job or current_job()
+    if batch <= 0:
+        raise UsageError(
+            f"batch must be a positive integer, got {batch!r}", detail={"batch": batch}
+        )
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+    if mode == "overwrite":
+        raise UnsupportedMode(
+            "mode=overwrite cannot be honoured for a set either: darktable's Lua "
+            "API only appends a style to an image's history (image:apply_style). "
+            "The one place overwrite exists at all is a render-only shortcut: "
+            "`export.release --overwrite-style`",
+            detail={"name": name, "mode": mode, "modes_available": ["append"]},
+        )
+
+    from scouter import config as config_module
+
+    cfg = config_module.load()
+    resolved = _resolve_set(job_slug, images, exclude)
+    plan = [
+        {
+            "action": "style.apply_set",
+            "image_id": r.image_id,
+            "path": r.path,
+            "name": name,
+            "mode": mode,
+        }
+        for r in resolved
+    ]
+
+    if dry_run or not confirm:
+        existing = _existing_styles()
+        if name not in existing:
+            raise UsageError(
+                f"no style named {name!r} exists", detail={"name": name, "existing": existing}
+            )
+        return StyleSetResult(
+            outcome="dry_run",
+            name=name,
+            mode=mode,
+            requested=len(resolved),
+            plan=plan,
+            reason=(
+                "dry run: nothing was applied"
+                if dry_run
+                else f"applying a style to {len(resolved)} images requires --yes / confirm=true"
+            ),
+        )
+
+    id_to_path = {r.image_id: r.path for r in resolved}
+    ids = [r.image_id for r in resolved]
+    batches = [ids[i : i + batch] for i in range(0, len(ids), batch)]
+
+    applied_ids: list[int] = []
+    per_image: list[dict] = []
+    missed_ids: list[int] = []
+    consecutive_failures = 0
+    batches_run = 0
+    warnings: list[str] = []
+
+    for batch_ids in batches:
+        batches_run += 1
+        try:
+            result = dtbridge.call(
+                "style.apply", {"image_ids": batch_ids, "name": name, "mode": mode}
+            )
+        except BridgeTimeout as e:
+            # The whole batch failed as one call -- every id in it is a miss,
+            # and a stalled worker on frame 140 must not lose frames 1-139:
+            # earlier batches' successes are already recorded in per_image.
+            consecutive_failures += 1
+            for iid in batch_ids:
+                missed_ids.append(iid)
+                per_image.append(
+                    {
+                        "image_id": iid,
+                        "path": id_to_path.get(iid),
+                        "applied": False,
+                        "error": str(e),
+                    }
+                )
+            if consecutive_failures >= MAX_CONSECUTIVE_BATCH_FAILURES:
+                warnings.append(
+                    f"stopped after {consecutive_failures} consecutive batch timeouts "
+                    f"({batches_run} of {len(batches)} batches attempted)"
+                )
+                break
+            continue
+        consecutive_failures = 0
+        batch_missed = {int(i) for i in result.get("missed", [])}
+        errors = list(result.get("errors", []))
+        error_ids = {int(e["image_id"]) for e in errors}
+        for iid in batch_ids:
+            if iid in batch_missed:
+                missed_ids.append(iid)
+                per_image.append(
+                    {
+                        "image_id": iid,
+                        "path": id_to_path.get(iid),
+                        "applied": False,
+                        "error": "not found in darktable's library",
+                    }
+                )
+            elif iid in error_ids:
+                err = next(e for e in errors if int(e["image_id"]) == iid)
+                missed_ids.append(iid)
+                per_image.append(
+                    {
+                        "image_id": iid,
+                        "path": id_to_path.get(iid),
+                        "applied": False,
+                        "error": err.get("error"),
+                    }
+                )
+            else:
+                applied_ids.append(iid)
+                per_image.append({"image_id": iid, "path": id_to_path.get(iid), "applied": True})
+
+    requested = len(resolved)
+    applied = len(applied_ids)
+    failed = len(missed_ids)
+    never_attempted = requested - applied - failed
+    if never_attempted > 0:
+        warnings.append(f"{never_attempted} images were never attempted")
+
+    if job_slug:
+        try:
+            from scouter.core import vault as vault_module
+
+            rows = [
+                {
+                    "image": pi["path"] or str(pi["image_id"]),
+                    "result": "applied" if pi["applied"] else "failed",
+                }
+                for pi in per_image
+            ]
+            vault_module.append_stage(
+                cfg, job_slug, "Style applied", rows, "style applied to the set"
+            )
+        except Exception as e:
+            # `scouter/core/vault.py` is task 4's and does not exist yet on
+            # this branch (always ImportError today); any other vault
+            # failure degrades the same way -- a warning, never a rollback
+            # of work that already landed in darktable.
+            warnings.append(f"vault stage not recorded: {e}")
+
+    if applied == 0:
+        raise StylePartial(
+            f"style {name!r} applied to 0 of {requested} images",
+            detail={"per_image": per_image, "missed": missed_ids, "name": name},
+        )
+
+    outcome = "partial" if failed > 0 else "ok"
+    return StyleSetResult(
+        outcome=outcome,
+        name=name,
+        mode=mode,
+        requested=requested,
+        applied=applied,
+        failed=failed,
+        batches=batches_run,
+        missed=sorted(missed_ids),
+        per_image=per_image,
+        warnings=warnings,
+    )
+
+
 for verb in (
     Verb(
         id="style.extract",
@@ -392,6 +684,53 @@ for verb in (
         writes=True,
         gated=False,
         summary="Apply a style to one image, appending it to the history.",
+    ),
+    # Always gated (task 8): a set apply is inherently a bulk write, so
+    # unlike `style.apply` there is always something to confirm.
+    Verb(
+        id="style.apply_set",
+        group="style",
+        fn=apply_set,
+        args=(
+            ArgSpec("name", "str", required=True, positional=True, help="style name"),
+            ArgSpec(
+                "job_slug",
+                "str",
+                default=None,
+                help="job whose import.json lists the set (used when --images is not given)",
+            ),
+            ArgSpec(
+                "images",
+                "list[str]",
+                default=None,
+                help="paths or image ids; defaults to every file in --job-slug's import.json",
+            ),
+            ArgSpec("exclude", "list[str]", default=None, help="paths or image ids to leave out"),
+            ArgSpec(
+                "mode",
+                "str",
+                default="append",
+                choices=MODES,
+                help="append adds to history; overwrite is refused "
+                "(unsupported_mode) -- darktable cannot replace history",
+            ),
+            ArgSpec(
+                "batch",
+                "int",
+                default=DEFAULT_BATCH_SIZE,
+                help="how many image ids per bridge call",
+            ),
+            ArgSpec(
+                "confirm",
+                "bool",
+                default=False,
+                help="required: applying to a set is always gated",
+            ),
+            ArgSpec("dry_run", "bool", default=False, help="plan only"),
+        ),
+        writes=True,
+        gated=True,
+        summary="Apply one style to a whole set, in batches, keeping per-image results.",
     ),
 ):
     register(verb)

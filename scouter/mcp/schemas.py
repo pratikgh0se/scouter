@@ -299,6 +299,56 @@ TOOL_SPECS: list[dict] = [
         ),
     },
     {
+        "name": "style_apply_set",
+        "description": "Apply one style to a whole set, batched through the bridge, "
+        "keeping per-image results. Always requires confirm=true (a set apply is "
+        "always a bulk write). outcome=partial (exit 9) when some images applied "
+        "and some did not -- the successes are kept, never discarded. "
+        "mode=overwrite is refused with unsupported_mode; the only place "
+        "overwrite exists at all is the render-only `export.release "
+        "--overwrite-style`.",
+        "inputSchema": _schema(
+            {
+                "name": {"type": "string", "description": "style name"},
+                "job_slug": {
+                    "type": "string",
+                    "description": "job whose import.json lists the set "
+                    "(used when images is not given)",
+                },
+                "images": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "description": "paths or image ids; defaults to every file "
+                    "in job_slug's import.json",
+                },
+                "exclude": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "description": "paths or image ids to leave out of the set",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["append", "overwrite"],
+                    "default": "append",
+                    "description": "append adds to history; overwrite is refused "
+                    "(unsupported_mode)",
+                },
+                "batch": {
+                    "type": "integer",
+                    "default": 25,
+                    "description": "how many image ids per bridge call",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: applying to a set is always gated",
+                },
+                "dry_run": DRY_RUN,
+            },
+            ["name"],
+        ),
+    },
+    {
         "name": "export_run",
         "description": "Export images through a preset. client-final is a full-size "
         "sRGB JPEG; preview is a 1024 px PNG. Requires confirm=true for "

@@ -1803,19 +1803,18 @@ local SWEEP_INTERVAL_SECONDS = 10
 
 -- INVARIANT: STALE_AGE_SECONDS must stay comfortably GREATER than the largest
 -- per-method client budget in DEFAULT_TIMEOUTS (darktable_mcp/bridge/client.py
--- -- currently 120s for import_batch and apply_preset). Change either number
--- and you must re-check the other; tests/test_lua_dispatcher.py asserts the
--- relation across the two languages.
+-- -- currently 300s for style.apply, task 8's apply_set batching 25 ids per
+-- call). Change either number and you must re-check the other;
+-- tests/test_lua_dispatcher.py asserts the relation across the two languages.
 --
 -- The sweep exists to collect files whose owner is GONE. A request whose
 -- caller is still waiting is not abandoned, and the worker is single-threaded:
--- while it serves one 120s-budget call, later requests sit queued in the cache
--- directory doing nothing wrong. At the old 60s the sweep deleted those queued
--- request-*.json files out from under live callers, who then waited out their
--- full 120s and were told "darktable is not running" -- a bug the sweep itself
--- manufactured. 300s clears the largest budget with margin for the queueing
--- delay ahead of it.
-local STALE_AGE_SECONDS = 300
+-- while it serves one 300s-budget call, later requests sit queued in the cache
+-- directory doing nothing wrong. At the old 300s (equal to the largest budget)
+-- the sweep would have no margin left for the queueing delay ahead of a
+-- request stuck behind it, so task 8 raised it to 600s -- comfortably above
+-- the new largest budget.
+local STALE_AGE_SECONDS = 600
 
 local function worker_loop()
   local dir = cache_dir()

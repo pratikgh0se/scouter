@@ -49,6 +49,11 @@ SMOKE_ARGS: dict[str, dict] = {
     "scout.compare": {"a": SMOKE_RAW, "b": SMOKE_RAW, "px": 64},
     "style.extract": {"image": SMOKE_RAW, "name": "smoke", "modules": []},
     "style.apply": {"image": SMOKE_RAW, "name": "smoke"},
+    # No confirm: always gated (task 8), so this is a dry run -- it still
+    # calls list_styles (the smoke fixture's own empty answer makes this an
+    # expected `usage` error, which the coverage test tolerates; the point
+    # here is the one-event count, not a successful apply).
+    "style.apply_set": {"images": [SMOKE_RAW], "name": "smoke"},
     "export.run": {"images": [SMOKE_RAW], "preset": "preview", "out_dir": SMOKE_OUT_DIR},
 }
 

@@ -200,6 +200,28 @@ class StyleResult(Payload):
 
 
 @dataclass
+class StyleSetResult(Payload):
+    """Task 8: `style.apply_set` -- a partial set is a RESULT, not an exception.
+
+    `missed` carries every image id that did not apply (batch timeout, not
+    found, or `apply_style` itself failing); `per_image` has one row per
+    image actually attempted (never one per `requested` -- an id the run
+    never got to, because two consecutive batches timed out, appears in
+    neither list, and is only visible as `requested - applied - failed`
+    plus a `warnings` line naming the count).
+    """
+
+    name: str = ""
+    mode: str = "append"
+    requested: int = 0
+    applied: int = 0
+    failed: int = 0
+    batches: int = 0
+    missed: list[int] = field(default_factory=list)
+    per_image: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class ExportedFile:
     input: str
     output: str | None

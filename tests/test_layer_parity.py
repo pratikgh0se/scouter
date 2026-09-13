@@ -27,6 +27,7 @@ EXPECTED_VERBS = {
     "scout.compare",
     "style.extract",
     "style.apply",
+    "style.apply_set",
     "export.run",
     "metrics.summary",
 }

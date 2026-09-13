@@ -83,6 +83,7 @@ class ConfirmGateTest(unittest.TestCase):
         "config.init": {"path": None},
         "darkroom.reset": {"module": "exposure"},
         "style.extract": {"image": None, "name": "hero", "modules": []},
+        "style.apply_set": {"images": [None, None], "name": "hero"},
         "export.run": {"images": [None, None], "preset": "preview", "out_dir": None},
     }
     # `style.apply` is deliberately NOT here (final review, should-fix 7): its
