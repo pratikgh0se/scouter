@@ -1,0 +1,116 @@
+"""Exit criterion E7: no gated verb reaches darktable without confirm."""
+
+from __future__ import annotations
+
+import unittest
+
+from scouter import registry
+
+# `registry.load_verbs()` is idempotent (`VERB_REGISTRY` is only populated the
+# first time it runs) and any core module's own `register()` calls at import
+# time count as "already populated" -- so if some other test module in this
+# pytest session imports e.g. `scouter.core.style` before this file's tests
+# run, `load_verbs()` silently returns that partial set instead of loading
+# the rest. Importing every verb-registering module here (harmless: importing
+# an already-imported module is a no-op, so this never double-registers a
+# verb) guarantees the full registry regardless of test collection order.
+from scouter.core import darkroom, dtbridge, export, history, scout, style  # noqa: F401
+
+
+class RefusingBridge:
+    """Any call is a test failure: a gated dry run must not touch darktable."""
+
+    WRITE_METHODS = {
+        "darkroom.action", "module.enable", "module.disable", "module.reset",
+        "history.commit", "style.create_from_current", "style.apply", "snapshot.take",
+    }
+
+    def __init__(self, test: unittest.TestCase, raw: str) -> None:
+        self.test = test
+        self.raw = raw
+        self.calls: list[str] = []
+
+    def call(self, method: str, params: dict, timeout: float | None = None):
+        self.calls.append(method)
+        self.test.assertNotIn(
+            method, self.WRITE_METHODS,
+            f"a gated verb called the writing bridge method {method} without confirm",
+        )
+        if method == "view.current":
+            return {"view": "darkroom"}
+        if method == "image.lookup":
+            return {"found": True, "image_id": 1, "path": self.raw}
+        if method == "darkroom.open":
+            return {"image_id": 1, "path": self.raw, "view": "darkroom",
+                    "opened": False, "already_open": True}
+        if method == "list_styles":
+            # style.extract is gated only when a style of the requested name
+            # already exists (design 10.3); GATED_ARGS below asks for "hero",
+            # so the fake collides with it to actually exercise the gate.
+            return {"styles": [{"name": "hero"}], "count": 1}
+        raise AssertionError(f"unexpected read method {method}")
+
+
+class ConfirmGateTest(unittest.TestCase):
+    def setUp(self) -> None:
+        from tests.scouter_fakes import TempCache
+
+        self.cache = TempCache()
+        root = self.cache.start()
+        self.raw = str(root / "hero.ORF")
+        (root / "hero.ORF").write_bytes(b"raw")
+        self.bridge = RefusingBridge(self, self.raw)
+        dtbridge.set_bridge(self.bridge)
+
+    def tearDown(self) -> None:
+        dtbridge.set_bridge(None)
+        self.cache.stop()
+
+    #: Minimal args per gated verb, WITHOUT confirm.
+    GATED_ARGS = {
+        "darkroom.reset": {"module": "exposure"},
+        "style.extract": {"image": None, "name": "hero", "modules": []},
+        "style.apply": {"image": None, "name": "hero", "mode": "overwrite"},
+        "export.run": {"images": [None, None], "preset": "preview",
+                       "out_dir": "/tmp/scouter-gate-out"},
+    }
+
+    def test_the_gated_set_is_exactly_what_the_design_lists(self) -> None:
+        gated = {vid for vid, verb in registry.load_verbs().items() if verb.gated}
+        self.assertEqual(gated, set(self.GATED_ARGS))
+
+    def test_every_gated_verb_dry_runs_without_confirm(self) -> None:
+        for verb_id, args in self.GATED_ARGS.items():
+            with self.subTest(verb=verb_id):
+                filled = {
+                    k: (self.raw if v is None else
+                        [self.raw] * len(v) if isinstance(v, list) and v and v[0] is None
+                        else v)
+                    for k, v in args.items()
+                }
+                envelope = registry.call(verb_id, "core", **filled)
+                self.assertEqual(
+                    envelope.outcome, "dry_run",
+                    f"{verb_id} without confirm must be a dry run, got {envelope.outcome}",
+                )
+                self.assertTrue(envelope.data["plan"], f"{verb_id} dry run has no plan")
+                self.assertTrue(envelope.data["reason"], f"{verb_id} dry run has no reason")
+
+    #: `history.commit` is the one writer spec 10.1 gives no `dry_run` param:
+    #: it flushes darktable's own already-decided history to the XMP and
+    #: verifies the write landed -- there is no separate "plan" to preview,
+    #: unlike every other writer here, which chooses what to write.
+    NO_DRY_RUN_WRITERS = {"history.commit"}
+
+    def test_every_writer_accepts_dry_run(self) -> None:
+        for verb_id, verb in registry.load_verbs().items():
+            if verb.writes and verb_id not in self.NO_DRY_RUN_WRITERS:
+                names = {a.name for a in verb.args}
+                self.assertIn("dry_run", names, f"{verb_id} writes but has no dry_run")
+
+    def test_only_writers_are_gated(self) -> None:
+        for verb_id, verb in registry.load_verbs().items():
+            if verb.gated:
+                self.assertTrue(verb.writes, f"{verb_id} is gated but does not write")
+                names = {a.name for a in verb.args}
+                self.assertIn("confirm", names, f"{verb_id} is gated but has no confirm")

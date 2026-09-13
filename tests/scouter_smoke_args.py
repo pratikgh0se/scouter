@@ -31,6 +31,10 @@ SMOKE_ARGS: dict[str, dict] = {
     "scout.preview": {"image": "/tmp/scouter-smoke.ORF", "px": 64, "fmt": "ppm"},
     "scout.compare": {"a": "/tmp/scouter-smoke.ORF", "b": "/tmp/scouter-smoke.ORF",
                       "px": 64},
+    "style.extract": {"image": "/tmp/scouter-smoke.ORF", "name": "smoke", "modules": []},
+    "style.apply": {"image": "/tmp/scouter-smoke.ORF", "name": "smoke"},
+    "export.run": {"images": ["/tmp/scouter-smoke.ORF"], "preset": "preview",
+                   "out_dir": "/tmp/scouter-smoke-export"},   # out_dir overridden below
 }
 
 
@@ -62,23 +66,30 @@ def install_doubles(verb_id: str) -> Iterator[dict]:
                                       "modules_requested": 0, "modules_honoured": False},
         "style.apply": {"name": "smoke", "mode": "append", "applied": 1,
                         "missed": [], "errors": []},
+        "list_styles": {"styles": [], "count": 0},
     })
     dtbridge.set_bridge(bridge)
     saved_cli = os.environ.get("SCOUTER_DARKTABLE_CLI")
-    if verb_id.startswith("scout."):
-        # scout.* verbs shell out to darktable-cli (via CLIWrapper); point it
-        # at a fake script that writes a valid P6 for any *.ppm/*.png output,
-        # inside this test's own cache root, so nothing touches a real
-        # darktable install.
+    extra: dict = {}
+    needs_cli = verb_id.startswith("scout.") or verb_id == "export.run"
+    if needs_cli:
+        # scout.* and export.run shell out to darktable-cli (via CLIWrapper);
+        # point it at a fake script that writes a valid P6 for any
+        # *.ppm/*.png output, inside this test's own cache root, so nothing
+        # touches a real darktable install.
         cli_dir = paths.cache_root() / "smoke-cli"
         cli_dir.mkdir(parents=True, exist_ok=True)
         script = fake_cli_script(cli_dir, FAKE_CLI_WRITES_PPM)
         os.environ["SCOUTER_DARKTABLE_CLI"] = str(script)
+    if verb_id == "export.run":
+        # `preview` writes a .png, which the fake CLI script above matches;
+        # the out_dir lives under this test's own temp cache root.
+        extra["out_dir"] = str(paths.cache_root() / "smoke-export")
     try:
-        yield {}
+        yield extra
     finally:
         dtbridge.set_bridge(None)
-        if verb_id.startswith("scout."):
+        if needs_cli:
             if saved_cli is None:
                 os.environ.pop("SCOUTER_DARKTABLE_CLI", None)
             else:
