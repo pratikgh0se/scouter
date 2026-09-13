@@ -82,17 +82,19 @@ stub_dt.gui = {
       error("scripted darkroom switch failure")
     end
     view_state.current = v.id
-    if v.id == "darkroom" then
-      -- Switching INTO the darkroom loads whatever was most recently
-      -- selected -- mirrors the real GUI closely enough to prove
-      -- switch_to_darkroom's bounce actually loads the requested image.
-      local sel = selection_log[#selection_log]
-      if sel and sel[1] then stub_dt.gui.action_images = {sel[1]} end
-    end
     return v
   end,
   views = views,
-  selection = function(images) table.insert(selection_log, images); return images end,
+  -- Selecting an image immediately becomes the "action_images" reading --
+  -- mirrors the real GUI closely enough to prove switch_to_darkroom's
+  -- select-before-display_image ordering (fix round 2 item 2) actually keeps
+  -- the action_images fallback fresh, independent of which switch mechanism
+  -- (display_image or the view-switch bounce) ends up doing the real work.
+  selection = function(images)
+    table.insert(selection_log, images)
+    stub_dt.gui.action_images = images
+    return images
+  end,
   action_images = {},
   libs = {snapshots = {take_snapshot = function() view_state.snapshots =
     (view_state.snapshots or 0) + 1 end}},
@@ -1443,6 +1445,17 @@ local c = plugin.methods["history.commit"]({strategy = "auto"})
 assertEq(c.strategy_used, "view_bounce", "auto uses the view bounce, never the sidecar ladder")
 assertEq(c.ok, true, "view bounce ok")
 assertEq(c.view_after, "darkroom", "view bounce returns to the darkroom")
+assertTrue(type(c.cpu_ms) == "number", "history.commit reports cpu_ms as a number")
+assertTrue(c.ms == nil, "history.commit no longer reports the old ambiguous ms field")
+
+-- An unknown strategy is a caller mistake, not a silent fallback to auto.
+local c_bad = plugin.handle({id = "bad-strategy", method = "history.commit",
+  params = {strategy = "yolo"}})
+assertTrue(c_bad.error ~= nil and c_bad.error:find("yolo", 1, true) ~= nil,
+  "unknown strategy names the offending value")
+assertTrue(c_bad.error and c_bad.error:find("auto", 1, true) ~= nil
+  and c_bad.error:find("sidecar_action", 1, true) ~= nil,
+  "unknown strategy error lists the valid strategies")
 
 -- ...the sidecar ladder stays reachable only via an EXPLICIT
 -- strategy="sidecar_action" request, and can still succeed there...
@@ -1542,12 +1555,18 @@ stub_dt.gui.action_images = {images_by_id[101]}
 local original_selection = stub_dt.gui.selection
 stub_dt.gui.selection = function(_)
   table.insert(selection_log, {images_by_id[101]})
+  stub_dt.gui.action_images = {images_by_id[101]}
   return {images_by_id[101]}
 end
-local op4 = plugin.methods["darkroom.open"]({image_id = 102})
-assertEq(op4.opened, false, "a switch that does not actually load the requested image is not opened")
+-- A wrong-image outcome is a JSON-RPC error (like darkroom.open's other
+-- failures), not a {opened=false, error=...} result a caller could ignore --
+-- so it must be reached through plugin.handle, not a direct call to
+-- plugin.methods["darkroom.open"], which would let the error abort the test.
+local op4 = plugin.handle({id = "wrong-image", method = "darkroom.open",
+  params = {image_id = 102}})
 assertTrue(op4.error ~= nil and op4.error:find("102", 1, true) ~= nil,
   "wrong-image error names the requested id")
+assertTrue(op4.result == nil, "a wrong-image outcome carries no result, only an error")
 stub_dt.gui.selection = original_selection
 
 -- A path not yet in the library is imported, then opened, and reported so.
@@ -1571,6 +1590,56 @@ assertEq(op5.image_id, 104, "darkroom.open opens the newly imported image")
 stub_dt.database = original_db
 images_by_id[104] = nil
 table.remove(iter_list)
+
+-- switch_to_darkroom / loaded_darkroom_image: the display_image branches.
+-- The stub's dt.gui.views.darkroom has no display_image by default (all the
+-- darkroom.open tests above exercise the action_images fallback), so these
+-- are exercised directly against the exported internals with a scripted
+-- display_image getter/setter.
+do
+  local display_state = {current = nil}
+  views.darkroom.display_image = function(image)
+    if image == nil then return display_state.current end
+    display_state.current = image
+    return image
+  end
+
+  local switched, method = plugin.switch_to_darkroom(images_by_id[103])
+  assertTrue(switched, "switch_to_darkroom succeeds via display_image")
+  assertEq(method, "display_image", "switch_to_darkroom reports display_image as the method used")
+  assertEq(display_state.current.id, 103, "display_image actually stored the requested image")
+
+  local image, source = plugin.loaded_darkroom_image()
+  assertEq(source, "display_image", "loaded_darkroom_image reports display_image as its source")
+  assertTrue(image ~= nil and image.id == 103, "loaded_darkroom_image reads back through display_image")
+
+  views.darkroom.display_image = nil
+end
+
+-- A display_image whose GETTER answers nil (real-world quirk: the setter
+-- half works but the read-back half does not) must fall back to
+-- action_images -- and that fallback must already be correct, proving
+-- switch_to_darkroom's select-before-display_image ordering (fix round 2
+-- item 2) rather than a lucky leftover from an earlier test.
+do
+  views.darkroom.display_image = function(image)
+    if image == nil then return nil end  -- getter always answers nil
+    return image                          -- setter reports success
+  end
+  stub_dt.gui.action_images = {}
+
+  local switched, method = plugin.switch_to_darkroom(images_by_id[101])
+  assertTrue(switched, "switch_to_darkroom still succeeds via display_image's setter")
+  assertEq(method, "display_image", "switch_to_darkroom still reports display_image as the method used")
+
+  local image, source = plugin.loaded_darkroom_image()
+  assertEq(source, "action_images",
+    "falls back to action_images when display_image's getter answers nil")
+  assertTrue(image ~= nil and image.id == 101,
+    "the action_images fallback is already correct -- selection ran before display_image")
+
+  views.darkroom.display_image = nil
+end
 
 -- image.lookup by absolute path.
 local lu = plugin.methods["image.lookup"]({path = "/photos/DSC_0001.NEF"})

@@ -727,6 +727,14 @@ end
 
 local function is_nan(v) return type(v) == "number" and v ~= v end
 
+-- Both ids must be present, coercible numbers, AND equal. A naive
+-- `tonumber(a) == tonumber(b)` is a trap: `tonumber(nil)` is nil, and Lua's
+-- `nil == nil` is true, so "neither side has an id" would read as a match.
+local function ids_match(a, b)
+  local na, nb = tonumber(a), tonumber(b)
+  return na ~= nil and nb ~= nil and na == nb
+end
+
 -- Run one dt.gui.action. Returns (value, nan_flag). Raises only when the API
 -- itself is missing or the call blows up -- a nan is data, not an error.
 local function gui_action(path, instance, element, effect, value)
@@ -809,13 +817,20 @@ end
 -- switch is a real transition rather than another no-op.
 local function switch_to_darkroom(image)
   local view = dt.gui and dt.gui.views and dt.gui.views.darkroom
+
+  -- Select FIRST, unconditionally -- even when display_image is about to do
+  -- the actual switch. loaded_darkroom_image()'s action_images fallback must
+  -- never read a stale selection if display_image's own getter turns out to
+  -- be unreliable (display_image is documented but not yet host-verified;
+  -- see loaded_darkroom_image's comment).
+  if dt.gui.selection then pcall(dt.gui.selection, {image}) end
+
   if view and type(view.display_image) == "function" then
-    local ok, err = pcall(view.display_image, image)
+    local ok = pcall(view.display_image, image)
     if ok then return true, "display_image" end
     -- Fall through to the select+switch path below on failure.
   end
 
-  if dt.gui.selection then pcall(dt.gui.selection, {image}) end
   if not view then return false, "dt.gui.views.darkroom missing" end
 
   if current_view_name() == "darkroom" then
@@ -855,7 +870,7 @@ methods["darkroom.open"] = function(p)
 
   local loaded, source = loaded_darkroom_image()
   local already = current_view_name() == "darkroom"
-      and loaded ~= nil and tonumber(loaded.id) == tonumber(image.id)
+      and loaded ~= nil and ids_match(loaded.id, image.id)
 
   if not already then
     local switched, detail = switch_to_darkroom(image)
@@ -866,20 +881,14 @@ methods["darkroom.open"] = function(p)
 
   -- VERIFY: a "successful" switch is not enough on its own -- the no-op bug
   -- this fixes would otherwise still report opened=true for an image that
-  -- never actually loaded. Trust only what is now actually displayed.
+  -- never actually loaded. Trust only what is now actually displayed. This
+  -- is a genuine failure of the request, not a normal result shape, so it is
+  -- a JSON-RPC error like the method's other failures -- not a
+  -- {opened=false, error=...} result a careless caller could ignore.
   local final_image, final_source = loaded_darkroom_image()
-  local matches = final_image ~= nil and tonumber(final_image.id) == tonumber(image.id)
+  local matches = final_image ~= nil and ids_match(final_image.id, image.id)
   if not matches then
-    return {
-      image_id = tonumber(image.id),
-      path = _image_full_path(image),
-      view = current_view_name(),
-      opened = false,
-      already_open = false,
-      imported = imported,
-      source = final_source,
-      error = "wrong image loaded: " .. tostring(image.id),
-    }
+    error("wrong image loaded: " .. tostring(image.id))
   end
 
   return {
@@ -999,7 +1008,9 @@ local function commit_view_bounce()
   if not ok2 then
     -- One retry: a single flaky switch back into the darkroom should not
     -- strand the session in the lighttable when the commit itself likely
-    -- still landed (the pipe already unloaded on the way out).
+    -- still landed (the pipe already unloaded on the way out). Give it the
+    -- same settle time as the first bounce before trying again.
+    if dt.control and dt.control.sleep then dt.control.sleep(300) end
     ok2 = pcall(dt.gui.current_view, dt.gui.views.darkroom)
   end
   local final_view = current_view_name()
@@ -1009,26 +1020,36 @@ local function commit_view_bounce()
   return {ok = true, error = nil, view = final_view}
 end
 
+-- The only strategies history.commit understands. Anything else is a
+-- caller mistake, not a silent fallback to "auto".
+local HISTORY_COMMIT_STRATEGIES = {auto = true, view_bounce = true, sidecar_action = true}
+
 methods["history.commit"] = function(p)
   p = p or {}
   local strategy = p.strategy or "auto"
-  -- CPU time (os.clock()), not wall-clock -- matches docs/measurements.md,
-  -- which records both and notes CPU time understates the real cost.
+  if not HISTORY_COMMIT_STRATEGIES[strategy] then
+    error("history.commit: unknown strategy " .. tostring(strategy)
+      .. ' (valid: "auto", "view_bounce", "sidecar_action")')
+  end
+  -- cpu_ms: CPU time (os.clock()), not wall-clock -- matches
+  -- docs/measurements.md, which records both and notes CPU time understates
+  -- the real cost. Named cpu_ms (not ms) so callers cannot mistake it for a
+  -- wall-clock duration.
   local started = os.clock()
   if strategy == "sidecar_action" then
     local ok, path = commit_sidecar_action()
     if ok then
       return {strategy_used = "sidecar_action", ok = true, detail = path,
-              view_after = current_view_name(), ms = (os.clock() - started) * 1000}
+              view_after = current_view_name(), cpu_ms = (os.clock() - started) * 1000}
     end
     return {strategy_used = "sidecar_action", ok = false,
             detail = "every sidecar-write action returned nan on this build",
-            view_after = current_view_name(), ms = (os.clock() - started) * 1000}
+            view_after = current_view_name(), cpu_ms = (os.clock() - started) * 1000}
   end
-  -- strategy == "auto" (or anything else): the proven floor, C3.
+  -- strategy == "auto" or "view_bounce": the proven floor, C3.
   local result = commit_view_bounce()
   return {strategy_used = "view_bounce", ok = result.ok, detail = result.error,
-          view_after = result.view, ms = (os.clock() - started) * 1000}
+          view_after = result.view, cpu_ms = (os.clock() - started) * 1000}
 end
 
 methods["snapshot.take"] = function()

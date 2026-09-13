@@ -291,12 +291,12 @@ def test_history_commit_auto_does_not_reach_the_sidecar_ladder():
     )
 
 
-def test_history_commit_ms_is_cpu_time_not_os_time():
-    """`ms` must come from os.clock() (CPU time), not os.time() (whole seconds).
-
-    os.time() has whole-second resolution, so a sub-second commit always
-    measured as 0ms or 1000ms -- not a real duration. docs/measurements.md
-    itself uses os.clock() and documents it as CPU time, not wall clock.
+def test_history_commit_reports_cpu_ms_not_ms():
+    """The CPU-time payload field must be named `cpu_ms`, from os.clock(),
+    everywhere history.commit returns it -- never the ambiguous `ms`, and
+    never os.time() (whole-second resolution, so a sub-second commit always
+    measured as 0ms or 1000ms). docs/measurements.md itself uses os.clock()
+    and documents it as CPU time, not wall clock. Fix round 2 should-fix 3.
     """
     source = PLUGIN.read_text(encoding="utf-8")
     body = source.split('methods["history.commit"] = function', 1)
@@ -304,6 +304,107 @@ def test_history_commit_ms_is_cpu_time_not_os_time():
     body = body[1].split('\nmethods[', 1)[0]
     assert "os.clock()" in body, "history.commit no longer times itself with os.clock()"
     assert "os.time()" not in body, "history.commit must not time itself with os.time()"
+    assert body.count("cpu_ms = (os.clock()") == 3, (
+        "history.commit must report cpu_ms = (os.clock() - started) * 1000 on "
+        "all three return paths (sidecar success, sidecar failure, view_bounce)"
+    )
+    assert re.search(r"(?<!cpu_)\bms\s*=", body) is None, (
+        "history.commit still returns the old ambiguous `ms` field alongside "
+        "or instead of cpu_ms"
+    )
+
+
+def test_history_commit_rejects_unknown_strategy():
+    """An unknown `strategy` must error, listing the valid ones, rather than
+    silently falling back to auto. Fix round 2 should-fix 7."""
+    source = PLUGIN.read_text(encoding="utf-8")
+    body = source.split('methods["history.commit"] = function', 1)
+    assert len(body) == 2, 'methods["history.commit"] not found in the plugin'
+    body = body[1].split('\nmethods[', 1)[0]
+    assert "unknown strategy" in body, (
+        "history.commit no longer rejects an unrecognised strategy value"
+    )
+    for valid in ('"auto"', '"view_bounce"', '"sidecar_action"'):
+        assert valid in body, f"unknown-strategy error must list {valid} as valid"
+
+
+def test_ids_match_guards_against_double_nil():
+    """`nil == nil` is true in Lua, so a naive tonumber(a) == tonumber(b)
+    would treat "neither side has an id" as a match. Fix round 2 should-fix 1.
+    """
+    source = PLUGIN.read_text(encoding="utf-8")
+    assert "local function ids_match(" in source, "ids_match helper not found in the plugin"
+    ids_match_body = source.split("local function ids_match(", 1)[1].split("\nend", 1)[0]
+    assert "na ~= nil and nb ~= nil" in ids_match_body, (
+        "ids_match does not guard both sides against nil before comparing"
+    )
+    # And darkroom.open must actually USE it, not the old bare tonumber(...)==.
+    open_body = source.split('methods["darkroom.open"] = function', 1)[1].split(
+        '\nmethods[', 1
+    )[0]
+    assert "tonumber(loaded.id) == tonumber(image.id)" not in open_body, (
+        "darkroom.open's already-open check reverted to the unguarded id "
+        "comparison"
+    )
+    assert "tonumber(final_image.id) == tonumber(image.id)" not in open_body, (
+        "darkroom.open's post-switch verification reverted to the unguarded "
+        "id comparison"
+    )
+    assert open_body.count("ids_match(") == 2, (
+        "darkroom.open should call ids_match(...) exactly twice: the "
+        "already-open check and the post-switch verification"
+    )
+
+
+def test_darkroom_open_wrong_image_is_an_rpc_error():
+    """A wrong-image outcome must be a JSON-RPC error (error(...)), not a
+    {opened=false, error=...} result a caller could ignore. Fix round 2
+    should-fix 4."""
+    source = PLUGIN.read_text(encoding="utf-8")
+    open_body = source.split('methods["darkroom.open"] = function', 1)[1].split(
+        '\nmethods[', 1
+    )[0]
+    assert 'error("wrong image loaded: "' in open_body, (
+        "darkroom.open no longer raises on a wrong-image outcome"
+    )
+    assert "opened = false," not in open_body, (
+        "darkroom.open still builds an {opened=false, ...} result table for "
+        "the wrong-image case instead of erroring"
+    )
+
+
+def test_switch_to_darkroom_selects_before_display_image():
+    """dt.gui.selection must run BEFORE display_image is attempted, so the
+    action_images fallback in loaded_darkroom_image is never stale if
+    display_image's own getter turns out to be unreliable. Fix round 2
+    should-fix 2."""
+    source = PLUGIN.read_text(encoding="utf-8")
+    body = source.split("local function switch_to_darkroom(", 1)
+    assert len(body) == 2, "switch_to_darkroom not found in the plugin"
+    body = body[1].split("\nend", 1)[0]
+    selection_pos = body.find("dt.gui.selection")
+    display_image_pos = body.find("view.display_image")
+    assert selection_pos != -1 and display_image_pos != -1, (
+        "switch_to_darkroom no longer calls both dt.gui.selection and "
+        "view.display_image"
+    )
+    assert selection_pos < display_image_pos, (
+        "switch_to_darkroom calls display_image before selection -- the "
+        "action_images fallback can read a stale selection"
+    )
+
+
+def test_commit_view_bounce_retry_sleeps_first():
+    """The single retry of the second (into-darkroom) switch must be preceded
+    by the same settle sleep as the first bounce. Fix round 2 should-fix 6."""
+    source = PLUGIN.read_text(encoding="utf-8")
+    body = source.split("local function commit_view_bounce", 1)
+    assert len(body) == 2, "commit_view_bounce not found in the plugin"
+    body = body[1].split("\nend", 1)[0]
+    assert body.count("dt.control.sleep(300)") == 2, (
+        "commit_view_bounce must sleep(300) before the first attempt AND "
+        "again before the retry of the second switch"
+    )
 
 
 def test_commit_view_bounce_refuses_outside_darkroom():
