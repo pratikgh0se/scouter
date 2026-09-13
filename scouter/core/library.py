@@ -20,7 +20,13 @@ from pathlib import Path
 
 from scouter import __version__, config, metrics, paths
 from scouter.core import dtbridge, exif, xmp
-from scouter.errors import BridgeTimeout, ChecksumMismatch, DestinationCollision, UsageError
+from scouter.errors import (
+    BridgeTimeout,
+    ChecksumMismatch,
+    DestinationCollision,
+    ScouterError,
+    UsageError,
+)
 from scouter.registry import ArgSpec, Verb
 from scouter.registry import register as register_verb
 from scouter.types import ImportResult, JobsResult, RegisterResult, RelocateResult, VerifyResult
@@ -34,14 +40,19 @@ CHUNK = 1 << 20
 
 
 def _scan(source: Path, extensions: tuple[str, ...]) -> list[Path]:
-    """Recursive, depth-bounded, symlinks not followed. Sorted for determinism."""
+    """Recursive, depth-bounded, symlinks not followed. Sorted for determinism.
+
+    `._`-prefixed entries are skipped: FAT-formatted cards routinely carry
+    AppleDouble sidecar junk (`._P6281348.ORF`) written by macOS's Finder,
+    which matches the wanted suffix just as well as the real file and is
+    never something a camera wrote (fix round 1, nit)."""
     wanted = {("." + e.lower()) for e in extensions}
     found: list[Path] = []
     stack = [(source, 0)]
     while stack:
         directory, depth = stack.pop()
         for entry in sorted(directory.iterdir()):
-            if entry.is_symlink():
+            if entry.is_symlink() or entry.name.startswith("._"):
                 continue
             if entry.is_dir():
                 if depth < SCAN_MAX_DEPTH:
@@ -77,6 +88,17 @@ def _copy_verified(src: Path, dst: Path) -> tuple[str, int]:
             size += len(chunk)
         fout.flush()
         os.fsync(fout.fileno())
+    if dst.exists():
+        # Cheap O_EXCL-equivalent (fix round 1, nit): the caller already
+        # checked `dest.exists()` before calling this, so a destination that
+        # exists NOW must have appeared during the copy -- a concurrent
+        # import of the same job, not a resume. `os.replace` would silently
+        # clobber it; refuse instead.
+        tmp.unlink(missing_ok=True)
+        raise DestinationCollision(
+            f"{dst} appeared during the copy (a concurrent import of this job?)",
+            detail={"path": str(dst), "source": str(src)},
+        )
     os.replace(tmp, dst)
     written = hashlib.sha256()
     with dst.open("rb") as fin:
@@ -106,19 +128,85 @@ def _now_z() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
+def _load_existing_manifest(scouter_dir: Path) -> list[dict]:
+    """The `files[]` of an existing `.scouter/import.json`, or `[]` when the
+    job has never been imported before -- also `[]` (never a crash) if the
+    file is unreadable or not valid JSON, exactly like a first import."""
+    path = scouter_dir / "import.json"
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    files = data.get("files") if isinstance(data, dict) else None
+    return files if isinstance(files, list) else []
+
+
+def _merge_manifest_files(existing: list[dict], new: list[dict]) -> list[dict]:
+    """Union `existing` and `new` manifest entries by destination name.
+
+    Fix round 1, blocker 1: re-running an import must never SHRINK the
+    manifest just because a source file left the card between runs -- its
+    destination is still sitting in `raw/`, still real, still backed up. A
+    destination this run recomputed with a DIFFERENT sha256 than the
+    manifest already recorded is a typed error: the manifest disagreeing
+    with itself (hand-edited, or a disk that changed under a 0444 file) is
+    worth stopping for, never silently overwritten.
+    """
+    merged: dict[str, dict] = {f["dest"]: f for f in existing}
+    for entry in new:
+        dest = entry["dest"]
+        prior = merged.get(dest)
+        if prior is not None and prior.get("sha256") != entry["sha256"]:
+            raise ChecksumMismatch(
+                f"{dest} is already in the manifest with a different sha256 than "
+                "this run computed",
+                detail={
+                    "destination": dest,
+                    "expected": prior.get("sha256"),
+                    "actual": entry["sha256"],
+                },
+            )
+        merged[dest] = entry
+    return sorted(merged.values(), key=lambda f: f["dest"])
+
+
+def _persist_manifest(
+    scouter_dir: Path, meta: dict, existing_files: list[dict], new_files: list[dict]
+) -> list[dict]:
+    """Merge `new_files` into `existing_files` and write both manifest files
+    atomically. Returns the merged list (what `import.json` now holds), so
+    the caller can report the real, merged state -- not just this run's."""
+    merged = _merge_manifest_files(existing_files, new_files)
+    checksum_lines = "".join(f"{f['sha256']}  {f['dest']}\n" for f in merged)
+    _write_atomic(scouter_dir / "checksums.sha256", checksum_lines)
+    _write_atomic(scouter_dir / "import.json", json.dumps({**meta, "files": merged}, indent=2))
+    return merged
+
+
 def _plan(
     files: list[Path],
     cfg: config.Config,
     job_slug: str,
     date: str | None,
     camera: str | None,
-) -> tuple[str, str, str | None, str | None, list[dict]]:
+) -> tuple[str, str, str | None, str | None, list[dict], list[dict]]:
     """Read EXIF for every candidate, derive `date`/`camera` when not given,
     sort by `capture_key`, and assign one `seq` per stem (so `P1.ORF` and
     `P1.JPG` share a number). Returns
-    `(date, camera, camera_model, camera_make, plan)` -- `plan` entries carry
-    `Path` objects, never serialised themselves (the caller builds both the
-    dry-run preview and `import.json`'s `files[]` from them)."""
+    `(date, camera, camera_model, camera_make, plan, existing_files)` --
+    `plan` entries carry `Path` objects, never serialised themselves (the
+    caller builds both the dry-run preview and `import.json`'s `files[]`
+    from them); `existing_files` is this job's prior `import.json['files']`
+    (`[]` on a first import), returned so the caller doesn't have to re-read
+    it a second time to merge the manifest (fix round 1, blocker 1).
+
+    Fix round 1, blocker 2 (stable sequence): `seq` is seeded from the
+    EXISTING manifest's `source_name -> seq` mapping, not restarted at 1 --
+    so removing a frame from the card, or adding a second card later, never
+    renames or collides with a frame this job already assigned a number.
+    """
     tagged = [(f, exif.read_tags(f)) for f in files]
 
     if date is None:
@@ -130,6 +218,15 @@ def _plan(
                 detail={"files": len(files)},
             )
         date = min(times)[:10]
+
+    # Needs `date` (just resolved above) and `job_slug`; a plain read, so
+    # this is safe to do even for a dry run (ruling 3 only forbids writes).
+    job_scouter_dir = config.scouter_dir(config.job_dir(cfg, date, job_slug))
+    existing_files = _load_existing_manifest(job_scouter_dir)
+    stem_seq: dict[str, int] = {}
+    for entry in existing_files:
+        stem_seq.setdefault(Path(entry["source_name"]).stem, entry["seq"])
+    next_seq = max(stem_seq.values(), default=0) + 1
 
     if camera is None:
         slugs = {exif.camera_slug(t, cfg) for _, t in tagged}
@@ -150,20 +247,32 @@ def _plan(
 
     ordered = sorted(tagged, key=lambda pair: exif.capture_key(pair[1], pair[0]))
     seq_digits = cfg.import_.seq_digits
-    stem_seq: dict[str, int] = {}
-    seen_dest: set[str] = set()
+    dest_sources: dict[str, Path] = {}
     plan: list[dict] = []
     for path, tags in ordered:
         stem = path.stem
         if stem not in stem_seq:
-            stem_seq[stem] = len(stem_seq) + 1
+            stem_seq[stem] = next_seq
+            next_seq += 1
         seq = stem_seq[stem]
         ext = path.suffix.lower()
         dest_name = f"{date}_{job_slug}_{camera}_{seq:0{seq_digits}d}{ext}"
-        # Impossible by construction (one name per (date, job_slug, camera, seq,
-        # ext) and ext is lowercased once here) -- asserted anyway, per the brief.
-        assert dest_name not in seen_dest, f"duplicate destination name in plan: {dest_name}"
-        seen_dest.add(dest_name)
+        if dest_name in dest_sources:
+            # Fix round 1, should-fix 3: two source files from different card
+            # subdirectories sharing a stem+ext (the same camera filename
+            # counter, recycled across folders/cards) would otherwise trip
+            # the "impossible by construction" assertion below -- it is very
+            # much possible, and it is a caller-facing usage problem, not an
+            # internal bug.
+            raise UsageError(
+                f"two source files would both become {dest_name}: "
+                f"{dest_sources[dest_name]} and {path}",
+                detail={
+                    "dest": dest_name,
+                    "sources": [str(dest_sources[dest_name]), str(path)],
+                },
+            )
+        dest_sources[dest_name] = path
         plan.append(
             {
                 "seq": seq,
@@ -178,7 +287,7 @@ def _plan(
                 "f_number": tags.f_number,
             }
         )
-    return date, camera, camera_model, camera_make, plan
+    return date, camera, camera_model, camera_make, plan, existing_files
 
 
 @metrics.instrumented("library.import")
@@ -200,6 +309,15 @@ def import_card(
     # depend on the card being present at all.
 
     source_path = Path(source)
+    if not source_path.is_dir():
+        # Fix round 1, should-fix 4: `_scan`'s own `iterdir()` would raise a
+        # bare `FileNotFoundError`/`NotADirectoryError` here -- not one of
+        # Scouter's typed errors, and not actionable.
+        raise UsageError(
+            f"{source_path} is not a directory",
+            fix="check that the card is mounted at that path, or pass a different --source",
+            detail={"source": str(source_path)},
+        )
     exts = tuple(extensions) if extensions else cfg.import_.extensions
     files = _scan(source_path, exts)
     if not files:
@@ -213,7 +331,7 @@ def import_card(
             },
         )
 
-    resolved_date, resolved_camera, camera_model, camera_make, planned = _plan(
+    resolved_date, resolved_camera, camera_model, camera_make, planned, existing_files = _plan(
         files, cfg, job_slug, date, camera
     )
 
@@ -251,66 +369,14 @@ def import_card(
     scouter_d = config.scouter_dir(job_path)
     raw.mkdir(parents=True, exist_ok=True)
     scouter_d.mkdir(parents=True, exist_ok=True)
+    # Fix round 1, nit: sweep `.part` leftovers from a run that died mid-copy
+    # (a hard kill, a power loss) before starting -- `_copy_verified` always
+    # cleans up its own tmp file on a normal return or a checksum mismatch,
+    # so anything still here is from a run that never got that far.
+    for stale in raw.glob(".*.part"):
+        stale.unlink(missing_ok=True)
 
-    files_out: list[dict] = []
-    copied = 0
-    skipped = 0
-    total_bytes = 0
-    for p in planned:
-        src: Path = p["source"]
-        dest = raw / p["dest_name"]
-        if dest.exists():
-            # Resume-safety: never overwrite. A 0444 destination from a
-            # previous run is still readable, so it is hashable without any
-            # special-casing -- and it is NOT re-chmod-ed here, only in the
-            # `else` branch below where a fresh copy just landed.
-            existing_hash = _hash_file(dest)
-            source_hash = _hash_file(src)
-            if existing_hash == source_hash:
-                sha = existing_hash
-                size = dest.stat().st_size
-                status = "skipped_identical" if cfg.import_.skip_identical else "already_present"
-                skipped += 1
-            else:
-                raise DestinationCollision(
-                    f"{dest} already exists with different content than {src}",
-                    detail={"path": str(dest), "source": str(src)},
-                )
-        else:
-            sha, size = _copy_verified(src, dest)
-            if cfg.import_.read_only_originals:
-                os.chmod(dest, 0o444)
-            status = "copied"
-            copied += 1
-        total_bytes += size
-        files_out.append(
-            {
-                "seq": p["seq"],
-                "dest": f"raw/{p['dest_name']}",
-                "source_name": p["source_name"],
-                "bytes": size,
-                "sha256": sha,
-                "captured_at": p["captured_at"],
-                "subsec": p["subsec"],
-                "exposure_time": p["exposure_time"],
-                "iso": p["iso"],
-                "f_number": p["f_number"],
-                "status": status,
-            }
-        )
-
-    checksum_lines = "".join(
-        f"{f['sha256']}  {f['dest']}\n" for f in sorted(files_out, key=lambda f: f["dest"])
-    )
-    _write_atomic(scouter_d / "checksums.sha256", checksum_lines)
-
-    totals = {
-        "planned": len(planned),
-        "copied": copied,
-        "skipped_identical": skipped,
-        "bytes": total_bytes,
-    }
-    manifest = {
+    meta = {
         "version": 1,
         "job_slug": job_slug,
         "date": resolved_date,
@@ -320,10 +386,86 @@ def import_card(
         "imported_at": _now_z(),
         "scouter_version": __version__,
         "source_root": str(source_path),
-        "files": files_out,
-        "totals": totals,
     }
-    _write_atomic(scouter_d / "import.json", json.dumps(manifest, indent=2))
+
+    files_out: list[dict] = []
+    copied = 0
+    skipped = 0
+    total_bytes = 0
+    try:
+        for p in planned:
+            src: Path = p["source"]
+            dest = raw / p["dest_name"]
+            if dest.exists():
+                # Resume-safety: never overwrite. A 0444 destination from a
+                # previous run is still readable, so it is hashable without
+                # any special-casing -- and it is NOT re-chmod-ed here, only
+                # in the `else` branch below where a fresh copy just landed.
+                existing_hash = _hash_file(dest)
+                source_hash = _hash_file(src)
+                if existing_hash == source_hash:
+                    sha = existing_hash
+                    size = dest.stat().st_size
+                    status = (
+                        "skipped_identical" if cfg.import_.skip_identical else "already_present"
+                    )
+                    skipped += 1
+                else:
+                    raise DestinationCollision(
+                        f"{dest} already exists with different content than {src}",
+                        detail={"path": str(dest), "source": str(src)},
+                    )
+            else:
+                sha, size = _copy_verified(src, dest)
+                if cfg.import_.read_only_originals:
+                    os.chmod(dest, 0o444)
+                status = "copied"
+                copied += 1
+            total_bytes += size
+            files_out.append(
+                {
+                    "seq": p["seq"],
+                    "dest": f"raw/{p['dest_name']}",
+                    "source_name": p["source_name"],
+                    "bytes": size,
+                    "sha256": sha,
+                    "captured_at": p["captured_at"],
+                    "subsec": p["subsec"],
+                    "exposure_time": p["exposure_time"],
+                    "iso": p["iso"],
+                    "f_number": p["f_number"],
+                    "status": status,
+                }
+            )
+    except Exception as e:
+        # Fix round 1, should-fix 5: whatever landed THIS run before the
+        # failure is still real, and the manifest must not stay silent about
+        # it -- write the merged manifest now (never shrinking what a prior
+        # run already recorded), and name how far this run got in the
+        # error's own detail, so the agent isn't left guessing.
+        totals = {
+            "planned": len(planned),
+            "copied": copied,
+            "skipped_identical": skipped,
+            "bytes": total_bytes,
+        }
+        _persist_manifest(scouter_d, {**meta, "totals": totals}, existing_files, files_out)
+        if isinstance(e, ScouterError):
+            e.detail = {
+                **e.detail,
+                "files_landed_this_run": len(files_out),
+                "manifest_written": True,
+            }
+        raise
+
+    totals = {
+        "planned": len(planned),
+        "copied": copied,
+        "skipped_identical": skipped,
+        "bytes": total_bytes,
+    }
+    manifest = {**meta, "totals": totals}
+    merged_files = _persist_manifest(scouter_d, manifest, existing_files, files_out)
 
     warnings: list[str] = []
     film_roll_registered = False
@@ -338,17 +480,26 @@ def import_card(
         film_roll_registered = False
         warnings.append(e.fix)
     else:
-        film_roll_registered = True
         imported_count = int(result.get("imported", 0))
         scan_incomplete = result.get("scan_incomplete")
         recursive_honoured = result.get("recursive_honoured")
+        # Fix round 1, should-fix 7: a bridge call that returns without
+        # raising but reports 0 images imported registered nothing -- that
+        # is not honestly "film_roll_registered: true".
+        film_roll_registered = imported_count > 0
+        if not film_roll_registered:
+            warnings.append(
+                "import_batch reported 0 images imported; the film roll may not "
+                "have registered -- re-run `library register` once darktable can "
+                "see the card"
+            )
         if result.get("note"):
             warnings.append(str(result["note"]))
 
     try:
         from scouter.core import vault
 
-        note = vault.write_job_note(cfg, manifest)
+        note = vault.write_job_note(cfg, {**manifest, "files": merged_files})
         if not note.get("written"):
             warnings.append(f"vault note not written: {note.get('reason')}")
     except Exception as e:  # noqa: BLE001 - the copy already succeeded; a vault
@@ -363,7 +514,7 @@ def import_card(
         camera_model=camera_model,
         camera_make=camera_make,
         source_root=str(source_path),
-        files=files_out,
+        files=merged_files,
         totals=totals,
         film_roll_registered=film_roll_registered,
         imported=imported_count,
@@ -381,6 +532,16 @@ def _verify_at(job_slug: str, job_path: Path) -> VerifyResult:
     `verify()` in a loop there would emit one event per job instead)."""
     raw = config.raw_dir(job_path)
     checksums_path = config.scouter_dir(job_path) / "checksums.sha256"
+    if not checksums_path.is_file():
+        # Fix round 1, should-fix 6: no manifest is not the same fact as "an
+        # empty job verified clean" -- `checked=0, ok=True` for a job that
+        # was never imported (or whose manifest was lost) is a phantom pass.
+        raise UsageError(
+            f"no {checksums_path} for job {job_slug!r}: it has never been "
+            "imported, or its manifest is missing",
+            fix="run `library import` for this job first, or check the job slug/--date",
+            detail={"job_slug": job_slug, "checksums_path": str(checksums_path)},
+        )
 
     manifest: dict[str, str] = {}
     if checksums_path.is_file():
@@ -461,11 +622,19 @@ def register(
             ),
         )
     result = dtbridge.call("import_batch", {"source_path": str(raw), "recursive": False})
+    imported_count = int(result.get("imported", 0))
+    # Fix round 1, should-fix 7: a call that didn't raise but reports 0
+    # images imported registered nothing -- don't claim it did.
+    film_roll_registered = imported_count > 0
     warnings = [str(result["note"])] if result.get("note") else []
+    if not film_roll_registered:
+        warnings.append(
+            "import_batch reported 0 images imported; the film roll may not " "have registered"
+        )
     return RegisterResult(
         job_slug=job_slug,
-        film_roll_registered=True,
-        imported=int(result.get("imported", 0)),
+        film_roll_registered=film_roll_registered,
+        imported=imported_count,
         scan_incomplete=result.get("scan_incomplete"),
         recursive_honoured=result.get("recursive_honoured"),
         path=str(job_path),
@@ -617,7 +786,23 @@ def relocate(
     results = []
     for e in entries:
         job_path = config.job_dir(new_cfg, e["date"], e["slug"])
-        vr = _verify_at(e["slug"], job_path)
+        try:
+            vr = _verify_at(e["slug"], job_path)
+        except UsageError:
+            # `_verify_at` refuses (rather than a phantom "ok") when there is
+            # no checksums.sha256 to check against -- at a fresh new_root
+            # that means this job hasn't actually been copied there yet, not
+            # that its check passed vacuously.
+            results.append(
+                {
+                    "slug": e["slug"],
+                    "ok": False,
+                    "checked": 0,
+                    "mismatched": [],
+                    "missing": ["job not found at new_root (not copied there yet)"],
+                }
+            )
+            continue
         results.append(
             {
                 "slug": e["slug"],

@@ -265,12 +265,72 @@ class ConfigResult(Payload):
 
 
 @dataclass
+class BackupResult(Payload):
+    archive_dir: str = ""
+    manifest_path: str = ""
+    members: int = 0
+    plaintext_bytes: int = 0
+    ciphertext_bytes: int = 0
+    encryption: str = "openssl"
+    rsync_ran: bool = False
+    rsync_files: int = 0
+    rsync_bytes: int = 0
+    rsync_exit: int | None = None
+    pruned: list[str] = field(default_factory=list)
+    ms_tar: int = 0
+    ms_encrypt: int = 0
+    ms_rsync: int = 0
+
+
+@dataclass
+class BackupVerifyResult(Payload):
+    verified: bool = False
+    archive: str = ""
+    checks: list[dict] = field(default_factory=list)
+    sampled_members: list[dict] = field(default_factory=list)
+    sampled_raws: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class SummaryResult(Payload):
     since: str = "7d"
     from_ts: str = ""
     verbs: list[dict] = field(default_factory=list)
     totals: dict[str, Any] = field(default_factory=dict)
     alerts: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class CullResult(Payload):
+    """`cull.propose`'s result. `proposals` carries one entry per frame, each
+    with a `reasons` list that names its numbers (never a bare verdict); the
+    same list is persisted verbatim to `proposal_path` so `cull.apply`
+    consumes exactly the table Pratik read."""
+
+    proposal_path: str = ""
+    job_slug: str = ""
+    groups: list[dict] = field(default_factory=list)
+    proposals: list[dict] = field(default_factory=list)
+    counts: dict[str, int] = field(default_factory=dict)
+    stats: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class CullApplyResult(Payload):
+    """`cull.apply`'s result. `verified`/`unverified` are reported separately
+    (design 8.3) rather than folded into `applied`: darktable owns when it
+    flushes a rating to the sidecar, so an unverified write is real, just not
+    yet visible -- never claimed as a failure."""
+
+    job_slug: str = ""
+    proposal_path: str = ""
+    applied: int = 0
+    unchanged: int = 0
+    would_change: int = 0
+    missed: list[int] = field(default_factory=list)
+    verified: int = 0
+    unverified: int = 0
+    per_image: list[dict] = field(default_factory=list)
 
 
 @dataclass

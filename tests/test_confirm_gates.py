@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -99,10 +101,64 @@ class ConfirmGateTest(unittest.TestCase):
         self.relocate_root = root / "gate-relocate-dest"
         self.relocate_root.mkdir()
 
+        # `cull.apply` reads its proposal from a real file (`--proposal`, not
+        # an image argument), so this harness's usual "None -> self.raw"
+        # substitution does not apply to it -- a one-frame proposal that
+        # actually changes a rating is written here instead, so the dry run
+        # has a non-empty plan to report.
+        self.cull_proposal = root / "cull-gate.json"
+        self.cull_proposal.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "job_slug": self.job_slug,
+                    "frames": [
+                        {
+                            "path": self.raw,
+                            "image_id": 1,
+                            "seq": 1,
+                            "rating_now": 0,
+                            "rating_proposed": 2,
+                        }
+                    ],
+                    "groups": [],
+                    "xmp_mtimes": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+        # `backup.run`'s gate check runs even for a dry run (design 4.3's
+        # order is gate -> enumerate -> ...), so this fixture needs a
+        # gate-satisfiable config for that dry run to ever be reached.
+        self._env_saved = dict(os.environ)
+        backup_target = root / "backup-target"
+        backup_target.mkdir()
+        passfile = root / "backup.pass"
+        passfile.write_text("test-passphrase\n")
+        passfile.chmod(0o600)
+        config_path = root / "config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "library_root": str(root / "library"),
+                    "backup": {
+                        "enabled": True,
+                        "target": str(backup_target),
+                        "encryption": "openssl",
+                        "openssl_passfile": str(passfile),
+                    },
+                }
+            )
+        )
+        os.environ["SCOUTER_CONFIG"] = str(config_path)
+
     def tearDown(self) -> None:
         self._lib_cfg_patch.stop()
         dtbridge.set_bridge(None)
         self.cache.stop()
+        os.environ.clear()
+        os.environ.update(self._env_saved)
 
     #: Minimal args per gated verb, WITHOUT confirm.
     GATED_ARGS = {
@@ -113,6 +169,12 @@ class ConfirmGateTest(unittest.TestCase):
         "library.import": {"source": None, "job_slug": "gate-hero"},
         "library.register": {"job_slug": "gate-hero"},
         "library.relocate": {"new_root": None},
+        # `--proposal` is a JSON file path, not an image -- the generic
+        # `None -> self.raw` substitution below is for image-shaped args, so
+        # this placeholder is swapped for `self.cull_proposal` explicitly in
+        # `test_every_gated_verb_dry_runs_without_confirm` instead.
+        "cull.apply": {"proposal": "<cull-proposal>"},
+        "backup.run": {},
     }
     # `style.apply` is deliberately NOT here (final review, should-fix 7): its
     # only would-be gate was mode=overwrite, which darktable cannot do at all,
@@ -150,6 +212,8 @@ class ConfirmGateTest(unittest.TestCase):
                     )
                     for k, v in args.items()
                 }
+                if verb_id == "cull.apply":
+                    filled["proposal"] = str(self.cull_proposal)
                 envelope = registry.call(verb_id, "core", **filled)
                 self.assertEqual(
                     envelope.outcome,

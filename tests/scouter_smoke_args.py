@@ -68,6 +68,22 @@ SMOKE_ARGS: dict[str, dict] = {
     # new_root doesn't exist) at worst-worst -- either way exactly one event,
     # and nothing is ever written.
     "library.relocate": {"new_root": SMOKE_SOURCE_DIR},
+    # No real job on disk, so `cull.propose` resolving `--images` (the one
+    # frame `install_doubles` sets up) is enough to exercise it: EXIF comes
+    # from a re-read (no import.json to draw on), and nothing is persisted
+    # since no --job-slug is given -- this coverage test only asserts one
+    # event, not that the proposal was written anywhere.
+    "cull.propose": {"images": [SMOKE_RAW], "px": 64, "workers": 1},
+    # No job named "smoke-job" exists on disk here, so this fails fast
+    # (usage: no such job) -- still exactly one event, which is all this
+    # coverage test asserts.
+    "cull.apply": {"job_slug": "smoke-job"},
+    # dry_run=True: backup.run's gate check runs even for a dry run (design
+    # 4.3's order is gate -> enumerate -> ...), so with no SCOUTER_CONFIG
+    # override here this legitimately errors out on an unconfigured gate --
+    # which is fine, this coverage test only cares about the event count.
+    "backup.run": {"dry_run": True},
+    "backup.verify": {},
 }
 
 
