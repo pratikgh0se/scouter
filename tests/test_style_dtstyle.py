@@ -280,6 +280,83 @@ class ExtractFilteredTest(unittest.TestCase):
         self.assertNotIn("flip", written)
         self.assertIn("exposure", written)
 
+    def test_explicit_forbidden_module_refused_even_under_no_filter(self) -> None:
+        """Fix round 3, item 1: naming a never_include op in --modules is a
+        hard refusal on EVERY path, including no_filter=True -- the explicit
+        request wins over no_filter's "ignore modules" meaning."""
+        with self.assertRaises(UsageError) as ctx:
+            style.extract(
+                image=str(self.raw), name="hero", modules=["exposure", "crop"], no_filter=True
+            )
+        self.assertIn("crop", str(ctx.exception))
+        self.assertIn("--no-filter", str(ctx.exception))
+        self.assertNotIn("style.import_file", self.bridge.methods_called())
+        self.assertNotIn("style.create_from_current", self.bridge.methods_called())
+
+    def test_all_active_modules_forbidden_says_so_honestly(self) -> None:
+        """Fix round 3, item 2: when EVERY active operation is forbidden
+        (no_filter's implicit-drop case), the refusal names that exactly --
+        never "none of the requested modules are present" (nothing was
+        requested; no_filter ignores --modules as a restriction)."""
+        sidecar_path = self.raw.with_suffix(self.raw.suffix + ".xmp")
+        all_forbidden_xmp = """<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="XMP Core 4.4.0-Exiv2">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:darktable="http://darktable.sf.net/"
+   darktable:history_end="1"
+   darktable:iop_order_version="4"
+   darktable:xmp_version="5">
+   <darktable:history>
+    <rdf:Seq>
+     <rdf:li
+      darktable:num="0"
+      darktable:operation="flip"
+      darktable:enabled="1"
+      darktable:modversion="2"
+      darktable:params="ffffffff"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
+    </rdf:Seq>
+   </darktable:history>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+"""
+        sidecar_path.write_text(all_forbidden_xmp, encoding="utf-8")
+
+        with self.assertRaises(UsageError) as ctx:
+            style.extract(image=str(self.raw), name="hero", modules=[], no_filter=True)
+        message = str(ctx.exception)
+        self.assertIn("all 1 active modules are per-image modules", message)
+        self.assertIn("flip", message)
+        self.assertNotIn("none of the requested modules are", message)
+
+    def test_modules_ignored_warning_under_no_filter(self) -> None:
+        """Fix round 3, item 3: a non-empty --modules that names nothing
+        forbidden is still ignored under no_filter=True (every active
+        operation is a candidate instead) -- warn, and echo it in the plan."""
+        dry = style.extract(
+            image=str(self.raw), name="hero", modules=["exposure"], no_filter=True, dry_run=True
+        )
+        self.assertEqual(dry.outcome, "dry_run")
+        self.assertTrue(dry.plan[0]["modules_ignored"])
+
+        result = style.extract(
+            image=str(self.raw), name="hero", modules=["exposure"], no_filter=True
+        )
+        self.assertTrue(any("--modules is ignored under --no-filter" in w for w in result.warnings))
+
+    def test_no_modules_ignored_warning_when_modules_is_empty(self) -> None:
+        """The common no_filter usage (modules=[]) has nothing to warn about."""
+        dry = style.extract(
+            image=str(self.raw), name="hero", modules=[], no_filter=True, dry_run=True
+        )
+        self.assertFalse(dry.plan[0]["modules_ignored"])
+
     def test_no_filter_refusal_message_does_not_recommend_itself(self) -> None:
         """Fix round 2, blocker 1: since no_filter also drops (never bypasses)
         never_include, the filtered path's refusal must not suggest it as an

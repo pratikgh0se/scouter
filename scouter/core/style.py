@@ -179,11 +179,14 @@ def _extract_whole_history(
     Used when `no_filter=True` AND nothing in the image's active history is
     in `cfg.style.never_include` (so there is nothing to drop and the native
     call is equivalent -- fix round 2, blocker 1: when something IS forbidden,
-    `extract` uses the `.dtstyle` writer instead, even under `no_filter`), or
-    when `.dtstyle` filtering itself is unavailable (task 7's host probe
-    found it always is on this darktable build -- see `dtstyle` module
-    docstring -- so `extra_warning` is only ever set by a future build that
-    regresses that).
+    `extract` uses the `.dtstyle` writer instead, even under `no_filter`).
+
+    `extra_warning` carries `extract`'s "--modules is ignored under
+    --no-filter" notice (fix round 3, item 3) when the caller passed a
+    non-empty `modules` alongside `no_filter=True` -- there is no other
+    reason for it to be set today, since `.dtstyle` filtering itself has
+    been available on every darktable build task 7's host probe has seen
+    (see `dtstyle` module docstring).
 
     `style.create_from_current` (the Lua side) builds the style from
     whatever `loaded_darkroom_image()` reports -- the darkroom's OWN idea of
@@ -238,21 +241,33 @@ def extract(
     lighttable), but it does need darktable/the bridge running: `_existing_styles`
     and `style.import_file` are both real round trips (fix round 2, item 7).
 
-    `no_filter=True` ignores the `modules` request (every active operation is
-    a candidate, not just the requested ones) rather than bypassing
-    `cfg.style.never_include` -- per-image geometry and repairs (crop,
-    retouch, spot white balance, ...) must never ride a style EITHER way
-    (fix round 2, blocker 1; an earlier round let `--no-filter` bypass this
-    entirely, which was wrong). When none of the image's active operations
-    are in `never_include`, this is phase 1's cheap native path
-    (`style.create_from_current`, which DOES need the darkroom showing
-    `image` -- that Lua call builds the style from whatever the darkroom
-    currently shows, not from `image` itself, hence `_require_darkroom_shows`).
-    When some ARE, they are DROPPED (never a refusal -- crop in particular is
-    close to universal, so refusing whole-history extraction over it would
-    make `no_filter` useless) via the same `.dtstyle` writer the filtered
-    path uses, and named in `forbidden`. The gate is unchanged either way:
-    `confirm` is required only when a style of that name already exists.
+    `no_filter=True` reads the sidecar and requires a committed history, same
+    as the filtered path (fix round 3, item 3): it ignores `modules` as a
+    RESTRICTION (every active operation is a candidate, not just the
+    requested ones) rather than bypassing `cfg.style.never_include` --
+    per-image geometry and repairs (crop, retouch, spot white balance, ...)
+    must never ride a style EITHER way (fix round 2, blocker 1; an earlier
+    round let `--no-filter` bypass this entirely, which was wrong). When none
+    of the image's active operations are in `never_include`, this is phase
+    1's cheap native path (`style.create_from_current`, which DOES need the
+    darkroom showing `image` -- that Lua call builds the style from whatever
+    the darkroom currently shows, not from `image` itself, hence
+    `_require_darkroom_shows`). When some ARE, they are DROPPED (never a
+    refusal -- crop in particular is close to universal, so refusing
+    whole-history extraction over it would make `no_filter` useless) via the
+    same `.dtstyle` writer the filtered path uses, and named in `forbidden`.
+
+    `modules` naming a `never_include` operation EXPLICITLY is always a hard
+    refusal, even under `no_filter=True` (fix round 3, item 1): the explicit
+    request wins over `no_filter`'s "ignore modules" meaning, since asking
+    for a forbidden module by name and also asking to ignore the module list
+    is a contradiction Scouter should not silently resolve either way.
+    `--no-filter` cannot be combined with `--modules` naming a forbidden op.
+    A non-empty `modules` that names nothing forbidden is otherwise ignored
+    under `no_filter=True` and a warning says so.
+
+    The gate is unchanged either way: `confirm` is required only when a
+    style of that name already exists.
     """
     job = job or current_job()
     # Fix round 1, blocker 1: validated BEFORE any path join -- `name` becomes
@@ -270,6 +285,46 @@ def extract(
     never_include = set(cfg.style.never_include)
     never_include_sorted = sorted(never_include)
 
+    # Fix round 3, item 1: a `modules` entry naming a `never_include`
+    # operation is ALWAYS a hard refusal, on every path, including
+    # `no_filter=True` -- the explicit request wins over `no_filter`'s
+    # "ignore modules" meaning, since naming a forbidden module by hand while
+    # also asking to ignore the module list is a contradiction, not something
+    # to silently resolve either way. Computed and raised BEFORE anything
+    # else (no sidecar read, no bridge call) -- unlike the IMPLICIT drop
+    # below (forbidden operations merely present in a whole-history extract),
+    # this is a pure argument-shape check.
+    explicitly_forbidden = sorted(m for m in modules if m in never_include)
+    if explicitly_forbidden:
+        raise UsageError(
+            f"{explicitly_forbidden} may never ride a style: per-image geometry "
+            "and repairs (cfg.style.never_include) are excluded on purpose. "
+            "Remove them from --modules and re-run"
+            + (
+                " (--no-filter cannot be combined with --modules naming a "
+                "forbidden op -- --no-filter only ignores modules it was not "
+                "explicitly told to include)"
+                if no_filter
+                else ""
+            ),
+            detail={
+                "forbidden": explicitly_forbidden,
+                "never_include": never_include_sorted,
+                "no_filter": no_filter,
+            },
+        )
+
+    # Fix round 3, item 3: `no_filter=True` ignores a non-empty `modules` as a
+    # RESTRICTION (it names nothing forbidden, or the check above would
+    # already have raised) -- warn so the caller is never left thinking their
+    # `--modules` list did anything.
+    modules_ignored_warning: str | None = None
+    if no_filter and modules:
+        modules_ignored_warning = (
+            f"--modules is ignored under --no-filter (every active operation "
+            f"is a candidate instead): {modules}"
+        )
+
     # Fix round 1, should-fix 8: computed BEFORE the dry-run return, so a
     # dry run (or a real run) with a forbidden or entirely-missing module
     # refuses immediately instead of reporting a plan that hides the problem.
@@ -283,6 +338,7 @@ def extract(
     modules_disabled: list[str] = []
     parsed: xmp_module.ParsedXmp | None = None
     active_by_key: dict[tuple[str, int], xmp_module.HistoryEntry] = {}
+    active_ops: set[str] = set()
 
     if no_filter:
         # Fix round 2, blocker 1: `no_filter` drops `modules` as a RESTRICTION
@@ -296,7 +352,7 @@ def extract(
         forbidden = sorted(active_ops & never_include)
         modules_present = sorted(active_ops - never_include)
     else:
-        forbidden = sorted(m for m in modules if m in never_include)
+        forbidden = sorted(m for m in modules if m in never_include)  # always [] here; see above
         if not forbidden:
             parsed = _read_filtered_sidecar(resolved.path)
             active_by_key = {
@@ -327,23 +383,24 @@ def extract(
             "modules_requested": modules,
             "replaces_existing": replaces,
             "no_filter": no_filter,
+            "modules_ignored": bool(modules_ignored_warning),
             "forbidden": forbidden,
             "modules_missing": modules_missing,
         }
     ]
 
-    # Fix round 2, blocker 1: a forbidden module in the FILTERED path (the
-    # caller explicitly asked for it by name) is still a hard refusal -- only
-    # `no_filter` downgrades a forbidden module already present in the
-    # history to a drop, since it is never explicitly "requested" there.
-    if forbidden and not no_filter:
-        raise UsageError(
-            f"{forbidden} may never ride a style: per-image geometry and "
-            "repairs (cfg.style.never_include) are excluded on purpose. Remove "
-            "them from --modules and re-run",
-            detail={"forbidden": forbidden, "never_include": never_include_sorted},
-        )
     if not modules_present:
+        if no_filter and active_ops:
+            # Fix round 3, item 2: this is the IMPLICIT-drop case -- nothing
+            # was "requested" under no_filter, so "none of the requested
+            # modules are present" would be a lie. Say what actually
+            # happened: every active operation is forbidden.
+            active_sorted = sorted(active_ops)
+            raise UsageError(
+                f"all {len(active_sorted)} active modules are per-image modules "
+                f"(cfg.style.never_include) and cannot form a style: {active_sorted}",
+                detail={"active": active_sorted, "never_include": never_include_sorted},
+            )
         raise UsageError(
             "none of the requested modules are in the image's active history: "
             "an empty style is not a style",
@@ -369,7 +426,9 @@ def extract(
     if no_filter and not forbidden:
         # Nothing to drop: the cheap native path is equivalent and needs no
         # .dtstyle round trip at all.
-        return _extract_whole_history(resolved, name, modules, description, extra_warning=None)
+        return _extract_whole_history(
+            resolved, name, modules, description, extra_warning=modules_ignored_warning
+        )
 
     assert parsed is not None  # guaranteed: forbidden->raised above, modules_present non-empty
 
@@ -417,6 +476,8 @@ def extract(
         )
     if no_filter and forbidden:
         warnings.append(f"never_include modules dropped from the whole-history style: {forbidden}")
+    if modules_ignored_warning:
+        warnings.append(modules_ignored_warning)
     if sidecar_warning:
         warnings.append(sidecar_warning)
 
@@ -534,8 +595,10 @@ for verb in (
                 "no_filter",
                 "bool",
                 default=False,
-                help="ignore --modules and keep every active operation "
-                "(never_include is still excluded either way)",
+                help="reads the sidecar and requires a committed history, same "
+                "as the default path; ignores --modules and keeps every active "
+                "operation instead (never_include is still excluded either way "
+                "-- naming a forbidden op in --modules is still refused)",
             ),
         ),
         writes=True,

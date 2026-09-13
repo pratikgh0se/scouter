@@ -244,11 +244,14 @@ TOOL_SPECS: list[dict] = [
         "name": "style_extract",
         "description": "Save the image's history as a darktable style, filtered to `modules` "
         "by writing a .dtstyle from the XMP (no darkroom needed). "
-        "`no_filter=true` ignores `modules` and keeps every active operation "
-        "instead (native darkroom path when nothing is forbidden; still "
-        "excludes cfg.style.never_include -- crop, retouch, spot white "
-        "balance, ... -- either way). Requires confirm=true when a style "
-        "of that name already exists.",
+        "`no_filter=true` also reads the sidecar and requires a committed "
+        "history: it ignores `modules` as a restriction and keeps every "
+        "active operation instead (native darkroom path when nothing is "
+        "forbidden), but still excludes cfg.style.never_include -- crop, "
+        "retouch, spot white balance, ... -- either way. `modules` naming a "
+        "forbidden op is always refused, even with no_filter=true -- an "
+        "explicit request wins over no_filter's 'ignore modules' meaning. "
+        "Requires confirm=true when a style of that name already exists.",
         "inputSchema": _schema(
             {
                 "image": IMAGE,
@@ -272,8 +275,10 @@ TOOL_SPECS: list[dict] = [
                 "no_filter": {
                     "type": "boolean",
                     "default": False,
-                    "description": "ignore `modules` and keep every active operation "
-                    "(never_include is still excluded either way)",
+                    "description": "reads the sidecar and requires a committed history, "
+                    "same as the default path; ignores `modules` and keeps every "
+                    "active operation instead (never_include is still excluded "
+                    "either way -- naming a forbidden op in `modules` is still refused)",
                 },
             },
             ["image", "name", "modules"],

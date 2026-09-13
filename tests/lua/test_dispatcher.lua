@@ -1854,6 +1854,18 @@ local ok_default_prefix = plugin.methods["style.delete"](
 assertEq(ok_default_prefix.existed, false,
   "a name starting with the default prefix is accepted (just not present)")
 
+-- Fix round 3, item 4: an EXPLICIT empty prefix is refused with a typed
+-- error, never silently rewritten to the "scouter-" default -- prefix=""
+-- would otherwise match every style name (sub(1, 0) == "" for anything).
+local ok_empty_prefix, err_empty_prefix = pcall(function()
+  return plugin.methods["style.delete"]({name = "anything-at-all", prefix = "", confirm = true})
+end)
+assertEq(ok_empty_prefix, false, "an explicit empty prefix is refused, not silently defaulted")
+assertTrue(tostring(err_empty_prefix):find("prefix", 1, true) ~= nil,
+  "the refusal names the prefix requirement")
+assertTrue(tostring(err_empty_prefix):find("non-empty", 1, true) ~= nil,
+  "the refusal explains prefix must be non-empty")
+
 -- xml_unescape: all five entities, and the &amp;lt; ordering case (must not
 -- double-unescape to "<").
 assertEq(plugin.xml_unescape("Tom &amp; Jerry"), "Tom & Jerry", "xml_unescape: &amp;")

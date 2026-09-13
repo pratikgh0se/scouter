@@ -1653,8 +1653,19 @@ end
 methods["style.delete"] = function(p)
   p = p or {}
   if type(p.name) ~= "string" or p.name == "" then error("style.delete: name required") end
+  -- Fix round 3, item 4: an OMITTED prefix (nil) defaults to "scouter-", but
+  -- an EXPLICIT empty prefix is refused rather than silently rewritten to
+  -- the same default -- prefix="" would match every style name (an empty
+  -- string is a prefix of everything in Lua's sub(1, 0) == ""), which is
+  -- exactly the safety check this argument exists to prevent bypassing.
   local prefix = p.prefix
-  if type(prefix) ~= "string" or prefix == "" then prefix = "scouter-" end
+  if prefix == nil then
+    prefix = "scouter-"
+  elseif type(prefix) ~= "string" or prefix == "" then
+    error("style.delete: prefix must be a non-empty string (omit it to use "
+      .. "the default \"scouter-\"; an explicit empty prefix would match "
+      .. "every style name, defeating the safety check)")
+  end
   if p.name:sub(1, #prefix) ~= prefix then
     error(string.format(
       "style.delete: refusing to delete %q -- it does not start with the "
