@@ -767,17 +767,76 @@ methods["image.lookup"] = function(p)
   }
 end
 
--- The image the darkroom currently has loaded, or nil.
-local function darkroom_image()
-  if not (dt.gui and dt.gui.action_images) then return nil end
+-- The image the darkroom currently has loaded, or nil, plus WHERE that
+-- answer came from.
+--
+-- `dt.gui.views.darkroom.display_image()` (no args) is documented to return
+-- the image currently displayed in the darkroom, and is the API darkroom.open
+-- should prefer for LOADING one too (see loaded_darkroom_image below) -- but
+-- it is documented, not yet host-verified (task 12 verifies against a real
+-- darktable), so it is guarded and falls back to the `action_images` reading
+-- this plugin already relied on. Callers that act on the result must know
+-- which source answered, hence the second return value.
+local function loaded_darkroom_image()
+  local view = dt.gui and dt.gui.views and dt.gui.views.darkroom
+  if view and type(view.display_image) == "function" then
+    local ok, img = pcall(view.display_image)
+    if ok and img then return img, "display_image" end
+  end
+  if not (dt.gui and dt.gui.action_images) then return nil, "action_images" end
   local ok, images = pcall(function() return dt.gui.action_images end)
-  if not ok or type(images) ~= "table" then return nil end
-  return images[1]
+  if not ok or type(images) ~= "table" then return nil, "action_images" end
+  return images[1], "action_images"
+end
+
+-- Backward-compatible alias: pre-round-1 code and tests called this
+-- darkroom_image() and only wanted the image, not its source.
+local function darkroom_image()
+  local image = loaded_darkroom_image()
+  return image
+end
+
+-- Actually switch the darkroom onto `image`. Returns (ok, method_or_error).
+--
+-- Prefers the documented `display_image(image)` call, which (unlike
+-- dt.gui.current_view) is not a no-op when the darkroom is already open on a
+-- DIFFERENT image -- that was the bug: dt.gui.current_view(dt.gui.views.
+-- darkroom) while already IN the darkroom does nothing, so the requested
+-- image never loaded even though the old code reported opened=true.
+--
+-- Falls back to select + the proven lighttable<->darkroom bounce, bouncing
+-- through the lighttable FIRST when already in the darkroom so the second
+-- switch is a real transition rather than another no-op.
+local function switch_to_darkroom(image)
+  local view = dt.gui and dt.gui.views and dt.gui.views.darkroom
+  if view and type(view.display_image) == "function" then
+    local ok, err = pcall(view.display_image, image)
+    if ok then return true, "display_image" end
+    -- Fall through to the select+switch path below on failure.
+  end
+
+  if dt.gui.selection then pcall(dt.gui.selection, {image}) end
+  if not view then return false, "dt.gui.views.darkroom missing" end
+
+  if current_view_name() == "darkroom" then
+    -- Already in the darkroom (on some other image): switching straight to
+    -- darkroom again is a no-op, so bounce out to the lighttable first.
+    if not (dt.gui.views and dt.gui.views.lighttable) then
+      return false, "dt.gui.views.lighttable missing"
+    end
+    local ok = pcall(dt.gui.current_view, dt.gui.views.lighttable)
+    if not ok then return false, "bounce to lighttable failed" end
+  end
+
+  local ok, err = pcall(dt.gui.current_view, view)
+  if not ok then return false, "view switch failed: " .. tostring(err) end
+  return true, "view_switch"
 end
 
 methods["darkroom.open"] = function(p)
   p = p or {}
   local image = nil
+  local imported = false
   if p.image_id then image = dt.database[tonumber(p.image_id)] end
   if not image and p.path then
     image = find_image_by_path(p.path)
@@ -787,23 +846,40 @@ methods["darkroom.open"] = function(p)
       -- trust its return type -- re-scan instead.
       pcall(dt.database.import, p.path)
       image = find_image_by_path(p.path)
+      if image then imported = true end
     end
   end
   if not image then
     error("darkroom.open: no image for " .. tostring(p.image_id or p.path))
   end
 
-  local loaded = darkroom_image()
+  local loaded, source = loaded_darkroom_image()
   local already = current_view_name() == "darkroom"
       and loaded ~= nil and tonumber(loaded.id) == tonumber(image.id)
 
   if not already then
-    if dt.gui.selection then pcall(dt.gui.selection, {image}) end
-    if not (dt.gui.views and dt.gui.views.darkroom) then
-      error("darkroom.open: dt.gui.views.darkroom missing")
+    local switched, detail = switch_to_darkroom(image)
+    if not switched then
+      error("darkroom.open: " .. tostring(detail))
     end
-    local ok, err = pcall(dt.gui.current_view, dt.gui.views.darkroom)
-    if not ok then error("darkroom.open: view switch failed: " .. tostring(err)) end
+  end
+
+  -- VERIFY: a "successful" switch is not enough on its own -- the no-op bug
+  -- this fixes would otherwise still report opened=true for an image that
+  -- never actually loaded. Trust only what is now actually displayed.
+  local final_image, final_source = loaded_darkroom_image()
+  local matches = final_image ~= nil and tonumber(final_image.id) == tonumber(image.id)
+  if not matches then
+    return {
+      image_id = tonumber(image.id),
+      path = _image_full_path(image),
+      view = current_view_name(),
+      opened = false,
+      already_open = false,
+      imported = imported,
+      source = final_source,
+      error = "wrong image loaded: " .. tostring(image.id),
+    }
   end
 
   return {
@@ -812,6 +888,8 @@ methods["darkroom.open"] = function(p)
     view = current_view_name(),
     opened = not already,
     already_open = already,
+    imported = imported,
+    source = already and source or final_source,
   }
 end
 
@@ -820,13 +898,20 @@ methods["darkroom.action"] = function(p)
   if type(p.path) ~= "string" or p.path == "" then
     error("darkroom.action: path required (e.g. iop/exposure/exposure)")
   end
+  local effect = p.effect or "set"
+  if effect == "set" and type(p.value) ~= "number" then
+    -- HONESTY: value is the absolute value dt.gui.action sets for effect=
+    -- "set" (phase 0 finding 1). Defaulting a missing/mistyped value to 0
+    -- would silently zero a slider instead of reporting the caller's mistake.
+    error('darkroom.action: value is required and must be a number when effect="set"')
+  end
   local value, nan = gui_action(p.path, p.instance, p.element or "value",
-                               p.effect or "set", p.value or 0)
+                               effect, p.value or 0)
   return {
     path = p.path,
     instance = p.instance or 0,
     element = p.element or "value",
-    effect = p.effect or "set",
+    effect = effect,
     value = p.value,
     status = value,
     nan = nan,
@@ -870,9 +955,16 @@ methods["module.enable"] = module_verb("enable")
 methods["module.disable"] = module_verb("disable")
 methods["module.reset"] = module_verb("reset")
 
--- Commit trigger. Candidate order comes from task 1's measurement, recorded in
--- docs/measurements.md. C1/C2 keep the darkroom loaded (cheap); C3 is the
--- proven floor (phase 0 finding 3) and reloads the pipe, so it is the fallback.
+-- Commit trigger.
+--
+-- Task 1's measurement (docs/measurements.md) REJECTED every sidecar-write
+-- action spelling below -- C1 and all three C2 variants returned nan on this
+-- darktable build, the same "not a real widget path" signal phase 0 saw for
+-- absolute sets outside the darkroom. So strategy="auto" goes straight to
+-- C3, the view bounce, which is the only strategy phase 0/1 proved commits.
+-- The ladder below stays reachable only via an EXPLICIT
+-- strategy="sidecar_action" request, for a future darktable build where one
+-- of these spellings might actually be wired up.
 local SIDECAR_ACTION_PATHS = {
   "lib/selected image[s]/write sidecar files",
   "lib/metadata/write sidecar files",
@@ -887,36 +979,56 @@ local function commit_sidecar_action()
   return false, nil
 end
 
+-- Returns {ok, error, view}. `view` is always the ACTUAL current view when
+-- the function returns, whether or not the bounce succeeded -- callers must
+-- never report a view the session did not really end up in.
 local function commit_view_bounce()
+  local starting_view = current_view_name()
+  if starting_view ~= "darkroom" then
+    -- A bounce that starts outside the darkroom cannot commit anything: the
+    -- lighttable-then-darkroom dance only re-triggers a pipe write if there
+    -- was a live darkroom pipe to write from.
+    return {ok = false, error = "not in darkroom", view = starting_view}
+  end
   if not (dt.gui.views and dt.gui.views.lighttable and dt.gui.views.darkroom) then
-    return false, "dt.gui.views.lighttable/darkroom missing"
+    return {ok = false, error = "dt.gui.views.lighttable/darkroom missing", view = starting_view}
   end
   local ok1 = pcall(dt.gui.current_view, dt.gui.views.lighttable)
   if dt.control and dt.control.sleep then dt.control.sleep(300) end
   local ok2 = pcall(dt.gui.current_view, dt.gui.views.darkroom)
-  if not (ok1 and ok2) then return false, "view switch failed" end
-  return true, nil
+  if not ok2 then
+    -- One retry: a single flaky switch back into the darkroom should not
+    -- strand the session in the lighttable when the commit itself likely
+    -- still landed (the pipe already unloaded on the way out).
+    ok2 = pcall(dt.gui.current_view, dt.gui.views.darkroom)
+  end
+  local final_view = current_view_name()
+  if not (ok1 and ok2) then
+    return {ok = false, error = "view switch failed", view = final_view}
+  end
+  return {ok = true, error = nil, view = final_view}
 end
 
 methods["history.commit"] = function(p)
   p = p or {}
   local strategy = p.strategy or "auto"
-  local started = os.time()
-  if strategy == "auto" or strategy == "sidecar_action" then
+  -- CPU time (os.clock()), not wall-clock -- matches docs/measurements.md,
+  -- which records both and notes CPU time understates the real cost.
+  local started = os.clock()
+  if strategy == "sidecar_action" then
     local ok, path = commit_sidecar_action()
     if ok then
       return {strategy_used = "sidecar_action", ok = true, detail = path,
-              view_after = current_view_name(), ms = (os.time() - started) * 1000}
+              view_after = current_view_name(), ms = (os.clock() - started) * 1000}
     end
-    if strategy == "sidecar_action" then
-      return {strategy_used = "sidecar_action", ok = false,
-              detail = "every sidecar-write action returned nan on this build",
-              view_after = current_view_name(), ms = (os.time() - started) * 1000}
-    end
+    return {strategy_used = "sidecar_action", ok = false,
+            detail = "every sidecar-write action returned nan on this build",
+            view_after = current_view_name(), ms = (os.clock() - started) * 1000}
   end
-  local ok, detail = commit_view_bounce()
-  return {strategy_used = "view_bounce", ok = ok, detail = detail,
-          view_after = current_view_name(), ms = (os.time() - started) * 1000}
+  -- strategy == "auto" (or anything else): the proven floor, C3.
+  local result = commit_view_bounce()
+  return {strategy_used = "view_bounce", ok = result.ok, detail = result.error,
+          view_after = result.view, ms = (os.clock() - started) * 1000}
 end
 
 methods["snapshot.take"] = function()
@@ -938,7 +1050,7 @@ methods["style.create_from_current"] = function(p)
   if type(p.name) ~= "string" or p.name == "" then
     error("style.create_from_current: name required")
   end
-  local image = darkroom_image()
+  local image, source = loaded_darkroom_image()
   if not image then error("style.create_from_current: no image loaded in the darkroom") end
 
   local existed = false
@@ -958,6 +1070,7 @@ methods["style.create_from_current"] = function(p)
   return {
     name = p.name, created = true, existing_replaced = existed,
     modules_requested = requested, modules_honoured = false,
+    source = source,
     note = requested > 0 and ("dt.styles.create has no module filter in Lua API "
       .. "9.6.0; the style carries the image's whole history") or nil,
   }
@@ -1337,6 +1450,9 @@ return {
   is_nan = is_nan,
   find_image_by_path = find_image_by_path,
   darkroom_image = darkroom_image,
+  loaded_darkroom_image = loaded_darkroom_image,
+  switch_to_darkroom = switch_to_darkroom,
+  commit_view_bounce = commit_view_bounce,
   module_actions = MODULE_ACTIONS,
   sidecar_action_paths = SIDECAR_ACTION_PATHS,
 }

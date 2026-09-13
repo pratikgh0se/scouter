@@ -41,7 +41,10 @@ local dt_log = {}
 local NAN = 0/0
 local action_log = {}
 local action_returns = {}
-local view_state = {current = "lighttable"}
+-- `fail_switches_remaining`: how many upcoming dt.gui.current_view(darkroom)
+-- calls should raise before succeeding, scripting a flaky/failing switch for
+-- the commit_view_bounce retry tests. Consumed one at a time.
+local view_state = {current = "lighttable", fail_switches_remaining = 0}
 local views = {darkroom = {id = "darkroom"}, lighttable = {id = "lighttable"}}
 local selection_log = {}
 local styles_created = {}
@@ -66,8 +69,27 @@ stub_dt.gui = {
     return r
   end,
   current_view = function(v)
-    if v ~= nil then view_state.current = v.id; return v end
-    return views[view_state.current]
+    if v == nil then return views[view_state.current] end
+    if v.id == view_state.current then
+      -- Real darktable treats a switch to the CURRENT view as a no-op: it
+      -- does not reload the pipe, so a stale image stays loaded. This is
+      -- exactly the bug darkroom.open's fix (switch_to_darkroom) has to
+      -- route around when already in the darkroom on a different image.
+      return v
+    end
+    if v.id == "darkroom" and (view_state.fail_switches_remaining or 0) > 0 then
+      view_state.fail_switches_remaining = view_state.fail_switches_remaining - 1
+      error("scripted darkroom switch failure")
+    end
+    view_state.current = v.id
+    if v.id == "darkroom" then
+      -- Switching INTO the darkroom loads whatever was most recently
+      -- selected -- mirrors the real GUI closely enough to prove
+      -- switch_to_darkroom's bounce actually loads the requested image.
+      local sel = selection_log[#selection_log]
+      if sel and sel[1] then stub_dt.gui.action_images = {sel[1]} end
+    end
+    return v
   end,
   views = views,
   selection = function(images) table.insert(selection_log, images); return images end,
@@ -1365,12 +1387,29 @@ assertEq(act.effect, "set", "action effect echoed")
 assertEq(act.view, "darkroom", "action view echoed")
 assertEq(action_log[#action_log].element, "value", "action element forwarded")
 
+-- effect="set" requires an actual numeric value: it must error, never
+-- silently default to 0 and zero out a slider the caller only meant to nudge.
+local resp_missing_value = plugin.handle({id = "dv1", method = "darkroom.action",
+  params = {path = "iop/exposure/exposure", effect = "set"}})
+assertTrue(resp_missing_value.error ~= nil
+  and resp_missing_value.error:find("value", 1, true) ~= nil,
+  "darkroom.action refuses effect=set with no value")
+local resp_string_value = plugin.handle({id = "dv2", method = "darkroom.action",
+  params = {path = "iop/exposure/exposure", effect = "set", value = "1.5"}})
+assertTrue(resp_string_value.error ~= nil,
+  "darkroom.action refuses effect=set with a non-numeric value")
+
 -- nan must arrive as nan=true, NOT as a null number.
 action_returns["iop/sigmoid/contrast"] = "nan"
 local nanres = plugin.methods["darkroom.action"]({
   path = "iop/sigmoid/contrast", effect = "set", value = 1.4})
 assertEq(nanres.nan, true, "nan flagged")
-assertEq(nanres.status, nil, "nan status is nil, encoded as null")
+-- A direct `nanres.status == nil` check is vacuous in Lua: a table
+-- constructor never STORES a nil-valued field, so this would read nil
+-- whether or not the encoder is correct. Assert on the encoded JSON text
+-- instead, where the key's absence (not an explicit null) is observable.
+assertTrue(plugin.json.encode(nanres):find('"status"', 1, true) == nil,
+  "nan status key is absent from the encoded JSON (Lua omits nil-valued keys)")
 assertTrue(plugin.json.encode(nanres):find('"nan":true') ~= nil, "nan survives encoding")
 
 -- darkroom.status uses the empty effect and speed 0 (the documented query).
@@ -1396,23 +1435,60 @@ assertEq(action_log[#action_log].effect, "activate", "reset effect")
 local ok_err = plugin.handle({id = "x", method = "module.enable", params = {}})
 assertTrue(ok_err.error ~= nil, "module.enable without module errors")
 
--- history.commit: the sidecar action wins when it does not return nan.
-action_returns["lib/selected image[s]/write sidecar files"] = 1
+-- history.commit: strategy="auto" goes straight to the proven view_bounce
+-- floor -- task 1's measurement rejected every sidecar-write action spelling
+-- on this darktable build, so auto no longer tries the ladder at all.
+view_state.current = "darkroom"
 local c = plugin.methods["history.commit"]({strategy = "auto"})
-assertEq(c.strategy_used, "sidecar_action", "auto picks the cheap strategy")
-assertEq(c.ok, true, "sidecar commit ok")
+assertEq(c.strategy_used, "view_bounce", "auto uses the view bounce, never the sidecar ladder")
+assertEq(c.ok, true, "view bounce ok")
+assertEq(c.view_after, "darkroom", "view bounce returns to the darkroom")
 
--- ... and falls back to the view bounce when every spelling is nan.
+-- ...the sidecar ladder stays reachable only via an EXPLICIT
+-- strategy="sidecar_action" request, and can still succeed there...
+action_returns["lib/selected image[s]/write sidecar files"] = 1
+local c2 = plugin.methods["history.commit"]({strategy = "sidecar_action"})
+assertEq(c2.strategy_used, "sidecar_action", "explicit sidecar_action strategy reaches the ladder")
+assertEq(c2.ok, true, "sidecar commit ok")
+
+-- ...and honestly reports failure, never a silent fallback, when every
+-- spelling is nan.
 action_returns["lib/selected image[s]/write sidecar files"] = "nan"
 action_returns["lib/metadata/write sidecar files"] = "nan"
 action_returns["lib/image/write sidecar files"] = "nan"
-view_state.current = "darkroom"
-local c2 = plugin.methods["history.commit"]({strategy = "auto"})
-assertEq(c2.strategy_used, "view_bounce", "auto falls back to the view bounce")
-assertEq(c2.ok, true, "view bounce ok")
-assertEq(c2.view_after, "darkroom", "view bounce returns to the darkroom")
+local c3 = plugin.methods["history.commit"]({strategy = "sidecar_action"})
+assertEq(c3.strategy_used, "sidecar_action", "sidecar_action strategy_used echoed even on failure")
+assertEq(c3.ok, false, "sidecar commit reports failure instead of silently succeeding")
 
--- style.create_from_current is honest about the missing module filter.
+-- The view bounce refuses outside the darkroom instead of attempting a
+-- bounce that cannot possibly commit anything.
+view_state.current = "lighttable"
+local c4 = plugin.methods["history.commit"]({strategy = "auto"})
+assertEq(c4.ok, false, "view bounce refuses outside the darkroom")
+assertEq(c4.detail, "not in darkroom", "refusal names the reason")
+assertEq(c4.view_after, "lighttable", "refusal reports the actual (unchanged) view honestly")
+
+-- A single flaky switch back into the darkroom is retried once, so it does
+-- not strand the session in the lighttable when the commit likely landed.
+view_state.current = "darkroom"
+view_state.fail_switches_remaining = 1
+local c5 = plugin.methods["history.commit"]({strategy = "auto"})
+assertEq(c5.ok, true, "a switch that fails once and succeeds on retry still commits")
+assertEq(c5.view_after, "darkroom", "retry lands back in the darkroom")
+assertEq(view_state.fail_switches_remaining, 0, "the scripted failure was consumed by the retry")
+
+-- Two consecutive failures exhaust the retry: report failure and the ACTUAL
+-- view truthfully, never a claimed "darkroom" that never happened.
+view_state.current = "darkroom"
+view_state.fail_switches_remaining = 2
+local c6 = plugin.methods["history.commit"]({strategy = "auto"})
+assertEq(c6.ok, false, "two consecutive switch failures are reported as failure")
+assertEq(c6.view_after, "lighttable",
+  "an unrecovered bounce leaves (and honestly reports) the session in the lighttable")
+view_state.fail_switches_remaining = 0
+
+-- style.create_from_current is honest about the missing module filter, and
+-- about where the "current image" reading came from.
 stub_dt.gui.action_images = {images_by_id[101]}
 local cs = plugin.methods["style.create_from_current"]({
   name = "hero", modules = {"exposure", "sigmoid"}})
@@ -1420,6 +1496,8 @@ assertEq(cs.created, true, "style created")
 assertEq(cs.modules_requested, 2, "modules counted")
 assertEq(cs.modules_honoured, false, "module filter honestly refused")
 assertTrue(cs.note ~= nil, "module filter note present")
+assertEq(cs.source, "action_images",
+  "reports the action_images fallback source (stub has no display_image)")
 
 -- style.apply appends, counts misses, and refuses overwrite loudly.
 local ap = plugin.methods["style.apply"]({image_ids = {101, 999}, name = "hero"})
@@ -1437,11 +1515,62 @@ local op = plugin.methods["darkroom.open"]({image_id = 101})
 assertEq(op.image_id, 101, "open by id")
 assertEq(op.opened, true, "opened")
 assertEq(op.view, "darkroom", "view after open")
+assertEq(op.imported, false, "opening a known image does not import anything")
 assertTrue(#selection_log > 0, "selection set before the view switch")
 stub_dt.gui.action_images = {images_by_id[101]}
 local op2 = plugin.methods["darkroom.open"]({image_id = 101})
 assertEq(op2.already_open, true, "already-open detected")
 assertEq(op2.opened, false, "no redundant view switch")
+
+-- THE BLOCKER THIS ROUND FIXES: the darkroom is open on a DIFFERENT image.
+-- dt.gui.current_view(darkroom) alone is a no-op there, so the old code
+-- reported opened=true while image 101 stayed loaded. switch_to_darkroom
+-- must bounce through the lighttable and really load image 102.
+view_state.current = "darkroom"
+stub_dt.gui.action_images = {images_by_id[101]}
+local op3 = plugin.methods["darkroom.open"]({image_id = 102})
+assertEq(op3.image_id, 102, "open requests id 102")
+assertEq(op3.opened, true, "switching to a different already-darkroom image reports opened=true")
+assertTrue(op3.error == nil, "no error when the switch actually loads the requested image")
+assertEq(stub_dt.gui.action_images[1].id, 102, "the stub's loaded image genuinely became 102")
+
+-- A selection that silently targets the WRONG image (simulated staleness):
+-- the post-switch VERIFICATION must catch the mismatch and refuse, never
+-- claim opened=true for an image that never actually loaded.
+view_state.current = "darkroom"
+stub_dt.gui.action_images = {images_by_id[101]}
+local original_selection = stub_dt.gui.selection
+stub_dt.gui.selection = function(_)
+  table.insert(selection_log, {images_by_id[101]})
+  return {images_by_id[101]}
+end
+local op4 = plugin.methods["darkroom.open"]({image_id = 102})
+assertEq(op4.opened, false, "a switch that does not actually load the requested image is not opened")
+assertTrue(op4.error ~= nil and op4.error:find("102", 1, true) ~= nil,
+  "wrong-image error names the requested id")
+stub_dt.gui.selection = original_selection
+
+-- A path not yet in the library is imported, then opened, and reported so.
+local imported_image = {id = 104, filename = "NEWFILE.NEF", path = "/photos", rating = 0}
+imported_image.apply_style = function(self, style)
+  table.insert(applied_styles, {id = self.id, style = style.name})
+end
+local original_db = stub_dt.database
+stub_dt.database = setmetatable({
+  import = function(_)
+    images_by_id[104] = imported_image
+    table.insert(iter_list, imported_image)
+    return imported_image
+  end,
+}, {__index = original_db})
+view_state.current = "lighttable"
+stub_dt.gui.action_images = {}
+local op5 = plugin.methods["darkroom.open"]({path = "/photos/NEWFILE.NEF"})
+assertEq(op5.imported, true, "darkroom.open reports imported=true when the path had to be registered")
+assertEq(op5.image_id, 104, "darkroom.open opens the newly imported image")
+stub_dt.database = original_db
+images_by_id[104] = nil
+table.remove(iter_list)
 
 -- image.lookup by absolute path.
 local lu = plugin.methods["image.lookup"]({path = "/photos/DSC_0001.NEF"})
@@ -1454,6 +1583,18 @@ assertEq(lu2.found, false, "lookup miss reports found=false")
 local sn = plugin.methods["snapshot.take"]()
 assertEq(sn.taken, true, "snapshot taken")
 assertEq(sn.via, "libs.snapshots", "snapshot via the lib API")
+
+-- ...and falls back to the action path when the lib API raises, honestly
+-- reporting failure when that fallback action ALSO returns nan.
+local original_take_snapshot = stub_dt.gui.libs.snapshots.take_snapshot
+stub_dt.gui.libs.snapshots.take_snapshot = function() error("snapshot lib boom") end
+action_returns["lib/snapshots/take snapshot"] = "nan"
+local sn2 = plugin.methods["snapshot.take"]()
+assertEq(sn2.via, "action", "snapshot falls back to the action path when libs.snapshots raises")
+assertEq(sn2.taken, false, "snapshot not taken when the fallback action also returns nan")
+assertTrue(sn2.detail ~= nil, "snapshot fallback records the libs.snapshots error as detail")
+stub_dt.gui.libs.snapshots.take_snapshot = original_take_snapshot
+action_returns["lib/snapshots/take snapshot"] = nil
 
 -- ---- Report ----------------------------------------------------------------
 if #failures > 0 then

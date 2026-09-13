@@ -268,6 +268,90 @@ def test_plugin_registers_every_scouter_method():
     )
 
 
+def test_history_commit_auto_does_not_reach_the_sidecar_ladder():
+    """strategy="auto" must go straight to view_bounce (spec section 8.1).
+
+    Task 1's measurement rejected every sidecar-write action spelling on this
+    darktable build, so `history.commit` no longer tries them under "auto" --
+    the ladder is reachable only via an explicit strategy="sidecar_action".
+    Fix round 1 regression: the original code gated the sidecar ladder behind
+    `strategy == "auto" or strategy == "sidecar_action"`.
+    """
+    source = PLUGIN.read_text(encoding="utf-8")
+    body = source.split('methods["history.commit"] = function', 1)
+    assert len(body) == 2, 'methods["history.commit"] not found in the plugin'
+    body = body[1].split('\nmethods[', 1)[0]
+    assert 'strategy == "auto" or strategy == "sidecar_action"' not in body, (
+        'history.commit still gates the sidecar ladder behind "auto" -- auto '
+        "must use only the proven view_bounce floor"
+    )
+    assert 'if strategy == "sidecar_action" then' in body, (
+        "the sidecar ladder is no longer reachable via an explicit "
+        "strategy=\"sidecar_action\" request"
+    )
+
+
+def test_history_commit_ms_is_cpu_time_not_os_time():
+    """`ms` must come from os.clock() (CPU time), not os.time() (whole seconds).
+
+    os.time() has whole-second resolution, so a sub-second commit always
+    measured as 0ms or 1000ms -- not a real duration. docs/measurements.md
+    itself uses os.clock() and documents it as CPU time, not wall clock.
+    """
+    source = PLUGIN.read_text(encoding="utf-8")
+    body = source.split('methods["history.commit"] = function', 1)
+    assert len(body) == 2, 'methods["history.commit"] not found in the plugin'
+    body = body[1].split('\nmethods[', 1)[0]
+    assert "os.clock()" in body, "history.commit no longer times itself with os.clock()"
+    assert "os.time()" not in body, "history.commit must not time itself with os.time()"
+
+
+def test_commit_view_bounce_refuses_outside_darkroom():
+    """commit_view_bounce must check the starting view before doing anything.
+
+    A bounce that starts outside the darkroom cannot commit anything, and the
+    old code attempted it anyway. Fix round 1 blocker.
+    """
+    source = PLUGIN.read_text(encoding="utf-8")
+    body = source.split("local function commit_view_bounce", 1)
+    assert len(body) == 2, "commit_view_bounce not found in the plugin"
+    body = body[1].split("\nend", 1)[0]
+    assert '"not in darkroom"' in body, (
+        "commit_view_bounce does not refuse when the starting view is not "
+        "the darkroom"
+    )
+
+
+def test_darkroom_open_verifies_the_loaded_image():
+    """darkroom.open must check what actually loaded, not just that the view
+    switch call itself did not raise.
+
+    dt.gui.current_view(darkroom) is a no-op when the darkroom is already
+    open on a different image, so a switch that "succeeds" can still leave
+    the wrong image loaded. Fix round 1 blocker.
+    """
+    source = PLUGIN.read_text(encoding="utf-8")
+    body = source.split('methods["darkroom.open"] = function', 1)
+    assert len(body) == 2, 'methods["darkroom.open"] not found in the plugin'
+    body = body[1].split('\nmethods[', 1)[0]
+    assert "wrong image loaded" in body, (
+        "darkroom.open no longer verifies the loaded image id against the "
+        "requested one"
+    )
+
+
+def test_darkroom_action_requires_a_numeric_value_for_set():
+    """effect="set" must require a real numeric value, never default to 0."""
+    source = PLUGIN.read_text(encoding="utf-8")
+    body = source.split('methods["darkroom.action"] = function', 1)
+    assert len(body) == 2, 'methods["darkroom.action"] not found in the plugin'
+    body = body[1].split('\nmethods[', 1)[0]
+    assert 'type(p.value) ~= "number"' in body, (
+        "darkroom.action no longer guards effect=\"set\" against a missing "
+        "or non-numeric value"
+    )
+
+
 def test_sweep_covers_orphan_responses():
     """sweep_stale must collect response-*.json, not just request-*.json.
 
