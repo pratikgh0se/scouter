@@ -91,7 +91,7 @@ class LoadVerbsImportGuardTest(unittest.TestCase):
             groups = {verb.group for verb in verbs.values()}
             self.assertEqual(
                 groups,
-                {"config", "darkroom", "export", "history", "scout", "style", "metrics", "backup"},
+                {"config", "darkroom", "export", "history", "scout", "style", "library", "cull", "backup", "metrics"},
             )
         finally:
             for name in core_module_names:

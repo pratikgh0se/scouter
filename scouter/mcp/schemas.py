@@ -321,6 +321,144 @@ TOOL_SPECS: list[dict] = [
         ),
     },
     {
+        "name": "library_import",
+        "description": "Copy, checksum, rename and register a memory card into the library. "
+        "Refuses with backup_not_configured before reading a single file "
+        "unless the backup gate passes (config.show reports its verdict). "
+        "Always requires confirm=true: an import is always more than one "
+        "file. Originals are copied read-only (chmod 0444) and verified "
+        "with two independent sha256 passes; a darktable that is not "
+        "running does not fail the import (film_roll_registered: false, "
+        "retry with library.register).",
+        "inputSchema": _schema(
+            {
+                "source": {"type": "string", "description": "the card's mount point"},
+                "job_slug": {
+                    "type": "string",
+                    "description": "job directory slug, e.g. harbour-wedding",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "YYYY-MM-DD; default: the earliest capture time",
+                },
+                "camera": {
+                    "type": "string",
+                    "description": "camera slug override; required for a mixed-camera card",
+                },
+                "extensions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "override import.extensions, e.g. ORF,ARW",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: an import always touches more than one file",
+                },
+            },
+            ["source", "job_slug"],
+        ),
+    },
+    {
+        "name": "library_verify",
+        "description": "Re-hash raw/ against the job's .scouter/checksums.sha256 manifest. "
+        "Read-only. `.xmp` sidecars are excluded by suffix, not by silence.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {"type": "string", "description": "job slug to verify"},
+                "date": {
+                    "type": "string",
+                    "description": "disambiguate when the slug matches more than one job",
+                },
+            },
+            ["job_slug"],
+        ),
+    },
+    {
+        "name": "library_register",
+        "description": "Re-register a job's film roll with darktable (e.g. after importing "
+        "with darktable closed). Requires confirm=true: it writes to "
+        "darktable's own library.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {"type": "string", "description": "job slug to register"},
+                "date": {
+                    "type": "string",
+                    "description": "disambiguate when the slug matches more than one job",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: writes to darktable's library",
+                },
+            },
+            ["job_slug"],
+        ),
+    },
+    {
+        "name": "cull_propose",
+        "description": "Propose a rating for every frame in a job (or an explicit image "
+        "list), grouped into bursts by capture time and camera. Never "
+        "proposes rating 0 or reject -- stats cannot see eyes, "
+        "expression or a deliberate motion blur, so a flagged frame "
+        "gets rating 1 with its numbers and the human decides. Every "
+        "reason names the numbers behind it. Read-only: writes no "
+        "rating and calls the bridge only for the read-only "
+        "image.lookup behind image resolution.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {
+                    "type": "string",
+                    "description": "job slug; frames come from its import.json",
+                },
+                "images": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "description": "explicit image list, instead of (or alongside) " "--job-slug",
+                },
+                "px": {
+                    "type": "integer",
+                    "description": "stats render size (default: stats.set_px)",
+                },
+                "workers": {
+                    "type": "integer",
+                    "description": "thread pool size (default: stats.workers)",
+                },
+            },
+            [],
+        ),
+    },
+    {
+        "name": "cull_apply",
+        "description": "Apply a cull.propose proposal's ratings via the image.rate bridge "
+        "verb, in batches of 50, verified by polling each changed "
+        "frame's XMP sidecar. Refuses (usage) if any frame's sidecar "
+        "changed since the proposal was written. Requires confirm=true: "
+        "a cull touches many images.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {
+                    "type": "string",
+                    "description": "job slug; loads the newest cull-*.json unless "
+                    "proposal is given",
+                },
+                "proposal": {
+                    "type": "string",
+                    "description": "path to a specific cull-<ts>.json",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: writes ratings via image.rate",
+                },
+            },
+            [],
+        ),
+    },
+    {
         "name": "config_init",
         "description": "Write the starter Scouter config file (~/.config/scouter/config.json "
         "by default). backup.enabled is false in the starter file, so the "

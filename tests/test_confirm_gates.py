@@ -5,9 +5,14 @@ from __future__ import annotations
 import json
 import os
 import unittest
+from pathlib import Path
+from unittest import mock
 
-from scouter import registry
-from scouter.core import dtbridge
+from scouter import config, registry
+from scouter.core import dtbridge, library
+from tests.scouter_fakes import config_fixture
+
+FIXTURE = Path(__file__).parent / "fixtures" / "exif-orf-header.bin"
 
 # `registry.load_verbs()` tracks whether a full load has been attempted (not
 # whether `VERB_REGISTRY` happens to be non-empty), so it always walks every
@@ -76,6 +81,47 @@ class ConfirmGateTest(unittest.TestCase):
         self.bridge = RefusingBridge(self, self.raw)
         dtbridge.set_bridge(self.bridge)
 
+        # `library.import`/`library.register` need a passing backup gate and
+        # a real job layout to reach their own dry-run branch at all -- unlike
+        # every other gated verb here, `library.import` refuses BEFORE the
+        # dry-run check if the backup gate fails (design section 4.3), so this
+        # harness's usual "just substitute a raw path" trick isn't enough.
+        self.cfg = config_fixture(root)
+        self._lib_cfg_patch = mock.patch.object(library.config, "load", return_value=self.cfg)
+        self._lib_cfg_patch.start()
+        self.card_dir = root / "gate-card"
+        self.card_dir.mkdir()
+        (self.card_dir / "P0001.ORF").write_bytes(FIXTURE.read_bytes())
+        self.job_slug = "gate-hero"
+        job_path = config.job_dir(self.cfg, "2026-06-28", self.job_slug)
+        (job_path / "raw").mkdir(parents=True)
+
+        # `cull.apply` reads its proposal from a real file (`--proposal`, not
+        # an image argument), so this harness's usual "None -> self.raw"
+        # substitution does not apply to it -- a one-frame proposal that
+        # actually changes a rating is written here instead, so the dry run
+        # has a non-empty plan to report.
+        self.cull_proposal = root / "cull-gate.json"
+        self.cull_proposal.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "job_slug": self.job_slug,
+                    "frames": [
+                        {
+                            "path": self.raw,
+                            "image_id": 1,
+                            "seq": 1,
+                            "rating_now": 0,
+                            "rating_proposed": 2,
+                        }
+                    ],
+                    "groups": [],
+                    "xmp_mtimes": {},
+                }
+            ),
+            encoding="utf-8",
+        )
         # `backup.run`'s gate check runs even for a dry run (design 4.3's
         # order is gate -> enumerate -> ...), so this fixture needs a
         # gate-satisfiable config for that dry run to ever be reached.
@@ -103,6 +149,7 @@ class ConfirmGateTest(unittest.TestCase):
         os.environ["SCOUTER_CONFIG"] = str(config_path)
 
     def tearDown(self) -> None:
+        self._lib_cfg_patch.stop()
         dtbridge.set_bridge(None)
         self.cache.stop()
         os.environ.clear()
@@ -114,6 +161,13 @@ class ConfirmGateTest(unittest.TestCase):
         "darkroom.reset": {"module": "exposure"},
         "style.extract": {"image": None, "name": "hero", "modules": []},
         "export.run": {"images": [None, None], "preset": "preview", "out_dir": None},
+        "library.import": {"source": None, "job_slug": "gate-hero"},
+        "library.register": {"job_slug": "gate-hero"},
+        # `--proposal` is a JSON file path, not an image -- the generic
+        # `None -> self.raw` substitution below is for image-shaped args, so
+        # this placeholder is swapped for `self.cull_proposal` explicitly in
+        # `test_every_gated_verb_dry_runs_without_confirm` instead.
+        "cull.apply": {"proposal": "<cull-proposal>"},
         "backup.run": {},
     }
     # `style.apply` is deliberately NOT here (final review, should-fix 7): its
@@ -133,17 +187,23 @@ class ConfirmGateTest(unittest.TestCase):
                         self.out_dir
                         if k == "out_dir"
                         else (
-                            self.raw
-                            if v is None
+                            str(self.card_dir)
+                            if k == "source"
                             else (
-                                [self.raw] * len(v)
-                                if isinstance(v, list) and v and v[0] is None
-                                else v
+                                self.raw
+                                if v is None
+                                else (
+                                    [self.raw] * len(v)
+                                    if isinstance(v, list) and v and v[0] is None
+                                    else v
+                                )
                             )
                         )
                     )
                     for k, v in args.items()
                 }
+                if verb_id == "cull.apply":
+                    filled["proposal"] = str(self.cull_proposal)
                 envelope = registry.call(verb_id, "core", **filled)
                 self.assertEqual(
                     envelope.outcome,
