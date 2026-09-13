@@ -80,6 +80,7 @@ class ConfirmGateTest(unittest.TestCase):
 
     #: Minimal args per gated verb, WITHOUT confirm.
     GATED_ARGS = {
+        "config.init": {"path": None},
         "darkroom.reset": {"module": "exposure"},
         "style.extract": {"image": None, "name": "hero", "modules": []},
         "export.run": {"images": [None, None], "preset": "preview", "out_dir": None},

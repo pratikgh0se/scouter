@@ -129,6 +129,12 @@ class ErrorsTest(unittest.TestCase):
             "db_locked",
             "style_partial",
             "commit_timeout",
+            "backup_not_configured",
+            "checksum_mismatch",
+            "destination_collision",
+            "exif_unreadable",
+            "style_write_failed",
+            "encryption_unavailable",
         }
         codes = {cls.code for cls in errors.ERROR_CLASSES}
         self.assertEqual(codes, expected)

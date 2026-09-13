@@ -28,6 +28,47 @@ def validate_job(job: str) -> str:
     return job
 
 
+#: A job slug becomes a DIRECTORY NAME inside the library and a vault note name,
+#: so it is validated like a job id: lowercase, no separators, no leading dot.
+SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
+
+
+def validate_slug(slug: str) -> str:
+    if not isinstance(slug, str) or not SLUG_RE.match(slug):
+        raise UsageError(
+            f"invalid job slug {slug!r}: 1-48 characters of [a-z0-9-] starting with a "
+            "letter or a digit (it becomes a directory name and a vault note name)",
+            detail={"slug": slug, "pattern": SLUG_RE.pattern},
+        )
+    return slug
+
+
+def config_dir() -> Path:
+    """`$SCOUTER_CONFIG`'s parent, else `$XDG_CONFIG_HOME/scouter`, else `~/.config/scouter`."""
+    explicit = os.environ.get("SCOUTER_CONFIG")
+    if explicit:
+        return Path(explicit).parent
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "scouter"
+
+
+def config_path() -> Path:
+    explicit = os.environ.get("SCOUTER_CONFIG")
+    return Path(explicit) if explicit else config_dir() / "config.json"
+
+
+def wb_dir() -> Path:
+    return config_dir() / "wb"
+
+
+def styles_dir() -> Path:
+    return cache_root() / "styles"
+
+
+def stats_dir() -> Path:
+    return cache_root() / "stats"
+
+
 def cache_root() -> Path:
     """`$SCOUTER_CACHE`, else `$XDG_CACHE_HOME/scouter`, else `~/.cache/scouter`."""
     explicit = os.environ.get("SCOUTER_CACHE")

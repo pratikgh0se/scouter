@@ -203,6 +203,15 @@ class ExportResult(Payload):
 
 
 @dataclass
+class ConfigResult(Payload):
+    config_path: str = ""
+    config_exists: bool = False
+    written: bool = False
+    backup_gate: str = "unknown"
+    config: dict = field(default_factory=dict)
+
+
+@dataclass
 class SummaryResult(Payload):
     since: str = "7d"
     from_ts: str = ""

@@ -8,6 +8,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from scouter.config import BackupConfig, Config
+
 
 class TempCache:
     """Redirect every Scouter path into a fresh temp dir for one test."""
@@ -54,6 +56,29 @@ class TempCache:
             return []
         with sqlite3.connect(path) as conn:
             return conn.execute("SELECT verb, layer, outcome, ms FROM events").fetchall()
+
+
+def config_fixture(tmp: Path, *, backup: bool = True, encryption: str = "openssl") -> Config:
+    """A Config pointing at temp directories, with the gate satisfiable when backup=True."""
+    root = tmp / "library"
+    root.mkdir(parents=True, exist_ok=True)
+    target = tmp / "backup"
+    target.mkdir(parents=True, exist_ok=True)
+    passfile = tmp / "backup.pass"
+    passfile.write_text("test-passphrase\n")
+    passfile.chmod(0o600)
+    return Config(
+        library_root=str(root),
+        path=str(tmp / "config.json"),
+        exists=True,
+        backup=BackupConfig(
+            enabled=backup,
+            target=str(target),
+            encryption=encryption,
+            openssl_passfile=str(passfile),
+        ),
+        cameras=(("E-M10 Mark III", "em10iii"),),
+    )
 
 
 class FakeBridge:

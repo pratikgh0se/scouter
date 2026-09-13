@@ -20,9 +20,15 @@ from collections.abc import Iterator
 #: outside its own throwaway directory.
 SMOKE_RAW = "<smoke-raw>"
 SMOKE_OUT_DIR = "<smoke-out-dir>"
+SMOKE_CONFIG_PATH = "<smoke-config-path>"
 
 SMOKE_ARGS: dict[str, dict] = {
     "metrics.summary": {"since": "1d"},
+    # dry_run=True: config.init writes to disk otherwise, and this coverage
+    # test must never touch the real ~/.config even by accident (no
+    # SCOUTER_CONFIG override here, only SCOUTER_CACHE).
+    "config.init": {"path": SMOKE_CONFIG_PATH, "dry_run": True},
+    "config.show": {"path": SMOKE_CONFIG_PATH},
     "darkroom.open": {"image": SMOKE_RAW},
     "darkroom.set": {
         "module": "exposure",
@@ -121,6 +127,8 @@ def install_doubles(verb_id: str) -> Iterator[dict]:
             return raw
         if value == SMOKE_OUT_DIR:
             return str(paths.cache_root() / "smoke-export")
+        if value == SMOKE_CONFIG_PATH:
+            return str(paths.cache_root() / "smoke-config.json")
         if isinstance(value, list):
             return [_real(item) for item in value]
         return value

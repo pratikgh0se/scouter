@@ -89,7 +89,9 @@ class LoadVerbsImportGuardTest(unittest.TestCase):
 
             verbs = registry.load_verbs()
             groups = {verb.group for verb in verbs.values()}
-            self.assertEqual(groups, {"darkroom", "export", "history", "scout", "style", "metrics"})
+            self.assertEqual(
+                groups, {"config", "darkroom", "export", "history", "scout", "style", "metrics"}
+            )
         finally:
             for name in core_module_names:
                 sys.modules.pop(name, None)

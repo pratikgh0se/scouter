@@ -321,6 +321,34 @@ TOOL_SPECS: list[dict] = [
         ),
     },
     {
+        "name": "config_init",
+        "description": "Write the starter Scouter config file (~/.config/scouter/config.json "
+        "by default). backup.enabled is false in the starter file, so the "
+        "first import fails loudly until a target is set. Requires "
+        "confirm=true to write, or to replace an existing file.",
+        "inputSchema": _schema(
+            {
+                "path": {"type": "string", "description": "override the config path"},
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required to write, or to replace an existing file",
+                },
+            },
+            [],
+        ),
+    },
+    {
+        "name": "config_show",
+        "description": "Show the loaded Scouter config and whether the backup gate "
+        "currently passes -- the one call that answers 'will an import "
+        "work right now?' without attempting one.",
+        "inputSchema": _schema(
+            {"path": {"type": "string", "description": "override the config path"}}, []
+        ),
+    },
+    {
         "name": "metrics_summary",
         "description": "Per-verb calls, error rate by class, p50/p95 latency and "
         "estimated tokens over a time window.",

@@ -10,6 +10,8 @@ from scouter.cli.main import NON_REGISTRY_COMMANDS, build_parser
 from scouter.mcp import schemas
 
 EXPECTED_VERBS = {
+    "config.init",
+    "config.show",
     "darkroom.open",
     "darkroom.set",
     "darkroom.nudge",
