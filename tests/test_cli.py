@@ -104,6 +104,8 @@ class ExitCodeTest(unittest.TestCase):
             "image.lookup": {"found": True, "image_id": 1, "path": raw},
             "darkroom.open": {"image_id": 1, "path": raw, "view": "lighttable",
                               "opened": False, "already_open": False},
+            "darkroom.current": {"image_id": 1, "path": raw, "view": "lighttable",
+                                 "source": "action_images"},
         }))
         code = main(["darkroom", "set", "exposure", "exposure", "1.5"])
         self.assertEqual(code, 4)

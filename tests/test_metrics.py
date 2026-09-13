@@ -250,6 +250,8 @@ class WriteVerbSingleEventTest(unittest.TestCase):
         dtbridge.set_bridge(FakeBridge({
             "darkroom.open": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
                               "opened": False, "already_open": True},
+            "darkroom.current": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
+                                 "source": "action_images"},
             "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
             "darkroom.action": lambda p: {"nan": False, "view": "darkroom", **p},
             "history.commit": fake_commit,
