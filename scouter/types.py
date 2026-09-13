@@ -225,7 +225,14 @@ class ReleaseResult(Payload):
 class ImportResult(Payload):
     """`library.import`'s result. `files`/`totals` mirror `.scouter/import.json`
     (relative `raw/<name>` destinations, per design section 6) so the two never
-    drift; a dry run leaves both empty and reports the same shape via `plan`."""
+    drift; a dry run leaves both empty and reports the same shape via `plan`.
+
+    `duplicates` lists the byte-identical pairs the import deliberately KEPT
+    BOTH of, as `[already_present_dest, new_dest]` (ruling R17): resume
+    identity is `(source_name, sha256)`, so the same bytes arriving under a
+    different camera filename are a second frame with their own `seq`, never
+    a silent skip and never a refusal. A dry run cannot fill this in (it does
+    not hash every candidate) and leaves it empty."""
 
     job_slug: str = ""
     date: str = ""
@@ -239,6 +246,7 @@ class ImportResult(Payload):
     imported: int = 0
     scan_incomplete: bool | None = None
     recursive_honoured: bool | None = None
+    duplicates: list[list[str]] = field(default_factory=list)
 
 
 @dataclass

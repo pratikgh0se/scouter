@@ -7,6 +7,15 @@ names; dry-run/confirm; create the layout; copy with two sha256 passes,
 resume-safely, chmod-ing originals read-only; write the checksum manifest and
 `import.json` atomically; register the film roll (tolerating darktable being
 down); write the vault note (tolerating the vault not existing yet).
+
+Resume identity is `(source_name, sha256)` together (ruling R17): the same
+bytes under a different camera filename are a second frame, kept alongside
+the first and reported in `duplicates`. The single exception (ruling R17b) is
+an entry synthesised from `checksums.sha256` alone, whose `source_name` is a
+placeholder (its own destination basename, `status: "recovered_from_checksums"`)
+because the camera filename is genuinely unrecoverable -- for those entries,
+and only those, the bytes are the whole identity, since otherwise a re-run
+with the card still inserted would re-copy every frame of it under new names.
 """
 
 from __future__ import annotations
@@ -44,26 +53,6 @@ CHUNK = 1 << 20
 #: round 2, nit) -- anything younger might belong to a genuinely concurrent
 #: import of a DIFFERENT job and must not be deleted out from under it.
 STALE_PART_AGE_S = 3600
-
-
-@dataclasses.dataclass
-class ImportResultWithDuplicates(ImportResult):
-    """`ImportResult` plus `duplicates`: the byte-identical pairs this import
-    deliberately KEPT BOTH of (fix round 4, ruling R17).
-
-    Resume identity is `(source_name, sha256)`, so the same bytes arriving
-    under a different camera filename is a new frame with its own `seq` --
-    never a silent skip and never a refusal. That decision has to be visible,
-    so every pair is reported as `[already_present_dest, new_dest]`.
-
-    Declared here rather than in `scouter/types.py` only because fix round
-    4's scope is this module and its test; the field belongs beside the rest
-    of `ImportResult` and the controller should move it there (see the fix
-    round 4 report). `Payload.to_dict` picks it up either way -- `asdict`
-    walks the actual dataclass, subclass fields included.
-    """
-
-    duplicates: list[list[str]] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -605,14 +594,15 @@ def _plan(
     by_identity: dict[tuple[str, str], dict] = {
         (e["source_name"], e["sha256"]): e for e in existing_files if e.get("sha256")
     }
-    # The one case where a source name is genuinely UNKNOWN rather than
-    # different: `_synthesize_from_checksums` has no camera filename left to
-    # record, so it writes the destination's own name as a placeholder. For
-    # those entries the bytes are the only identity that exists, so a sha
-    # match IS a resume match -- otherwise a re-run with the card still
-    # inserted would re-copy every frame of it under new names (the fix
-    # round 3 blocker). Narrow by construction: only entries Scouter itself
-    # marked `recovered_*` whose `source_name` is exactly their own dest.
+    # Ruling R17b: the one case where a source name is genuinely UNKNOWN
+    # rather than different -- `_synthesize_from_checksums` has no camera
+    # filename left to record, so it writes the destination's own name as a
+    # placeholder. For those entries the bytes are the only identity that
+    # exists, so a sha match IS a resume match -- otherwise a re-run with the
+    # card still inserted would re-copy every frame of it under new names
+    # (the fix round 3 blocker). Narrow by construction, and the ONLY
+    # sha-only match in this module: just entries Scouter itself marked
+    # `recovered_*` whose `source_name` is exactly their own dest.
     by_sha_unknown_source: dict[str, dict] = {
         e["sha256"]: e
         for e in existing_files
@@ -805,7 +795,7 @@ def import_card(
                 "has already imported)"
             )
         )
-        return ImportResultWithDuplicates(
+        return ImportResult(
             outcome="dry_run",
             job_slug=job_slug,
             date=resolved_date,
@@ -1071,7 +1061,7 @@ def import_card(
         # must never roll it back -- it is a warning, never a raise.
         warnings.append(f"vault note not written: {e}")
 
-    return ImportResultWithDuplicates(
+    return ImportResult(
         duplicates=duplicates,
         job_slug=job_slug,
         date=resolved_date,
