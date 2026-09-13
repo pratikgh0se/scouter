@@ -292,6 +292,7 @@ SCOUTER_METHODS = (
     "snapshot.take",
     "style.create_from_current",
     "style.apply",
+    "image.rate",
 )
 
 #: Matches both `methods["dotted.name"] = ...` and `methods.bare_name = ...`

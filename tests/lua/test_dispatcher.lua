@@ -213,6 +213,26 @@ do
   assertEq(images_by_id[102].rating, 1, "rate_photos changed image 102 rating")
 end
 
+-- ---- methods["image.rate"] --------------------------------------------------
+do
+  local result = internals.methods["image.rate"]({image_ids = {"103", "999"}, rating = 2})
+  assertEq(result.rated, 1, "image.rate rated count")
+  assertEq(images_by_id[103].rating, 2, "image.rate changed image 103 rating")
+  assertEq(#result.missed, 1, "image.rate missed count")
+  assertEq(result.missed[1], 999, "image.rate missed unknown id")
+  assertEq(#result.per_image, 1, "image.rate per_image count for rated ids")
+  assertEq(result.per_image[1].image_id, 103, "image.rate per_image id")
+  assertEq(result.per_image[1].rating_before, 4, "image.rate per_image rating_before")
+  assertEq(result.per_image[1].rating_after, 2, "image.rate per_image rating_after")
+
+  local ok_high = pcall(internals.methods["image.rate"], {image_ids = {"103"}, rating = 6})
+  assertTrue(not ok_high, "image.rate rejects a rating above 5")
+  local ok_low = pcall(internals.methods["image.rate"], {image_ids = {"103"}, rating = -2})
+  assertTrue(not ok_low, "image.rate rejects a rating below -1")
+  local ok_empty = pcall(internals.methods["image.rate"], {image_ids = {}, rating = 1})
+  assertTrue(not ok_empty, "image.rate rejects an empty image_ids list")
+end
+
 -- ---- methods.import_batch --------------------------------------------------
 do
   -- Stub dt.database.import to record args and return a fake list.
@@ -1387,7 +1407,7 @@ do
     "view.current", "image.lookup", "darkroom.open", "darkroom.current",
     "darkroom.action", "darkroom.status", "module.enable", "module.disable",
     "module.reset", "history.commit", "snapshot.take", "style.create_from_current",
-    "style.apply",
+    "style.apply", "image.rate",
   }
   for _, name in ipairs(expected_scouter_methods) do
     assertTrue(type(plugin.methods[name]) == "function",

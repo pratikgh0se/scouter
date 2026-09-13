@@ -110,6 +110,56 @@ class SidecarPathTest(unittest.TestCase):
         self.assertEqual(xmp.sidecar_path("/a/P6281348.ORF"), Path("/a/P6281348.ORF.xmp"))
 
 
+class RatingTest(unittest.TestCase):
+    def test_rating_regex_reads_the_real_sidecar(self) -> None:
+        self.assertEqual(xmp.rating(FIXTURES / "P6281348.ORF"), 1)
+
+    def test_rating_is_none_when_there_is_no_attribute(self) -> None:
+        text = REFERENCE.read_text().replace('xmp:Rating="1"', "")
+        self.assertNotIn("xmp:Rating", text)
+        # Same header, no attribute: rating() must not fall back to a guess.
+        self.assertIsNone(xmp._RATING_RE.search(text))
+
+    def test_rating_is_none_when_there_is_no_sidecar(self) -> None:
+        self.assertIsNone(xmp.rating("/does/not/exist.ORF"))
+
+
+class ActiveEntriesTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.parsed = xmp.parse(REFERENCE.read_text())
+
+    def test_active_entries_are_a_subset_filtered_by_num(self) -> None:
+        active = xmp.active_entries(self.parsed)
+        self.assertTrue(active)
+        self.assertTrue(all(e.num < self.parsed.history_end for e in active))
+        self.assertEqual(len(active), len([e for e in self.parsed.entries if e.active]))
+
+    def test_active_entries_keeps_enabled_visible_not_filtered(self) -> None:
+        active = xmp.active_entries(self.parsed)
+        # `enabled` stays on the entry as its own field -- active_entries only
+        # answers "in the active history", not "toggled on".
+        self.assertTrue(all(hasattr(e, "enabled") for e in active))
+
+
+class LatestParamsTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.parsed = xmp.parse(REFERENCE.read_text())
+
+    def test_latest_params_returns_the_whole_decoded_dict(self) -> None:
+        params = xmp.latest_params(self.parsed, "exposure")
+        assert params is not None
+        self.assertAlmostEqual(params["exposure"], 1.5500002, places=5)
+        self.assertEqual(params["mode"], 0)
+
+    def test_latest_params_none_for_absent_module(self) -> None:
+        self.assertIsNone(xmp.latest_params(self.parsed, "no-such-module"))
+
+    def test_latest_params_none_for_unknown_layout(self) -> None:
+        # rawprepare has no LAYOUTS entry, so it decodes to opaque hex --
+        # latest_params must not invent a value for it.
+        self.assertIsNone(xmp.latest_params(self.parsed, "rawprepare"))
+
+
 class ColorbalancergbTest(unittest.TestCase):
     FIXTURE = FIXTURES / "colorbalancergb.xmp"
 

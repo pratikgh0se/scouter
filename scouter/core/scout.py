@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
 
@@ -33,6 +35,11 @@ PX_MIN, PX_MAX = 64, 4096
 #: (oldest first). Fix round 1, point 6.
 PREVIEW_MAX_AGE_S = 7 * 24 * 3600
 PREVIEW_MAX_BYTES = 500 * 1024 * 1024
+
+#: Total budget `stats_many` trims `paths.stats_dir()` to (fix round: task 5).
+#: Age itself comes from the config (`stats.cache_max_age_days`), not a
+#: constant, because it is exactly the knob task 5's cache is meant to expose.
+STATS_CACHE_MAX_BYTES = 200 * 1024 * 1024
 
 #: darktable-cli's own stderr wording for a library lock contention (ruling 7:
 #: rendering goes through `CLIWrapper`, which raises a generic `ExportError`
@@ -230,6 +237,86 @@ def stats(
     )
 
 
+def _stats_cache_path(raw_path: str, px: int) -> Path:
+    """Key: absolute path + the XMP's mtime_ns + px + Scouter's version.
+
+    The XMP mtime is in the key on purpose: after `style.apply_set` the frames
+    whose history changed get fresh numbers and the rest are read from cache,
+    which is what makes "stats before the style, stats after the style"
+    affordable over 300 frames.
+    """
+    from scouter import __version__
+
+    mtime = xmp.sidecar_path(raw_path)
+    stamp = mtime.stat().st_mtime_ns if mtime.exists() else 0
+    digest_input = f"{Path(raw_path).resolve()}|{stamp}|{px}|{__version__}"
+    key = hashlib.sha1(digest_input.encode()).hexdigest()
+    return paths.stats_dir() / f"{key}.json"
+
+
+def _stats_many_one(path: str, px: int) -> dict:
+    """One frame's stats entry for `stats_many`: cache hit, cache miss, or error.
+
+    Ruling 23: cache misses call `stats.__wrapped__` directly -- no nested
+    metrics event, only the one `stats_many` itself does not even emit (it is
+    not a registered top-level verb; the verb that calls it, task 9/12, emits
+    the single event for the whole set).
+    """
+    cache_path = _stats_cache_path(path, px)
+    if cache_path.exists():
+        try:
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass  # corrupt/partial cache entry: fall through to a fresh render
+        else:
+            data["cached"] = True
+            return data
+    try:
+        result = stats.__wrapped__(path, px=px)
+    except ScouterError as e:
+        return {"path": path, "error": {"code": e.code, "message": e.message}}
+    except Exception as e:  # one bad frame must not fail the whole set
+        return {"path": path, "error": {"code": "error", "message": str(e)}}
+    data = result.to_dict()
+    data["cached"] = False
+    paths.ensure(cache_path)
+    token = f"{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex[:8]}"
+    tmp = cache_path.with_name(f".{cache_path.stem}.{token}.tmp")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    os.replace(tmp, cache_path)
+    return data
+
+
+def stats_many(
+    paths_in: list[str], *, px: int, workers: int, job_dir: Path | None = None
+) -> list[dict]:
+    """Stats for a set, cached on disk and rendered by a small thread pool.
+
+    Each worker calls `render`, which already builds its OWN isolated configdir
+    per call (`_render_configdir` uses a per-call token) and deletes it after,
+    so K concurrent darktable-cli processes cannot contend for a library lock.
+    One frame that fails does not fail the set: it comes back as
+    {"path": ..., "error": {"code", "message"}} and the caller reports `failed`.
+    """
+    workers = max(1, min(workers, os.cpu_count() or 2))
+    from scouter.config import load as _load_config
+
+    cfg = _load_config()
+    _prune_cache(paths.stats_dir(), cfg.stats.cache_max_age_days * 24 * 3600, STATS_CACHE_MAX_BYTES)
+
+    slots: list[dict] = [{} for _ in paths_in]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_stats_many_one, p, px): i for i, p in enumerate(paths_in)}
+        for future in as_completed(futures):
+            slots[futures[future]] = future.result()
+
+    ordered: list[dict] = slots
+    if job_dir is not None:
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / f"stats-{px}.json").write_text(json.dumps(ordered, indent=2), encoding="utf-8")
+    return ordered
+
+
 def _cache_key(raw_path: str, px: int, ext: str) -> str:
     """A NAME, not a fingerprint (fix round 1, point 6).
 
@@ -250,18 +337,16 @@ def _sidecar_mtime(raw_path: str) -> float | None:
     return sidecar.stat().st_mtime if sidecar.exists() else None
 
 
-def _prune_preview_cache() -> None:
-    """Age out anything older than 7 days, then trim to a 500 MB budget.
+def _prune_cache(directory: Path, max_age_s: float, max_bytes: int) -> None:
+    """Age out anything older than `max_age_s`, then trim to a `max_bytes` budget.
 
-    Runs at the top of every `preview()` call -- Scouter has no daemon, and
-    the persistent preview cache is the only thing under `paths.preview_dir()`
-    that accumulates across calls (`scout.stats`'s own scratch files clean up
-    after themselves in `_raster_for`). Age culling runs first so a stale file
-    never counts against the size budget; the size trim then removes the
-    oldest surviving files until the total fits, so a burst of fresh previews
-    is what stays.
+    Generalised out of phase 1's `_prune_preview_cache` (task 5) so the same
+    age+size policy also bounds `paths.stats_dir()`, whose entries accumulate
+    exactly like previews do -- one file per (image, px, xmp mtime) key ever
+    requested. Age culling runs first so a stale file never counts against
+    the size budget; the size trim then removes the oldest surviving files
+    until the total fits, so a burst of fresh entries is what stays.
     """
-    directory = paths.preview_dir()
     if not directory.is_dir():
         return
     now = time.time()
@@ -273,19 +358,24 @@ def _prune_preview_cache() -> None:
             stat = path.stat()
         except OSError:
             continue
-        if now - stat.st_mtime > PREVIEW_MAX_AGE_S:
+        if now - stat.st_mtime > max_age_s:
             path.unlink(missing_ok=True)
             continue
         entries.append((stat.st_mtime, stat.st_size, path))
 
     total = sum(size for _, size, _ in entries)
-    if total <= PREVIEW_MAX_BYTES:
+    if total <= max_bytes:
         return
     for _, size, path in sorted(entries, key=lambda e: e[0]):  # oldest first
-        if total <= PREVIEW_MAX_BYTES:
+        if total <= max_bytes:
             break
         path.unlink(missing_ok=True)
         total -= size
+
+
+def _prune_preview_cache() -> None:
+    """Thin wrapper kept so nothing else changes: age+size policy for previews."""
+    _prune_cache(paths.preview_dir(), PREVIEW_MAX_AGE_S, PREVIEW_MAX_BYTES)
 
 
 @metrics.instrumented("scout.preview")

@@ -126,6 +126,10 @@ class FakeBridge:
     def methods_called(self) -> list[str]:
         return [m for m, _ in self.calls]
 
+    def count(self, method: str) -> int:
+        """How many times `method` was called -- task 12's E8 asserts zero writes."""
+        return sum(1 for m, _ in self.calls if m == method)
+
 
 def fake_cli_script(tmp: Path, body: str) -> Path:
     """Write an executable fake darktable-cli and return its path."""

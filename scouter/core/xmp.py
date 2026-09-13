@@ -244,6 +244,56 @@ def parse(text: str) -> ParsedXmp:
     )
 
 
+def active_entries(parsed: ParsedXmp) -> list[HistoryEntry]:
+    """Entries actually in effect: `num < history_end` (ruling: active = num < history_end).
+
+    `ParsedXmp.entries` already carries every history step darktable ever
+    wrote, each with its own `active` flag computed the same way at parse
+    time (`_entry_from_attrs`). This is just the filtered view over that list
+    -- `enabled` stays on each entry as its own field (ruling: enabled
+    surfaced), never folded into the filter, because "in the active history"
+    and "the module's own on/off toggle" are different questions.
+    """
+    return [entry for entry in parsed.entries if entry.active]
+
+
+def latest_params(parsed: ParsedXmp, operation: str, instance: int = 0) -> dict | None:
+    """The active, decoded param dict for one module, newest entry wins.
+
+    Same newest-active-entry search as `latest_value`, but returns the whole
+    decoded dict instead of a single field -- for callers (task 9's WB delta)
+    that need more than one slot out of the same module. Returns None when
+    the module is absent, inactive, or its params could not be decoded (an
+    unknown module stays opaque hex, per the honesty rule); never a guessed
+    or partial dict.
+    """
+    for entry in sorted(parsed.entries, key=lambda e: e.num, reverse=True):
+        if entry.operation != operation or not entry.active:
+            continue
+        if entry.multi_priority != instance:
+            continue
+        return entry.decoded
+    return None
+
+
+_RATING_RE = re.compile(r'xmp:Rating="(-?\d+)"')
+
+
+def rating(raw_path: str | Path) -> int | None:
+    """The sidecar's xmp:Rating, or None when there is no sidecar / no attribute.
+
+    A regex, not a parse: this is called for 300 sidecars in a cull and it reads
+    one attribute out of the rdf:Description header. Verified present in
+    Pratik's real sidecar (xmp:Rating="1", 2026-09-14).
+    """
+    sidecar = sidecar_path(raw_path)
+    if not sidecar.exists():
+        return None
+    text = sidecar.read_text(encoding="utf-8", errors="replace")
+    match = _RATING_RE.search(text)
+    return int(match.group(1)) if match else None
+
+
 def latest_value(parsed: ParsedXmp, operation: str, param: str, instance: int = 0) -> float | None:
     """The active value of one module parameter, newest entry wins.
 

@@ -471,6 +471,43 @@ methods.rate_photos = function(p)
   return {updated = updated}
 end
 
+-- Per-image rating writes with HONEST misses.
+--
+-- w1ne's rate_photos returns only {updated = n} and silently skips ids
+-- darktable does not know. For a 300-frame cull that is exactly the case that
+-- must be visible, so this verb reports the before/after rating per image and
+-- lists the ids it could not find. rate_photos is left untouched for its own
+-- MCP tool.
+methods["image.rate"] = function(p)
+  p = p or {}
+  local ids = p.image_ids or {}
+  if #ids == 0 then error("image.rate: image_ids required and non-empty") end
+  local rating = tonumber(p.rating)
+  if rating == nil or rating < -1 or rating > 5 then
+    error("image.rate: rating must be -1..5, got " .. tostring(p.rating))
+  end
+  local rated, missed, per_image = 0, {}, {}
+  for _, id in ipairs(ids) do
+    local image = dt.database[tonumber(id)]
+    if not image then
+      table.insert(missed, tonumber(id))
+    else
+      local before = image.rating or 0
+      local ok, err = pcall(function() image.rating = rating end)
+      if ok then
+        rated = rated + 1
+        table.insert(per_image, {image_id = tonumber(id), rating_before = before,
+                                 rating_after = rating})
+      else
+        table.insert(missed, tonumber(id))
+        table.insert(per_image, {image_id = tonumber(id), rating_before = before,
+                                 rating_after = before, error = tostring(err)})
+      end
+    end
+  end
+  return {rating = rating, rated = rated, missed = missed, per_image = per_image}
+end
+
 -- Count images that landed anywhere under `source_path`.
 --
 -- Matching is by PREFIX, not equality. Each imported directory becomes its
