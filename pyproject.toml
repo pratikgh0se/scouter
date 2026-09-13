@@ -59,9 +59,11 @@ Issues = "https://github.com/w1ne/darktable-mcp/issues"
 
 [project.scripts]
 darktable-mcp = "darktable_mcp:main"
+scouter = "scouter:main"
+scouter-mcp = "scouter.mcp.server:main"
 
 [tool.setuptools.packages.find]
-include = ["darktable_mcp*"]
+include = ["darktable_mcp*", "scouter*"]
 
 [tool.setuptools.package-data]
 darktable_mcp = ["lua/*.lua"]
