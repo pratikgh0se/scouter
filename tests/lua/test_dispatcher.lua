@@ -34,6 +34,19 @@ local stub_db = setmetatable(iter_list, {
 })
 
 local dt_log = {}
+
+-- Scouter phase 1: a scriptable dt.gui. `action_log` records every call, and
+-- `action_returns` maps a path to the value the stub hands back -- including
+-- the nan the real darktable returns outside the darkroom.
+local NAN = 0/0
+local action_log = {}
+local action_returns = {}
+local view_state = {current = "lighttable"}
+local views = {darkroom = {id = "darkroom"}, lighttable = {id = "lighttable"}}
+local selection_log = {}
+local styles_created = {}
+local applied_styles = {}
+
 local stub_dt = {
   database = stub_db,
   print_log = function(msg) table.insert(dt_log, msg) end,
@@ -42,12 +55,56 @@ local stub_dt = {
     sleep = function(_) end,
   },
 }
+
+stub_dt.gui = {
+  action = function(path, instance, element, effect, value)
+    table.insert(action_log, {path = path, instance = instance, element = element,
+                             effect = effect, value = value})
+    local r = action_returns[path]
+    if r == nil then return value or 0 end
+    if r == "nan" then return NAN end
+    return r
+  end,
+  current_view = function(v)
+    if v ~= nil then view_state.current = v.id; return v end
+    return views[view_state.current]
+  end,
+  views = views,
+  selection = function(images) table.insert(selection_log, images); return images end,
+  action_images = {},
+  libs = {snapshots = {take_snapshot = function() view_state.snapshots =
+    (view_state.snapshots or 0) + 1 end}},
+}
+
+stub_dt.styles = setmetatable({}, {
+  __index = function(t, k)
+    if k == "create" then
+      return function(image, name, description)
+        table.insert(styles_created, {image = image, name = name, description = description})
+        table.insert(t, {name = name, description = description})
+      end
+    end
+    return nil
+  end,
+})
+
+-- Give every stub image an apply_style method, so style.apply's
+-- `image:apply_style(style)` has something to call. Recorded into
+-- applied_styles for tests that want to inspect what was applied.
+for _, img in pairs(images_by_id) do
+  img.apply_style = function(self, style)
+    table.insert(applied_styles, {id = self.id, style = style.name})
+  end
+end
+
 -- Make `require("darktable")` return our stub by pre-populating package.loaded.
 package.loaded.darktable = stub_dt
 
 -- ---- Load the plugin -------------------------------------------------------
 package.path = package.path .. ";./darktable_mcp/lua/?.lua"
 local internals = require("darktable_mcp")
+-- Scouter darkroom-verb tests below use `plugin` as the module alias.
+local plugin = internals
 
 -- ---- Verify the plugin announces itself on load ----------------------------
 do
@@ -1272,6 +1329,131 @@ do
   assertTrue(string.find(resp2.error, "number", 1, true) ~= nil,
     "non-string method error reports the actual type")
 end
+
+-- ---- Scouter darkroom verbs ------------------------------------------------
+
+-- Registry completeness: every Scouter method the Python client knows about
+-- (tests/test_lua_dispatcher.py's SCOUTER_METHODS) must actually be a
+-- function in the real plugin.methods table -- not merely mentioned in the
+-- source. This is the tests/lua half of Ruling 13's two-pronged check; the
+-- Python half parses the source text independently.
+do
+  local expected_scouter_methods = {
+    "view.current", "image.lookup", "darkroom.open", "darkroom.action",
+    "darkroom.status", "module.enable", "module.disable", "module.reset",
+    "history.commit", "snapshot.take", "style.create_from_current", "style.apply",
+  }
+  for _, name in ipairs(expected_scouter_methods) do
+    assertTrue(type(plugin.methods[name]) == "function",
+      "plugin.methods actually registers " .. name .. " (not just mentioned in source)")
+  end
+end
+
+-- view.current reflects the stub's view state.
+view_state.current = "lighttable"
+assertEq(plugin.methods["view.current"]().view, "lighttable", "view.current lighttable")
+view_state.current = "darkroom"
+assertEq(plugin.methods["view.current"]().view, "darkroom", "view.current darkroom")
+
+-- darkroom.action passes every argument through and reports a real value.
+action_returns["iop/exposure/exposure"] = 1.5
+local act = plugin.methods["darkroom.action"]({
+  path = "iop/exposure/exposure", element = "value", effect = "set", value = 1.5})
+assertEq(act.status, 1.5, "action status")
+assertEq(act.nan, false, "action not nan")
+assertEq(act.effect, "set", "action effect echoed")
+assertEq(act.view, "darkroom", "action view echoed")
+assertEq(action_log[#action_log].element, "value", "action element forwarded")
+
+-- nan must arrive as nan=true, NOT as a null number.
+action_returns["iop/sigmoid/contrast"] = "nan"
+local nanres = plugin.methods["darkroom.action"]({
+  path = "iop/sigmoid/contrast", effect = "set", value = 1.4})
+assertEq(nanres.nan, true, "nan flagged")
+assertEq(nanres.status, nil, "nan status is nil, encoded as null")
+assertTrue(plugin.json.encode(nanres):find('"nan":true') ~= nil, "nan survives encoding")
+
+-- darkroom.status uses the empty effect and speed 0 (the documented query).
+action_returns["iop/exposure/exposure"] = 0.6429
+local st = plugin.methods["darkroom.status"]({path = "iop/exposure/exposure"})
+assertEq(st.position, 0.6429, "status position")
+assertEq(action_log[#action_log].effect, "", "status uses empty effect")
+assertEq(action_log[#action_log].value, 0, "status uses speed 0")
+
+-- module verbs map onto iop/<module> with the right element and effect.
+action_returns["iop/exposure"] = 1.0
+local en = plugin.methods["module.enable"]({module = "exposure"})
+assertEq(en.action, "enable", "module.enable action name")
+assertEq(action_log[#action_log].element, "enable", "enable element")
+assertEq(action_log[#action_log].effect, "on", "enable effect")
+plugin.methods["module.disable"]({module = "exposure"})
+assertEq(action_log[#action_log].effect, "off", "disable effect")
+plugin.methods["module.reset"]({module = "exposure"})
+assertEq(action_log[#action_log].element, "reset", "reset element")
+assertEq(action_log[#action_log].effect, "activate", "reset effect")
+
+-- A missing module name is an error response, not a silent no-op.
+local ok_err = plugin.handle({id = "x", method = "module.enable", params = {}})
+assertTrue(ok_err.error ~= nil, "module.enable without module errors")
+
+-- history.commit: the sidecar action wins when it does not return nan.
+action_returns["lib/selected image[s]/write sidecar files"] = 1
+local c = plugin.methods["history.commit"]({strategy = "auto"})
+assertEq(c.strategy_used, "sidecar_action", "auto picks the cheap strategy")
+assertEq(c.ok, true, "sidecar commit ok")
+
+-- ... and falls back to the view bounce when every spelling is nan.
+action_returns["lib/selected image[s]/write sidecar files"] = "nan"
+action_returns["lib/metadata/write sidecar files"] = "nan"
+action_returns["lib/image/write sidecar files"] = "nan"
+view_state.current = "darkroom"
+local c2 = plugin.methods["history.commit"]({strategy = "auto"})
+assertEq(c2.strategy_used, "view_bounce", "auto falls back to the view bounce")
+assertEq(c2.ok, true, "view bounce ok")
+assertEq(c2.view_after, "darkroom", "view bounce returns to the darkroom")
+
+-- style.create_from_current is honest about the missing module filter.
+stub_dt.gui.action_images = {images_by_id[101]}
+local cs = plugin.methods["style.create_from_current"]({
+  name = "hero", modules = {"exposure", "sigmoid"}})
+assertEq(cs.created, true, "style created")
+assertEq(cs.modules_requested, 2, "modules counted")
+assertEq(cs.modules_honoured, false, "module filter honestly refused")
+assertTrue(cs.note ~= nil, "module filter note present")
+
+-- style.apply appends, counts misses, and refuses overwrite loudly.
+local ap = plugin.methods["style.apply"]({image_ids = {101, 999}, name = "hero"})
+assertEq(ap.applied, 1, "style applied to the one real image")
+assertEq(ap.missed[1], 999, "missing id reported")
+local ov = plugin.handle({id = "y", method = "style.apply",
+  params = {image_ids = {101}, name = "hero", mode = "overwrite"}})
+assertTrue(ov.error ~= nil and ov.error:find("overwrite") ~= nil,
+  "overwrite mode refused with an explanation")
+
+-- darkroom.open selects then switches, and detects an already-open image.
+view_state.current = "lighttable"
+stub_dt.gui.action_images = {}
+local op = plugin.methods["darkroom.open"]({image_id = 101})
+assertEq(op.image_id, 101, "open by id")
+assertEq(op.opened, true, "opened")
+assertEq(op.view, "darkroom", "view after open")
+assertTrue(#selection_log > 0, "selection set before the view switch")
+stub_dt.gui.action_images = {images_by_id[101]}
+local op2 = plugin.methods["darkroom.open"]({image_id = 101})
+assertEq(op2.already_open, true, "already-open detected")
+assertEq(op2.opened, false, "no redundant view switch")
+
+-- image.lookup by absolute path.
+local lu = plugin.methods["image.lookup"]({path = "/photos/DSC_0001.NEF"})
+assertEq(lu.found, true, "lookup found")
+assertEq(lu.image_id, 101, "lookup id")
+local lu2 = plugin.methods["image.lookup"]({path = "/nope.NEF"})
+assertEq(lu2.found, false, "lookup miss reports found=false")
+
+-- snapshot.take prefers the documented lib API.
+local sn = plugin.methods["snapshot.take"]()
+assertEq(sn.taken, true, "snapshot taken")
+assertEq(sn.via, "libs.snapshots", "snapshot via the lib API")
 
 -- ---- Report ----------------------------------------------------------------
 if #failures > 0 then

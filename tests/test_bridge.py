@@ -186,7 +186,17 @@ class TestTimeoutResolution:
         assert resolve_timeout("no_such_method", 0.25) == 0.25
 
     def test_every_budget_beats_the_old_hardcoded_five_seconds(self):
-        assert all(v > 5.0 for v in DEFAULT_TIMEOUTS.values())
+        # Scouter phase 1 (design section 5.2) adds a couple of pure status
+        # queries -- "view.current" and "darkroom.status" -- budgeted at
+        # exactly 5.0s verbatim from the spec, so the old strict "> 5.0"
+        # floor is loosened to ">=" for those two. Every other budget must
+        # still clear the old hardcoded 5s, which this loop still enforces.
+        exactly_five_by_design = {"view.current", "darkroom.status"}
+        for method, v in DEFAULT_TIMEOUTS.items():
+            if method in exactly_five_by_design:
+                assert v >= 5.0, method
+            else:
+                assert v > 5.0, method
         assert FALLBACK_TIMEOUT > 5.0
 
     def test_poll_interval_is_a_named_constant(self):

@@ -700,6 +700,306 @@ methods.apply_preset = function(p)
   return {applied = applied, missed = missed, preset_name = preset_name}
 end
 
+-- ---- Darkroom verbs (Scouter phase 1) --------------------------------------
+--
+-- Every verb here is a thin, honest wrapper over dt.gui.action. Three rules,
+-- all of them consequences of the phase 0 spike:
+--   1. nan is the "not in the darkroom / module not in the pipe" signal, and
+--      our JSON encoder turns nan into null -- so every result that carries an
+--      action return value ALSO carries an explicit `nan` boolean. A null
+--      status with nan=false means darktable returned nothing at all, which is
+--      a different bug and must not be conflated.
+--   2. Every verb reports the current view, so the Python layer can raise
+--      wrong_view with an actionable message instead of interpreting a nan.
+--   3. Nothing here writes library.db or an XMP directly. `darkroom.open` may
+--      call dt.database.import to register an unknown path -- that IS the Lua
+--      API for adding an image (w1ne's import_batch does the same thing), not
+--      a direct library.db write. Everything else here goes through
+--      dt.gui.action, dt.styles or image:apply_style, never the database file.
+
+local function current_view_name()
+  if not (dt.gui and dt.gui.current_view) then return "unknown" end
+  local ok, view = pcall(dt.gui.current_view)
+  if not ok or view == nil then return "unknown" end
+  if type(view) == "string" then return view end
+  return tostring(view.id or view.name or "unknown")
+end
+
+local function is_nan(v) return type(v) == "number" and v ~= v end
+
+-- Run one dt.gui.action. Returns (value, nan_flag). Raises only when the API
+-- itself is missing or the call blows up -- a nan is data, not an error.
+local function gui_action(path, instance, element, effect, value)
+  if not (dt.gui and dt.gui.action) then
+    error("dt.gui.action is unavailable (darktable too old, or no GUI)")
+  end
+  local ok, res = pcall(dt.gui.action, path, instance or 0, element or "value",
+                        effect or "", value or 0)
+  if not ok then error("action " .. tostring(path) .. ": " .. tostring(res)) end
+  if is_nan(res) then return nil, true end
+  return res, false
+end
+
+methods["view.current"] = function()
+  return {view = current_view_name()}
+end
+
+local function find_image_by_path(path)
+  if not path or path == "" then return nil end
+  for _, image in ipairs(dt.database) do
+    if _image_full_path(image) == path then return image end
+  end
+  return nil
+end
+
+methods["image.lookup"] = function(p)
+  p = p or {}
+  local image = find_image_by_path(p.path)
+  if not image then
+    return {found = false, image_id = nil, path = p.path, filename = nil, rating = nil}
+  end
+  return {
+    found = true,
+    image_id = tonumber(image.id),
+    path = _image_full_path(image),
+    filename = image.filename,
+    rating = image.rating or 0,
+  }
+end
+
+-- The image the darkroom currently has loaded, or nil.
+local function darkroom_image()
+  if not (dt.gui and dt.gui.action_images) then return nil end
+  local ok, images = pcall(function() return dt.gui.action_images end)
+  if not ok or type(images) ~= "table" then return nil end
+  return images[1]
+end
+
+methods["darkroom.open"] = function(p)
+  p = p or {}
+  local image = nil
+  if p.image_id then image = dt.database[tonumber(p.image_id)] end
+  if not image and p.path then
+    image = find_image_by_path(p.path)
+    if not image then
+      -- Not in the library yet: register it, then look it up again. import()
+      -- returns an image for a file and a film for a directory, so do not
+      -- trust its return type -- re-scan instead.
+      pcall(dt.database.import, p.path)
+      image = find_image_by_path(p.path)
+    end
+  end
+  if not image then
+    error("darkroom.open: no image for " .. tostring(p.image_id or p.path))
+  end
+
+  local loaded = darkroom_image()
+  local already = current_view_name() == "darkroom"
+      and loaded ~= nil and tonumber(loaded.id) == tonumber(image.id)
+
+  if not already then
+    if dt.gui.selection then pcall(dt.gui.selection, {image}) end
+    if not (dt.gui.views and dt.gui.views.darkroom) then
+      error("darkroom.open: dt.gui.views.darkroom missing")
+    end
+    local ok, err = pcall(dt.gui.current_view, dt.gui.views.darkroom)
+    if not ok then error("darkroom.open: view switch failed: " .. tostring(err)) end
+  end
+
+  return {
+    image_id = tonumber(image.id),
+    path = _image_full_path(image),
+    view = current_view_name(),
+    opened = not already,
+    already_open = already,
+  }
+end
+
+methods["darkroom.action"] = function(p)
+  p = p or {}
+  if type(p.path) ~= "string" or p.path == "" then
+    error("darkroom.action: path required (e.g. iop/exposure/exposure)")
+  end
+  local value, nan = gui_action(p.path, p.instance, p.element or "value",
+                               p.effect or "set", p.value or 0)
+  return {
+    path = p.path,
+    instance = p.instance or 0,
+    element = p.element or "value",
+    effect = p.effect or "set",
+    value = p.value,
+    status = value,
+    nan = nan,
+    view = current_view_name(),
+  }
+end
+
+methods["darkroom.status"] = function(p)
+  p = p or {}
+  if type(p.path) ~= "string" or p.path == "" then
+    error("darkroom.status: path required")
+  end
+  -- Speed 0 with an empty effect is the documented status query; it returns the
+  -- NORMALISED position in the slider's visible range, never the value.
+  local pos, nan = gui_action(p.path, p.instance, p.element or "value", "", 0)
+  return {path = p.path, instance = p.instance or 0, position = pos, nan = nan,
+          view = current_view_name()}
+end
+
+local MODULE_ACTIONS = {
+  enable  = {element = "enable", effect = "on"},
+  disable = {element = "enable", effect = "off"},
+  reset   = {element = "reset",  effect = "activate"},
+}
+
+local function module_verb(action_name)
+  return function(p)
+    p = p or {}
+    if type(p.module) ~= "string" or p.module == "" then
+      error("module." .. action_name .. ": module required (e.g. exposure)")
+    end
+    local spec = MODULE_ACTIONS[action_name]
+    local value, nan = gui_action("iop/" .. p.module, p.instance,
+                                  spec.element, spec.effect, 1)
+    return {module = p.module, action = action_name, instance = p.instance or 0,
+            status = value, nan = nan, view = current_view_name()}
+  end
+end
+
+methods["module.enable"] = module_verb("enable")
+methods["module.disable"] = module_verb("disable")
+methods["module.reset"] = module_verb("reset")
+
+-- Commit trigger. Candidate order comes from task 1's measurement, recorded in
+-- docs/measurements.md. C1/C2 keep the darkroom loaded (cheap); C3 is the
+-- proven floor (phase 0 finding 3) and reloads the pipe, so it is the fallback.
+local SIDECAR_ACTION_PATHS = {
+  "lib/selected image[s]/write sidecar files",
+  "lib/metadata/write sidecar files",
+  "lib/image/write sidecar files",
+}
+
+local function commit_sidecar_action()
+  for _, path in ipairs(SIDECAR_ACTION_PATHS) do
+    local ok, value, nan = pcall(gui_action, path, 0, "button", "activate", 1)
+    if ok and not nan then return true, path end
+  end
+  return false, nil
+end
+
+local function commit_view_bounce()
+  if not (dt.gui.views and dt.gui.views.lighttable and dt.gui.views.darkroom) then
+    return false, "dt.gui.views.lighttable/darkroom missing"
+  end
+  local ok1 = pcall(dt.gui.current_view, dt.gui.views.lighttable)
+  if dt.control and dt.control.sleep then dt.control.sleep(300) end
+  local ok2 = pcall(dt.gui.current_view, dt.gui.views.darkroom)
+  if not (ok1 and ok2) then return false, "view switch failed" end
+  return true, nil
+end
+
+methods["history.commit"] = function(p)
+  p = p or {}
+  local strategy = p.strategy or "auto"
+  local started = os.time()
+  if strategy == "auto" or strategy == "sidecar_action" then
+    local ok, path = commit_sidecar_action()
+    if ok then
+      return {strategy_used = "sidecar_action", ok = true, detail = path,
+              view_after = current_view_name(), ms = (os.time() - started) * 1000}
+    end
+    if strategy == "sidecar_action" then
+      return {strategy_used = "sidecar_action", ok = false,
+              detail = "every sidecar-write action returned nan on this build",
+              view_after = current_view_name(), ms = (os.time() - started) * 1000}
+    end
+  end
+  local ok, detail = commit_view_bounce()
+  return {strategy_used = "view_bounce", ok = ok, detail = detail,
+          view_after = current_view_name(), ms = (os.time() - started) * 1000}
+end
+
+methods["snapshot.take"] = function()
+  -- Preferred: the documented lib API. Fallback: the panel's button action.
+  if dt.gui and dt.gui.libs and dt.gui.libs.snapshots
+     and dt.gui.libs.snapshots.take_snapshot then
+    local ok, err = pcall(dt.gui.libs.snapshots.take_snapshot)
+    if ok then return {taken = true, via = "libs.snapshots", view = current_view_name()} end
+    local _, nan = gui_action("lib/snapshots/take snapshot", 0, "button", "activate", 1)
+    return {taken = not nan, via = "action", detail = tostring(err),
+            view = current_view_name()}
+  end
+  local _, nan = gui_action("lib/snapshots/take snapshot", 0, "button", "activate", 1)
+  return {taken = not nan, via = "action", view = current_view_name()}
+end
+
+methods["style.create_from_current"] = function(p)
+  p = p or {}
+  if type(p.name) ~= "string" or p.name == "" then
+    error("style.create_from_current: name required")
+  end
+  local image = darkroom_image()
+  if not image then error("style.create_from_current: no image loaded in the darkroom") end
+
+  local existed = false
+  for _, s in ipairs(dt.styles) do
+    if s.name == p.name then existed = true; break end
+  end
+
+  local ok, err = pcall(dt.styles.create, image, p.name, p.description or "")
+  if not ok then error("style.create_from_current: " .. tostring(err)) end
+
+  -- HONESTY: dt.styles.create takes the WHOLE history. Lua API 9.6.0 has no
+  -- module filter, so `modules` cannot be honoured here. Say so rather than
+  -- letting the caller believe the style is narrow. Filtering by writing a
+  -- .dtstyle from the XMP and importing it is phase 2.
+  local requested = 0
+  for _ in ipairs(p.modules or {}) do requested = requested + 1 end
+  return {
+    name = p.name, created = true, existing_replaced = existed,
+    modules_requested = requested, modules_honoured = false,
+    note = requested > 0 and ("dt.styles.create has no module filter in Lua API "
+      .. "9.6.0; the style carries the image's whole history") or nil,
+  }
+end
+
+methods["style.apply"] = function(p)
+  p = p or {}
+  local ids = p.image_ids or {}
+  if type(p.name) ~= "string" or p.name == "" then error("style.apply: name required") end
+  if #ids == 0 then error("style.apply: image_ids required and non-empty") end
+  local mode = p.mode or "append"
+  if mode ~= "append" then
+    -- HONESTY: image:apply_style always appends. There is no overwrite in Lua
+    -- API 9.6.0; darktable-cli --style-overwrite covers renders only.
+    error("style.apply: mode " .. tostring(mode) .. " is not available in Lua API "
+          .. "9.6.0 (apply_style always appends); use append, or export with "
+          .. "darktable-cli --style-overwrite")
+  end
+
+  local style = nil
+  for _, s in ipairs(dt.styles) do
+    if s.name == p.name then style = s; break end
+  end
+  if not style then error(string.format("style.apply: style %q not found", p.name)) end
+
+  local applied, missed, errors = 0, {}, {}
+  for _, id in ipairs(ids) do
+    local image = dt.database[tonumber(id)]
+    if not image then
+      table.insert(missed, tonumber(id))
+    else
+      local ok, err = pcall(function() image:apply_style(style) end)
+      if ok then
+        applied = applied + 1
+      else
+        table.insert(errors, {image_id = tonumber(id), error = tostring(err)})
+      end
+    end
+  end
+  return {name = p.name, mode = mode, applied = applied, missed = missed, errors = errors}
+end
+
 -- ---- Dispatch --------------------------------------------------------------
 
 local function handle(req)
@@ -1030,4 +1330,13 @@ return {
   },
   sweep_interval_seconds = SWEEP_INTERVAL_SECONDS,
   stale_age_seconds = STALE_AGE_SECONDS,
+  -- Scouter phase 1 darkroom verb internals, exercised directly by
+  -- tests/lua/test_dispatcher.lua.
+  current_view_name = current_view_name,
+  gui_action = gui_action,
+  is_nan = is_nan,
+  find_image_by_path = find_image_by_path,
+  darkroom_image = darkroom_image,
+  module_actions = MODULE_ACTIONS,
+  sidecar_action_paths = SIDECAR_ACTION_PATHS,
 }

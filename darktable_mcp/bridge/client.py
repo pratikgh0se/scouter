@@ -27,6 +27,19 @@ DEFAULT_TIMEOUTS = {
     "import_batch": 120.0,
     "list_styles": 15.0,
     "apply_preset": 120.0,
+    # Scouter phase 1 darkroom verbs (design section 5.2).
+    "view.current": 5.0,
+    "image.lookup": 30.0,  # linear scan of dt.database, like view_photos
+    "darkroom.open": 30.0,  # pipeline load for a 20 MP raw
+    "darkroom.action": 10.0,
+    "darkroom.status": 5.0,
+    "module.enable": 10.0,
+    "module.disable": 10.0,
+    "module.reset": 10.0,
+    "history.commit": 60.0,  # view_bounce reloads the whole pipe
+    "snapshot.take": 15.0,
+    "style.create_from_current": 30.0,
+    "style.apply": 60.0,
 }
 
 

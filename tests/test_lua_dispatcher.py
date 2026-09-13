@@ -195,6 +195,79 @@ def test_stale_age_outlasts_every_client_timeout():
     )
 
 
+SCOUTER_METHODS = (
+    "view.current", "image.lookup", "darkroom.open", "darkroom.action",
+    "darkroom.status", "module.enable", "module.disable", "module.reset",
+    "history.commit", "snapshot.take", "style.create_from_current", "style.apply",
+)
+
+#: Matches both `methods["dotted.name"] = ...` and `methods.bare_name = ...`
+#: registrations in the plugin source.
+_METHOD_REGISTRATION = re.compile(r'methods\["([\w.]+)"\]\s*=|methods\.(\w+)\s*=')
+
+
+def _registered_method_names(source: str) -> set[str]:
+    names: set[str] = set()
+    for match in _METHOD_REGISTRATION.finditer(source):
+        names.add(match.group(1) or match.group(2))
+    return names
+
+
+def test_plugin_registers_every_scouter_method():
+    """The plugin's registry must contain exactly the methods the client knows.
+
+    Ruling 13 requires two independent checks, since either alone can lie:
+    a static check that cannot see whether the assignment actually runs (a
+    dead branch, a typo'd table name), and a dynamic check that cannot see
+    whether some *other* method got left out of the client's timeout table.
+    """
+    from darktable_mcp.bridge.client import DEFAULT_TIMEOUTS
+
+    # (1) Static: every SCOUTER_METHODS name is actually assigned into the
+    # `methods` table in the plugin source (not just mentioned in a comment).
+    source = PLUGIN.read_text(encoding="utf-8")
+    registered = _registered_method_names(source)
+    missing_from_source = [m for m in SCOUTER_METHODS if m not in registered]
+    assert not missing_from_source, (
+        f"{missing_from_source} not found as `methods[...] = ` assignments in "
+        f"{PLUGIN}"
+    )
+
+    # (2) Dynamic: run the existing tests/lua harness, which stubs `dt` and
+    # asserts (in tests/lua/test_dispatcher.lua's "registry completeness"
+    # block) that plugin.methods[name] is actually a function for every one
+    # of these names -- not merely present in the source text.
+    if LUA_BIN is None:
+        pytest.skip(
+            "no lua interpreter found; the dynamic half of this check runs "
+            "inside test_lua_dispatcher, which is skipped for the same reason"
+        )
+    result = subprocess.run(
+        [LUA_BIN, "tests/lua/test_dispatcher.lua"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0 and "OK: all dispatcher tests passed" in result.stdout, (
+        "the tests/lua harness (which asserts plugin.methods registers every "
+        "Scouter method) did not pass:\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+    # (3) Every registered Scouter method needs an explicit client budget, or
+    # it silently falls back to FALLBACK_TIMEOUT.
+    for method in SCOUTER_METHODS:
+        assert method in DEFAULT_TIMEOUTS, (
+            f"{method} has no entry in DEFAULT_TIMEOUTS, so it would fall back to "
+            "the 15s FALLBACK_TIMEOUT; add an explicit budget"
+        )
+    assert max(DEFAULT_TIMEOUTS.values()) < 300, (
+        "STALE_AGE_SECONDS (300) in the Lua plugin must stay above every client "
+        "budget, or the sweep deletes live requests"
+    )
+
+
 def test_sweep_covers_orphan_responses():
     """sweep_stale must collect response-*.json, not just request-*.json.
 
