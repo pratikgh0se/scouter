@@ -180,6 +180,13 @@ class BackupGateTest(TmpTestCase):
             config.require_backup(cfg)
         self.assertEqual(ctx.exception.detail["mode"], "0644")
 
+    def test_unknown_encryption_refuses_instead_of_passing(self) -> None:
+        cfg = self._base(backup={"encryption": "opnessl"})
+        with self.assertRaises(UsageError) as ctx:
+            config.require_backup(cfg)
+        self.assertEqual(ctx.exception.detail["check"], "unknown_encryption")
+        self.assertEqual(ctx.exception.detail["encryption"], "opnessl")
+
     def test_satisfiable_gate_passes(self) -> None:
         cfg = config_fixture(self.tmp)
         result = config.require_backup(cfg)
@@ -211,6 +218,11 @@ class JobLayoutTest(TmpTestCase):
         cfg = config_fixture(self.tmp)
         with self.assertRaises(UsageError):
             config.job_dir(cfg, "06-28-2026", "harbour-wedding")
+
+    def test_job_dir_numerically_invalid_date_raises_usage(self) -> None:
+        cfg = config_fixture(self.tmp)
+        with self.assertRaises(UsageError):
+            config.job_dir(cfg, "2026-13-40", "harbour-wedding")
 
     def test_find_job_by_slug_alone(self) -> None:
         cfg = config_fixture(self.tmp)

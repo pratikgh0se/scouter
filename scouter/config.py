@@ -1,17 +1,20 @@
 """Scouter's configuration: JSON, because tomllib is 3.11+ and our floor is 3.10.
 
-One frozen dataclass tree, one `DEFAULTS` dict, and a loader that REJECTS unknown
-keys. A typo in `backup.target` must not silently disarm the import gate, so an
-unrecognised key is a `usage` error naming the nearest known one.
+One frozen dataclass tree (each field defaulted on the dataclass itself, so
+there is no separate `DEFAULTS` dict to drift out of sync) and a loader that
+REJECTS unknown keys. A typo in `backup.target` must not silently disarm the
+import gate, so an unrecognised key is a `usage` error naming the nearest
+known one.
 """
 
 from __future__ import annotations
 
+import datetime
 import difflib
 import json
 import os
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from scouter import metrics, paths
@@ -229,6 +232,13 @@ def require_backup(cfg: Config) -> BackupConfig:
     probe = target if target.exists() else target.parent
     if not os.access(probe, os.W_OK):
         refuse("target_not_writable", f"{probe} is not writable", target=str(target))
+    if b.encryption not in ("age", "openssl", "none"):
+        # A typo here (e.g. "opnessl") must not silently pass the gate as if it
+        # were a configured, working encryption -- fail closed, not open.
+        raise UsageError(
+            f"unknown `backup.encryption` {b.encryption!r}: must be one of " "age, openssl, none",
+            detail={"check": "unknown_encryption", "encryption": b.encryption},
+        )
     if b.encryption == "none" and not b.allow_unencrypted:
         refuse(
             "unencrypted",
@@ -265,6 +275,13 @@ def job_dir(cfg: Config, date: str, slug: str) -> Path:
     paths.validate_slug(slug)
     if len(date) != 10 or date[4] != "-" or date[7] != "-":
         raise UsageError(f"date must be YYYY-MM-DD, got {date!r}", detail={"date": date})
+    try:
+        # len/dash check above catches shape; this catches garbage inside the
+        # shape ("2026-13-40") that would otherwise build a directory name
+        # for a date that never happened.
+        datetime.date.fromisoformat(date)
+    except ValueError as e:
+        raise UsageError(f"date must be YYYY-MM-DD, got {date!r}", detail={"date": date}) from e
     return cfg.root() / date[:4] / f"{date} {slug}"
 
 
@@ -369,8 +386,6 @@ def show(path: str | None = None, *, job: str | None = None) -> ConfigResult:
         gate = "ok"
     except BackupNotConfigured as e:
         gate = f"{e.code}: {e.message}"
-    from dataclasses import asdict
-
     return ConfigResult(
         config_path=cfg.path or "",
         config_exists=cfg.exists,
