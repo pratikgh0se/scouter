@@ -203,6 +203,25 @@ class ExportResult(Payload):
 
 
 @dataclass
+class ReleaseResult(Payload):
+    """`export.release`'s result. `selection_rule`/`selected`/`of` mirror the
+    manifest's own `selection` block, so the CLI's summary and the manifest on
+    disk never drift; `manifest_path` is what `export.verify` re-reads."""
+
+    job_slug: str = ""
+    preset: str = ""
+    out_dir: str = ""
+    manifest_path: str = ""
+    selection_rule: str = ""
+    selected: int = 0
+    of: int = 0
+    files: list[ExportedFile] = field(default_factory=list)
+    exported: int = 0
+    failed: int = 0
+    bytes: int = 0
+
+
+@dataclass
 class ImportResult(Payload):
     """`library.import`'s result. `files`/`totals` mirror `.scouter/import.json`
     (relative `raw/<name>` destinations, per design section 6) so the two never

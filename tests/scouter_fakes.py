@@ -110,6 +110,18 @@ class FakeBridge:
                 "directories_imported": 1,
                 "scan_incomplete": False,
             },
+            # A sane default for `export.release`'s finals selection
+            # (task 10, ruling R12): every requested id comes back known,
+            # with no colour labels, so a test that isn't specifically
+            # exercising label selection doesn't have to restate this
+            # shape. Override per-test (see tests/test_export_release.py)
+            # for a frame that actually carries a label.
+            "image.color_labels": lambda p: {
+                "missing": [],
+                "per_image": [
+                    {"image_id": image_id, "labels": []} for image_id in p.get("image_ids", [])
+                ],
+            },
             **(responses or {}),
         }
         self.raises = raises or {}
@@ -166,6 +178,65 @@ FAKE_CLI_WRITES_NOTHING = "exit 0\n"
 
 #: A fake darktable-cli that fails with darktable's own lock message.
 FAKE_CLI_DB_LOCKED = 'echo "ERROR: database is locked, probably another instance" >&2\nexit 1\n'
+
+
+class FakeCLIWrapper:
+    """Stand-in for `darktable_mcp.darktable.cli_wrapper.CLIWrapper`, monkeypatched
+    onto `scouter.core.scout.CLIWrapper` (task 10).
+
+    Unlike `FakeCli` below (which fakes `CLIWrapper.export`, an interface no
+    production code actually calls), this fakes the REAL `export_image`
+    method `scout.render` invokes, so `export.release`'s tests can assert
+    the exact `extra_args` list that reached the wrapper without shelling
+    out to a fake darktable-cli script and parsing argv back out of it.
+
+    `calls` is a CLASS attribute (not per-instance): `scout.render` builds a
+    fresh `CLIWrapper` per call, so a test resets `FakeCLIWrapper.calls = []`
+    in `setUp` and reads it after, across as many renders as the test made.
+    `raises` maps an input path (str) to an exception `export_image` raises
+    instead of writing anything, for `files[].error` / partial-failure tests.
+    """
+
+    calls: list[dict] = []
+    raises: dict[str, BaseException] = {}
+
+    def __init__(
+        self, darktable_cli_path: str | None = None, configdir: Path | None = None
+    ) -> None:
+        self.darktable_cli_path = darktable_cli_path
+        self.configdir = configdir
+
+    def export_image(
+        self,
+        input_path: Path,
+        output_path: Path,
+        format_type: str = "jpeg",
+        quality: int = 95,
+        max_width: int | None = None,
+        max_height: int | None = None,
+        timeout: int = 180,
+        extra_args: list[str] | None = None,
+    ) -> Path:
+        FakeCLIWrapper.calls.append(
+            {
+                "input_path": str(input_path),
+                "output_path": str(output_path),
+                "format_type": format_type,
+                "quality": quality,
+                "max_width": max_width,
+                "max_height": max_height,
+                "timeout": timeout,
+                "extra_args": list(extra_args) if extra_args else extra_args,
+            }
+        )
+        exc = FakeCLIWrapper.raises.get(str(input_path))
+        if exc is not None:
+            raise exc
+        Path(output_path).write_bytes(bytes(1024))
+        return Path(output_path)
+
+    def get_version(self) -> str:
+        return "5.4.1-fake"
 
 
 class FakeCli:

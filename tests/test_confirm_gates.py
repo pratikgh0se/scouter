@@ -101,6 +101,30 @@ class ConfirmGateTest(unittest.TestCase):
         self.relocate_root = root / "gate-relocate-dest"
         self.relocate_root.mkdir()
 
+        # `export.release` reads its candidates from import.json + each
+        # raw's own XMP sidecar (file-based, no bridge call), and (fix round
+        # 1, should-fix 4) gates on n>1 selected frames even on a FRESH
+        # release -- no pre-existing output needed, mirroring export.run's
+        # own n>1 gate. Two frames, both rating high enough to be selected,
+        # exports/preview/ not created ahead of time.
+        scouter_dir = job_path / ".scouter"
+        scouter_dir.mkdir(parents=True, exist_ok=True)
+        release_files = []
+        for seq, name in enumerate(("gate_0001.orf", "gate_0002.orf"), start=1):
+            release_raw = job_path / "raw" / name
+            release_raw.write_bytes(b"raw")
+            Path(str(release_raw) + ".xmp").write_text('<x xmp:Rating="2"/>', encoding="utf-8")
+            # `library.import_card`'s dry run reads and shape-checks any
+            # EXISTING import.json (task 3 fix round 1's manifest merge), so
+            # this fixture's entries need every key `_REQUIRED_FILE_KEYS`
+            # names -- not just the ones `export.release` itself reads.
+            release_files.append(
+                {"dest": f"raw/{name}", "sha256": "deadbeef", "seq": seq, "source_name": name}
+            )
+        (scouter_dir / "import.json").write_text(
+            json.dumps({"files": release_files}), encoding="utf-8"
+        )
+
         # `cull.apply` reads its proposal from a real file (`--proposal`, not
         # an image argument), so this harness's usual "None -> self.raw"
         # substitution does not apply to it -- a one-frame proposal that
@@ -168,6 +192,7 @@ class ConfirmGateTest(unittest.TestCase):
         "export.run": {"images": [None, None], "preset": "preview", "out_dir": None},
         "library.import": {"source": None, "job_slug": "gate-hero"},
         "library.register": {"job_slug": "gate-hero"},
+        "export.release": {"job_slug": "gate-hero", "preset": "preview"},
         "library.relocate": {"new_root": None},
         # `--proposal` is a JSON file path, not an image -- the generic
         # `None -> self.raw` substitution below is for image-shaped args, so

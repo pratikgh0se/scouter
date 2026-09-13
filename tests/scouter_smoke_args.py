@@ -51,6 +51,13 @@ SMOKE_ARGS: dict[str, dict] = {
     "style.extract": {"image": SMOKE_RAW, "name": "smoke", "modules": []},
     "style.apply": {"image": SMOKE_RAW, "name": "smoke"},
     "export.run": {"images": [SMOKE_RAW], "preset": "preview", "out_dir": SMOKE_OUT_DIR},
+    # No job named "smoke-job" exists on disk here, so this fails fast (usage:
+    # no such job) -- still exactly one event, which is all this coverage
+    # test asserts (same trick as cull.apply below).
+    "export.release": {"job_slug": "smoke-job", "preset": "preview"},
+    # No manifest at this path, so this fails fast (usage: no manifest) --
+    # still exactly one event.
+    "export.verify": {"manifest": "/nonexistent/no-such-manifest.json"},
     # library.* calls `scouter.config.load()` with no override, exactly like
     # production -- there is no `--config` flag for these verbs (design
     # section 6). `SMOKE_SOURCE_DIR` resolves to this test's own (empty) cache

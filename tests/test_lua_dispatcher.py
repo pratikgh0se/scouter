@@ -293,6 +293,7 @@ SCOUTER_METHODS = (
     "style.create_from_current",
     "style.apply",
     "image.rate",
+    "image.color_labels",
 )
 
 #: Matches both `methods["dotted.name"] = ...` and `methods.bare_name = ...`

@@ -41,6 +41,7 @@ DEFAULT_TIMEOUTS = {
     "style.create_from_current": 30.0,
     "style.apply": 60.0,
     "image.rate": 60.0,  # 50 ids per call, each a library write
+    "image.color_labels": 30.0,  # read-only, dt.database[id] indexing like image.lookup
 }
 
 

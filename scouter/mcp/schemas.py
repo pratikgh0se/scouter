@@ -306,7 +306,7 @@ TOOL_SPECS: list[dict] = [
                 },
                 "preset": {
                     "type": "string",
-                    "enum": ["client-final", "preview"],
+                    "enum": ["preview", "client-proof", "client-final", "print-tiff"],
                     "description": "export preset",
                 },
                 "out_dir": {"type": "string", "description": "destination directory"},
@@ -318,6 +318,77 @@ TOOL_SPECS: list[dict] = [
                 },
             },
             ["images", "preset", "out_dir"],
+        ),
+    },
+    {
+        "name": "export_release",
+        "description": "Export a job's selected frames through a preset, with a checksum "
+        "manifest. Selection is --images if given, else every raw in "
+        "import.json whose rating >= min_rating (client-proof/preview) "
+        "or that carries the configured colour label "
+        "(client-final/print-tiff). Requires confirm=true to overwrite "
+        "an existing preset output.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {"type": "string", "description": "job slug to release"},
+                "preset": {
+                    "type": "string",
+                    "enum": ["preview", "client-proof", "client-final", "print-tiff"],
+                    "description": "export preset",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "disambiguate when the slug matches more than one job",
+                },
+                "min_rating": {
+                    "type": "integer",
+                    "description": "override export.min_rating for rating-based presets",
+                },
+                "images": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "description": "explicit image list, overriding the selection rule",
+                },
+                "style": {
+                    "type": "string",
+                    "description": "apply this style at render time only; nothing in the "
+                    "library changes",
+                },
+                "overwrite_style": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "pass --style-overwrite to darktable-cli (render-only)",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required to overwrite an existing preset output",
+                },
+            },
+            ["job_slug", "preset"],
+        ),
+    },
+    {
+        "name": "export_verify",
+        "description": "Re-hash a release manifest's outputs against it. The manifest's own "
+        ".sha256 sidecar is required, not optional -- a missing sidecar is "
+        "manifest_unauthenticated. Read-only.",
+        "inputSchema": _schema(
+            {
+                "manifest": {
+                    "type": "string",
+                    "description": "path to a manifest-<preset>-<ts>.json written by "
+                    "export.release",
+                },
+                "root": {
+                    "type": "string",
+                    "description": "directory files[].output resolves against; default is "
+                    "the manifest's own <job>/.scouter/ parent. Pass this to verify a "
+                    "manifest shipped beside its exports/ folder instead",
+                },
+            },
+            ["manifest"],
         ),
     },
     {
