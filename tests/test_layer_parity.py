@@ -32,6 +32,8 @@ EXPECTED_VERBS = {
     "library.import",
     "library.verify",
     "library.register",
+    "library.jobs",
+    "library.relocate",
 }
 
 

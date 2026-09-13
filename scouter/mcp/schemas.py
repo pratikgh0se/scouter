@@ -398,6 +398,39 @@ TOOL_SPECS: list[dict] = [
         ),
     },
     {
+        "name": "library_jobs",
+        "description": "List every job under the library root: frame count, bytes, a "
+        "ratings histogram from the XMPs' xmp:Rating, and which .scouter "
+        "manifests exist. Read-only.",
+        "inputSchema": _schema({}, []),
+    },
+    {
+        "name": "library_relocate",
+        "description": "Move the library to a new root: rewrite library_root in the config "
+        "(every other key survives untouched) and re-verify every job's "
+        "checksums there. Requires confirm=true: it rewrites the config "
+        "file and its dry run reports which jobs already exist at the "
+        "new root. Never edits darktable's library.db -- darktable's film "
+        "rolls keep pointing at the old paths, so re-import "
+        "<new_root>/<job>/raw for each job afterwards (the result's "
+        "next_step says so).",
+        "inputSchema": _schema(
+            {
+                "new_root": {
+                    "type": "string",
+                    "description": "new library root (must already exist)",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: rewrites the config and writes outside the library",
+                },
+            },
+            ["new_root"],
+        ),
+    },
+    {
         "name": "config_init",
         "description": "Write the starter Scouter config file (~/.config/scouter/config.json "
         "by default). backup.enabled is false in the starter file, so the "

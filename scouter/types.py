@@ -242,6 +242,20 @@ class RegisterResult(Payload):
 
 
 @dataclass
+class JobsResult(Payload):
+    jobs: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class RelocateResult(Payload):
+    old_root: str = ""
+    new_root: str = ""
+    jobs: list[dict] = field(default_factory=list)
+    darktable_rollpaths_stale: bool = False
+    next_step: str | None = None
+
+
+@dataclass
 class ConfigResult(Payload):
     config_path: str = ""
     config_exists: bool = False

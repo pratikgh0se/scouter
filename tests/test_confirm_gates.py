@@ -93,6 +93,11 @@ class ConfirmGateTest(unittest.TestCase):
         self.job_slug = "gate-hero"
         job_path = config.job_dir(self.cfg, "2026-06-28", self.job_slug)
         (job_path / "raw").mkdir(parents=True)
+        # `library.relocate` refuses a `new_root` that isn't an existing
+        # directory before it ever reaches the dry-run branch, so the generic
+        # "substitute self.raw" fallback below (a FILE) won't do for it.
+        self.relocate_root = root / "gate-relocate-dest"
+        self.relocate_root.mkdir()
 
     def tearDown(self) -> None:
         self._lib_cfg_patch.stop()
@@ -107,6 +112,7 @@ class ConfirmGateTest(unittest.TestCase):
         "export.run": {"images": [None, None], "preset": "preview", "out_dir": None},
         "library.import": {"source": None, "job_slug": "gate-hero"},
         "library.register": {"job_slug": "gate-hero"},
+        "library.relocate": {"new_root": None},
     }
     # `style.apply` is deliberately NOT here (final review, should-fix 7): its
     # only would-be gate was mode=overwrite, which darktable cannot do at all,
@@ -128,12 +134,16 @@ class ConfirmGateTest(unittest.TestCase):
                             str(self.card_dir)
                             if k == "source"
                             else (
-                                self.raw
-                                if v is None
+                                str(self.relocate_root)
+                                if k == "new_root"
                                 else (
-                                    [self.raw] * len(v)
-                                    if isinstance(v, list) and v and v[0] is None
-                                    else v
+                                    self.raw
+                                    if v is None
+                                    else (
+                                        [self.raw] * len(v)
+                                        if isinstance(v, list) and v and v[0] is None
+                                        else v
+                                    )
                                 )
                             )
                         )

@@ -11,6 +11,7 @@ down); write the vault note (tolerating the vault not existing yet).
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -18,11 +19,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from scouter import __version__, config, metrics, paths
-from scouter.core import dtbridge, exif
+from scouter.core import dtbridge, exif, xmp
 from scouter.errors import BridgeTimeout, ChecksumMismatch, DestinationCollision, UsageError
 from scouter.registry import ArgSpec, Verb
 from scouter.registry import register as register_verb
-from scouter.types import ImportResult, RegisterResult, VerifyResult
+from scouter.types import ImportResult, JobsResult, RegisterResult, RelocateResult, VerifyResult
 
 #: Recursion bound for `_scan`. A card is a flat DCIM tree at most a handful of
 #: directories deep; 8 is generous headroom without an unbounded walk.
@@ -347,12 +348,12 @@ def import_card(
     try:
         from scouter.core import vault
 
-        vault.write_job_note(cfg, manifest)
-    except Exception as e:  # noqa: BLE001 - task 4 hasn't landed vault.py yet
-        # Until task 4 lands, `scouter.core.vault` doesn't exist and this is
-        # always an ImportError; caught the same way any later vault failure
-        # (a missing $OBSIDIAN_VAULT_PATH, a write error) is: a warning, never
-        # a rollback of the copy that already succeeded.
+        note = vault.write_job_note(cfg, manifest)
+        if not note.get("written"):
+            warnings.append(f"vault note not written: {note.get('reason')}")
+    except Exception as e:  # noqa: BLE001 - the copy already succeeded; a vault
+        # write failure (a bad path, a permissions error, anything unexpected)
+        # must never roll it back -- it is a warning, never a raise.
         warnings.append(f"vault note not written: {e}")
 
     return ImportResult(
@@ -373,13 +374,11 @@ def import_card(
     )
 
 
-@metrics.instrumented("library.verify")
-def verify(job_slug: str, *, date: str | None = None, job: str | None = None) -> VerifyResult:
-    """Re-hash raw/ against .scouter/checksums.sha256. `.xmp` sidecars are
-    excluded by SUFFIX, not by silence: they are darktable's files, they change
-    whenever an edit lands, and they are never in the manifest."""
-    cfg = config.load()
-    job_path = config.find_job(cfg, job_slug, date)
+def _verify_at(job_slug: str, job_path: Path) -> VerifyResult:
+    """The actual re-hash, unwrapped from `@metrics.instrumented`: shared by
+    `verify()` (one event) and `relocate()` (which re-verifies every job under
+    its own single `library.relocate` event -- calling the instrumented
+    `verify()` in a loop there would emit one event per job instead)."""
     raw = config.raw_dir(job_path)
     checksums_path = config.scouter_dir(job_path) / "checksums.sha256"
 
@@ -424,6 +423,16 @@ def verify(job_slug: str, *, date: str | None = None, job: str | None = None) ->
     )
 
 
+@metrics.instrumented("library.verify")
+def verify(job_slug: str, *, date: str | None = None, job: str | None = None) -> VerifyResult:
+    """Re-hash raw/ against .scouter/checksums.sha256. `.xmp` sidecars are
+    excluded by SUFFIX, not by silence: they are darktable's files, they change
+    whenever an edit lands, and they are never in the manifest."""
+    cfg = config.load()
+    job_path = config.find_job(cfg, job_slug, date)
+    return _verify_at(job_slug, job_path)
+
+
 @metrics.instrumented("library.register")
 def register(
     job_slug: str,
@@ -461,6 +470,175 @@ def register(
         recursive_honoured=result.get("recursive_honoured"),
         path=str(job_path),
         warnings=warnings,
+    )
+
+
+def _list_jobs(root: Path) -> list[dict]:
+    """Every `<YYYY>/<YYYY-MM-DD slug>` job under `root`. Shared by the
+    `library.jobs` verb and `relocate`'s dry-run plan (which must not call the
+    instrumented `jobs()` and double up on events)."""
+    entries: list[dict] = []
+    if not root.is_dir():
+        return entries
+    for year_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        for job_path in sorted(p for p in year_dir.iterdir() if p.is_dir()):
+            date, sep, slug = job_path.name.partition(" ")
+            if not sep:
+                continue  # not a "<date> <slug>" job directory -- ignore it
+            raw = config.raw_dir(job_path)
+            scouter_d = config.scouter_dir(job_path)
+            files = (
+                sorted(p for p in raw.iterdir() if p.is_file() and p.suffix.lower() != ".xmp")
+                if raw.is_dir()
+                else []
+            )
+            # Ratings come from `xmp.rating`: a file with no sidecar or no
+            # `xmp:Rating` attribute buckets under 0 ("unrated"), the same
+            # convention darktable's own rating widget starts from.
+            ratings: dict[int, int] = {}
+            for f in files:
+                key = xmp.rating(f) or 0
+                ratings[key] = ratings.get(key, 0) + 1
+            manifests = (
+                sorted(p.name for p in scouter_d.iterdir() if p.is_file())
+                if scouter_d.is_dir()
+                else []
+            )
+            entries.append(
+                {
+                    "date": date,
+                    "slug": slug,
+                    "path": str(job_path.relative_to(root)),
+                    "frames": len(files),
+                    "bytes": sum(f.stat().st_size for f in files),
+                    "ratings": ratings,
+                    "manifests": manifests,
+                    # `cull.propose` (task 6) writes its proposal under
+                    # `.scouter/`; not landed yet, so this is always False for
+                    # now -- honest, not a guess (honesty rule).
+                    "has_cull_proposal": any("cull-proposal" in m for m in manifests),
+                    # No verb records a verify timestamp anywhere yet, so this
+                    # stays None rather than inventing one.
+                    "verified_at": None,
+                }
+            )
+    return entries
+
+
+@metrics.instrumented("library.jobs")
+def jobs(*, job: str | None = None) -> JobsResult:
+    """Every job under `library_root`, browsable without `ls`."""
+    cfg = config.load()
+    return JobsResult(jobs=_list_jobs(cfg.root()))
+
+
+def _rewrite_library_root(config_path: Path, new_root: str) -> None:
+    """Read the config file, mutate ONLY `library_root`, write it back
+    atomically -- every other key and every `_comment` (top-level or nested)
+    survives untouched because this never goes through the `Config`
+    dataclass, which would drop them."""
+    raw = json.loads(config_path.read_text(encoding="utf-8"))
+    raw["library_root"] = new_root
+    _write_atomic(config_path, json.dumps(raw, indent=2) + "\n")
+
+
+@metrics.instrumented("library.relocate")
+def relocate(
+    new_root: str,
+    *,
+    confirm: bool = False,
+    dry_run: bool = False,
+    job: str | None = None,
+) -> RelocateResult:
+    """Move the library to `new_root`: rewrite `library_root` in the config
+    and re-verify every job there. Gated: it writes outside the library
+    (the config file) and, per job, as many bytes as darktable's film rolls
+    would need to catch up.
+
+    This NEVER edits darktable's `library.db` -- film roll re-registration
+    goes through the bridge (`library.register`, `import_batch`) per job,
+    left to the operator, and `next_step` says so honestly rather than
+    claiming a phantom success.
+    """
+    cfg = config.load()
+    old_root = cfg.root()
+    new_root_path = Path(new_root).expanduser()
+
+    if not new_root_path.is_dir():
+        raise UsageError(
+            f"{new_root_path} does not exist or is not a directory",
+            detail={"new_root": str(new_root_path)},
+        )
+    try:
+        new_root_path.resolve().relative_to(old_root.resolve())
+        nested = True
+    except ValueError:
+        nested = False
+    if nested:
+        raise UsageError(
+            f"{new_root_path} is inside the current library root {old_root}; "
+            "a nested move would recurse",
+            detail={"old_root": str(old_root), "new_root": str(new_root_path)},
+        )
+
+    entries = _list_jobs(old_root)
+    plan = [
+        {
+            "slug": e["slug"],
+            "date": e["date"],
+            "new_path": str(new_root_path / e["path"]),
+            "exists_at_new_root": (new_root_path / e["path"]).exists(),
+        }
+        for e in entries
+    ]
+
+    if dry_run or not confirm:
+        return RelocateResult(
+            outcome="dry_run",
+            old_root=str(old_root),
+            new_root=str(new_root_path),
+            plan=plan,
+            reason=(
+                "dry run: no config change and no bridge calls"
+                if dry_run
+                else f"{len(entries)} job(s) would relocate; re-run with --yes / "
+                "confirm=true to rewrite library_root and re-verify"
+            ),
+        )
+
+    if not cfg.exists or not cfg.path:
+        raise UsageError(
+            "no Scouter config file to rewrite; run `scouter config init` first",
+            detail={"config": cfg.path},
+        )
+    _rewrite_library_root(Path(cfg.path), str(new_root_path))
+
+    new_cfg = dataclasses.replace(cfg, library_root=str(new_root_path))
+    results = []
+    for e in entries:
+        job_path = config.job_dir(new_cfg, e["date"], e["slug"])
+        vr = _verify_at(e["slug"], job_path)
+        results.append(
+            {
+                "slug": e["slug"],
+                "ok": vr.ok,
+                "checked": vr.checked,
+                "mismatched": vr.mismatched,
+                "missing": vr.missing,
+            }
+        )
+
+    return RelocateResult(
+        old_root=str(old_root),
+        new_root=str(new_root_path),
+        jobs=results,
+        darktable_rollpaths_stale=True,
+        next_step=(
+            "in darktable, import <new_root>/<YYYY>/<date slug>/raw for each job; the "
+            ".xmp sidecars beside the raws carry every edit, so nothing is lost -- but "
+            "darktable's film rolls hold absolute paths in library.db, which Scouter "
+            "may not write"
+        ),
     )
 
 
@@ -520,6 +698,33 @@ for _verb in (
         writes=True,
         gated=True,
         summary="Re-register a job's film roll (e.g. after importing with darktable closed).",
+    ),
+    Verb(
+        id="library.jobs",
+        group="library",
+        fn=jobs,
+        args=(),
+        writes=False,
+        gated=False,
+        summary="List every job under the library root with frame counts and rating histograms.",
+    ),
+    Verb(
+        id="library.relocate",
+        group="library",
+        fn=relocate,
+        args=(
+            ArgSpec("new_root", "str", required=True, positional=True, help="new library root"),
+            ArgSpec("dry_run", "bool", default=False, help="plan only"),
+            ArgSpec(
+                "confirm",
+                "bool",
+                default=False,
+                help="required: rewrites the config and writes outside the library",
+            ),
+        ),
+        writes=True,
+        gated=True,
+        summary="Move the library to a new root: rewrite library_root and re-verify every job.",
     ),
 ):
     register_verb(_verb)

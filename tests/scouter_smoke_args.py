@@ -62,6 +62,12 @@ SMOKE_ARGS: dict[str, dict] = {
     "library.import": {"source": SMOKE_SOURCE_DIR, "job_slug": "smoke-job"},
     "library.verify": {"job_slug": "smoke-job"},
     "library.register": {"job_slug": "smoke-job"},
+    "library.jobs": {},
+    # `confirm` deliberately omitted, same reasoning as library.import above:
+    # a dry run at worst, a fast `usage` error (no config / no library_root /
+    # new_root doesn't exist) at worst-worst -- either way exactly one event,
+    # and nothing is ever written.
+    "library.relocate": {"new_root": SMOKE_SOURCE_DIR},
 }
 
 
