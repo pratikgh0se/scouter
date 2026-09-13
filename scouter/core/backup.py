@@ -81,16 +81,56 @@ def _utc_now_z() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _darktable_library_db() -> Path:
-    """The GUI darktable's own `library.db` -- never opened, only copied.
+def _darktable_library_db_candidates() -> list[tuple[str, Path]]:
+    """Where the GUI darktable's own `library.db` might be, in probe order.
 
-    `$SCOUTER_DARKTABLE_LIBRARY_DB` overrides it (tests); the real default is
-    darktable's macOS config location.
+    `$SCOUTER_DARKTABLE_LIBRARY_DB` first (tests, and an explicit override),
+    then `~/.config/darktable/library.db` -- the REAL path on this Mac
+    (verified 2026-09-14) -- then the macOS `Application Support` default,
+    which some darktable installs / older versions use instead.
     """
+    candidates: list[tuple[str, Path]] = []
     explicit = os.environ.get("SCOUTER_DARKTABLE_LIBRARY_DB")
     if explicit:
-        return Path(explicit)
-    return Path.home() / "Library" / "Application Support" / "darktable" / "library.db"
+        candidates.append(("$SCOUTER_DARKTABLE_LIBRARY_DB", Path(explicit)))
+    candidates.append(
+        ("~/.config/darktable/library.db", Path.home() / ".config" / "darktable" / "library.db")
+    )
+    candidates.append(
+        (
+            "~/Library/Application Support/darktable/library.db",
+            Path.home() / "Library" / "Application Support" / "darktable" / "library.db",
+        )
+    )
+    return candidates
+
+
+def _darktable_library_db() -> tuple[Path | None, str | None]:
+    """The GUI darktable's own `library.db` -- never opened, only copied.
+
+    Returns `(path, source)` for the first candidate (see
+    `_darktable_library_db_candidates`) that actually exists, or `(None,
+    None)` when none does.
+    """
+    for label, path in _darktable_library_db_candidates():
+        if path.is_file():
+            return path, label
+    return None, None
+
+
+def _darktable_db_warning(cfg) -> str | None:
+    """None found while `backup.include_darktable_db` is true must never
+    silently degrade to `included: false` -- it names every candidate probed."""
+    if not cfg.backup.include_darktable_db:
+        return None
+    dt_db, _source = _darktable_library_db()
+    if dt_db is not None:
+        return None
+    probed = ", ".join(str(path) for _label, path in _darktable_library_db_candidates())
+    return (
+        "backup.include_darktable_db is true but no darktable library.db was found; "
+        f"probed: {probed}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -150,8 +190,8 @@ def _members(cfg) -> list[tuple[Path, str]]:
     # sqlite3's own backup API is deliberately not used -- that would be
     # reading darktable's database, which the invariant forbids.
     if cfg.backup.include_darktable_db:
-        dt_db = _darktable_library_db()
-        if dt_db.is_file():
+        dt_db, _source = _darktable_library_db()
+        if dt_db is not None:
             pairs.append((dt_db, "darktable/library.db"))
 
     pairs.sort(key=lambda t: t[1])
@@ -458,12 +498,18 @@ def run(*, confirm: bool = False, dry_run: bool = False, job: str | None = None)
         }
     ]
 
+    dry_run_warnings = []
+    dt_warning = _darktable_db_warning(cfg)
+    if dt_warning:
+        dry_run_warnings.append(dt_warning)
+
     if dry_run or not confirm:
         return BackupResult(
             outcome="dry_run",
             members=len(members),
             plaintext_bytes=total_bytes,
             plan=plan,
+            warnings=dry_run_warnings,
             reason=(
                 "dry run: nothing was archived, encrypted, rsynced or pruned"
                 if dry_run
@@ -505,13 +551,17 @@ def run(*, confirm: bool = False, dry_run: bool = False, job: str | None = None)
         if rsync_outcome.warning:
             warnings.append(rsync_outcome.warning)
 
-    dt_db = _darktable_library_db()
-    dt_db_included = b.include_darktable_db and dt_db.is_file()
+    dt_db, dt_source = _darktable_library_db()
+    dt_db_included = b.include_darktable_db and dt_db is not None
     darktable_db_info = {
         "included": dt_db_included,
         "bytes": dt_db.stat().st_size if dt_db_included else None,
+        "source": dt_source,
         "consistency": "file-copy, may be mid-write",
     }
+    dt_warning = _darktable_db_warning(cfg)
+    if dt_warning:
+        warnings.append(dt_warning)
 
     note = (
         "age encryption is authenticated (ChaCha20-Poly1305)"

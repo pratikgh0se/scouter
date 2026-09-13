@@ -16,6 +16,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scouter import config, metrics
 from scouter.core import backup
@@ -227,6 +228,91 @@ class TarAndEncryptTest(BackupTestCase):
         with self.assertRaises(EncryptionUnavailable) as ctx:
             backup._encrypt(plain, cfg)
         self.assertEqual(ctx.exception.detail["check"], "age_missing")
+
+
+class DarktableDbProbeTest(BackupTestCase):
+    """Probe order: $SCOUTER_DARKTABLE_LIBRARY_DB, then ~/.config/darktable/library.db
+    (the real path on this Mac), then ~/Library/Application Support/darktable/library.db.
+    Every candidate lives under a temp "fake home", never the real one."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.fake_home = self.tmp / "fakehome"
+        self.fake_home.mkdir()
+        os.environ.pop("SCOUTER_DARKTABLE_LIBRARY_DB", None)
+
+    def test_env_override_wins_over_config_and_application_support(self) -> None:
+        config_db = self.fake_home / ".config" / "darktable" / "library.db"
+        config_db.parent.mkdir(parents=True)
+        config_db.write_bytes(b"config-db")
+
+        env_db = self.tmp / "env-library.db"
+        env_db.write_bytes(b"env-db")
+        os.environ["SCOUTER_DARKTABLE_LIBRARY_DB"] = str(env_db)
+
+        with mock.patch.object(Path, "home", return_value=self.fake_home):
+            found, source = backup._darktable_library_db()
+
+        self.assertEqual(found, env_db)
+        self.assertEqual(source, "$SCOUTER_DARKTABLE_LIBRARY_DB")
+
+    def test_config_path_found_when_env_unset(self) -> None:
+        config_db = self.fake_home / ".config" / "darktable" / "library.db"
+        config_db.parent.mkdir(parents=True)
+        config_db.write_bytes(b"config-db")
+
+        with mock.patch.object(Path, "home", return_value=self.fake_home):
+            found, source = backup._darktable_library_db()
+
+        self.assertEqual(found, config_db)
+        self.assertEqual(source, "~/.config/darktable/library.db")
+
+    def test_application_support_path_found_as_last_resort(self) -> None:
+        app_support_db = (
+            self.fake_home / "Library" / "Application Support" / "darktable" / "library.db"
+        )
+        app_support_db.parent.mkdir(parents=True)
+        app_support_db.write_bytes(b"app-support-db")
+
+        with mock.patch.object(Path, "home", return_value=self.fake_home):
+            found, source = backup._darktable_library_db()
+
+        self.assertEqual(found, app_support_db)
+        self.assertEqual(source, "~/Library/Application Support/darktable/library.db")
+
+    @unittest.skipUnless(OPENSSL_PRESENT, "openssl not found")
+    def test_none_found_adds_a_warning_naming_every_candidate(self) -> None:
+        # fake_home stays empty: no candidate exists anywhere.
+        cfg = self._write_config(rsync_raws=False)
+        self.assertTrue(cfg.backup.include_darktable_db)
+
+        with mock.patch.object(Path, "home", return_value=self.fake_home):
+            result = backup.run(confirm=True)
+
+        self.assertEqual(result.outcome, "ok")
+        matching = [w for w in result.warnings if "library.db" in w]
+        self.assertTrue(matching, result.warnings)
+        warning = matching[0]
+        self.assertIn(str(self.fake_home / ".config" / "darktable" / "library.db"), warning)
+        self.assertIn(
+            str(self.fake_home / "Library" / "Application Support" / "darktable" / "library.db"),
+            warning,
+        )
+
+        manifest = json.loads(Path(result.manifest_path).read_text())
+        self.assertFalse(manifest["darktable_db"]["included"])
+        self.assertIsNone(manifest["darktable_db"]["source"])
+
+    @unittest.skipUnless(OPENSSL_PRESENT, "openssl not found")
+    def test_none_found_warns_on_dry_run_too(self) -> None:
+        cfg = self._write_config()
+        self.assertTrue(cfg.backup.include_darktable_db)
+
+        with mock.patch.object(Path, "home", return_value=self.fake_home):
+            result = backup.run(dry_run=True)
+
+        self.assertEqual(result.outcome, "dry_run")
+        self.assertTrue(any("library.db" in w for w in result.warnings), result.warnings)
 
 
 class PruningTest(BackupTestCase):
