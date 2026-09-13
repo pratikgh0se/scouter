@@ -181,6 +181,7 @@ class StyleResult(Payload):
     missed: list[int] = field(default_factory=list)
     per_image: list[dict] = field(default_factory=list)
     note: str | None = None
+    source: str | None = None
 
 
 @dataclass

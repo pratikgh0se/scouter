@@ -236,10 +236,10 @@ These are load-bearing, not incidental — read them before scripting against Sc
   phase 1 has no verified position→value table for every slider — use
   `history read` (the XMP) for actual values; `status` is a liveness/reachability
   check and the `wrong_view` signal, nothing more.
-- **`style apply --modules` can honestly fail to filter.** When darktable's
-  build doesn't expose per-module style filtering, applying a style with a
-  `modules` list still applies the *whole* style and reports
-  `modules_honoured: false` — never a silent partial application dressed up
+- **`style extract --modules` can honestly fail to filter.** When darktable's
+  build doesn't expose per-module style filtering, extracting a style with a
+  `modules` list still captures the *whole* history and reports
+  `modules_honoured: false` — never a silent partial extraction dressed up
   as a filtered one.
 - **`style apply --mode overwrite` is refused, not downgraded.** darktable's
   Lua API only appends a style (`image:apply_style`), so overwrite is rejected

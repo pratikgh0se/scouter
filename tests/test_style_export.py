@@ -4,7 +4,7 @@ from pathlib import Path
 
 from scouter.core import dtbridge, export, style
 from scouter.core.style import UnsupportedMode
-from scouter.errors import StylePartial
+from scouter.errors import NotInDarkroom, StylePartial
 from tests.scouter_fakes import FAKE_CLI_WRITES_PPM, FakeBridge, TempCache, fake_cli_script
 
 
@@ -25,6 +25,12 @@ class StyleTest(unittest.TestCase):
                     "already_open": True,
                 },
                 "list_styles": {"styles": [{"name": "old-look"}], "count": 1},
+                "darkroom.current": {
+                    "image_id": 12,
+                    "path": str(self.raw),
+                    "view": "darkroom",
+                    "source": "action_images",
+                },
                 "style.create_from_current": {
                     "name": "hero",
                     "created": True,
@@ -32,6 +38,7 @@ class StyleTest(unittest.TestCase):
                     "modules_requested": 2,
                     "modules_honoured": False,
                     "note": "dt.styles.create has no module filter in Lua API 9.6.0",
+                    "source": "action_images",
                 },
                 "style.apply": {
                     "name": "hero",
@@ -62,6 +69,43 @@ class StyleTest(unittest.TestCase):
         self.assertNotIn("style.create_from_current", self.bridge.methods_called())
         confirmed = style.extract(image=str(self.raw), name="old-look", modules=[], confirm=True)
         self.assertEqual(confirmed.outcome, "ok")
+
+    def test_extract_keeps_the_lua_reported_source(self) -> None:
+        result = style.extract(image=str(self.raw), name="hero", modules=[])
+        self.assertEqual(result.source, "action_images")
+
+    def test_extract_refuses_when_the_darkroom_shows_another_image(self) -> None:
+        """Final re-review: `style.create_from_current` builds the style from
+
+        whatever the darkroom currently displays, not from the `image`
+        argument `extract` resolved by lookup. If the darkroom shows a
+        different image, refuse BEFORE `style.create_from_current` is ever
+        called (the RefusingBridge pattern of `tests/test_confirm_gates.py`,
+        applied inline here) rather than silently building the style from the
+        wrong photo and reporting the requested one.
+        """
+        self.bridge.responses["darkroom.current"] = {
+            "image_id": 999,
+            "path": "/somewhere/else.ORF",
+            "view": "darkroom",
+            "source": "action_images",
+        }
+        before = len(self.bridge.calls)
+        with self.assertRaises(NotInDarkroom) as ctx:
+            style.extract(image=str(self.raw), name="hero", modules=[])
+        self.assertIn("darkroom shows 999, requested 12", str(ctx.exception))
+        self.assertNotIn("style.create_from_current", self.bridge.methods_called()[before:])
+
+    def test_extract_proceeds_when_the_darkroom_matches(self) -> None:
+        result = style.extract(image=str(self.raw), name="hero", modules=[])
+        self.assertEqual(result.outcome, "ok")
+        self.assertIn("darkroom.current", self.bridge.methods_called())
+        self.assertIn("style.create_from_current", self.bridge.methods_called())
+
+    def test_extract_dry_run_does_not_call_darkroom_current(self) -> None:
+        result = style.extract(image=str(self.raw), name="old-look", modules=[])
+        self.assertEqual(result.outcome, "dry_run")
+        self.assertNotIn("darkroom.current", self.bridge.methods_called())
 
     def test_apply_append_is_ungated(self) -> None:
         result = style.apply(image=str(self.raw), name="hero")

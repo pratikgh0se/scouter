@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from scouter import metrics
 from scouter.core import dtbridge
-from scouter.errors import ScouterError, StylePartial
+from scouter.errors import NotInDarkroom, ScouterError, StylePartial
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
 from scouter.types import StyleResult
@@ -43,6 +43,39 @@ class UnsupportedMode(ScouterError):
 def _existing_styles() -> list[str]:
     result = dtbridge.call("list_styles", {})
     return [str(s.get("name")) for s in result.get("styles", [])]
+
+
+def _require_darkroom_shows(image_id: int) -> None:
+    """Refuse, before ANY `style.create_from_current` call, when the darkroom
+    is showing a different image than the one `extract` resolved.
+
+    Final re-review: `style.create_from_current` (the Lua side) builds the
+    style from whatever `loaded_darkroom_image()` reports -- the darkroom's
+    OWN idea of "current image" -- not from the `image` argument, which
+    `extract` resolves by library lookup (`dtbridge.resolve_image`, a pure
+    read with no relation to what is on screen). Extracting image A while the
+    darkroom shows image B would silently build the style from B and report A
+    as the source. `darkroom.current` is a read-only query (no side effects,
+    same call `core.darkroom._current_image` uses) so this check costs one
+    round trip and moves nothing. Absent (`image_id` missing) means nothing
+    is loaded at all -- also a refusal, not a pass.
+    """
+    current = dtbridge.call("darkroom.current", {})
+    loaded = current.get("image_id")
+    if loaded is None:
+        raise NotInDarkroom(
+            f"no image is loaded in the darkroom (view is {current.get('view', 'unknown')})",
+            detail={"view": current.get("view")},
+        )
+    if int(loaded) != int(image_id):
+        raise NotInDarkroom(
+            f"darkroom shows {int(loaded)}, requested {int(image_id)}",
+            fix=(
+                "open the intended image first (`scouter darkroom open <image>`), "
+                "or extract from the image the darkroom already shows"
+            ),
+            detail={"loaded_image_id": int(loaded), "requested_image_id": int(image_id)},
+        )
 
 
 @metrics.instrumented("style.extract")
@@ -87,6 +120,7 @@ def extract(
             ),
         )
     dtbridge.require_darkroom()
+    _require_darkroom_shows(resolved.image_id)
     result = dtbridge.call(
         "style.create_from_current",
         {"name": name, "modules": modules, "description": description},
@@ -102,6 +136,7 @@ def extract(
         modules_honoured=bool(result.get("modules_honoured")),
         created=bool(result.get("created")),
         note=result.get("note"),
+        source=result.get("source"),
         warnings=warnings,
     )
 
