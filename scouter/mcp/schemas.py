@@ -349,6 +349,47 @@ TOOL_SPECS: list[dict] = [
         ),
     },
     {
+        "name": "backup_run",
+        "description": "Tar the small-and-precious set (XMPs, .scouter/, config, "
+        "metrics.db, events.jsonl), hash and encrypt it (age if configured, "
+        "else openssl enc), rsync the raws, write a manifest, and prune old "
+        "archives beyond keep_archives (never the newest two). Refuses when "
+        "the backup gate is not satisfied. Requires confirm=true: it writes "
+        "outside the library and deletes old archives.",
+        "inputSchema": _schema(
+            {
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: writes outside the library and prunes old archives",
+                },
+            },
+            [],
+        ),
+    },
+    {
+        "name": "backup_verify",
+        "description": "Decrypt the newest archive (or --archive TS) to a temp "
+        "directory, compare the ciphertext and plaintext sha256 against the "
+        "manifest, re-hash a sample of members and of the rsynced raws. "
+        "Read-only; writes nothing outside its own temp directory.",
+        "inputSchema": _schema(
+            {
+                "archive": {
+                    "type": "string",
+                    "description": "archive timestamp to verify (default: newest)",
+                },
+                "sample": {
+                    "type": "integer",
+                    "default": 10,
+                    "description": "how many members/raws to re-hash",
+                },
+            },
+            [],
+        ),
+    },
+    {
         "name": "metrics_summary",
         "description": "Per-verb calls, error rate by class, p50/p95 latency and "
         "estimated tokens over a time window.",

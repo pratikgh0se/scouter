@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import unittest
 
 from scouter import registry
@@ -74,9 +76,37 @@ class ConfirmGateTest(unittest.TestCase):
         self.bridge = RefusingBridge(self, self.raw)
         dtbridge.set_bridge(self.bridge)
 
+        # `backup.run`'s gate check runs even for a dry run (design 4.3's
+        # order is gate -> enumerate -> ...), so this fixture needs a
+        # gate-satisfiable config for that dry run to ever be reached.
+        self._env_saved = dict(os.environ)
+        backup_target = root / "backup-target"
+        backup_target.mkdir()
+        passfile = root / "backup.pass"
+        passfile.write_text("test-passphrase\n")
+        passfile.chmod(0o600)
+        config_path = root / "config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "library_root": str(root / "library"),
+                    "backup": {
+                        "enabled": True,
+                        "target": str(backup_target),
+                        "encryption": "openssl",
+                        "openssl_passfile": str(passfile),
+                    },
+                }
+            )
+        )
+        os.environ["SCOUTER_CONFIG"] = str(config_path)
+
     def tearDown(self) -> None:
         dtbridge.set_bridge(None)
         self.cache.stop()
+        os.environ.clear()
+        os.environ.update(self._env_saved)
 
     #: Minimal args per gated verb, WITHOUT confirm.
     GATED_ARGS = {
@@ -84,6 +114,7 @@ class ConfirmGateTest(unittest.TestCase):
         "darkroom.reset": {"module": "exposure"},
         "style.extract": {"image": None, "name": "hero", "modules": []},
         "export.run": {"images": [None, None], "preset": "preview", "out_dir": None},
+        "backup.run": {},
     }
     # `style.apply` is deliberately NOT here (final review, should-fix 7): its
     # only would-be gate was mode=overwrite, which darktable cannot do at all,

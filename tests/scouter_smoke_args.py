@@ -50,6 +50,12 @@ SMOKE_ARGS: dict[str, dict] = {
     "style.extract": {"image": SMOKE_RAW, "name": "smoke", "modules": []},
     "style.apply": {"image": SMOKE_RAW, "name": "smoke"},
     "export.run": {"images": [SMOKE_RAW], "preset": "preview", "out_dir": SMOKE_OUT_DIR},
+    # dry_run=True: backup.run's gate check runs even for a dry run (design
+    # 4.3's order is gate -> enumerate -> ...), so with no SCOUTER_CONFIG
+    # override here this legitimately errors out on an unconfigured gate --
+    # which is fine, this coverage test only cares about the event count.
+    "backup.run": {"dry_run": True},
+    "backup.verify": {},
 }
 
 

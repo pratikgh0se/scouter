@@ -29,6 +29,8 @@ EXPECTED_VERBS = {
     "style.apply",
     "export.run",
     "metrics.summary",
+    "backup.run",
+    "backup.verify",
 }
 
 

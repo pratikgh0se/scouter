@@ -212,6 +212,33 @@ class ConfigResult(Payload):
 
 
 @dataclass
+class BackupResult(Payload):
+    archive_dir: str = ""
+    manifest_path: str = ""
+    members: int = 0
+    plaintext_bytes: int = 0
+    ciphertext_bytes: int = 0
+    encryption: str = "openssl"
+    rsync_ran: bool = False
+    rsync_files: int = 0
+    rsync_bytes: int = 0
+    rsync_exit: int | None = None
+    pruned: list[str] = field(default_factory=list)
+    ms_tar: int = 0
+    ms_encrypt: int = 0
+    ms_rsync: int = 0
+
+
+@dataclass
+class BackupVerifyResult(Payload):
+    verified: bool = False
+    archive: str = ""
+    checks: list[dict] = field(default_factory=list)
+    sampled_members: list[dict] = field(default_factory=list)
+    sampled_raws: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class SummaryResult(Payload):
     since: str = "7d"
     from_ts: str = ""
