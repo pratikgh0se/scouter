@@ -469,6 +469,39 @@ TOOL_SPECS: list[dict] = [
         ),
     },
     {
+        "name": "library_jobs",
+        "description": "List every job under the library root: frame count, bytes, a "
+        "ratings histogram from the XMPs' xmp:Rating, and which .scouter "
+        "manifests exist. Read-only.",
+        "inputSchema": _schema({}, []),
+    },
+    {
+        "name": "library_relocate",
+        "description": "Move the library to a new root: rewrite library_root in the config "
+        "(every other key survives untouched) and re-verify every job's "
+        "checksums there. Requires confirm=true: it rewrites the config "
+        "file and its dry run reports which jobs already exist at the "
+        "new root. Never edits darktable's library.db -- darktable's film "
+        "rolls keep pointing at the old paths, so re-import "
+        "<new_root>/<job>/raw for each job afterwards (the result's "
+        "next_step says so).",
+        "inputSchema": _schema(
+            {
+                "new_root": {
+                    "type": "string",
+                    "description": "new library root (must already exist)",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: rewrites the config and writes outside the library",
+                },
+            },
+            ["new_root"],
+        ),
+    },
+    {
         "name": "cull_propose",
         "description": "Propose a rating for every frame in a job (or an explicit image "
         "list), grouped into bursts by capture time and camera. Never "
@@ -555,6 +588,47 @@ TOOL_SPECS: list[dict] = [
         "work right now?' without attempting one.",
         "inputSchema": _schema(
             {"path": {"type": "string", "description": "override the config path"}}, []
+        ),
+    },
+    {
+        "name": "backup_run",
+        "description": "Tar the small-and-precious set (XMPs, .scouter/, config, "
+        "metrics.db, events.jsonl), hash and encrypt it (age if configured, "
+        "else openssl enc), rsync the raws, write a manifest, and prune old "
+        "archives beyond keep_archives (never the newest two). Refuses when "
+        "the backup gate is not satisfied. Requires confirm=true: it writes "
+        "outside the library and deletes old archives.",
+        "inputSchema": _schema(
+            {
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: writes outside the library and prunes old archives",
+                },
+            },
+            [],
+        ),
+    },
+    {
+        "name": "backup_verify",
+        "description": "Decrypt the newest archive (or --archive TS) to a temp "
+        "directory, compare the ciphertext and plaintext sha256 against the "
+        "manifest, re-hash a sample of members and of the rsynced raws. "
+        "Read-only; writes nothing outside its own temp directory.",
+        "inputSchema": _schema(
+            {
+                "archive": {
+                    "type": "string",
+                    "description": "archive timestamp to verify (default: newest)",
+                },
+                "sample": {
+                    "type": "integer",
+                    "default": 10,
+                    "description": "how many members/raws to re-hash",
+                },
+            },
+            [],
         ),
     },
     {

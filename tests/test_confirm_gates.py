@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -94,6 +95,11 @@ class ConfirmGateTest(unittest.TestCase):
         self.job_slug = "gate-hero"
         job_path = config.job_dir(self.cfg, "2026-06-28", self.job_slug)
         (job_path / "raw").mkdir(parents=True)
+        # `library.relocate` refuses a `new_root` that isn't an existing
+        # directory before it ever reaches the dry-run branch, so the generic
+        # "substitute self.raw" fallback below (a FILE) won't do for it.
+        self.relocate_root = root / "gate-relocate-dest"
+        self.relocate_root.mkdir()
 
         # `export.release` reads its candidates from import.json + each
         # raw's own XMP sidecar (file-based, no bridge call), and (fix round
@@ -104,11 +110,17 @@ class ConfirmGateTest(unittest.TestCase):
         scouter_dir = job_path / ".scouter"
         scouter_dir.mkdir(parents=True, exist_ok=True)
         release_files = []
-        for name in ("gate_0001.orf", "gate_0002.orf"):
+        for seq, name in enumerate(("gate_0001.orf", "gate_0002.orf"), start=1):
             release_raw = job_path / "raw" / name
             release_raw.write_bytes(b"raw")
             Path(str(release_raw) + ".xmp").write_text('<x xmp:Rating="2"/>', encoding="utf-8")
-            release_files.append({"dest": f"raw/{name}", "sha256": "deadbeef"})
+            # `library.import_card`'s dry run reads and shape-checks any
+            # EXISTING import.json (task 3 fix round 1's manifest merge), so
+            # this fixture's entries need every key `_REQUIRED_FILE_KEYS`
+            # names -- not just the ones `export.release` itself reads.
+            release_files.append(
+                {"dest": f"raw/{name}", "sha256": "deadbeef", "seq": seq, "source_name": name}
+            )
         (scouter_dir / "import.json").write_text(
             json.dumps({"files": release_files}), encoding="utf-8"
         )
@@ -139,11 +151,38 @@ class ConfirmGateTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        # `backup.run`'s gate check runs even for a dry run (design 4.3's
+        # order is gate -> enumerate -> ...), so this fixture needs a
+        # gate-satisfiable config for that dry run to ever be reached.
+        self._env_saved = dict(os.environ)
+        backup_target = root / "backup-target"
+        backup_target.mkdir()
+        passfile = root / "backup.pass"
+        passfile.write_text("test-passphrase\n")
+        passfile.chmod(0o600)
+        config_path = root / "config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "library_root": str(root / "library"),
+                    "backup": {
+                        "enabled": True,
+                        "target": str(backup_target),
+                        "encryption": "openssl",
+                        "openssl_passfile": str(passfile),
+                    },
+                }
+            )
+        )
+        os.environ["SCOUTER_CONFIG"] = str(config_path)
 
     def tearDown(self) -> None:
         self._lib_cfg_patch.stop()
         dtbridge.set_bridge(None)
         self.cache.stop()
+        os.environ.clear()
+        os.environ.update(self._env_saved)
 
     #: Minimal args per gated verb, WITHOUT confirm.
     GATED_ARGS = {
@@ -154,11 +193,13 @@ class ConfirmGateTest(unittest.TestCase):
         "library.import": {"source": None, "job_slug": "gate-hero"},
         "library.register": {"job_slug": "gate-hero"},
         "export.release": {"job_slug": "gate-hero", "preset": "preview"},
+        "library.relocate": {"new_root": None},
         # `--proposal` is a JSON file path, not an image -- the generic
         # `None -> self.raw` substitution below is for image-shaped args, so
         # this placeholder is swapped for `self.cull_proposal` explicitly in
         # `test_every_gated_verb_dry_runs_without_confirm` instead.
         "cull.apply": {"proposal": "<cull-proposal>"},
+        "backup.run": {},
     }
     # `style.apply` is deliberately NOT here (final review, should-fix 7): its
     # only would-be gate was mode=overwrite, which darktable cannot do at all,
@@ -180,12 +221,16 @@ class ConfirmGateTest(unittest.TestCase):
                             str(self.card_dir)
                             if k == "source"
                             else (
-                                self.raw
-                                if v is None
+                                str(self.relocate_root)
+                                if k == "new_root"
                                 else (
-                                    [self.raw] * len(v)
-                                    if isinstance(v, list) and v and v[0] is None
-                                    else v
+                                    self.raw
+                                    if v is None
+                                    else (
+                                        [self.raw] * len(v)
+                                        if isinstance(v, list) and v and v[0] is None
+                                        else v
+                                    )
                                 )
                             )
                         )

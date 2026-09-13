@@ -100,6 +100,7 @@ class LoadVerbsImportGuardTest(unittest.TestCase):
                     "style",
                     "library",
                     "cull",
+                    "backup",
                     "metrics",
                 },
             )
