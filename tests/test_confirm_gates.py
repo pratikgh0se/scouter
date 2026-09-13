@@ -68,12 +68,24 @@ class RefusingBridge:
 
 class ConfirmGateTest(unittest.TestCase):
     def setUp(self) -> None:
-        from tests.scouter_fakes import TempCache
+        from tests.scouter_fakes import TempCache, write_minimal_style_sidecar
 
         self.cache = TempCache()
         root = self.cache.start()
         self.raw = str(root / "hero.ORF")
         (root / "hero.ORF").write_bytes(b"raw")
+        # Fix round 2, blocker 1: style.extract(no_filter=True) reads the
+        # sidecar too now (never_include applies to the whole active
+        # history, not just a requested `modules` list).
+        raw_sidecar = write_minimal_style_sidecar(self.raw)
+        # merge (task 7 x task 3/9): cull.apply's staleness check (design
+        # 8.3) compares each frame's recorded sidecar mtime to the real
+        # mtime on disk. The cull_proposal fixture below used to record
+        # `{}` (no sidecar existed for self.raw at all, pre-task-7); now one
+        # does, so its real mtime_ns has to be in `xmp_mtimes` or the
+        # generic dry-run test mistakes an unrelated fixture interaction for
+        # staleness.
+        self._raw_sidecar_mtime_ns = raw_sidecar.stat().st_mtime_ns
         # Never /tmp: the gate test writes nothing, but the PATH it plans must
         # still live under the throwaway cache so a regression cannot leave a
         # directory behind in a shared place.
@@ -146,7 +158,7 @@ class ConfirmGateTest(unittest.TestCase):
                         }
                     ],
                     "groups": [],
-                    "xmp_mtimes": {},
+                    "xmp_mtimes": {self.raw: self._raw_sidecar_mtime_ns},
                 }
             ),
             encoding="utf-8",
@@ -188,7 +200,13 @@ class ConfirmGateTest(unittest.TestCase):
     GATED_ARGS = {
         "config.init": {"path": None},
         "darkroom.reset": {"module": "exposure"},
-        "style.extract": {"image": None, "name": "hero", "modules": []},
+        # no_filter=True: this generic test only exercises the "would
+        # replace an existing style" confirm gate, common to every gated
+        # verb -- not style.extract's own module-filter refusals (fix round
+        # 1, should-fix 8, tested directly in tests/test_style_dtstyle.py),
+        # which would otherwise fire first against this fake's empty modules
+        # / absent sidecar and mask the thing this test actually checks.
+        "style.extract": {"image": None, "name": "hero", "modules": [], "no_filter": True},
         "export.run": {"images": [None, None], "preset": "preview", "out_dir": None},
         "library.import": {"source": None, "job_slug": "gate-hero"},
         "library.register": {"job_slug": "gate-hero"},

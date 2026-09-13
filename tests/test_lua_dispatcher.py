@@ -293,6 +293,9 @@ SCOUTER_METHODS = (
     "style.create_from_current",
     "style.apply",
     "image.rate",
+    "style.export_file",
+    "style.import_file",
+    "style.delete",
     "image.color_labels",
 )
 

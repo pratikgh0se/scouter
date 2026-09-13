@@ -190,6 +190,14 @@ def _entry_from_attrs(attrs: dict[str, str], history_end: int) -> HistoryEntry:
         params_hex=raw_params,
         decoded=decoded,
         reason=reason,
+        # Task 7: verbatim, never decoded -- the `.dtstyle` writer copies
+        # these two attributes character for character, the same way it
+        # copies `params_hex` (pinned against every real entry in
+        # tests/fixtures/P6281348.ORF.xmp, e.g. num 11's
+        # blendop_version="14").
+        blendop_params_hex=attrs.get("blendop_params", ""),
+        blendop_version=int(attrs.get("blendop_version", "0") or 0),
+        multi_name_hand_edited=attrs.get("multi_name_hand_edited", "0") == "1",
     )
 
 
@@ -245,16 +253,32 @@ def parse(text: str) -> ParsedXmp:
 
 
 def active_entries(parsed: ParsedXmp) -> list[HistoryEntry]:
-    """Entries actually in effect: `num < history_end` (ruling: active = num < history_end).
+    """Entries with num < history_end, newest-wins per (operation, multi_priority).
 
-    `ParsedXmp.entries` already carries every history step darktable ever
-    wrote, each with its own `active` flag computed the same way at parse
-    time (`_entry_from_attrs`). This is just the filtered view over that list
-    -- `enabled` stays on each entry as its own field (ruling: enabled
-    surfaced), never folded into the filter, because "in the active history"
-    and "the module's own on/off toggle" are different questions.
+    history_end is darktable's cut: everything at or past it is a redo-able
+    tail and is not part of the image's current look, so it must never ride
+    into a style.
+
+    Task 7: this used to be a plain `num < history_end` filter with no
+    dedup, which was correct for reporting (every step darktable wrote is
+    worth showing) but wrong for a style -- a slider touched twice (e.g.
+    exposure at num 8 then again at num 11) must contribute ONE `<plugin>`
+    element, the newest, not two competing ones. `enabled` stays on each
+    entry as its own field (ruling: enabled surfaced), never folded into the
+    filter, because "in the active history" and "the module's own on/off
+    toggle" are different questions.
     """
-    return [entry for entry in parsed.entries if entry.active]
+    active = [entry for entry in parsed.entries if entry.active]
+    newest_num: dict[tuple[str, int], int] = {}
+    for entry in active:
+        key = (entry.operation, entry.multi_priority)
+        if key not in newest_num or entry.num > newest_num[key]:
+            newest_num[key] = entry.num
+    return [
+        entry
+        for entry in active
+        if entry.num == newest_num[(entry.operation, entry.multi_priority)]
+    ]
 
 
 def latest_params(parsed: ParsedXmp, operation: str, instance: int = 0) -> dict | None:

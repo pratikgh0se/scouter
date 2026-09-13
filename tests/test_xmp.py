@@ -132,7 +132,21 @@ class ActiveEntriesTest(unittest.TestCase):
         active = xmp.active_entries(self.parsed)
         self.assertTrue(active)
         self.assertTrue(all(e.num < self.parsed.history_end for e in active))
-        self.assertEqual(len(active), len([e for e in self.parsed.entries if e.active]))
+        # Newest-wins per (operation, multi_priority): the reference fixture
+        # touches exposure, sigmoid and temperature twice each (nums 8/11,
+        # 10/12, 5/13), so active_entries dedupes to one entry per group --
+        # 11 of the 14 active raw entries survive, never 14 (task 7).
+        self.assertEqual(len(active), 11)
+        self.assertLess(len(active), len([e for e in self.parsed.entries if e.active]))
+
+    def test_active_entries_newest_wins_per_operation(self) -> None:
+        active = xmp.active_entries(self.parsed)
+        exposures = [e for e in active if e.operation == "exposure"]
+        self.assertEqual(len(exposures), 1, "only one exposure entry survives the dedup")
+        self.assertEqual(exposures[0].num, 11, "the newer exposure (num 11) wins over num 8")
+        sigmoids = [e for e in active if e.operation == "sigmoid"]
+        self.assertEqual(len(sigmoids), 1)
+        self.assertEqual(sigmoids[0].num, 12, "the newer sigmoid (num 12) wins over num 10")
 
     def test_active_entries_keeps_enabled_visible_not_filtered(self) -> None:
         active = xmp.active_entries(self.parsed)

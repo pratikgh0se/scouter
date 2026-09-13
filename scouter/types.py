@@ -93,6 +93,13 @@ class HistoryEntry:
     params_hex: str
     decoded: dict[str, Any] | None
     reason: str | None
+    # Task 7: needed verbatim by the `.dtstyle` writer (scouter/core/dtstyle.py)
+    # -- every real `<plugin>` darktable itself wrote carries its own blendop
+    # params/version and a multi_name_hand_edited flag alongside multi_name,
+    # pinned against tests/fixtures/hero.dtstyle (2026-09-14 host probe).
+    blendop_params_hex: str = ""
+    blendop_version: int = 0
+    multi_name_hand_edited: bool = False
 
 
 @dataclass
@@ -182,6 +189,18 @@ class StyleResult(Payload):
     per_image: list[dict] = field(default_factory=list)
     note: str | None = None
     source: str | None = None
+    # Task 7: the module filter is real now. `dtstyle_path` is set only on
+    # the filtered path (never on the `no_filter` / whole-history fallback);
+    # `operations_included` is the requested-and-present set actually
+    # written; `modules_missing` is what was requested but absent from the
+    # active history.
+    dtstyle_path: str | None = None
+    operations_included: list[str] = field(default_factory=list)
+    modules_missing: list[str] = field(default_factory=list)
+    # Fix round 1, should-fix 5: a requested module whose newest active entry
+    # is disabled is still written (honouring the request literally), but
+    # named here so the caller is never left thinking it is live.
+    modules_disabled: list[str] = field(default_factory=list)
 
 
 @dataclass
