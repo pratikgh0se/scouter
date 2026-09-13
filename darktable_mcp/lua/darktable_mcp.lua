@@ -1469,6 +1469,7 @@ return {
   current_view_name = current_view_name,
   gui_action = gui_action,
   is_nan = is_nan,
+  ids_match = ids_match,
   find_image_by_path = find_image_by_path,
   darkroom_image = darkroom_image,
   loaded_darkroom_image = loaded_darkroom_image,

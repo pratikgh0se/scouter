@@ -1373,6 +1373,19 @@ do
   end
 end
 
+-- ids_match: direct unit tests (fix round 3). `nil == nil` is true in Lua,
+-- so this must explicitly reject "neither side has an id" as a match, while
+-- still coercing numeric-looking strings the way tonumber() does.
+do
+  local m = plugin.ids_match
+  assertEq(m(nil, nil), false, "ids_match(nil, nil) is false -- no id on either side is not a match")
+  assertEq(m(nil, 5), false, "ids_match(nil, 5) is false")
+  assertEq(m(5, nil), false, "ids_match(5, nil) is false")
+  assertEq(m("x", "x"), false, 'ids_match("x", "x") is false -- neither side is a number')
+  assertEq(m(5, "5"), true, 'ids_match(5, "5") is true -- tonumber coerces the numeric string')
+  assertEq(m(5, 5), true, "ids_match(5, 5) is true")
+end
+
 -- view.current reflects the stub's view state.
 view_state.current = "lighttable"
 assertEq(plugin.methods["view.current"]().view, "lighttable", "view.current lighttable")

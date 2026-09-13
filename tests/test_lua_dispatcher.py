@@ -328,17 +328,33 @@ def test_history_commit_rejects_unknown_strategy():
         assert valid in body, f"unknown-strategy error must list {valid} as valid"
 
 
-def test_ids_match_guards_against_double_nil():
+@_skip_no_lua
+def test_ids_match_behaves_correctly():
     """`nil == nil` is true in Lua, so a naive tonumber(a) == tonumber(b)
-    would treat "neither side has an id" as a match. Fix round 2 should-fix 1.
+    would treat "neither side has an id" as a match. Fix round 2 should-fix 1;
+    fix round 3 replaces the static substring check below (which only proved
+    the guard clause was PRESENT in the source, not that it actually behaves
+    correctly) with the real thing: running the Lua harness, whose
+    tests/lua/test_dispatcher.lua asserts plugin.ids_match's exported
+    behaviour directly against (nil,nil)->false, (nil,5)->false, (5,nil)
+    ->false, ("x","x")->false, (5,"5")->true, (5,5)->true.
     """
-    source = PLUGIN.read_text(encoding="utf-8")
-    assert "local function ids_match(" in source, "ids_match helper not found in the plugin"
-    ids_match_body = source.split("local function ids_match(", 1)[1].split("\nend", 1)[0]
-    assert "na ~= nil and nb ~= nil" in ids_match_body, (
-        "ids_match does not guard both sides against nil before comparing"
+    assert LUA_BIN is not None
+    result = subprocess.run(
+        [LUA_BIN, "tests/lua/test_dispatcher.lua"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
-    # And darkroom.open must actually USE it, not the old bare tonumber(...)==.
+    assert result.returncode == 0 and "OK: all dispatcher tests passed" in result.stdout, (
+        "the tests/lua harness (which directly unit-tests plugin.ids_match) "
+        f"did not pass:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+    # Secondary, still-useful static check: darkroom.open must actually USE
+    # ids_match, not the old bare unguarded tonumber(...) == tonumber(...).
+    source = PLUGIN.read_text(encoding="utf-8")
     open_body = source.split('methods["darkroom.open"] = function', 1)[1].split(
         '\nmethods[', 1
     )[0]
