@@ -31,21 +31,39 @@ is a library-level history append.
 Fix round 1 (Opus quality review): `image:apply_style` always APPENDS, for
 a set the same as for one image -- re-running `apply_set` on a set that
 already carries the style stacks a SECOND copy of every operation the
-style contains, it does not replace or dedupe the first. `apply_set` now
-reads each target's sidecar locally before applying (`_already_has_style`,
-cheap -- one `image.lookup` per target plus a local file read, no render
-or write) and skips a target that already looks like it carries the
-style, `force=True` overrides. See `apply_set`'s own docstring for the
-error-handling and idempotency changes in full; `StyleSetResult`'s fixed
-fields (`scouter/types.py`, out of this fix round's file scope) have no
+style contains, it does not replace or dedupe the first. `apply_set` skips
+a target that already looks like it carries the style, `force=True`
+overrides. `StyleSetResult`'s fixed fields (`scouter/types.py`) have no
 room for new top-level lists, so `status` per image (`"applied"`,
-`"failed"`, `"unknown"`, `"already_has_style"`) lives in `per_image` rows,
-with the aggregate counts and id lists also named in `warnings`.
+`"failed"`, `"unknown"`, `"already_styled"`, `"not_attempted"`) lives in
+`per_image` rows, with the aggregate counts and id lists also named in
+`warnings`.
+
+Fix round 2 (Ruling R16): the idempotency guard is Scouter's OWN record,
+never darktable's. Round 1 matched a history entry's `multi_name` against
+the style name -- an unverified guess about how darktable happens to tag a
+style-created instance, never confirmed against a real host. R16 replaces
+it outright: `apply_set` keeps a per-job ledger,
+`<job>/.scouter/styles-applied.json` (one entry per `(image_id, style)`:
+`applied_at`, `history_end_after` -- the sidecar's `history_end` read
+right after the batch that applied it, best effort). An image counts as
+"already styled" only when the ledger has an entry for it AND the
+CURRENT sidecar's `history_end` is still at or past `history_end_after`
+(an untouched or advanced history since the recorded application); an
+unconfirmed or missing current sidecar is never guessed at -- it is
+`"unknown"`, and the frame is skipped without applying, never applied
+blind. A set resolved from `--images` alone, with no `--job-slug`, has no
+job directory and therefore no ledger: nothing is ever skipped that way,
+and a warning says so. See `apply_set`'s own docstring for the exact rule
+and the accounting it implies.
 """
 
 from __future__ import annotations
 
 import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
 
 from scouter import metrics, paths
 from scouter.core import dtbridge, dtstyle
@@ -71,6 +89,11 @@ MODES = ("append", "overwrite")
 #: time, each waiting out the full `style.apply` timeout before giving up.
 DEFAULT_BATCH_SIZE = 25
 MAX_CONSECUTIVE_BATCH_FAILURES = 2
+
+#: Fix round 2 (Ruling R16): the idempotency ledger's filename, inside the
+#: same `<job>/.scouter/` directory `import.json` and `checksums.sha256`
+#: already live in.
+LEDGER_FILENAME = "styles-applied.json"
 
 
 class UnsupportedMode(ScouterError):
@@ -484,38 +507,124 @@ def _resolve_set(
     return resolved, unresolved
 
 
-def _already_has_style(resolved: ResolvedImage, name: str, job: str) -> bool:
-    """Cheap, local-mostly check: does this image's sidecar already carry
-    an instance darktable tagged with this style's name?
+def _ledger_path(job_path: Path) -> Path:
+    from scouter import config as config_module
 
-    Heuristic, not a guarantee -- fix round 1's idempotency guard.
-    `image:apply_style` always APPENDS (module docstring), so re-running
-    `apply_set` on a set that already has the style stacks a SECOND copy of
-    every operation the style contains, it does not replace or dedupe the
-    first. darktable tags a NEW instance a style application CREATES with
-    `multi_name` set to the style's own name (observed on real history
-    stacks, not a documented Lua API guarantee), so a case-insensitive
-    `multi_name` match against any of the image's history entries is a
-    real, if imperfect, signal: it can miss a style whose instances
-    darktable did not name after it, and it cannot distinguish an earlier
-    application from a deliberate repeat with different values. `force=True`
-    bypasses this entirely, for exactly that reason.
+    return config_module.scouter_dir(job_path) / LEDGER_FILENAME
 
-    Reads `history.read.__wrapped__` directly (ruling 21/23: lazy import so
-    this module stays importable regardless of load order, and the
-    unwrapped call so one `apply_set` invocation still emits exactly one
-    metrics event). `history.read` still re-resolves the image (one cheap
-    `image.lookup` -- `dt.database`'s own dict lookup by id, not a render or
-    a write) before its actual work, which is the sidecar read: a local
-    file read, no bridge round trip for the part that matters at 300-image
-    scale.
+
+def _read_ledger(job_path: Path) -> list[dict]:
+    """Every entry ever recorded for this job, every style -- not filtered.
+    Missing, unreadable, or malformed is an empty ledger, not an error: the
+    idempotency guard degrades to "nothing is known to be already styled",
+    never to a crash.
     """
-    from scouter.core import history
+    path = _ledger_path(job_path)
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    return data if isinstance(data, list) else []
 
-    read_fn = getattr(history.read, "__wrapped__", history.read)
-    result = read_fn(resolved.image_id, job=job)
-    target = name.strip().lower()
-    return any((entry.multi_name or "").strip().lower() == target for entry in result.entries)
+
+def _upsert_ledger(existing: list[dict], updates: list[dict]) -> list[dict]:
+    """Merge `updates` into `existing` by `(image_id, style)`, replacing an
+    older entry for the same pair. Entries for OTHER styles, or from an
+    earlier run of THIS style that this run's `updates` does not touch, are
+    preserved untouched -- the ledger is additive across every `apply_set`
+    call a job ever sees, not just the current one.
+    """
+    by_key: dict[tuple[int, str], dict] = {}
+    for entry in existing:
+        try:
+            key = (int(entry["image_id"]), str(entry["style"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        by_key[key] = entry
+    for entry in updates:
+        by_key[(entry["image_id"], entry["style"])] = entry
+    return list(by_key.values())
+
+
+def _write_ledger_atomic(job_path: Path, entries: list[dict]) -> None:
+    path = _ledger_path(job_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(entries, indent=2))
+    os.replace(tmp, path)
+
+
+def _now_z() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _current_history_end(path: str) -> tuple[int | None, bool]:
+    """Local sidecar read (fix round 2, item 4): `resolved.path` is already
+    known from `_resolve_set`, so re-resolving through `history.read`
+    (which calls `dtbridge.resolve_image` again, one more bridge round
+    trip) would be redundant -- this reads `xmp.read_sidecar` + `xmp.parse`
+    directly instead, the same two calls `history.read`'s own body makes
+    after its resolve step.
+
+    Returns `(history_end, confirmed)`. `confirmed=False` (with
+    `history_end=None`) covers exactly `history.read`'s own two "not
+    confirmed" cases: no sidecar yet (`FileNotFoundError`), or one caught
+    mid-write (`not parsed.well_formed`, the torn-read fallback). Fix round
+    2, item 2: a caller MUST treat `confirmed=False` as "cannot verify",
+    never as "not styled" or "still styled" -- guessing either way risks a
+    duplicate append or a wrongly-skipped real application.
+    """
+    try:
+        text, _mtime = xmp_module.read_sidecar(path)
+    except FileNotFoundError:
+        return None, False
+    parsed = xmp_module.parse(text)
+    if not parsed.well_formed:
+        return None, False
+    return parsed.history_end, True
+
+
+def _idempotency_verdict(
+    resolved: ResolvedImage, ledger_entry: dict | None
+) -> tuple[str, str | None]:
+    """One resolved target's fix-round-2 idempotency verdict.
+
+    Returns `("apply", None)` when there is nothing on record (proceed
+    normally -- the common case, and the ONLY case that does not need a
+    local sidecar read at all); `("already_styled", note)` when the ledger
+    says this image already has the style AND the current sidecar confirms
+    the history has not been rewound past that point; `("unknown", note)`
+    when the ledger has a record but the current sidecar cannot confirm or
+    deny it (item 2) -- never a guess.
+
+    Never raises: the one thing that could (`xmp.read_sidecar` /
+    `xmp.parse`, both plain stdlib calls with no bridge round trip) is
+    fully handled inside `_current_history_end`. The caller still wraps
+    this in `except ScouterError` (fix round 2, item 3) for the general
+    case -- a future change to what this function does should not have to
+    remember to re-add that wrapping at the call site.
+    """
+    if ledger_entry is None:
+        return "apply", None
+    history_end, confirmed = _current_history_end(resolved.path)
+    if not confirmed:
+        return (
+            "unknown",
+            "commit history first: the current sidecar is missing or mid-write, so "
+            "Scouter's ledger record cannot be confirmed against it",
+        )
+    expected = ledger_entry.get("history_end_after")
+    if expected is None:
+        return (
+            "already_styled",
+            "ledger record has no history_end_after on file (best-effort read failed "
+            "when it was written); assuming still applied",
+        )
+    if history_end is not None and int(history_end) >= int(expected):
+        return "already_styled", None
+    return "apply", None
 
 
 @metrics.instrumented("style.apply_set")
@@ -536,12 +645,15 @@ def apply_set(
 
     A partial set is a RESULT, not an exception: 280 of 300 applied is
     information the caller needs, and phase 1's single-image `apply` raises
-    StylePartial, which would discard the payload. So `outcome="partial"` when
-    applied > 0 and (failed > 0 or a batch came back "unknown") -- exit 9,
-    the same code as style_partial, so one shell branch covers "some of it
-    worked" -- and StylePartial only when NOTHING applied (and something did
-    go wrong; see the idempotency note below for the one case that is not
-    a failure at all).
+    StylePartial, which would discard the payload. `outcome="partial"` when
+    `applied > 0` and (`failed > 0` or any id is `"unknown"`) -- exit 9, the
+    same code as `style_partial`, so one shell branch covers "some of it
+    worked". `StylePartial` (the exception) fires ONLY when `applied == 0`
+    AND `failed > 0` AND there is no `"unknown"` id at all (fix round 2,
+    item 5) -- `applied == 0` with any `"unknown"` id present is still
+    `outcome="partial"`, because "we genuinely do not know" is never the
+    same claim as "this definitely failed". `applied == 0` with `failed ==
+    0` (everything already styled, nothing ambiguous) is `outcome="ok"`.
 
     Always gated: a set apply is inherently a bulk write (there is no
     "safe by default" single-image case here, unlike `style.apply`), so
@@ -549,11 +661,11 @@ def apply_set(
     -- the same reasoning `library.import` uses ("an import is always > 1
     file, so it is always gated", design 3.1).
 
-    Fix round 1 (Opus quality review), five changes:
+    Fix round 1 (Opus quality review):
 
-    1. The `name` typo check (`list_styles`) now runs FIRST, before
-       resolving a single image -- a typo costs zero round trips, dry run or
-       real, instead of only being caught on the no-confirm/dry-run path.
+    1. The `name` typo check (`list_styles`) runs FIRST, before resolving a
+       single image -- a typo costs zero round trips, dry run or real,
+       instead of only being caught on the no-confirm/dry-run path.
     2. Resolution never aborts the whole set for one bad candidate: a raw
        `image.lookup` cannot find (a stale or renamed entry in a 300-file
        `import.json`, most likely) becomes a `per_image` failure row
@@ -566,34 +678,55 @@ def apply_set(
        propagate out of this function discarding batches that already
        succeeded. `BridgeTimeout` specifically means the client gave up
        without a response, so the bridge genuinely does not know whether
-       darktable finished the write -- those ids get `status="unknown"`,
-       excluded from both `applied` and `failed`, with a warning pointing at
-       `history.read`. Any OTHER `ScouterError` means the bridge answered
-       with a definite refusal, so those ids get `status="failed"`. Both
-       count toward the existing two-consecutive-batch-failures stop rule.
-    4. Idempotency: before the real batch loop, every resolved target's
-       sidecar is read locally (`_already_has_style`, cheap -- see its own
-       docstring) and a
-       target that already looks like it carries this style is skipped by
-       default (`status="already_has_style"` in `per_image`) --
-       `image:apply_style` always APPENDS, so re-running this verb on an
-       already-styled set would otherwise stack a second copy of every
-       operation the style contains. `force=True` applies anyway. This does
-       not run during a dry run, matching `extract`'s own dry-run path
-       (which also defers its local reads past the gate).
-    5. `batch` is bounds-checked to 1..100 (`usage` if not), `images=[]`
+       darktable finished the write -- those ids get `status="unknown"`.
+       Any OTHER `ScouterError` means the bridge answered with a definite
+       refusal, so those ids get `status="failed"`. Both count toward the
+       two-consecutive-batch-failures stop rule.
+    4. `batch` is bounds-checked to 1..100 (`usage` if not), `images=[]`
        (an explicit empty list) is a caller mistake rather than a silent
        fallback to `--job-slug`, and `--images` entries outside
        `--job-slug`'s own `import.json` are refused when both are given.
        See `_resolve_set`'s own docstring for the exact rules.
 
-    `StyleSetResult` (`scouter/types.py`) is out of this fix round's file
-    scope, so there is no new top-level field for "unknown" ids or
-    "already carries this style" ids -- every `per_image` row carries a
-    `status` (`"applied"` | `"failed"` | `"unknown"` | `"already_has_style"`)
-    and an `error` (`None` when not applicable); `warnings` also names the
-    aggregate counts and ids for whichever of those categories is non-empty,
-    so nothing is buried in a list a caller has to filter for by hand.
+    Fix round 2 (Ruling R16) -- idempotency, replacing round 1's darktable
+    heuristic entirely (see the module docstring for why):
+
+    1. Before the real batch loop, every resolved target is checked against
+       the job's OWN ledger (`_idempotency_verdict`, `<job>/.scouter/
+       styles-applied.json`) -- never darktable's history metadata. A
+       target the ledger and the current sidecar agree is already styled
+       gets `status="already_styled"` and is skipped; `force=True` applies
+       anyway. With no `--job-slug` there is no ledger at all (a warning
+       says so, once), so nothing is ever skipped that way.
+    2. A ledger record whose current sidecar cannot be confirmed (missing,
+       or mid-write) is `status="unknown"`, skipped WITHOUT applying, never
+       applied blind -- the warning says "commit history first".
+    3. The guard call is wrapped in `except ScouterError` at the call site:
+       any failure there also becomes `status="unknown"`, never propagates
+       past the gate.
+    4. The guard reads `resolved.path` directly (`_current_history_end`),
+       never re-resolving the image through the bridge.
+    5. See the accounting paragraph above for how `"unknown"` changes
+       `StylePartial` vs `outcome="partial"`.
+    6. `per_image` gets one `status="not_attempted"` row per id in a batch
+       the consecutive-failure stop never reached, `error` naming why
+       ("stopped after N consecutive batch failures") -- previously only
+       computable by subtraction, never listed.
+
+    After a batch succeeds, every id it applied gets a ledger entry written
+    (`applied_at`, `history_end_after` -- the sidecar's `history_end` read
+    right back, best effort: `None` if the sidecar is not yet confirmed,
+    which the next run's guard treats as "assume still applied", per the
+    module docstring). The ledger is only written when `--job-slug` gave a
+    job directory to write it into.
+
+    `StyleSetResult` (`scouter/types.py`) has no new top-level field for
+    "unknown" ids, "already carries this style" ids, or "never attempted"
+    ids -- every `per_image` row carries a `status` (`"applied"` |
+    `"failed"` | `"unknown"` | `"already_styled"` | `"not_attempted"`) and
+    an `error` (`None` when not applicable); `warnings` also names the
+    aggregate counts and id lists for whichever category is non-empty, so
+    nothing is buried in a list a caller has to filter for by hand.
 
     `--exclude-hero` (a shortcut to exclude a caller's own extract source
     automatically) is NOT implemented -- there is no such flag; `--exclude`
@@ -668,20 +801,56 @@ def apply_set(
             ),
         )
 
-    # Fix round 1, item 3 (idempotency): cheap local sidecar reads.
+    warnings: list[str] = []
+
+    # Fix round 2 (Ruling R16): idempotency from Scouter's OWN ledger, never
+    # darktable's history metadata.
     already_rows: list[dict] = []
+    guard_unknown_rows: list[dict] = []
     to_apply: list[ResolvedImage] = resolved
+    job_path = None
+    raw_ledger: list[dict] = []
+    ledger_by_id: dict[int, dict] = {}
+    if job_slug:
+        job_path = config_module.find_job(cfg, job_slug)
+        raw_ledger = _read_ledger(job_path)
+        for entry in raw_ledger:
+            if entry.get("style") != name:
+                continue
+            try:
+                ledger_by_id[int(entry["image_id"])] = entry
+            except (KeyError, TypeError, ValueError):
+                continue
+    elif not force:
+        warnings.append(
+            "no --job-slug: the idempotency ledger lives at "
+            "<job>/.scouter/styles-applied.json, so with no job nothing is "
+            "ever skipped as already-styled"
+        )
+
     if not force:
         to_apply = []
         for r in resolved:
-            if _already_has_style(r, name, job):
+            entry = ledger_by_id.get(r.image_id)
+            try:
+                verdict, note = _idempotency_verdict(r, entry)
+            except ScouterError as e:
+                # Fix round 2, item 3: the guard itself must never abort the
+                # run -- an unexpected failure here is exactly as uncertain
+                # as a bridge timeout, so it gets the same "unknown" status.
+                verdict, note = "unknown", str(e)
+            if verdict == "already_styled":
                 already_rows.append(
                     {
                         "image_id": r.image_id,
                         "path": r.path,
-                        "status": "already_has_style",
-                        "error": None,
+                        "status": "already_styled",
+                        "error": note,
                     }
+                )
+            elif verdict == "unknown":
+                guard_unknown_rows.append(
+                    {"image_id": r.image_id, "path": r.path, "status": "unknown", "error": note}
                 )
             else:
                 to_apply.append(r)
@@ -692,11 +861,11 @@ def apply_set(
 
     applied_ids: list[int] = []
     batch_rows: list[dict] = []
+    ledger_updates: list[dict] = []
     missed_ids: list[int] = []
     unknown_ids: list[int] = []
     consecutive_failures = 0
     batches_run = 0
-    warnings: list[str] = []
 
     for batch_ids in batches:
         batches_run += 1
@@ -724,10 +893,6 @@ def apply_set(
                     }
                 )
             if consecutive_failures >= MAX_CONSECUTIVE_BATCH_FAILURES:
-                warnings.append(
-                    f"stopped after {consecutive_failures} consecutive batch failures "
-                    f"({batches_run} of {len(batches)} batches attempted)"
-                )
                 break
             continue
         except ScouterError as e:
@@ -748,10 +913,6 @@ def apply_set(
                     }
                 )
             if consecutive_failures >= MAX_CONSECUTIVE_BATCH_FAILURES:
-                warnings.append(
-                    f"stopped after {consecutive_failures} consecutive batch failures "
-                    f"({batches_run} of {len(batches)} batches attempted)"
-                )
                 break
             continue
         consecutive_failures = 0
@@ -790,26 +951,70 @@ def apply_set(
                         "error": None,
                     }
                 )
+                # Ruling R16: record the ledger entry right after this
+                # batch's own apply, best effort -- a sidecar darktable has
+                # not committed yet reads back unconfirmed, and that is
+                # recorded honestly as `history_end_after=None`, not a
+                # guessed number.
+                history_end_after, _confirmed = _current_history_end(id_to_path[iid])
+                ledger_updates.append(
+                    {
+                        "image_id": iid,
+                        "style": name,
+                        "applied_at": _now_z(),
+                        "history_end_after": history_end_after,
+                    }
+                )
 
-    per_image = list(unresolved) + already_rows + batch_rows
+    # Fix round 2, item 6: rows for ids a consecutive-failure stop never
+    # reached, previously only inferable by subtraction.
+    not_attempted_rows: list[dict] = []
+    if batches_run < len(batches):
+        remaining = [iid for chunk in batches[batches_run:] for iid in chunk]
+        for iid in remaining:
+            not_attempted_rows.append(
+                {
+                    "image_id": iid,
+                    "path": id_to_path.get(iid),
+                    "status": "not_attempted",
+                    "error": f"stopped after {consecutive_failures} consecutive batch failures",
+                }
+            )
+        warnings.append(f"{len(remaining)} images were never attempted")
+
+    per_image = (
+        list(unresolved) + already_rows + guard_unknown_rows + batch_rows + not_attempted_rows
+    )
     requested = len(resolved) + len(unresolved)
     applied = len(applied_ids)
     failed = len(unresolved) + len(missed_ids)
-    unknown = len(unknown_ids)
+    unknown = len(guard_unknown_rows) + len(unknown_ids)
     skipped = len(already_rows)
-    never_attempted = requested - applied - failed - unknown - skipped
-    if never_attempted > 0:
-        warnings.append(f"{never_attempted} images were never attempted")
+
+    if guard_unknown_rows:
+        warnings.append(
+            f"{len(guard_unknown_rows)} images have an unconfirmed current sidecar "
+            "and were skipped without applying (commit history first): "
+            f"{sorted(r['image_id'] for r in guard_unknown_rows)}"
+        )
     if unknown_ids:
         warnings.append(
-            f"{unknown} images have unknown status (bridge timeout, may or may not "
-            f"have applied): {sorted(unknown_ids)}; check history.read before retrying"
+            f"{len(unknown_ids)} images have unknown status (bridge timeout, may or "
+            f"may not have applied): {sorted(unknown_ids)}; check history.read before "
+            "retrying"
         )
     if already_rows:
         warnings.append(
-            f"{skipped} images already carried this style and were skipped "
-            f"(force=True to apply again): {sorted(r['image_id'] for r in already_rows)}"
+            "skip decided from Scouter's own record, not darktable history: "
+            f"{skipped} already_styled ids "
+            f"{sorted(r['image_id'] for r in already_rows)} (force=True to apply again)"
         )
+
+    if job_path is not None and ledger_updates:
+        try:
+            _write_ledger_atomic(job_path, _upsert_ledger(raw_ledger, ledger_updates))
+        except OSError as e:
+            warnings.append(f"style ledger not written: {e}")
 
     if job_slug:
         try:
@@ -830,7 +1035,28 @@ def apply_set(
             warnings.append(f"vault stage not recorded: {e}")
 
     if applied == 0:
-        if failed == 0 and unknown == 0 and skipped > 0:
+        if unknown > 0:
+            # Fix round 2, item 5: some or all of the picture is genuinely
+            # unresolved (a bridge timeout or an unconfirmed sidecar) --
+            # that is never the same claim as "this definitely failed", so
+            # StylePartial (which says exactly that) does not fire here.
+            warnings.append(
+                f"nothing applied this run; {unknown} ids are unknown, not a "
+                "confirmed failure -- check history.read before retrying"
+            )
+            return StyleSetResult(
+                outcome="partial",
+                name=name,
+                mode=mode,
+                requested=requested,
+                applied=0,
+                failed=failed,
+                batches=batches_run,
+                missed=sorted(missed_ids),
+                per_image=per_image,
+                warnings=warnings,
+            )
+        if failed == 0:
             # Every candidate already carried this style: nothing failed,
             # nothing is ambiguous, there was simply nothing left to do --
             # NOT the "nothing applied" failure StylePartial exists for.
@@ -978,9 +1204,9 @@ for verb in (
                 "force",
                 "bool",
                 default=False,
-                help="apply even to images that already look like they carry this "
-                "style (fix round 1's idempotency guard; a local sidecar-only "
-                "heuristic, see apply_set's own docstring)",
+                help="apply even to images Scouter's own ledger says already carry "
+                "this style (<job>/.scouter/styles-applied.json; see apply_set's "
+                "own docstring)",
             ),
         ),
         writes=True,

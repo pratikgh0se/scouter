@@ -303,13 +303,14 @@ TOOL_SPECS: list[dict] = [
         "description": "Apply one style to a whole set, batched through the bridge, "
         "keeping per-image results. Always requires confirm=true (a set apply is "
         "always a bulk write). outcome=partial (exit 9) when some images applied "
-        "and some did not, or came back with unknown status after a bridge "
-        "timeout -- the successes are kept, never discarded. A target that "
-        "already looks like it carries this style is skipped by default "
-        "(image:apply_style always appends, so re-applying would stack a "
-        "second copy); force=true applies anyway. mode=overwrite is refused "
-        "with unsupported_mode; the only place overwrite exists at all is "
-        "the render-only `export.release --overwrite-style`.",
+        "and some did not, or any id came back unknown (a bridge timeout, or an "
+        "unconfirmed sidecar the idempotency guard could not verify) -- the "
+        "successes are kept, never discarded. A target Scouter's own ledger "
+        "(job/.scouter/styles-applied.json) says already carries this style is "
+        "skipped by default (image:apply_style always appends, so re-applying "
+        "would stack a second copy); force=true applies anyway. mode=overwrite "
+        "is refused with unsupported_mode; the only place overwrite exists at "
+        "all is the render-only `export.release --overwrite-style`.",
         "inputSchema": _schema(
             {
                 "name": {"type": "string", "description": "style name"},
@@ -352,8 +353,8 @@ TOOL_SPECS: list[dict] = [
                 "force": {
                     "type": "boolean",
                     "default": False,
-                    "description": "apply even to images that already look like "
-                    "they carry this style (a local, sidecar-only heuristic)",
+                    "description": "apply even to images Scouter's own ledger says "
+                    "already carry this style (job/.scouter/styles-applied.json)",
                 },
             },
             ["name"],

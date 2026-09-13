@@ -1,36 +1,53 @@
-"""Task 8 + fix round 1: `style.apply_set` -- batches of 25, the `partial`
-outcome, honest batch-level error handling, unknown-status timeouts, and
-the idempotency guard.
+"""Task 8 + fix rounds 1-2: `style.apply_set` -- batches of 25, the
+`partial` outcome, honest batch-level error handling, unknown-status
+timeouts, and the ledger-based idempotency guard (Ruling R16).
 
 `partial` keeps the successes: any `ScouterError` on one batch marks that
 batch's ids as failed (or, for a real client-side `BridgeTimeout`, as
 "unknown" -- the bridge genuinely does not know whether darktable finished)
 and CONTINUES (a stalled worker on frame 140 must not lose frames 1-139),
 up to two consecutive batch failures, after which the run stops with
-whatever it has. `StylePartial` (the exception) is reserved for the one
-case nothing survives: zero images applied, and something actually failed
-(everything already carrying the style is not a failure).
+whatever it has (`per_image` gets a `"not_attempted"` row for each id that
+never got a batch). `StylePartial` (the exception) fires only when
+`applied == 0` AND `failed > 0` AND nothing is `"unknown"` -- fix round 2,
+item 5: `applied == 0` with any `"unknown"` id is `outcome="partial"`
+instead, never a raised exception, because "we do not know" is never the
+same claim as "this failed".
+
+Fix round 2 (Ruling R16) replaced round 1's darktable `multi_name`
+heuristic outright: idempotency is now Scouter's OWN per-job ledger,
+`<job>/.scouter/styles-applied.json`, checked against the CURRENT sidecar's
+`history_end` -- never a guess about how darktable happens to tag history
+entries.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from darktable_mcp.bridge.client import BridgeError, BridgeTimeoutError
 from scouter import registry
 from scouter.core import dtbridge, style
 from scouter.core.style import UnsupportedMode
-from scouter.errors import StylePartial, UsageError, exit_code_for
+from scouter.errors import NotInDarkroom, StylePartial, UsageError, exit_code_for
 from tests.scouter_fakes import FakeBridge, TempCache
 
-MULTI_NAME_SIDECAR = """<?xml version="1.0" encoding="UTF-8"?>
+
+def _sidecar_xml(history_end: int) -> str:
+    """A minimal, well-formed darktable-shaped sidecar -- `xmp.parse` only
+    needs the RDF/darktable namespaces and one `rdf:li` history entry to
+    consider it well-formed; the entry's own content is irrelevant to the
+    ledger guard (fix round 2 dropped the `multi_name` match entirely)."""
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
   <rdf:Description rdf:about=""
     xmlns:darktable="http://darktable.sf.net/"
-    darktable:history_end="1"
+    darktable:history_end="{history_end}"
     darktable:xmp_version="4"
     darktable:iop_order_version="1">
    <darktable:history>
@@ -41,7 +58,7 @@ MULTI_NAME_SIDECAR = """<?xml version="1.0" encoding="UTF-8"?>
       darktable:enabled="1"
       darktable:modversion="1"
       darktable:params="00"
-      darktable:multi_name="{style_name}"
+      darktable:multi_name=""
       darktable:multi_priority="0"
       darktable:blendop_params=""
       darktable:blendop_version="0"
@@ -52,8 +69,6 @@ MULTI_NAME_SIDECAR = """<?xml version="1.0" encoding="UTF-8"?>
  </rdf:RDF>
 </x:xmpmeta>
 """
-
-PLAIN_SIDECAR = MULTI_NAME_SIDECAR.replace("{style_name}", "")
 
 
 def _images(root: Path, n: int, start: int = 1) -> dict[int, str]:
@@ -123,10 +138,51 @@ class StyleSetTest(unittest.TestCase):
     def setUp(self) -> None:
         self.cache = TempCache()
         self.root = self.cache.start()
+        self.job_path: Path | None = None
 
     def tearDown(self) -> None:
         dtbridge.set_bridge(None)
+        os.environ.pop("SCOUTER_CONFIG", None)
         self.cache.stop()
+
+    def _setup_job(self, n: int, slug: str = "hero-job") -> dict[int, str]:
+        """A real job dir + `import.json` under a temp library, with
+        `SCOUTER_CONFIG` pointed at a matching config -- the ledger lives at
+        `<job>/.scouter/styles-applied.json`, so the fix-round-2 tests need
+        an actual job directory on disk, not just a bridge fixture. Sets
+        `self.job_path` for tests that seed or read the ledger directly.
+        """
+        from scouter import config as config_module
+
+        library_root = self.root / "library"
+        cfg = config_module.Config(library_root=str(library_root), exists=True)
+        job_path = config_module.job_dir(cfg, "2026-06-28", slug)
+        (job_path / "raw").mkdir(parents=True, exist_ok=True)
+        scouter_dir = config_module.scouter_dir(job_path)
+        scouter_dir.mkdir(parents=True, exist_ok=True)
+
+        images: dict[int, str] = {}
+        files: list[dict] = []
+        for i in range(1, n + 1):
+            dest = f"raw/img{i:04d}.orf"
+            (job_path / dest).write_bytes(b"")
+            images[i] = str(job_path / dest)
+            files.append({"dest": dest, "seq": i})
+        manifest = {"version": 1, "job_slug": slug, "files": files}
+        (scouter_dir / "import.json").write_text(json.dumps(manifest))
+
+        config_path = self.root / f"config-{slug}.json"
+        config_path.write_text(json.dumps({"version": 1, "library_root": str(library_root)}))
+        os.environ["SCOUTER_CONFIG"] = str(config_path)
+        self.job_path = job_path
+        return images
+
+    def _ledger_path(self) -> Path:
+        assert self.job_path is not None
+        return self.job_path / ".scouter" / "styles-applied.json"
+
+    def _seed_ledger(self, entries: list[dict]) -> None:
+        self._ledger_path().write_text(json.dumps(entries))
 
     def _apply_set(self, known_images: dict[int, str], *, apply=None, style_name="hero", **kwargs):
         """`known_images` builds the FakeBridge's `image.lookup` table; the
@@ -283,36 +339,10 @@ class StyleSetTest(unittest.TestCase):
 
     def test_resolves_from_import_json_when_no_images_given(self) -> None:
         """`--job-slug` alone: every file in `<job>/.scouter/import.json`."""
-        from scouter import config as config_module
-
-        library_root = self.root / "library"
-        cfg = config_module.Config(library_root=str(library_root), exists=True)
-        job_path = config_module.job_dir(cfg, "2026-06-28", "harbour-wedding")
-        (job_path / "raw").mkdir(parents=True)
-        scouter_dir = config_module.scouter_dir(job_path)
-        scouter_dir.mkdir(parents=True)
-
-        images: dict[int, str] = {}
-        files: list[dict] = []
-        for i in range(1, 5):
-            dest = f"raw/img{i:04d}.orf"
-            (job_path / dest).write_bytes(b"")
-            images[i] = str(job_path / dest)
-            files.append({"dest": dest, "seq": i})
-        manifest = {"version": 1, "job_slug": "harbour-wedding", "files": files}
-        (scouter_dir / "import.json").write_text(json.dumps(manifest))
-
-        import os
-
-        config_path = self.root / "config.json"
-        config_path.write_text(json.dumps({"version": 1, "library_root": str(library_root)}))
-        os.environ["SCOUTER_CONFIG"] = str(config_path)
-        try:
-            bridge = _bridge(images, apply=_apply_all_ok)
-            dtbridge.set_bridge(bridge)
-            result = style.apply_set(name="hero", job_slug="harbour-wedding", confirm=True)
-        finally:
-            os.environ.pop("SCOUTER_CONFIG", None)
+        images = self._setup_job(4, slug="harbour-wedding")
+        bridge = _bridge(images, apply=_apply_all_ok)
+        dtbridge.set_bridge(bridge)
+        result = style.apply_set(name="hero", job_slug="harbour-wedding", confirm=True)
         self.assertEqual(result.requested, 4)
         self.assertEqual(result.applied, 4)
 
@@ -363,50 +393,203 @@ class StyleSetTest(unittest.TestCase):
             style.apply_set(name="hero", images=[], confirm=True)
         self.assertEqual(bridge.count("style.apply"), 0)
 
-    # -- fix round 1: idempotency guard -----------------------------------
+    # -- fix round 2 (Ruling R16): ledger-based idempotency guard ---------
 
-    def test_already_has_style_skip(self) -> None:
-        images = _images(self.root, 3)
+    def test_ledger_skip(self) -> None:
+        """A ledger entry whose `history_end_after` the current, CONFIRMED
+        sidecar has not moved past means "already styled" -- decided from
+        Scouter's own record, never darktable's history metadata."""
+        images = self._setup_job(3)
         styled_id = min(images)
-        styled_path = images[styled_id]
-        Path(styled_path + ".xmp").write_text(MULTI_NAME_SIDECAR.format(style_name="hero"))
-        for iid, path in images.items():
-            if iid != styled_id:
-                Path(path + ".xmp").write_text(PLAIN_SIDECAR)
+        self._seed_ledger(
+            [
+                {
+                    "image_id": styled_id,
+                    "style": "hero",
+                    "applied_at": "2026-01-01T00:00:00Z",
+                    "history_end_after": 3,
+                }
+            ]
+        )
+        Path(images[styled_id] + ".xmp").write_text(_sidecar_xml(history_end=3))
 
-        bridge, result = self._apply_set(images, apply=_apply_all_ok)
+        bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
         apply_calls = [p for m, p in bridge.calls if m == "style.apply"]
         applied_ids = {iid for call in apply_calls for iid in call["image_ids"]}
         self.assertNotIn(styled_id, applied_ids)
         statuses = _statuses(result.per_image)
-        self.assertEqual(statuses[styled_id], "already_has_style")
+        self.assertEqual(statuses[styled_id], "already_styled")
         self.assertEqual(result.applied, 2)
-        self.assertTrue(any("already carried this style" in w for w in result.warnings))
+        self.assertTrue(any("skip decided from Scouter's own record" in w for w in result.warnings))
+        self.assertTrue(any("already_styled" in w for w in result.warnings))
 
-    def test_force_applies_even_when_already_has_style(self) -> None:
-        images = _images(self.root, 3)
+    def test_force_ignores_ledger(self) -> None:
+        images = self._setup_job(3)
         styled_id = min(images)
-        styled_path = images[styled_id]
-        Path(styled_path + ".xmp").write_text(MULTI_NAME_SIDECAR.format(style_name="hero"))
-        for iid, path in images.items():
-            if iid != styled_id:
-                Path(path + ".xmp").write_text(PLAIN_SIDECAR)
+        self._seed_ledger(
+            [
+                {
+                    "image_id": styled_id,
+                    "style": "hero",
+                    "applied_at": "2026-01-01T00:00:00Z",
+                    "history_end_after": 3,
+                }
+            ]
+        )
+        Path(images[styled_id] + ".xmp").write_text(_sidecar_xml(history_end=3))
 
-        bridge, result = self._apply_set(images, apply=_apply_all_ok, force=True)
+        bridge, result = self._apply_set(
+            images, apply=_apply_all_ok, job_slug="hero-job", force=True
+        )
         apply_calls = [p for m, p in bridge.calls if m == "style.apply"]
         applied_ids = {iid for call in apply_calls for iid in call["image_ids"]}
         self.assertIn(styled_id, applied_ids)
         self.assertEqual(result.applied, 3)
 
     def test_all_already_applied_is_ok_not_partial(self) -> None:
-        images = _images(self.root, 2)
+        images = self._setup_job(2)
+        self._seed_ledger(
+            [
+                {
+                    "image_id": iid,
+                    "style": "hero",
+                    "applied_at": "2026-01-01T00:00:00Z",
+                    "history_end_after": 3,
+                }
+                for iid in images
+            ]
+        )
         for path in images.values():
-            Path(path + ".xmp").write_text(MULTI_NAME_SIDECAR.format(style_name="hero"))
-        bridge, result = self._apply_set(images, apply=_apply_all_ok)
+            Path(path + ".xmp").write_text(_sidecar_xml(history_end=5))  # past 3, still styled
+
+        bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
         self.assertEqual(result.outcome, "ok")
         self.assertEqual(result.applied, 0)
         self.assertEqual(result.failed, 0)
         self.assertEqual(bridge.count("style.apply"), 0)
+
+    def test_unknown_sidecar_skips_as_unknown(self) -> None:
+        """Fix round 2, item 2: a ledger record whose CURRENT sidecar cannot
+        be confirmed (here: missing entirely) is "unknown", not "already
+        styled" and not silently applied -- never a guess either way."""
+        images = self._setup_job(2)
+        styled_id = min(images)
+        self._seed_ledger(
+            [
+                {
+                    "image_id": styled_id,
+                    "style": "hero",
+                    "applied_at": "2026-01-01T00:00:00Z",
+                    "history_end_after": 3,
+                }
+            ]
+        )
+        # No sidecar written at all -- the guard cannot verify anything.
+
+        bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+        statuses = _statuses(result.per_image)
+        self.assertEqual(statuses[styled_id], "unknown")
+        unknown_row = next(p for p in result.per_image if p["image_id"] == styled_id)
+        self.assertIn("commit history first", unknown_row["error"])
+        self.assertEqual(result.applied, 1)  # the other image still applies normally
+        apply_calls = [p for m, p in bridge.calls if m == "style.apply"]
+        applied_ids = {iid for call in apply_calls for iid in call["image_ids"]}
+        self.assertNotIn(styled_id, applied_ids)
+
+    def test_torn_sidecar_also_skips_as_unknown(self) -> None:
+        images = self._setup_job(1)
+        styled_id = min(images)
+        self._seed_ledger(
+            [
+                {
+                    "image_id": styled_id,
+                    "style": "hero",
+                    "applied_at": "2026-01-01T00:00:00Z",
+                    "history_end_after": 3,
+                }
+            ]
+        )
+        Path(images[styled_id] + ".xmp").write_text("<not really xml, mid-write>")
+
+        bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+        statuses = _statuses(result.per_image)
+        self.assertEqual(statuses[styled_id], "unknown")
+        self.assertEqual(result.applied, 0)
+
+    def test_guard_error_becomes_unknown(self) -> None:
+        """Fix round 2, item 3: the guard call itself is wrapped in
+        `except ScouterError` at the call site -- a failure there is
+        recorded as "unknown", never propagated past the gate."""
+        images = _images(self.root, 3)
+        with mock.patch.object(style, "_idempotency_verdict", side_effect=NotInDarkroom("boom")):
+            bridge, result = self._apply_set(images, apply=_apply_all_ok)
+        self.assertEqual(result.outcome, "partial")
+        statuses = _statuses(result.per_image)
+        for iid in images:
+            self.assertEqual(statuses[iid], "unknown")
+        self.assertEqual(result.applied, 0)
+        self.assertEqual(result.failed, 0)
+
+    def test_all_unknown_accounting_is_partial_not_style_partial(self) -> None:
+        """Fix round 2, item 5: applied == 0 with unknown > 0 is
+        outcome="partial", never a raised StylePartial."""
+        images = self._setup_job(2)
+        self._seed_ledger(
+            [
+                {
+                    "image_id": iid,
+                    "style": "hero",
+                    "applied_at": "2026-01-01T00:00:00Z",
+                    "history_end_after": 3,
+                }
+                for iid in images
+            ]
+        )
+        # No sidecars written -- every target is unconfirmed, so unknown.
+        bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+        self.assertEqual(result.outcome, "partial")
+        self.assertEqual(result.applied, 0)
+        statuses = _statuses(result.per_image)
+        for iid in images:
+            self.assertEqual(statuses[iid], "unknown")
+
+    def test_no_job_slug_means_no_ledger_skip(self) -> None:
+        """Fix round 2, item 1: `--images` alone, with no `--job-slug`, has
+        no job directory and therefore no ledger -- nothing is ever skipped
+        that way, and a warning says so."""
+        images = _images(self.root, 3)
+        bridge, result = self._apply_set(images, apply=_apply_all_ok)
+        self.assertEqual(result.applied, 3)
+        self.assertTrue(any("no --job-slug" in w for w in result.warnings))
+
+    def test_ledger_write_after_apply(self) -> None:
+        """`history_end_after` is read from the sidecar right after the
+        batch that applied it, best effort."""
+        images = self._setup_job(2)
+        for path in images.values():
+            Path(path + ".xmp").write_text(_sidecar_xml(history_end=3))
+
+        self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+
+        entries = json.loads(self._ledger_path().read_text())
+        self.assertEqual(len(entries), 2)
+        for entry in entries:
+            self.assertEqual(entry["style"], "hero")
+            self.assertEqual(entry["history_end_after"], 3)
+            self.assertIn("applied_at", entry)
+
+    def test_not_attempted_rows_after_stop(self) -> None:
+        """Fix round 2, item 6: `per_image` carries an explicit row for
+        every id a consecutive-failure stop never reached."""
+        images = _images(self.root, 100)  # 4 batches at batch=25
+        timeout = BridgeTimeoutError("darktable stopped responding")
+        script = _Script([_apply_all_ok, timeout, timeout, _apply_all_ok])
+        bridge, result = self._apply_set(images, apply=script, batch=25)
+        not_attempted = [p for p in result.per_image if p["status"] == "not_attempted"]
+        self.assertEqual(len(not_attempted), 25)
+        for row in not_attempted:
+            self.assertIn("stopped after 2 consecutive batch failures", row["error"])
+        self.assertEqual({r["image_id"] for r in not_attempted}, set(list(images)[75:100]))
 
     # -- fix round 1: registry integration ---------------------------------
 
