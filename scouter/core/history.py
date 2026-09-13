@@ -14,7 +14,6 @@ import time
 from scouter import metrics
 from scouter.core import dtbridge, xmp
 from scouter.errors import CommitTimeout
-from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
 from scouter.types import CommitResult, HistoryResult
 
@@ -66,38 +65,79 @@ def read(image: str | int, *, job: str | None = None) -> HistoryResult:
     )
 
 
+def _sidecar_signature(sidecar) -> tuple[int, int]:
+    """`(mtime_ns, size)` -- the two-part change guard fix round 1 asked for.
+
+    A mtime advance alone (spec 8.1 step 1) is the primary signal; size is
+    kept alongside it because a filesystem whose mtime resolution is coarser
+    than one poll interval could report an unchanged mtime for a write that
+    landed inside the same tick. Either signal moving is treated as a change;
+    both signals unchanged is treated as no change yet.
+    """
+    if not sidecar.exists():
+        return (0, -1)
+    stat = sidecar.stat()
+    return (stat.st_mtime_ns, stat.st_size)
+
+
 @metrics.instrumented("history.commit")
 def commit(image: str | int | None = None, *, timeout_s: float = 5.0,
            strategy: str = "auto", job: str | None = None) -> CommitResult:
     """Make darktable write this image's history to its sidecar, then verify."""
-    job = job or current_job()
     target = image if image is not None else _darkroom_image()
     resolved = dtbridge.resolve_image(target)
     sidecar = xmp.sidecar_path(resolved.path)
-    before_ns = sidecar.stat().st_mtime_ns if sidecar.exists() else 0
+    before_ns, before_size = _sidecar_signature(sidecar)
 
     started = time.monotonic()
     result = dtbridge.call("history.commit", {"strategy": strategy})
     strategy_used = str(result.get("strategy_used", strategy))
+    ok = bool(result.get("ok", True))
+    view_after = str(result.get("view_after", "unknown"))
+
+    def _poll() -> CommitResult | None:
+        """One look at the sidecar. `None` means: not there yet, keep polling."""
+        if not sidecar.exists():
+            return None
+        mtime_ns, size = _sidecar_signature(sidecar)
+        if mtime_ns <= before_ns and size == before_size:
+            return None
+        text = sidecar.read_text(encoding="utf-8", errors="replace")
+        if not xmp.parse(text).well_formed:
+            return None
+        warnings: list[str] = []
+        if view_after != "darkroom":
+            warnings.append(
+                f"the bridge reports the view ended at {view_after!r}, not darkroom, "
+                "after the commit; a subsequent darkroom action may need a fresh "
+                "`darkroom.open`"
+            )
+        return CommitResult(
+            image_id=resolved.image_id, path=resolved.path,
+            strategy_used=strategy_used, committed=True, view_after=view_after,
+            ms=int((time.monotonic() - started) * 1000),
+            xmp_mtime=sidecar.stat().st_mtime, warnings=warnings,
+        )
 
     deadline = started + timeout_s
     while time.monotonic() < deadline:
-        if sidecar.exists() and sidecar.stat().st_mtime_ns > before_ns:
-            text = sidecar.read_text(encoding="utf-8", errors="replace")
-            if xmp.parse(text).well_formed:
-                return CommitResult(
-                    image_id=resolved.image_id, path=resolved.path,
-                    strategy_used=strategy_used, committed=True,
-                    ms=int((time.monotonic() - started) * 1000),
-                    xmp_mtime=sidecar.stat().st_mtime,
-                )
+        found = _poll()
+        if found is not None:
+            return found
         time.sleep(POLL_INTERVAL_S)
+
+    # One last look: the deadline can pass between the final `sleep` waking up
+    # and the loop re-checking `time.monotonic()`, which would otherwise
+    # discard a commit that landed in exactly that window.
+    found = _poll()
+    if found is not None:
+        return found
 
     raise CommitTimeout(
         f"darktable did not write {sidecar} within {timeout_s:g}s using the "
         f"{strategy_used} strategy",
         detail={"strategy_used": strategy_used, "image_id": resolved.image_id,
-                "xmp": str(sidecar),
+                "xmp": str(sidecar), "ok": ok, "view_after": view_after,
                 "ms": int((time.monotonic() - started) * 1000),
                 "bridge_detail": result.get("detail")},
     )

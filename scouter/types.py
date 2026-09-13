@@ -111,6 +111,7 @@ class HistoryResult(Payload):
 class CommitResult(Payload):
     strategy_used: str = ""
     committed: bool = False
+    view_after: str = "unknown"
     ms: int = 0
     xmp_mtime: float | None = None
 

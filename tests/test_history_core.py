@@ -128,3 +128,60 @@ class HistoryCommitTest(unittest.TestCase):
         dtbridge.set_bridge(FakeBridge({**self.base, "history.commit": commit}))
         result = history.commit(timeout_s=2.0)
         self.assertEqual(result.image_id, 12)
+
+    def test_commit_surfaces_view_after_and_warns_off_darkroom(self) -> None:
+        text = self.sidecar.read_text()
+
+        def commit(_params: dict) -> dict:
+            time.sleep(0.01)
+            self.sidecar.write_text(text)
+            return {"strategy_used": "sidecar_action", "ok": True,
+                    "view_after": "lighttable", "cpu_ms": 5}
+
+        dtbridge.set_bridge(FakeBridge({**self.base, "history.commit": commit}))
+        result = history.commit(image=str(self.raw), timeout_s=2.0)
+        self.assertEqual(result.view_after, "lighttable")
+        self.assertTrue(any("lighttable" in w for w in result.warnings))
+
+    def test_commit_does_not_warn_when_the_view_ends_in_darkroom(self) -> None:
+        text = self.sidecar.read_text()
+
+        def commit(_params: dict) -> dict:
+            time.sleep(0.01)
+            self.sidecar.write_text(text)
+            return {"strategy_used": "sidecar_action", "ok": True,
+                    "view_after": "darkroom", "cpu_ms": 5}
+
+        dtbridge.set_bridge(FakeBridge({**self.base, "history.commit": commit}))
+        result = history.commit(image=str(self.raw), timeout_s=2.0)
+        self.assertFalse(any("view" in w for w in result.warnings))
+
+    def test_timeout_detail_carries_ok_and_view_after(self) -> None:
+        dtbridge.set_bridge(FakeBridge({
+            **self.base,
+            "history.commit": {"strategy_used": "view_bounce", "ok": False,
+                               "view_after": "darkroom", "cpu_ms": 5,
+                               "detail": "view switch failed"},
+        }))
+        with self.assertRaises(CommitTimeout) as ctx:
+            history.commit(image=str(self.raw), timeout_s=0.1)
+        self.assertEqual(ctx.exception.detail["ok"], False)
+        self.assertEqual(ctx.exception.detail["view_after"], "darkroom")
+
+    def test_final_check_after_the_loop_still_catches_a_late_write(self) -> None:
+        # `timeout_s=0` puts the deadline in the past by the time the `while`
+        # loop is reached (the synchronous bridge call above it already took
+        # nonzero time), so the loop itself runs zero iterations. Only the
+        # post-loop "one last look" can still see the write the bridge call
+        # made -- this is what fix round 1, point 3 added.
+        text = self.sidecar.read_text()
+
+        def commit(_params: dict) -> dict:
+            time.sleep(0.01)                        # guarantee the mtime ticks
+            self.sidecar.write_text(text)
+            return {"strategy_used": "sidecar_action", "ok": True,
+                    "view_after": "darkroom", "cpu_ms": 1}
+
+        dtbridge.set_bridge(FakeBridge({**self.base, "history.commit": commit}))
+        result = history.commit(image=str(self.raw), timeout_s=0.0)
+        self.assertTrue(result.committed)

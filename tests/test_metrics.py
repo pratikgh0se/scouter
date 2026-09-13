@@ -1,8 +1,13 @@
+import shutil
+import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from scouter import metrics, registry
-from tests.scouter_fakes import TempCache
+from tests.scouter_fakes import FakeBridge, TempCache
+
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "P6281348.ORF.xmp"
 
 
 class EmitTest(unittest.TestCase):
@@ -202,3 +207,64 @@ class RegistryCoverageTest(unittest.TestCase):
                     f"{verb_id} emitted {len(after) - before} events, expected exactly 1",
                 )
                 self.assertEqual(after[-1]["verb"], verb_id)
+
+
+class WriteVerbSingleEventTest(unittest.TestCase):
+    """Fix round 1, point 1: a real (un-patched) commit must still be ONE event.
+
+    `RegistryCoverageTest` above proves every verb emits one event when its
+    *own* body runs, but `darkroom.set`'s dry-run-free smoke args commit
+    through `_commit`, which internally calls `history.commit` -- a second
+    `@instrumented` function. `test_darkroom_core.py` patches `_commit` out
+    entirely, so it cannot catch a double emission there; this test leaves
+    `_commit` real, with a FakeBridge whose `history.commit` handler actually
+    advances the sidecar's mtime, so `history.commit`'s own poll loop runs for
+    real too.
+    """
+
+    def setUp(self) -> None:
+        self.cache = TempCache()
+        root = self.cache.start()
+        self.raw = root / "P6281348.ORF"
+        self.raw.write_bytes(b"not really a raw")
+        self.sidecar = Path(str(self.raw) + ".xmp")
+        shutil.copy(FIXTURE, self.sidecar)
+
+    def tearDown(self) -> None:
+        from scouter.core import dtbridge
+
+        dtbridge.set_bridge(None)
+        self.cache.stop()
+
+    def test_darkroom_set_with_a_real_commit_emits_exactly_one_event(self) -> None:
+        from scouter.core import darkroom, dtbridge
+
+        text = self.sidecar.read_text()
+
+        def fake_commit(_params: dict) -> dict:
+            time.sleep(0.01)                # guarantee the mtime tick
+            self.sidecar.write_text(text)   # a real rewrite, like darktable's own
+            return {"strategy_used": "sidecar_action", "ok": True,
+                    "view_after": "darkroom", "cpu_ms": 5}
+
+        dtbridge.set_bridge(FakeBridge({
+            "darkroom.open": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
+                              "opened": False, "already_open": True},
+            "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+            "darkroom.action": lambda p: {"nan": False, "view": "darkroom", **p},
+            "history.commit": fake_commit,
+        }))
+
+        before = len(self.cache.events())
+        result = darkroom.set_param("exposure", "exposure", 1.2, commit=True,
+                                    job="job-test")
+        after = self.cache.events()
+
+        self.assertTrue(result.committed)
+        self.assertEqual(
+            len(after) - before, 1,
+            f"darkroom.set with commit=True emitted {len(after) - before} events, "
+            "expected exactly 1 (history.commit must run un-instrumented, via "
+            "`.__wrapped__`, when called from another core verb)",
+        )
+        self.assertEqual(after[-1]["verb"], "darkroom.set")
