@@ -839,5 +839,253 @@ class SingleEventTest(LibraryTestCase):
         self.assertEqual(after[-1]["verb"], "library.import")
 
 
+class DuplicateContentTest(LibraryTestCase):
+    """Fix round 4, items 1-2 (ruling R17): resume identity is
+    `(source_name, sha256)`, so byte-identical frames under different camera
+    filenames are KEPT BOTH -- on the first import and on every re-run -- and
+    the pairs are reported. The blocker this replaces: a sha-only index
+    mapped both frames onto one destination and made every re-run of such a
+    card a hard `UsageError`."""
+
+    def _card_with_a_duplicate(self) -> Path:
+        source = self.tmp / "card"
+        tail = os.urandom(2048)
+        # Same capture second AND the same padding bytes: two files whose
+        # sha256 is identical, under two different camera filenames.
+        _write_one(source, "P0001.ORF", "2026:06:28 15:49:28", tail=tail)
+        _write_one(source, "P0002.ORF", "2026:06:28 15:49:28", tail=tail)
+        return source
+
+    def test_identical_bytes_under_two_names_are_two_frames_and_are_reported(self) -> None:
+        source = self._card_with_a_duplicate()
+        result = library.import_card(str(source), "harbour-wedding", confirm=True)
+
+        self.assertEqual(result.totals["copied"], 2)  # kept both
+        seqs = sorted(f["seq"] for f in result.files)
+        self.assertEqual(seqs, [1, 2])
+        dests = sorted(Path(f["dest"]).name for f in result.files)
+        self.assertEqual(
+            dests,
+            [
+                "2026-06-28_harbour-wedding_em10iii_0001.orf",
+                "2026-06-28_harbour-wedding_em10iii_0002.orf",
+            ],
+        )
+        self.assertEqual(
+            result.duplicates,
+            [
+                [
+                    "raw/2026-06-28_harbour-wedding_em10iii_0001.orf",
+                    "raw/2026-06-28_harbour-wedding_em10iii_0002.orf",
+                ]
+            ],
+        )
+        self.assertEqual(result.totals["duplicate_pairs"], 1)
+        self.assertTrue(any("byte-identical" in w for w in result.warnings))
+        # And the on-disk record carries it too, not just the return value.
+        manifest = json.loads((Path(result.path) / ".scouter" / "import.json").read_text())
+        self.assertEqual(manifest["duplicates"], result.duplicates)
+
+    def test_rerunning_a_card_with_a_duplicate_resumes_instead_of_refusing(self) -> None:
+        source = self._card_with_a_duplicate()
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+
+        # The blocker: this used to raise `UsageError` ("two source files
+        # would both become ...") because both frames resolved to the same
+        # reused destination.
+        result2 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertEqual(result2.outcome, "ok")
+        self.assertEqual(result2.totals["copied"], 0)
+        self.assertEqual(result2.totals["skipped_identical"], 2)
+        self.assertEqual(len(result2.files), 2)
+        self.assertEqual({f["dest"] for f in result2.files}, {f["dest"] for f in result1.files})
+        # Still reported on the re-run: the pair did not become invisible
+        # just because nothing was copied this time.
+        self.assertEqual(result2.duplicates, result1.duplicates)
+        vr = library.verify("harbour-wedding")
+        self.assertTrue(vr.ok)
+        self.assertEqual(vr.checked, 2)
+
+
+class SeqNoneRepairTest(LibraryTestCase):
+    """Fix round 4, item 4: a recovered entry whose `seq` could not be parsed
+    out of its destination name must never travel any further as `None`."""
+
+    def test_a_recovered_entry_without_a_parseable_seq_gets_a_fresh_one(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        job_path = Path(result1.path)
+        scouter_d = job_path / ".scouter"
+        first = sorted(f["dest"] for f in result1.files)[0]
+
+        # Rename frame 1's copy to a name Scouter never wrote (no
+        # `<date>_<slug>_` prefix, so `_seq_from_dest_name` returns None),
+        # point checksums.sha256 at the new name, and drop import.json so
+        # recovery has to come from checksums alone.
+        legacy = job_path / "raw" / "legacy-frame.orf"
+        (job_path / first).chmod(0o644)
+        (job_path / first).rename(legacy)
+        legacy.chmod(0o444)
+        lines = (scouter_d / "checksums.sha256").read_text().splitlines()
+        (scouter_d / "checksums.sha256").write_text(
+            "".join(
+                (line.replace(first, "raw/legacy-frame.orf") if first in line else line) + "\n"
+                for line in lines
+            )
+        )
+        (scouter_d / "import.json").unlink()
+
+        result2 = library.import_card(str(source), "harbour-wedding", confirm=True)
+
+        # Nothing with a `None` seq reached the result or the manifest.
+        for entry in result2.files:
+            self.assertIsInstance(entry["seq"], int)
+        manifest = json.loads((scouter_d / "import.json").read_text())
+        for entry in manifest["files"]:
+            self.assertIsInstance(entry["seq"], int)
+        # Fresh number past every known one (the other frame kept seq 2), and
+        # the repair is announced rather than silent.
+        legacy_entry = next(f for f in result2.files if f["dest"] == "raw/legacy-frame.orf")
+        self.assertEqual(legacy_entry["seq"], 3)
+        self.assertTrue(any("no recoverable seq" in w for w in result2.warnings))
+        # The file itself was NOT renamed by the repair, and nothing was
+        # re-copied: the bytes were recognised by content.
+        self.assertTrue(legacy.is_file())
+        self.assertEqual(result2.totals["copied"], 0)
+
+
+class AmbiguousSlugTest(LibraryTestCase):
+    """Fix round 4, item 5: more than one job already sharing this slug."""
+
+    def _two_jobs(self) -> Path:
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        # A second job directory for the same slug (a `--date` override in an
+        # earlier session, or a hand-made directory).
+        config.job_dir(self.cfg, "2026-07-01", "harbour-wedding").mkdir(parents=True)
+        return Path(result1.path)
+
+    def test_no_date_and_two_candidates_is_refused_listing_them(self) -> None:
+        self._two_jobs()
+        with self.assertRaises(UsageError) as ctx:
+            library.import_card(str(self.tmp / "card"), "harbour-wedding", confirm=True)
+        self.assertEqual(len(ctx.exception.detail["candidates"]), 2)
+        self.assertTrue(ctx.exception.fix)
+
+    def test_a_date_matching_no_candidate_is_refused_and_creates_no_third_dir(self) -> None:
+        self._two_jobs()
+        with self.assertRaises(UsageError) as ctx:
+            library.import_card(
+                str(self.tmp / "card"), "harbour-wedding", date="2026-08-09", confirm=True
+            )
+        self.assertEqual(ctx.exception.detail["requested_date"], "2026-08-09")
+        self.assertEqual(len(ctx.exception.detail["candidates"]), 2)
+        third = config.job_dir(self.cfg, "2026-08-09", "harbour-wedding")
+        self.assertFalse(third.exists())
+
+    def test_a_date_naming_one_of_the_candidates_is_honoured(self) -> None:
+        first = self._two_jobs()
+        result = library.import_card(
+            str(self.tmp / "card"), "harbour-wedding", date="2026-06-28", confirm=True
+        )
+        self.assertEqual(result.path, str(first))
+        self.assertEqual(result.totals["skipped_identical"], 2)
+
+
+class DryRunHashCostTest(LibraryTestCase):
+    """Fix round 4, item 3: the dry-run reason states what it actually did."""
+
+    def test_a_first_import_dry_run_hashes_nothing_and_says_so(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 3)
+        result = library.import_card(str(source), "harbour-wedding", dry_run=True)
+        self.assertEqual(result.outcome, "dry_run")
+        self.assertIn("no files were hashed", result.reason)
+        self.assertIn("no directories were created", result.reason)
+        self.assertFalse(self._job_path().exists())
+
+    def test_a_rerun_dry_run_announces_the_hashing_it_did(self) -> None:
+        source = self.tmp / "card"
+        files = _make_card(source, 3)
+        library.import_card(str(source), "harbour-wedding", confirm=True)
+
+        result = library.import_card(str(source), "harbour-wedding", dry_run=True)
+        self.assertIn("hashed: 3 file(s)", result.reason)
+        self.assertIn(f"{sum(f.stat().st_size for f in files)} bytes", result.reason)
+
+    def test_the_real_run_counts_the_pre_check_separately_from_the_copy(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        # A first import cannot recognise anything, so it hashes nothing in
+        # the plan -- the only hashing is the copy's own two passes.
+        self.assertEqual(result1.totals["plan_hashed_files"], 0)
+        self.assertEqual(result1.totals["plan_hashed_bytes"], 0)
+
+        result2 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertEqual(result2.totals["plan_hashed_files"], 2)
+        self.assertGreater(result2.totals["plan_hashed_bytes"], 0)
+
+
+class ManifestWinsMergeOrderTest(LibraryTestCase):
+    """Fix round 4, item 6: a merge-order test that actually discriminates.
+
+    The earlier probe (`test_torn_write_with_card_present_does_not_duplicate_the_card`)
+    could be satisfied by content matching alone -- the card was still
+    inserted, so a candidate's own hash could repair a degraded entry no
+    matter which side of the merge won. Here the card that produced the
+    frames is GONE, so nothing can repair anything: the only thing deciding
+    what the manifest records for the shared destination is
+    `_fill_manifest_gaps`'s argument order. Verified by mutation: swapping
+    `_fill_manifest_gaps(files, recovered)` fails this test.
+    """
+
+    def test_a_rolled_back_import_json_still_wins_for_the_dests_it_holds(self) -> None:
+        card_a = self.tmp / "card-a"
+        _make_card(card_a, 2)
+        result1 = library.import_card(str(card_a), "harbour-wedding", confirm=True)
+        job_path = Path(result1.path)
+        import_json = job_path / ".scouter" / "import.json"
+        kept = next(f for f in result1.files if f["seq"] == 1)
+        gap = next(f for f in result1.files if f["seq"] == 2)
+
+        # Torn write: import.json rolled back to frame 1 only, older than
+        # checksums.sha256 (which still lists both).
+        manifest = json.loads(import_json.read_text())
+        manifest["files"] = [f for f in manifest["files"] if f["seq"] == 1]
+        import_json.write_text(json.dumps(manifest, indent=2))
+        os.utime(import_json, (time.time() - 10, time.time() - 10))
+
+        # Card A is gone (ejected, reformatted) -- frame 1's real camera
+        # filename exists nowhere but inside import.json now. A different
+        # card is inserted, so the import has something to do.
+        for old in sorted(card_a.iterdir()):
+            old.unlink()
+        card_b = self.tmp / "card-b"
+        _write_one(card_b, "Q0001.ORF", "2026:06:28 16:10:00")
+
+        result2 = library.import_card(str(card_b), "harbour-wedding", confirm=True)
+
+        by_dest = {f["dest"]: f for f in result2.files}
+        # The destination present in BOTH sides of the merge keeps the rich
+        # import.json record. If the degraded, checksums-derived entry won,
+        # `source_name` would be the destination's own basename and `status`
+        # would be "recovered_from_checksums".
+        survivor = by_dest[kept["dest"]]
+        self.assertEqual(survivor["source_name"], kept["source_name"])
+        self.assertTrue(survivor["source_name"].endswith(".ORF"))
+        self.assertEqual(survivor["status"], kept["status"])
+        self.assertIsNotNone(survivor["captured_at"])
+        # ...and the destination import.json had LOST is still filled in from
+        # checksums.sha256, degraded but present: the merge fills gaps, it
+        # does not just prefer one side.
+        filled = by_dest[gap["dest"]]
+        self.assertEqual(filled["sha256"], gap["sha256"])
+        self.assertEqual(filled["source_name"], Path(gap["dest"]).name)
+        self.assertEqual(len(result2.files), 3)  # 2 known + the new card's frame
+
+
 if __name__ == "__main__":
     unittest.main()

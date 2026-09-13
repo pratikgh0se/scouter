@@ -46,6 +46,55 @@ CHUNK = 1 << 20
 STALE_PART_AGE_S = 3600
 
 
+@dataclasses.dataclass
+class ImportResultWithDuplicates(ImportResult):
+    """`ImportResult` plus `duplicates`: the byte-identical pairs this import
+    deliberately KEPT BOTH of (fix round 4, ruling R17).
+
+    Resume identity is `(source_name, sha256)`, so the same bytes arriving
+    under a different camera filename is a new frame with its own `seq` --
+    never a silent skip and never a refusal. That decision has to be visible,
+    so every pair is reported as `[already_present_dest, new_dest]`.
+
+    Declared here rather than in `scouter/types.py` only because fix round
+    4's scope is this module and its test; the field belongs beside the rest
+    of `ImportResult` and the controller should move it there (see the fix
+    round 4 report). `Payload.to_dict` picks it up either way -- `asdict`
+    walks the actual dataclass, subclass fields included.
+    """
+
+    duplicates: list[list[str]] = dataclasses.field(default_factory=list)
+
+
+@dataclasses.dataclass
+class _Plan:
+    """What `_plan` resolved. A named record rather than the 7-tuple it used
+    to return: fix round 4 needed to add three more fields to it, and a
+    10-tuple unpacked at the call site is a defect waiting to happen."""
+
+    date: str
+    camera: str
+    camera_model: str | None
+    camera_make: str | None
+    #: One entry per candidate file, carrying `Path` objects (never
+    #: serialised directly -- the caller builds both the dry-run preview and
+    #: `import.json`'s `files[]` from them).
+    entries: list[dict]
+    #: This job's prior manifest, recovered as far down
+    #: `_recover_existing_files`'s chain as it had to go (`[]` on a genuine
+    #: first import), returned so the caller need not re-read it to merge.
+    existing_files: list[dict]
+    #: The stems already in `existing_files` BEFORE this run added any of its
+    #: own, so the copy loop can tell a stem reused across cards apart from a
+    #: stem merely repeated inside this run's own plan.
+    pre_existing_stems: set[str]
+    warnings: list[str] = dataclasses.field(default_factory=list)
+    #: The honest cost of the resume pre-check (fix round 4, item 3): how
+    #: many candidate files `_plan` hashed, and how many bytes that read.
+    hashed_files: int = 0
+    hashed_bytes: int = 0
+
+
 class ManifestCorrupt(UsageError):
     """`import.json` exists but is not valid JSON, or not shaped like a
     manifest Scouter itself would write (an object with a `files` list of
@@ -413,21 +462,16 @@ def _plan(
     job_slug: str,
     date: str | None,
     camera: str | None,
-) -> tuple[str, str, str | None, str | None, list[dict], list[dict], set[str]]:
+) -> _Plan:
     """Read EXIF for every candidate, derive `date`/`camera` when not given,
     sort by `capture_key`, and assign one `seq` per stem (so `P1.ORF` and
-    `P1.JPG` share a number). Returns
-    `(date, camera, camera_model, camera_make, plan, existing_files,
-    pre_existing_stems)` -- `plan` entries carry `Path` objects, never
-    serialised themselves (the caller builds both the dry-run preview and
-    `import.json`'s `files[]` from them); `existing_files` is this job's
-    prior manifest, recovered as far down `_recover_existing_files`'s chain
-    as it had to go (`[]` on a genuine first import), returned so the caller
-    doesn't have to re-read it a second time to merge the manifest (fix
-    round 1, blocker 1); `pre_existing_stems` is the stems already in
-    `existing_files` BEFORE this run added any of its own, so the copy loop
-    can tell a stem reused across cards apart from a stem merely repeated
-    within this run's own plan (fix round 2, item 4).
+    `P1.JPG` share a number). Returns a `_Plan`; see its own field docs.
+
+    Fix round 4, ruling R17: an existing entry recognises a candidate only
+    by `(source_name, sha256)` TOGETHER. Nothing here refuses a duplicate
+    and nothing here maps two candidates onto one destination -- identical
+    bytes under two different camera filenames are two frames, and the
+    caller reports the pair in `duplicates`.
 
     Fix round 1, blocker 2 (stable sequence): `seq` is seeded from the
     EXISTING manifest's `source_name -> seq` mapping, not restarted at 1 --
@@ -450,12 +494,40 @@ def _plan(
     # rather than raising an ambiguity error the caller's own `--date` may
     # already resolve; only a MISSING `--date` still needs find_job's own
     # disambiguation to fail loudly.
+    #
+    # Fix round 4, item 5: when MORE THAN ONE job already shares this slug,
+    # an explicit `--date` is no longer trusted outright. It is honoured only
+    # when it names one of those existing jobs; a `--date` matching none of
+    # them would silently create a THIRD directory for the same slug, which
+    # is exactly the drift the fixed-date rule exists to prevent. Either way
+    # the refusal lists the candidates, so the caller can pick one.
     try:
         existing_job_path = config.find_job(cfg, job_slug)
     except UsageError as e:
         existing_job_path = None
-        if "candidates" in e.detail and date is None:
-            raise  # genuinely ambiguous, and no --date to disambiguate with
+        candidates = e.detail.get("candidates")
+        if candidates:
+            matching = [c for c in candidates if c.startswith(f"{date} ")] if date else []
+            if not matching:
+                raise UsageError(
+                    f"{len(candidates)} jobs already share the slug {job_slug!r} "
+                    + (
+                        f"and none of them is dated {date}; --date {date} would "
+                        "create a third job directory for the same slug"
+                        if date
+                        else "and no --date was given to choose between them"
+                    ),
+                    fix=(
+                        "pass --date naming one of the existing jobs in "
+                        "`detail.candidates`, or pick a different --job-slug"
+                    ),
+                    detail={
+                        "slug": job_slug,
+                        "candidates": candidates,
+                        "requested_date": date,
+                    },
+                ) from e
+            existing_job_path = config.job_dir(cfg, date, job_slug)
     if existing_job_path is not None:
         existing_date = existing_job_path.name.rsplit(" ", 1)[0]
         if date is None:
@@ -491,25 +563,64 @@ def _plan(
     existing_files = _recover_existing_files(
         config.scouter_dir(job_path), config.raw_dir(job_path), date, job_slug
     )
+    plan_warnings: list[str] = []
+
+    # Fix round 4, item 4: a `seq` recovered from `checksums.sha256` can be
+    # `None` (a destination name Scouter didn't write, or one this job's
+    # `<date>_<slug>_` prefix doesn't match). Such an entry must never reach
+    # `files_out` or seed a name, so repair it HERE, once, before anything
+    # reads `seq`: give it a fresh number past every known one and say so.
+    # The file on disk keeps the name it already has -- nothing is renamed;
+    # the repair only stops `None` from travelling any further.
+    known_seqs = [e["seq"] for e in existing_files if isinstance(e.get("seq"), int)]
+    next_seq = max(known_seqs, default=0) + 1
+    seqless = sorted(
+        (e for e in existing_files if not isinstance(e.get("seq"), int)),
+        key=lambda e: e["dest"],
+    )
+    for entry in seqless:
+        entry["seq"] = next_seq
+        next_seq += 1
+    if seqless:
+        plan_warnings.append(
+            f"{len(seqless)} recovered manifest entr"
+            f"{'y' if len(seqless) == 1 else 'ies'} had no recoverable seq "
+            f"({', '.join(e['dest'] for e in seqless)}); assigned fresh "
+            f"number(s) {', '.join(str(e['seq']) for e in seqless)} so no new "
+            "frame can reuse them -- the files themselves were not renamed"
+        )
+
     stem_seq: dict[str, int] = {}
     for entry in existing_files:
-        seq = entry.get("seq")
-        if isinstance(seq, int):
-            stem_seq.setdefault(Path(entry["source_name"]).stem, seq)
+        stem_seq.setdefault(Path(entry["source_name"]).stem, entry["seq"])
     pre_existing_stems = set(stem_seq)
-    all_seqs = [e["seq"] for e in existing_files if isinstance(e.get("seq"), int)]
-    next_seq = max([*stem_seq.values(), *all_seqs], default=0) + 1
-    # Fix round 3 blocker (2nd half): a source whose CONTENT already exists
-    # under any destination is a resume-skip, never a new seq -- stem
-    # matching alone is not enough, because a degraded recovery entry (see
-    # `_synthesize_from_checksums`) has a `source_name` that will never
-    # stem-match the real file again. This is the guard that actually stops
-    # a re-run after a torn write, with the card still inserted, from
-    # duplicating the whole card: every file gets hashed here, even during a
-    # dry run -- a deliberate exception to "dry runs hash nothing" (ruling
-    # 3), because the alternative is a plan that can silently double a
-    # card's frame count.
-    sha_index: dict[str, dict] = {e["sha256"]: e for e in existing_files if e.get("sha256")}
+
+    # Fix round 4, item 1 (ruling R17): resume identity is
+    # `(source_name, sha256)` -- BOTH. An existing entry recognises a
+    # candidate only when the camera filename AND the bytes match; the same
+    # bytes under a different filename are a NEW frame with a new `seq`
+    # (keep-both), reported in `duplicates`. The old sha-only index made two
+    # byte-identical frames on one card map to a single destination, which
+    # turned every re-run of such a card into a hard `UsageError`.
+    by_identity: dict[tuple[str, str], dict] = {
+        (e["source_name"], e["sha256"]): e for e in existing_files if e.get("sha256")
+    }
+    # The one case where a source name is genuinely UNKNOWN rather than
+    # different: `_synthesize_from_checksums` has no camera filename left to
+    # record, so it writes the destination's own name as a placeholder. For
+    # those entries the bytes are the only identity that exists, so a sha
+    # match IS a resume match -- otherwise a re-run with the card still
+    # inserted would re-copy every frame of it under new names (the fix
+    # round 3 blocker). Narrow by construction: only entries Scouter itself
+    # marked `recovered_*` whose `source_name` is exactly their own dest.
+    by_sha_unknown_source: dict[str, dict] = {
+        e["sha256"]: e
+        for e in existing_files
+        if e.get("sha256")
+        and str(e.get("status", "")).startswith("recovered_")
+        and e["source_name"] == Path(e["dest"]).name
+    }
+    known_source_names = {e["source_name"] for e in existing_files}
 
     if camera is None:
         slugs = {exif.camera_slug(t, cfg) for _, t in tagged}
@@ -532,14 +643,33 @@ def _plan(
     seq_digits = cfg.import_.seq_digits
     dest_sources: dict[str, Path] = {}
     plan: list[dict] = []
+    hashed_files = 0
+    hashed_bytes = 0
     for path, tags in ordered:
         stem = path.stem
-        content_hash = _hash_file(path)
-        reused = sha_index.get(content_hash)
+        size = path.stat().st_size
+        # Fix round 4, item 3: the resume pre-check is a NAME check first and
+        # a hash only second. A candidate can only be recognised by an
+        # existing entry through `(source_name, sha256)`, so a filename no
+        # entry has ever recorded cannot possibly match and is never hashed
+        # -- on a first import, and on any re-run with a fresh card, that is
+        # zero hashing here. The exception is a job carrying
+        # source-name-less recovery entries: for those the bytes are the only
+        # identity left, so every candidate has to be hashed. Whatever it
+        # cost is counted and reported (`hashed_files`/`hashed_bytes`), never
+        # silently spent.
+        reused = None
+        if path.name in known_source_names or by_sha_unknown_source:
+            content_hash = _hash_file(path)
+            hashed_files += 1
+            hashed_bytes += size
+            reused = by_identity.get((path.name, content_hash)) or by_sha_unknown_source.get(
+                content_hash
+            )
         if reused is not None:
-            # Already imported under some destination -- reuse its `seq` and
-            # name outright, rather than minting a fresh one that would
-            # duplicate it.
+            # Same name AND same bytes (or the same bytes under an entry with
+            # no recorded name at all) -- this frame is already imported.
+            # Reuse its `seq` and destination rather than minting a new name.
             seq = reused["seq"]
             dest_name = Path(reused["dest"]).name
         else:
@@ -572,7 +702,7 @@ def _plan(
                 "source": path,
                 "source_name": path.name,
                 "dest_name": dest_name,
-                "bytes": path.stat().st_size,
+                "bytes": size,
                 "captured_at": tags.captured_at,
                 "subsec": tags.subsec,
                 "exposure_time": tags.exposure_time,
@@ -580,7 +710,18 @@ def _plan(
                 "f_number": tags.f_number,
             }
         )
-    return date, camera, camera_model, camera_make, plan, existing_files, pre_existing_stems
+    return _Plan(
+        date=date,
+        camera=camera,
+        camera_model=camera_model,
+        camera_make=camera_make,
+        entries=plan,
+        existing_files=existing_files,
+        pre_existing_stems=pre_existing_stems,
+        warnings=plan_warnings,
+        hashed_files=hashed_files,
+        hashed_bytes=hashed_bytes,
+    )
 
 
 @metrics.instrumented("library.import")
@@ -624,15 +765,15 @@ def import_card(
             },
         )
 
-    (
-        resolved_date,
-        resolved_camera,
-        camera_model,
-        camera_make,
-        planned,
-        existing_files,
-        pre_existing_stems,
-    ) = _plan(files, cfg, job_slug, date, camera)
+    resolved = _plan(files, cfg, job_slug, date, camera)
+    resolved_date = resolved.date
+    resolved_camera = resolved.camera
+    camera_model = resolved.camera_model
+    camera_make = resolved.camera_make
+    planned = resolved.entries
+    existing_files = resolved.existing_files
+    pre_existing_stems = resolved.pre_existing_stems
+    warnings: list[str] = list(resolved.warnings)
 
     plan_view = [
         {
@@ -646,7 +787,25 @@ def import_card(
         for p in planned
     ]
     if dry_run or not confirm:
-        return ImportResult(
+        # Fix round 4, item 3: the old reason claimed "no files were hashed",
+        # which had stopped being true the moment the plan gained a
+        # content-based resume check. The plan now hashes only candidates
+        # whose filename an existing manifest entry already records (or, for
+        # a job holding source-name-less recovery entries, all of them --
+        # the bytes are the only identity left), and it says exactly what
+        # that cost. A first import, or a re-run with a fresh card, still
+        # hashes nothing at all (ruling 3's spirit) -- and when it does hash,
+        # the number is in the reason rather than hidden.
+        cost = (
+            "no files were hashed"
+            if resolved.hashed_files == 0
+            else (
+                f"hashed: {resolved.hashed_files} file(s), {resolved.hashed_bytes} "
+                "bytes (the resume pre-check: candidates whose filename this job "
+                "has already imported)"
+            )
+        )
+        return ImportResultWithDuplicates(
             outcome="dry_run",
             job_slug=job_slug,
             date=resolved_date,
@@ -655,11 +814,12 @@ def import_card(
             camera_make=camera_make,
             source_root=str(source_path),
             plan=plan_view,
+            warnings=warnings,
             reason=(
-                "dry run: no files were hashed and no directories were created"
+                f"dry run: no directories were created and nothing was copied; {cost}"
                 if dry_run
                 else f"{len(planned)} file(s) planned; re-run with --yes / confirm=true "
-                "to copy them (an import always touches more than one file)"
+                f"to copy them (an import always touches more than one file); {cost}"
             ),
         )
 
@@ -702,6 +862,19 @@ def import_card(
     # the disk) can be told apart from a genuinely new destination before
     # any bytes are written.
     existing_by_dest = {e["dest"]: e for e in existing_files}
+
+    # Fix round 4, items 1-2: byte-identical frames are KEPT BOTH (they are
+    # two real exposures as far as this verb is concerned -- an in-camera
+    # copy, a doubled card, a genuinely repeated frame), and the pairs are
+    # reported so the decision is visible instead of implied. Seeded from the
+    # existing manifest (so a re-run reports the same pairs it reported the
+    # first time) and filled in from THIS run's own hashes, which the copy
+    # loop computes anyway: duplicate detection costs zero extra reads.
+    first_dest_by_sha: dict[str, str] = {}
+    for entry in sorted(existing_files, key=lambda e: e["dest"]):
+        if entry.get("sha256"):
+            first_dest_by_sha.setdefault(entry["sha256"], entry["dest"])
+    duplicates: list[list[str]] = []
 
     files_out: list[dict] = []
     copied = 0
@@ -778,10 +951,14 @@ def import_card(
                 status = "copied"
                 copied += 1
             total_bytes += size
+            this_dest = f"raw/{p['dest_name']}"
+            first_dest = first_dest_by_sha.setdefault(sha, this_dest)
+            if first_dest != this_dest:
+                duplicates.append([first_dest, this_dest])
             files_out.append(
                 {
                     "seq": p["seq"],
-                    "dest": f"raw/{p['dest_name']}",
+                    "dest": this_dest,
                     "source_name": p["source_name"],
                     "bytes": size,
                     "sha256": sha,
@@ -838,11 +1015,23 @@ def import_card(
         "copied": copied,
         "skipped_identical": skipped,
         "bytes": total_bytes,
+        # Fix round 4, item 3: the plan's resume pre-check, counted rather
+        # than assumed. `plan_hashed_*` is ONLY that pre-check -- the copy's
+        # own two sha256 passes per file are the verb's advertised work
+        # (design section 6, step 7) and are not folded in here, which would
+        # make the number mean nothing.
+        "plan_hashed_files": resolved.hashed_files,
+        "plan_hashed_bytes": resolved.hashed_bytes,
+        "duplicate_pairs": len(duplicates),
     }
-    manifest = {**meta, "totals": totals}
+    manifest = {**meta, "totals": totals, "duplicates": duplicates}
     merged_files = _persist_manifest(scouter_d, manifest, existing_files, files_out)
 
-    warnings: list[str] = []
+    if duplicates:
+        warnings.append(
+            f"{len(duplicates)} byte-identical pair(s) kept as separate frames "
+            f"(see `duplicates`): {'; '.join(a + ' == ' + b for a, b in duplicates)}"
+        )
     film_roll_registered = False
     imported_count = 0
     scan_incomplete = None
@@ -882,7 +1071,8 @@ def import_card(
         # must never roll it back -- it is a warning, never a raise.
         warnings.append(f"vault note not written: {e}")
 
-    return ImportResult(
+    return ImportResultWithDuplicates(
+        duplicates=duplicates,
         job_slug=job_slug,
         date=resolved_date,
         camera=resolved_camera,
