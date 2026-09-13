@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import time
+
 from scouter import metrics
 from scouter.core import dtbridge, journal, xmp
-from scouter.errors import ScouterError
+from scouter.errors import CommitTimeout, ScouterError
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
 from scouter.types import (
@@ -21,31 +23,158 @@ from scouter.types import (
 # `up`/`down` effect, which moved exposure by 0.05 EV in the phase 0 spike. That
 # keeps the step whatever darktable says it is, per module, with no table to rot.
 
+#: darktable rewrites the sidecar in place; a read can race a write and see a
+#: torn (not-yet-well-formed) document. Fix round 1, should-fix 10: retry
+#: briefly before giving up, rather than reporting a bogus `None` value.
+_TORN_RETRIES = 5
+_TORN_SLEEP_S = 0.1
+
+
+class _UnsupportedUndo(ScouterError):
+    """`reset` discarded a module's params; there is nothing to restore.
+
+    Fix round 1, blocker 6: generic exit code 1 -- `unsupported_undo` is not
+    one of `scouter.errors.EXIT_CODES`'s rows, deliberately: it is a Scouter
+    policy refusal, not a darktable/bridge failure class.
+    """
+
+    code = "unsupported_undo"
+    fix = "press Ctrl-Z in darktable; Scouter cannot restore discarded params"
+
 
 def _commit(job: str, image_id: int, *, strategy: str = "auto") -> CommitResult:
     """Every write's post-action commit, routed through one seam (ruling 21).
 
-    `scouter.core.history` is task 8's module and does not exist yet. Importing
-    it here, inside the function body, keeps `darkroom.py` importable -- and
-    `registry.load_verbs()` working -- before it lands: `load_verbs()` already
-    tolerates a missing core module (`registry._CORE_MODULES`'s docstring), and
-    this gives `darkroom.py`'s own call sites the same tolerance for the one
-    history call they need. Once task 8 adds `scouter/core/history.py`, this
-    import simply resolves -- nothing here changes.
+    Imports `scouter.core.history` lazily so `darkroom.py` stays importable
+    (and `registry.load_verbs()` keeps working) whether or not it has landed
+    yet. Calls the *unwrapped* `history.commit` (fix round 1, blocker 13) so
+    one `darkroom.*` verb call still produces exactly one metrics event, not
+    two -- `history.commit` is itself `@instrumented`. Falls back to the
+    wrapped function if `__wrapped__` is ever absent, so this never breaks
+    outright if that decorator detail changes.
     """
     from scouter.core import history
 
-    return history.commit(image_id, timeout_s=5.0, strategy=strategy, job=job)
+    commit_fn = getattr(history.commit, "__wrapped__", history.commit)
+    return commit_fn(image_id, timeout_s=5.0, strategy=strategy, job=job)
 
 
-def _read_value(resolved: dtbridge.ResolvedImage, module: str, param: str,
-                instance: int) -> float | None:
+def _close(a: float | None, b: float | None, tol: float = 1e-4) -> bool:
+    if a is None or b is None:
+        return a is None and b is None
+    return abs(a - b) < tol
+
+
+def _read_sidecar_parsed(path: str) -> xmp.ParsedXmp | None:
+    """Parse the sidecar, retrying briefly on a torn (mid-write) read.
+
+    Returns `None` when there is no sidecar at all (nothing to retry: that is
+    a normal "not committed yet" state, not a torn write). Raises
+    `CommitTimeout` if the file exists but never settles into well-formed XML
+    within `_TORN_RETRIES` attempts.
+    """
+    for attempt in range(_TORN_RETRIES):
+        try:
+            text, _ = xmp.read_sidecar(path)
+        except OSError:
+            return None
+        parsed = xmp.parse(text)
+        if parsed.well_formed:
+            return parsed
+        if attempt < _TORN_RETRIES - 1:
+            time.sleep(_TORN_SLEEP_S)
+    raise CommitTimeout(
+        f"sidecar not readable (torn write): {xmp.sidecar_path(path)}",
+        detail={"path": path, "attempts": _TORN_RETRIES},
+    )
+
+
+def _read_value(path: str, module: str, param: str, instance: int) -> float | None:
     """Current value from the XMP, or None when it is not decodable."""
-    try:
-        text, _ = xmp.read_sidecar(resolved.path)
-    except OSError:
+    parsed = _read_sidecar_parsed(path)
+    if parsed is None:
         return None
-    return xmp.latest_value(xmp.parse(text), module, param, instance)
+    return xmp.latest_value(parsed, module, param, instance)
+
+
+def _module_state(path: str, module: str, instance: int) -> dict:
+    """`enabled` + `history_end` for one module instance, from the XMP."""
+    parsed = _read_sidecar_parsed(path)
+    if parsed is None:
+        return {"source": "xmp", "enabled": None, "history_end": None}
+    enabled = None
+    for entry in sorted(parsed.entries, key=lambda e: e.num, reverse=True):
+        if entry.operation == module and entry.active and entry.multi_priority == instance:
+            enabled = entry.enabled
+            break
+    return {"source": "xmp", "enabled": enabled, "history_end": parsed.history_end}
+
+
+def _module_enabled(path: str, module: str, instance: int) -> bool | None:
+    return _module_state(path, module, instance)["enabled"]
+
+
+def _read_state(path: str, module: str, param: str, instance: int) -> dict:
+    """Everything the journal needs about one slider's current state
+
+    (fix round 1, blocker 7): not just `value`, but `enabled` and
+    `history_end` too, so a future reader can tell "this slider was disabled"
+    or "this was a stale read" apart from a plain missing value.
+    """
+    state = _module_state(path, module, instance)
+    return {**state, "value": _read_value(path, module, param, instance)}
+
+
+def _last_journal_write(job: str, image_id: int, module: str, param: str,
+                        instance: int) -> journal.Entry | None:
+    for entry in reversed(journal.read_all(job)):
+        if (entry.image_id == image_id and entry.module == module and entry.param == param
+                and entry.instance == instance and entry.after and "value" in entry.after):
+            return entry
+    return None
+
+
+def _before_state(job: str, image_id: int, path: str, module: str, param: str,
+                  instance: int) -> dict:
+    """The `before` state for a new write on this slider.
+
+    Ordinarily this is whatever the XMP currently shows. But when the last
+    write to this exact (image, module, param, instance) used `commit=False`,
+    darktable has not written the sidecar for it yet -- the XMP still shows
+    whatever was true *before that write*, not Scouter's own true current
+    value. In that case (detected by the XMP still reading back as that
+    write's own `before`, i.e. it has not advanced) the journal's `after` is
+    used instead, so a second `commit=False` write journals the right
+    `before` and `undo_last` does not over-revert past it (fix round 1,
+    blocker 11).
+    """
+    state = _read_state(path, module, param, instance)
+    last = _last_journal_write(job, image_id, module, param, instance)
+    if last is not None and (
+        state["value"] is None or _close(state["value"], last.before.get("value"))
+    ):
+        state = {**state, "value": last.after["value"]}
+    return state
+
+
+def _current_image() -> dtbridge.ResolvedImage:
+    """The darkroom's currently loaded image, in one bridge round trip.
+
+    Fix round 1, blocker 14: the old path resolved via
+    `dtbridge.resolve_image(_darkroom_image_hint())`, which called
+    `darkroom.open` twice (once to learn the image, once "again" inside
+    `resolve_image`). This calls it once and builds the `ResolvedImage`
+    directly from that single response.
+    """
+    result = dtbridge.call("darkroom.open", {})
+    path = str(result["path"])
+    return dtbridge.ResolvedImage(
+        image_id=int(result["image_id"]), path=path, xmp_path=str(xmp.sidecar_path(path))
+    )
+
+
+def _darkroom_image_hint() -> int:
+    return _current_image().image_id
 
 
 @metrics.instrumented("darkroom.open")
@@ -62,20 +191,42 @@ def open_image(image: str | int, *, job: str | None = None) -> OpenResult:
     )
 
 
-def _apply_set(resolved, module: str, param: str, instance: int, value: float,
-               commit: bool, job: str, verb: str) -> SetResult:
-    dtbridge.require_darkroom(resolved.image_id)
-    before = _read_value(resolved, module, param, instance)
-    dtbridge.action(
-        dtbridge.action_path(module, param),
-        instance=instance, element="value", effect="set", value=value,
+@metrics.instrumented("darkroom.set")
+def set_param(module: str, param: str, value: float, *, instance: int = 0,
+              commit: bool = True, dry_run: bool = False,
+              job: str | None = None) -> SetResult:
+    """Set one module parameter to an absolute value (phase 0 finding 1).
+
+    A dry run makes no darktable calls at all -- not even to learn which image
+    is in the darkroom (fix round 1, blocker 14) -- so it reports only the
+    action that would be sent, never a value or an image id.
+    """
+    job = job or current_job()
+    if dry_run:
+        return SetResult(
+            outcome="dry_run", module=module, param=param, instance=instance, requested=value,
+            plan=[{"action": "darkroom.set", "path": dtbridge.action_path(module, param),
+                   "effect": "set", "value": value, "instance": instance}],
+            reason="dry run: no darktable calls were made; the darkroom image was not resolved",
+        )
+    resolved = _current_image()
+    dtbridge.require_darkroom()
+    before_state = _before_state(job, resolved.image_id, resolved.path, module, param, instance)
+    entry = journal.begin(
+        job, verb="darkroom.set", image_id=resolved.image_id, path=resolved.path,
+        module=module, param=param, instance=instance, before=before_state,
     )
-    journal.record(
-        job, verb=verb, image_id=resolved.image_id, path=resolved.path,
-        module=module, param=param, instance=instance,
-        before={"source": "xmp", "value": before},
-        after={"value": value},
-    )
+    try:
+        dtbridge.action(
+            dtbridge.action_path(module, param),
+            instance=instance, element="value", effect="set", value=value,
+        )
+    except Exception as e:
+        code = e.code if isinstance(e, ScouterError) else "error"
+        journal.fail(job, entry.seq, outcome=f"error:{code}")
+        raise
+    journal.complete(job, entry.seq, after={"value": value})
+
     committed = False
     applied = None
     warnings: list[str] = []
@@ -83,7 +234,7 @@ def _apply_set(resolved, module: str, param: str, instance: int, value: float,
         commit_result = _commit(job, resolved.image_id, strategy="auto")
         committed = commit_result.committed
         warnings.extend(commit_result.warnings)
-        applied = _read_value(resolved, module, param, instance)
+        applied = _read_value(resolved.path, module, param, instance)
         if applied is None:
             warnings.append(
                 f"{module}.{param} committed but could not be decoded from the XMP; "
@@ -91,112 +242,99 @@ def _apply_set(resolved, module: str, param: str, instance: int, value: float,
             )
     return SetResult(
         image_id=resolved.image_id, path=resolved.path, module=module, param=param,
-        instance=instance, requested=value, applied=applied, previous=before,
+        instance=instance, requested=value, applied=applied, previous=before_state.get("value"),
         committed=committed, warnings=warnings,
     )
-
-
-@metrics.instrumented("darkroom.set")
-def set_param(module: str, param: str, value: float, *, instance: int = 0,
-              commit: bool = True, dry_run: bool = False,
-              job: str | None = None) -> SetResult:
-    """Set one module parameter to an absolute value (phase 0 finding 1)."""
-    job = job or current_job()
-    resolved = dtbridge.resolve_image(_darkroom_image_hint())
-    if dry_run:
-        return SetResult(
-            outcome="dry_run", image_id=resolved.image_id, path=resolved.path,
-            module=module, param=param, instance=instance, requested=value,
-            previous=_read_value(resolved, module, param, instance),
-            plan=[{"action": "darkroom.set", "path": dtbridge.action_path(module, param),
-                   "effect": "set", "value": value, "instance": instance}],
-            reason="dry run: no action was sent to darktable",
-        )
-    return _apply_set(resolved, module, param, instance, value, commit, job, "darkroom.set")
 
 
 @metrics.instrumented("darkroom.nudge")
 def nudge(module: str, param: str, steps: int = 1, *, instance: int = 0,
           commit: bool = True, dry_run: bool = False,
           job: str | None = None) -> SetResult:
-    """Move a slider by `steps` of darktable's own default step (+/-)."""
+    """Move a slider by `steps` of darktable's own default step (+/-).
+
+    Journals *before* the loop, not after (fix round 1, blocker 2): a crash
+    partway through would otherwise leave a write darktable actually applied
+    with no journal trace at all. `steps_landed` records how many of `steps`
+    actually reached the bridge; `undo_last` always reverts to `before`
+    regardless of how many landed, so a partial nudge is still fully undoable.
+    """
     job = job or current_job()
-    resolved = dtbridge.resolve_image(_darkroom_image_hint())
-    path = dtbridge.action_path(module, param)
+    path_ = dtbridge.action_path(module, param)
     effect = "up" if steps >= 0 else "down"
     if dry_run:
         return SetResult(
-            outcome="dry_run", image_id=resolved.image_id, path=resolved.path,
-            module=module, param=param, instance=instance,
-            plan=[{"action": "darkroom.nudge", "path": path, "effect": effect,
+            outcome="dry_run", module=module, param=param, instance=instance,
+            plan=[{"action": "darkroom.nudge", "path": path_, "effect": effect,
                    "repeats": abs(steps), "instance": instance}],
-            reason="dry run: no action was sent to darktable",
+            reason="dry run: no darktable calls were made; the darkroom image was not resolved",
         )
-    dtbridge.require_darkroom(resolved.image_id)
-    before = _read_value(resolved, module, param, instance)
-    for _ in range(abs(steps)):
-        dtbridge.action(path, instance=instance, element="value", effect=effect, value=1)
-    journal.record(
+    resolved = _current_image()
+    dtbridge.require_darkroom()
+    before_state = _before_state(job, resolved.image_id, resolved.path, module, param, instance)
+    entry = journal.begin(
         job, verb="darkroom.nudge", image_id=resolved.image_id, path=resolved.path,
-        module=module, param=param, instance=instance,
-        before={"source": "xmp", "value": before}, after={"steps": steps},
+        module=module, param=param, instance=instance, before=before_state,
     )
+    landed = 0
+    try:
+        for _ in range(abs(steps)):
+            dtbridge.action(path_, instance=instance, element="value", effect=effect, value=1)
+            landed += 1
+    except Exception as e:
+        code = e.code if isinstance(e, ScouterError) else "error"
+        journal.fail(job, entry.seq, outcome=f"error:{code}")
+        raise
+    journal.complete(job, entry.seq, after={"steps": steps, "steps_landed": landed})
+
     committed, applied, warnings = False, None, []
     if commit:
         commit_result = _commit(job, resolved.image_id, strategy="auto")
         committed, warnings = commit_result.committed, list(commit_result.warnings)
-        applied = _read_value(resolved, module, param, instance)
+        applied = _read_value(resolved.path, module, param, instance)
     return SetResult(
         image_id=resolved.image_id, path=resolved.path, module=module, param=param,
-        instance=instance, requested=None, applied=applied, previous=before,
+        instance=instance, requested=None, applied=applied, previous=before_state.get("value"),
         committed=committed, warnings=warnings,
     )
-
-
-def _module_enabled(resolved, module: str, instance: int) -> bool | None:
-    try:
-        text, _ = xmp.read_sidecar(resolved.path)
-    except OSError:
-        return None
-    parsed = xmp.parse(text)
-    for entry in sorted(parsed.entries, key=lambda e: e.num, reverse=True):
-        if entry.operation == module and entry.active and entry.multi_priority == instance:
-            return entry.enabled
-    return None
 
 
 def _do_module_action(action_name: str, method: str, *, module: str, instance: int,
                       dry_run: bool, confirm: bool, job: str | None) -> ModuleResult:
     job = job or current_job()
-    resolved = dtbridge.resolve_image(_darkroom_image_hint())
     gated = action_name == "reset"
-    plan = [{"action": f"module.{action_name}", "module": module,
-             "instance": instance, "image_id": resolved.image_id}]
+    plan = [{"action": f"module.{action_name}", "module": module, "instance": instance}]
     if dry_run or (gated and not confirm):
         return ModuleResult(
-            outcome="dry_run", image_id=resolved.image_id, path=resolved.path,
-            module=module, action=action_name, instance=instance, plan=plan,
+            outcome="dry_run", module=module, action=action_name, instance=instance, plan=plan,
             reason=(
                 "reset discards this module's parameters and cannot be undone by "
                 "Scouter (design 8.2); re-run with --yes / confirm=true"
                 if gated and not confirm
-                else "dry run: no action was sent to darktable"
+                else "dry run: no darktable calls were made; the darkroom image was not resolved"
             ),
         )
-    dtbridge.require_darkroom(resolved.image_id)
-    before_enabled = _module_enabled(resolved, module, instance)
-    dtbridge.call(method, {"module": module, "instance": instance})
-    journal.record(
-        job, verb=f"module.{action_name}", image_id=resolved.image_id,
-        path=resolved.path, module=module, param="", instance=instance,
-        before={"source": "xmp", "enabled": before_enabled},
-        after={"action": action_name},
+    resolved = _current_image()
+    dtbridge.require_darkroom()
+    before_state = _module_state(resolved.path, module, instance)
+    entry = journal.begin(
+        job, verb=f"module.{action_name}", image_id=resolved.image_id, path=resolved.path,
+        module=module, param="", instance=instance, before=before_state,
     )
+    try:
+        dtbridge.call(method, {"module": module, "instance": instance})
+    except Exception as e:
+        code = e.code if isinstance(e, ScouterError) else "error"
+        journal.fail(job, entry.seq, outcome=f"error:{code}")
+        raise
     commit_result = _commit(job, resolved.image_id, strategy="auto")
+    after_state = _module_state(resolved.path, module, instance)
+    journal.complete(
+        job, entry.seq, after={"action": action_name, "enabled": after_state["enabled"]}
+    )
     return ModuleResult(
-        image_id=resolved.image_id, path=resolved.path, module=module,
-        action=action_name, instance=instance,
-        enabled=_module_enabled(resolved, module, instance),
+        image_id=resolved.image_id, path=resolved.path, module=module, action=action_name,
+        instance=instance, enabled=after_state["enabled"],
         committed=commit_result.committed, warnings=list(commit_result.warnings),
     )
 
@@ -226,6 +364,17 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
         return UndoResult(
             outcome="dry_run", reason=f"nothing to undo: journal for {job} is empty",
         )
+
+    # Blocker 6: the reset refusal is checked before the dry-run branch, so
+    # `undo_last(dry_run=True)` on a reset entry says honestly that it cannot
+    # be undone rather than pretending a plan exists.
+    if entry.verb == "module.reset":
+        raise _UnsupportedUndo(
+            f"cannot undo the reset of {entry.module}: its parameters were discarded. "
+            "darktable's own Ctrl-Z is the only way back",
+            detail={"seq": entry.seq, "module": entry.module},
+        )
+
     plan = [{"action": "darkroom.undo_last", "seq": entry.seq, "verb": entry.verb,
              "module": entry.module, "param": entry.param,
              "restore_to": entry.before.get("value")}]
@@ -234,19 +383,31 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
                           seq=entry.seq, plan=plan,
                           reason="dry run: no action was sent to darktable")
 
-    if entry.verb == "module.reset":
-        raise ScouterError(
-            f"cannot undo the reset of {entry.module}: its parameters were discarded. "
-            "darktable's own Ctrl-Z is the only way back",
-            fix="press Ctrl-Z in darktable; Scouter cannot restore discarded params",
-            detail={"seq": entry.seq, "module": entry.module},
-        )
+    # Blocker 1: verify Scouter is about to act on the image it journaled.
+    # `darkroom.open` with an explicit `image_id` raises (dtbridge classifies
+    # the bridge's "wrong image loaded" error to `NotInDarkroom`) if some
+    # other image is loaded now.
+    dtbridge.call("darkroom.open", {"image_id": entry.image_id})
+    dtbridge.require_darkroom()
 
-    dtbridge.require_darkroom(entry.image_id)
     if entry.verb == "module.enable":
-        dtbridge.call("module.disable", {"module": entry.module,
-                                         "instance": entry.instance})
-        restored: float | None = None
+        was_enabled_before = entry.before.get("enabled")
+        if was_enabled_before:
+            # Blocker 9 (should-fix): the module was already enabled before
+            # Scouter's own `enable` call -- that call was a no-op, so undoing
+            # it is a no-op too, not a blind `disable` of something the user
+            # (not Scouter) turned on.
+            committed = False
+            warnings = [f"{entry.module} was already enabled before this write; nothing to undo"]
+            verified = True
+        else:
+            dtbridge.call("module.disable", {"module": entry.module, "instance": entry.instance})
+            commit_result = _commit(job, entry.image_id, strategy="auto")
+            committed = commit_result.committed
+            warnings = list(commit_result.warnings)
+            verified = _module_enabled(entry.path, entry.module, entry.instance) is False
+        undone = {"verb": entry.verb, "module": entry.module, "param": entry.param,
+                  "restored_to": None, "verified": verified}
     else:
         previous = entry.before.get("value")
         if previous is None:
@@ -260,15 +421,20 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             dtbridge.action_path(entry.module, entry.param),
             instance=entry.instance, element="value", effect="set", value=float(previous),
         )
-        restored = float(previous)
+        commit_result = _commit(job, entry.image_id, strategy="auto")
+        committed = commit_result.committed
+        warnings = list(commit_result.warnings)
+        # Blocker 5: verify from the XMP after the commit. `restored_to` is
+        # what was actually read back, not the value that was requested.
+        actual = _read_value(entry.path, entry.module, entry.param, entry.instance)
+        verified = _close(actual, previous)
+        undone = {"verb": entry.verb, "module": entry.module, "param": entry.param,
+                  "restored_to": actual, "verified": verified}
 
-    commit_result = _commit(job, entry.image_id, strategy="auto")
     journal.mark_undone(job, entry.seq)
     return UndoResult(
         image_id=entry.image_id, path=entry.path, seq=entry.seq,
-        undone={"verb": entry.verb, "module": entry.module, "param": entry.param,
-                "restored_to": restored},
-        committed=commit_result.committed, warnings=list(commit_result.warnings),
+        undone=undone, committed=committed, warnings=warnings,
     )
 
 
@@ -303,28 +469,16 @@ def describe_history(image: str | int | None = None, *,
                      job: str | None = None) -> HistoryResult:
     """The darkroom image's history, as darktable committed it.
 
-    Delegates to `scouter.core.history.read` (task 8), imported lazily for the
-    same reason `_commit` is (ruling 21): `darkroom.py` must import cleanly,
-    and stay registered, before `history.py` exists. `.__wrapped__` calls the
-    undecorated function so this verb still emits exactly one metrics event,
-    not two.
+    Delegates to `scouter.core.history.read` (task 8). `.__wrapped__` (falling
+    back to the wrapped function if absent) calls the undecorated function so
+    this verb still emits exactly one metrics event, not two (blocker 13,
+    same seam as `_commit`).
     """
     from scouter.core import history
 
+    read_fn = getattr(history.read, "__wrapped__", history.read)
     target = image if image is not None else _darkroom_image_hint()
-    return history.read.__wrapped__(target, job=job)
-
-
-def _darkroom_image_hint() -> int:
-    """The image the darkroom currently has loaded.
-
-    Every darkroom verb operates on it, so it is resolved once here rather than
-    made an argument: asking the caller to repeat the image id would let the
-    agent address an image that is not the one on screen, which is exactly the
-    silent-failure class the honesty pass removed.
-    """
-    result = dtbridge.call("darkroom.open", {})
-    return int(result["image_id"])
+    return read_fn(target, job=job)
 
 
 IMAGE_ARG = ArgSpec("image", "image", required=True, positional=True,
@@ -371,7 +525,8 @@ for verb in (
                INSTANCE_ARG),
          writes=False, gated=False, summary="Slider positions and the current view."),
     Verb(id="darkroom.describe_history", group="darkroom", fn=describe_history,
-         args=(ArgSpec("image", "image", help="defaults to the darkroom image"),),
+         args=(ArgSpec("image", "image", help="defaults to the darkroom image",
+                       positional=True),),
          writes=False, gated=False, summary="The darkroom image's committed history."),
 ):
     register(verb)

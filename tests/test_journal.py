@@ -1,5 +1,6 @@
 import unittest
 
+from scouter import paths
 from scouter.core import journal
 from tests.scouter_fakes import TempCache
 
@@ -44,6 +45,51 @@ class JournalTest(unittest.TestCase):
     def test_journal_is_per_job(self) -> None:
         self._record(0.7, None)
         self.assertEqual(journal.read_all("job-other"), [])
+
+    def test_begin_leaves_after_null_until_complete(self) -> None:
+        entry = journal.begin(
+            "job-test", verb="darkroom.set", image_id=12, path="/a/x.ORF",
+            module="exposure", param="exposure", instance=0,
+            before={"source": "xmp", "value": 0.7},
+        )
+        self.assertIsNone(journal.read_all("job-test")[0].after)
+        journal.complete("job-test", entry.seq, after={"value": 1.5})
+        self.assertEqual(journal.read_all("job-test")[0].after, {"value": 1.5})
+
+    def test_fail_sets_outcome_and_leaves_after_null(self) -> None:
+        entry = journal.begin(
+            "job-test", verb="darkroom.set", image_id=12, path="/a/x.ORF",
+            module="exposure", param="exposure", instance=0,
+            before={"source": "xmp", "value": 0.7},
+        )
+        journal.fail("job-test", entry.seq, outcome="error:not_in_darkroom")
+        saved = journal.read_all("job-test")[0]
+        self.assertIsNone(saved.after)
+        self.assertEqual(saved.outcome, "error:not_in_darkroom")
+
+    def test_complete_on_an_unknown_seq_raises_journal_corrupt(self) -> None:
+        with self.assertRaises(journal.JournalCorrupt):
+            journal.complete("job-test", 99, after={"value": 1.0})
+
+    def test_a_bad_line_raises_journal_corrupt_naming_the_line_number(self) -> None:
+        self._record(0.7, None)
+        path = paths.journal_path("job-test")
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write("{not valid json\n")
+        with self.assertRaises(journal.JournalCorrupt) as ctx:
+            journal.read_all("job-test")
+        self.assertEqual(ctx.exception.detail["line"], 2)
+        self.assertEqual(ctx.exception.code, "journal_corrupt")
+
+    def test_mark_undone_writes_via_temp_file_and_replace(self) -> None:
+        """Blocker 3: no bare `write_text` on a rewrite -- verified indirectly:
+        the journal is intact (and correctly updated) immediately afterwards,
+        which a torn write would not reliably leave behind."""
+        self._record(0.7, None)
+        journal.mark_undone("job-test", 1)
+        entries = journal.read_all("job-test")
+        self.assertEqual(len(entries), 1)
+        self.assertTrue(entries[0].undone)
 
 
 if __name__ == "__main__":

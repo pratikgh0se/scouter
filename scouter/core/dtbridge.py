@@ -84,13 +84,21 @@ def current_view() -> str:
     return str(result.get("view", "unknown"))
 
 
-def require_darkroom(expect_image_id: int | None = None) -> str:
-    """Pre-flight: raise `wrong_view` before spending an action on a dead call."""
+def require_darkroom() -> str:
+    """Pre-flight: raise `wrong_view` before spending an action on a dead call.
+
+    No `expect_image_id` parameter: `view.current` cannot tell us which image
+    is loaded, so a parameter here would be decorative, not honest (fix round
+    1, blocker 1). A caller that must confirm it is acting on a specific image
+    does so by calling `darkroom.open {image_id: ...}` through `call()` first
+    -- the bridge itself raises `wrong image loaded` (-> `not_in_darkroom`) on
+    a mismatch, which is a real check, not a parameter nobody reads.
+    """
     view = current_view()
     if view != "darkroom":
         raise WrongView(
             f"darktable is in the {view} view; slider actions only work in the darkroom",
-            detail={"view": view, "expected_image_id": expect_image_id},
+            detail={"view": view},
         )
     return view
 
