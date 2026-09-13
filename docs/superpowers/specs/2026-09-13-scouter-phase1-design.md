@@ -428,11 +428,11 @@ The CLI builds its argparse tree from `VERB_REGISTRY`; the MCP server builds its
 | `scout.preview` | `scouter scout preview IMAGE [--px N] [--fmt png\|ppm]` | `scout_preview` | no | no |
 | `scout.compare` | `scouter scout compare A B [--px N]` | `scout_compare` | no | no |
 | `style.extract` | `scouter style extract IMAGE --name N --modules a,b [--yes]` | `style_extract` | yes | **yes** (may replace an existing style) |
-| `style.apply` | `scouter style apply IMAGE --name N [--mode append\|overwrite] [--yes]` | `style_apply` | yes | **yes** when `--mode overwrite` |
+| `style.apply` | `scouter style apply IMAGE --name N [--mode append]` | `style_apply` | yes | no (ruling 31: phase 1 is append-only on one image; `--mode overwrite` is refused in core with `unsupported_mode` because the Lua API can only append; overwrite returns in phase 2 as a gated verb) |
 | `export.run` | `scouter export run IMAGE… --preset client-final\|preview --out-dir D [--yes]` | `export_run` | yes | **yes** when a planned output file exists |
 | `metrics.summary` | `scouter metrics summary [--since 7d]` | `metrics_summary` | no | no |
 
-Gate rule, from spec 6: `confirm=True` / `--yes` is required for **more than one image**, **history overwrite**, **delete/reject** (no phase-1 verb does this), and **export over existing files**. `darkroom.reset` is gated because it discards params irrecoverably (section 8.2). `style.apply --mode overwrite` is a history overwrite. `style.extract` is gated only when a style of that name already exists — the dry run lists what would be replaced.
+Gate rule, from spec 6: `confirm=True` / `--yes` is required for **more than one image**, **history overwrite**, **delete/reject** (no phase-1 verb does this), and **export over existing files**. `darkroom.reset` is gated because it discards params irrecoverably (section 8.2). `style.apply --mode overwrite` would be a history overwrite; phase 1 refuses it outright (ruling 31), so `style.apply` carries no gate until phase 2. `style.extract` is gated only when a style of that name already exists — the dry run lists what would be replaced.
 
 Every gated verb, called without confirm, returns:
 
