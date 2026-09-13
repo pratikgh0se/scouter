@@ -1,0 +1,352 @@
+"""Handwritten MCP tool schemas.
+
+Handwritten on purpose: a schema derived from the Python signature injects
+pydantic `title` keys and cannot express `minimum`/`maximum` or the
+"path or id" union, so the agent-facing contract would drift with every
+refactor. tests/test_scouter_mcp_schemas.py pins this table.
+"""
+
+from __future__ import annotations
+
+IMAGE = {
+    "type": ["string", "integer"],
+    "description": "absolute path to the raw file, or a darktable image id",
+}
+PX = {
+    "type": "integer",
+    "minimum": 64,
+    "maximum": 4096,
+    "default": 1024,
+    "description": "longest edge of the render in pixels",
+}
+DRY_RUN = {
+    "type": "boolean",
+    "default": False,
+    "description": "plan only: return what would happen and send nothing",
+}
+INSTANCE = {
+    "type": "integer",
+    "minimum": 0,
+    "default": 0,
+    "description": "module instance (darktable's multi_priority)",
+}
+BUDGET_S = {
+    "type": "number",
+    "default": 3.0,
+    "description": "loop budget; over it, re-render at 512 px",
+}
+
+
+def _schema(properties: dict, required: list[str]) -> dict:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
+TOOL_SPECS: list[dict] = [
+    {
+        "name": "darkroom_open",
+        "description": "Load an image in darktable's darkroom view, importing it into "
+        "the library first if it is not there. Every other darkroom "
+        "tool needs this first: slider actions only work in the darkroom.",
+        "inputSchema": _schema({"image": IMAGE}, ["image"]),
+    },
+    {
+        "name": "darkroom_set",
+        "description": "Set one module parameter to an absolute value on the image "
+        "currently open in the darkroom. Creates one darktable history "
+        "item the user can see and undo. Values are read back from the "
+        "XMP sidecar after the commit.",
+        "inputSchema": _schema(
+            {
+                "module": {
+                    "type": "string",
+                    "description": "darktable module, e.g. exposure, sigmoid, "
+                    "temperature, colorbalancergb",
+                },
+                "param": {
+                    "type": "string",
+                    "description": "parameter, e.g. exposure, contrast, temperature",
+                },
+                "value": {
+                    "type": "number",
+                    "description": "absolute value in the slider's own unit "
+                    "(EV for exposure, K for temperature)",
+                },
+                "instance": INSTANCE,
+                "commit": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "commit history to the XMP after the write",
+                },
+                "dry_run": DRY_RUN,
+            },
+            ["module", "param", "value"],
+        ),
+    },
+    {
+        "name": "darkroom_nudge",
+        "description": "Move a slider by darktable's own default step, up (positive "
+        "steps) or down (negative). Use when the user says 'a bit more'.",
+        "inputSchema": _schema(
+            {
+                "module": {"type": "string", "description": "darktable module"},
+                "param": {"type": "string", "description": "parameter"},
+                "steps": {
+                    "type": "integer",
+                    "default": 1,
+                    "description": "steps up (+) or down (-)",
+                },
+                "instance": INSTANCE,
+                "commit": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "commit history to the XMP after the write",
+                },
+                "dry_run": DRY_RUN,
+            },
+            ["module", "param"],
+        ),
+    },
+    {
+        "name": "darkroom_enable",
+        "description": "Enable a module on the darkroom image.",
+        "inputSchema": _schema(
+            {
+                "module": {"type": "string", "description": "darktable module"},
+                "instance": INSTANCE,
+                "dry_run": DRY_RUN,
+            },
+            ["module"],
+        ),
+    },
+    {
+        "name": "darkroom_reset",
+        "description": "Reset a module to its defaults. DESTRUCTIVE: the module's "
+        "parameters are discarded and Scouter cannot undo it (only the "
+        "user's own Ctrl-Z can). Requires confirm=true; without it you "
+        "get the plan and nothing happens.",
+        "inputSchema": _schema(
+            {
+                "module": {"type": "string", "description": "darktable module"},
+                "instance": INSTANCE,
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: authorises discarding this module's " "parameters",
+                },
+            },
+            ["module"],
+        ),
+    },
+    {
+        "name": "darkroom_undo_last",
+        "description": "Revert the newest Scouter write in this job by setting the "
+        "parameter back to its previous value. This adds a new history "
+        "item rather than deleting one, so the user's own undo still works.",
+        "inputSchema": _schema({"dry_run": DRY_RUN}, []),
+    },
+    {
+        "name": "darkroom_status",
+        "description": "Current view plus normalised slider POSITIONS (0..1). These are "
+        "positions, not parameter values: use history_read for values.",
+        "inputSchema": _schema(
+            {
+                "module": {"type": "string", "description": "module to query"},
+                "param": {"type": "string", "description": "parameter to query"},
+                "instance": INSTANCE,
+            },
+            [],
+        ),
+    },
+    {
+        "name": "darkroom_describe_history",
+        "description": "The darkroom image's committed history: every module, whether "
+        "it is active, and its decoded parameters where a verified "
+        "layout exists (otherwise opaque hex plus the module version).",
+        "inputSchema": _schema({"image": IMAGE}, []),
+    },
+    {
+        "name": "history_read",
+        "description": "Read an image's history from its XMP sidecar. Returns "
+        "confirmed=false when the sidecar is missing or mid-write.",
+        "inputSchema": _schema({"image": IMAGE}, ["image"]),
+    },
+    {
+        "name": "history_commit",
+        "description": "Make darktable write the darkroom image's history to its XMP "
+        "sidecar, then verify the file actually changed. darktable only "
+        "commits when the darkroom is left, so this is what makes an "
+        "edit readable.",
+        "inputSchema": _schema(
+            {
+                "image": IMAGE,
+                "timeout_s": {
+                    "type": "number",
+                    "default": 5.0,
+                    "minimum": 0.1,
+                    "description": "seconds to wait for the sidecar to change",
+                },
+                "strategy": {
+                    "type": "string",
+                    "enum": ["auto", "sidecar_action", "view_bounce"],
+                    "default": "auto",
+                    "description": "commit trigger; auto picks the cheapest "
+                    "that works on this build",
+                },
+            },
+            [],
+        ),
+    },
+    {
+        "name": "scout_stats",
+        "description": "Render the image at N px through darktable-cli and return the "
+        "per-channel histogram, clipping percentages, luminance "
+        "percentiles, white-balance ratios and a sharpness score. "
+        "Statistics are 8-bit and the luminance histogram is an estimate.",
+        "inputSchema": _schema(
+            {"image": IMAGE, "px": PX, "budget_s": BUDGET_S},
+            ["image"],
+        ),
+    },
+    {
+        "name": "scout_preview",
+        "description": "Render a viewable preview and return its FILE PATH. The pixels "
+        "are never inlined; read the file at preview_path yourself.",
+        "inputSchema": _schema(
+            {
+                "image": IMAGE,
+                "px": PX,
+                "fmt": {
+                    "type": "string",
+                    "enum": ["png", "ppm"],
+                    "default": "png",
+                    "description": "preview file format",
+                },
+            },
+            ["image"],
+        ),
+    },
+    {
+        "name": "scout_compare",
+        "description": "Numeric distance between two images' current renders "
+        "(deltas are b minus a).",
+        "inputSchema": _schema(
+            {"a": IMAGE, "b": IMAGE, "px": PX, "budget_s": BUDGET_S},
+            ["a", "b"],
+        ),
+    },
+    {
+        "name": "style_extract",
+        "description": "Save the darkroom image's current history as a darktable style. "
+        "NOTE: darktable's Lua API cannot filter a style by module, so "
+        "`modules` is recorded but the style carries the whole history. "
+        "Requires confirm=true when a style of that name already exists.",
+        "inputSchema": _schema(
+            {
+                "image": IMAGE,
+                "name": {"type": "string", "description": "style name"},
+                "modules": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "modules the caller wants (recorded only)",
+                },
+                "description": {
+                    "type": "string",
+                    "default": "",
+                    "description": "style description",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required to replace an existing style",
+                },
+            },
+            ["image", "name", "modules"],
+        ),
+    },
+    {
+        "name": "style_apply",
+        "description": "Apply a style to ONE image (applying to a set is phase 2). "
+        "mode=append adds to the history; mode=overwrite is a history "
+        "overwrite and requires confirm=true.",
+        "inputSchema": _schema(
+            {
+                "image": IMAGE,
+                "name": {"type": "string", "description": "style name"},
+                "mode": {
+                    "type": "string",
+                    "enum": ["append", "overwrite"],
+                    "default": "append",
+                    "description": "append adds to history; overwrite replaces it",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required for mode=overwrite",
+                },
+            },
+            ["image", "name"],
+        ),
+    },
+    {
+        "name": "export_run",
+        "description": "Export images through a preset. client-final is a full-size "
+        "sRGB JPEG; preview is a 1024 px PNG. Requires confirm=true for "
+        "more than one image or to overwrite an existing file.",
+        "inputSchema": _schema(
+            {
+                "images": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "minItems": 1,
+                    "description": "paths or image ids",
+                },
+                "preset": {
+                    "type": "string",
+                    "enum": ["client-final", "preview"],
+                    "description": "export preset",
+                },
+                "out_dir": {"type": "string", "description": "destination directory"},
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required for n>1 images or to overwrite files",
+                },
+            },
+            ["images", "preset", "out_dir"],
+        ),
+    },
+    {
+        "name": "metrics_summary",
+        "description": "Per-verb calls, error rate by class, p50/p95 latency and "
+        "estimated tokens over a time window.",
+        "inputSchema": _schema(
+            {
+                "since": {
+                    "type": "string",
+                    "default": "7d",
+                    "description": "window, e.g. 7d / 12h / 30m",
+                }
+            },
+            [],
+        ),
+    },
+]
+
+
+def tools() -> list:
+    """`TOOL_SPECS` as mcp `Tool` objects."""
+    from mcp.types import Tool
+
+    return [
+        Tool(name=spec["name"], description=spec["description"], inputSchema=spec["inputSchema"])
+        for spec in TOOL_SPECS
+    ]

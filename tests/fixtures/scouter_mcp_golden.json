@@ -1,0 +1,547 @@
+[
+  {
+    "description": "The darkroom image's committed history: every module, whether it is active, and its decoded parameters where a verified layout exists (otherwise opaque hex plus the module version).",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "description": "absolute path to the raw file, or a darktable image id",
+          "type": [
+            "string",
+            "integer"
+          ]
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "darkroom_describe_history"
+  },
+  {
+    "description": "Enable a module on the darkroom image.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "instance": {
+          "default": 0,
+          "description": "module instance (darktable's multi_priority)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "module": {
+          "description": "darktable module",
+          "type": "string"
+        }
+      },
+      "required": [
+        "module"
+      ],
+      "type": "object"
+    },
+    "name": "darkroom_enable"
+  },
+  {
+    "description": "Move a slider by darktable's own default step, up (positive steps) or down (negative). Use when the user says 'a bit more'.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "default": true,
+          "description": "commit history to the XMP after the write",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "instance": {
+          "default": 0,
+          "description": "module instance (darktable's multi_priority)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "module": {
+          "description": "darktable module",
+          "type": "string"
+        },
+        "param": {
+          "description": "parameter",
+          "type": "string"
+        },
+        "steps": {
+          "default": 1,
+          "description": "steps up (+) or down (-)",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "module",
+        "param"
+      ],
+      "type": "object"
+    },
+    "name": "darkroom_nudge"
+  },
+  {
+    "description": "Load an image in darktable's darkroom view, importing it into the library first if it is not there. Every other darkroom tool needs this first: slider actions only work in the darkroom.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "description": "absolute path to the raw file, or a darktable image id",
+          "type": [
+            "string",
+            "integer"
+          ]
+        }
+      },
+      "required": [
+        "image"
+      ],
+      "type": "object"
+    },
+    "name": "darkroom_open"
+  },
+  {
+    "description": "Reset a module to its defaults. DESTRUCTIVE: the module's parameters are discarded and Scouter cannot undo it (only the user's own Ctrl-Z can). Requires confirm=true; without it you get the plan and nothing happens.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "default": false,
+          "description": "required: authorises discarding this module's parameters",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "instance": {
+          "default": 0,
+          "description": "module instance (darktable's multi_priority)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "module": {
+          "description": "darktable module",
+          "type": "string"
+        }
+      },
+      "required": [
+        "module"
+      ],
+      "type": "object"
+    },
+    "name": "darkroom_reset"
+  },
+  {
+    "description": "Set one module parameter to an absolute value on the image currently open in the darkroom. Creates one darktable history item the user can see and undo. Values are read back from the XMP sidecar after the commit.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "default": true,
+          "description": "commit history to the XMP after the write",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "instance": {
+          "default": 0,
+          "description": "module instance (darktable's multi_priority)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "module": {
+          "description": "darktable module, e.g. exposure, sigmoid, temperature, colorbalancergb",
+          "type": "string"
+        },
+        "param": {
+          "description": "parameter, e.g. exposure, contrast, temperature",
+          "type": "string"
+        },
+        "value": {
+          "description": "absolute value in the slider's own unit (EV for exposure, K for temperature)",
+          "type": "number"
+        }
+      },
+      "required": [
+        "module",
+        "param",
+        "value"
+      ],
+      "type": "object"
+    },
+    "name": "darkroom_set"
+  },
+  {
+    "description": "Current view plus normalised slider POSITIONS (0..1). These are positions, not parameter values: use history_read for values.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "instance": {
+          "default": 0,
+          "description": "module instance (darktable's multi_priority)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "module": {
+          "description": "module to query",
+          "type": "string"
+        },
+        "param": {
+          "description": "parameter to query",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "darkroom_status"
+  },
+  {
+    "description": "Revert the newest Scouter write in this job by setting the parameter back to its previous value. This adds a new history item rather than deleting one, so the user's own undo still works.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "darkroom_undo_last"
+  },
+  {
+    "description": "Export images through a preset. client-final is a full-size sRGB JPEG; preview is a 1024 px PNG. Requires confirm=true for more than one image or to overwrite an existing file.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "default": false,
+          "description": "required for n>1 images or to overwrite files",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "images": {
+          "description": "paths or image ids",
+          "items": {
+            "description": "absolute path to the raw file, or a darktable image id",
+            "type": [
+              "string",
+              "integer"
+            ]
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "out_dir": {
+          "description": "destination directory",
+          "type": "string"
+        },
+        "preset": {
+          "description": "export preset",
+          "enum": [
+            "client-final",
+            "preview"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "images",
+        "preset",
+        "out_dir"
+      ],
+      "type": "object"
+    },
+    "name": "export_run"
+  },
+  {
+    "description": "Make darktable write the darkroom image's history to its XMP sidecar, then verify the file actually changed. darktable only commits when the darkroom is left, so this is what makes an edit readable.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "description": "absolute path to the raw file, or a darktable image id",
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "strategy": {
+          "default": "auto",
+          "description": "commit trigger; auto picks the cheapest that works on this build",
+          "enum": [
+            "auto",
+            "sidecar_action",
+            "view_bounce"
+          ],
+          "type": "string"
+        },
+        "timeout_s": {
+          "default": 5.0,
+          "description": "seconds to wait for the sidecar to change",
+          "minimum": 0.1,
+          "type": "number"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "history_commit"
+  },
+  {
+    "description": "Read an image's history from its XMP sidecar. Returns confirmed=false when the sidecar is missing or mid-write.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "description": "absolute path to the raw file, or a darktable image id",
+          "type": [
+            "string",
+            "integer"
+          ]
+        }
+      },
+      "required": [
+        "image"
+      ],
+      "type": "object"
+    },
+    "name": "history_read"
+  },
+  {
+    "description": "Per-verb calls, error rate by class, p50/p95 latency and estimated tokens over a time window.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "since": {
+          "default": "7d",
+          "description": "window, e.g. 7d / 12h / 30m",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "metrics_summary"
+  },
+  {
+    "description": "Numeric distance between two images' current renders (deltas are b minus a).",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "a": {
+          "description": "absolute path to the raw file, or a darktable image id",
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "b": {
+          "description": "absolute path to the raw file, or a darktable image id",
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "budget_s": {
+          "default": 3.0,
+          "description": "loop budget; over it, re-render at 512 px",
+          "type": "number"
+        },
+        "px": {
+          "default": 1024,
+          "description": "longest edge of the render in pixels",
+          "maximum": 4096,
+          "minimum": 64,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "a",
+        "b"
+      ],
+      "type": "object"
+    },
+    "name": "scout_compare"
+  },
+  {
+    "description": "Render a viewable preview and return its FILE PATH. The pixels are never inlined; read the file at preview_path yourself.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "fmt": {
+          "default": "png",
+          "description": "preview file format",
+          "enum": [
+            "png",
+            "ppm"
+          ],
+          "type": "string"
+        },
+        "image": {
+          "description": "absolute path to the raw file, or a darktable image id",
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "px": {
+          "default": 1024,
+          "description": "longest edge of the render in pixels",
+          "maximum": 4096,
+          "minimum": 64,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "image"
+      ],
+      "type": "object"
+    },
+    "name": "scout_preview"
+  },
+  {
+    "description": "Render the image at N px through darktable-cli and return the per-channel histogram, clipping percentages, luminance percentiles, white-balance ratios and a sharpness score. Statistics are 8-bit and the luminance histogram is an estimate.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_s": {
+          "default": 3.0,
+          "description": "loop budget; over it, re-render at 512 px",
+          "type": "number"
+        },
+        "image": {
+          "description": "absolute path to the raw file, or a darktable image id",
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "px": {
+          "default": 1024,
+          "description": "longest edge of the render in pixels",
+          "maximum": 4096,
+          "minimum": 64,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "image"
+      ],
+      "type": "object"
+    },
+    "name": "scout_stats"
+  },
+  {
+    "description": "Apply a style to ONE image (applying to a set is phase 2). mode=append adds to the history; mode=overwrite is a history overwrite and requires confirm=true.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "default": false,
+          "description": "required for mode=overwrite",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "image": {
+          "description": "absolute path to the raw file, or a darktable image id",
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "mode": {
+          "default": "append",
+          "description": "append adds to history; overwrite replaces it",
+          "enum": [
+            "append",
+            "overwrite"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "description": "style name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "image",
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "style_apply"
+  },
+  {
+    "description": "Save the darkroom image's current history as a darktable style. NOTE: darktable's Lua API cannot filter a style by module, so `modules` is recorded but the style carries the whole history. Requires confirm=true when a style of that name already exists.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "default": false,
+          "description": "required to replace an existing style",
+          "type": "boolean"
+        },
+        "description": {
+          "default": "",
+          "description": "style description",
+          "type": "string"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "image": {
+          "description": "absolute path to the raw file, or a darktable image id",
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "modules": {
+          "description": "modules the caller wants (recorded only)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "style name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "image",
+        "name",
+        "modules"
+      ],
+      "type": "object"
+    },
+    "name": "style_extract"
+  }
+]
