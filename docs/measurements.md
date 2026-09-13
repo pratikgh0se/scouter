@@ -131,3 +131,26 @@ reader.
 The real, committed capture is `tests/fixtures/hero.dtstyle`; the full XML
 and the exact `<info>`/`<plugin>` child order are in
 `docs/measurements-generated.md` (gitignored) and this task's report.
+
+### Fix round 2, item 3: dense 0..N-1 renumbering, multi-plugin, live round trip (2026-09-14)
+
+Same host, one more launch (`SCOUTER_HOST_TESTS=1 pytest tests/test_host_phase2.py`,
+clean quit confirmed via `pgrep` before and after). `dtstyle.build`'s `<num>`
+renumbering wording was corrected this round: the writer numbers `<num>`
+densely, 0..N-1, in **XMP history order** (the order `active_entries`
+returns them, i.e. ascending by the XMP's own `num`) -- NOT "pipeline
+order", which this writer has no access to (only a whole-history export
+happens to have XMP order coincide with the true pipeline order).
+
+Live-verified with a genuinely MULTI-plugin filtered request (not a single
+module, which the earlier round's probe used):
+`style.extract(image=HERO, modules=["exposure", "temperature", "colorin"])`.
+Result: 3 `<plugin>` elements, `<num>` sequence exactly `['0', '1', '2']`
+(dense, no gaps, regardless of the source XMP's own non-contiguous `num`
+values for those entries), and the real `dt.styles.import` accepted the
+file -- the resulting style (`scouter-probe-filtered-<pid>-<ts>`) appeared
+in a live `list_styles` afterwards, then was deleted again via the new
+`style.delete` verb (`confirm=true`) before the run ended.
+
+**Verdict: dense, XMP-history-order 0..N-1 renumbering round-trips through
+real darktable for a multi-plugin filtered style, confirmed live.**

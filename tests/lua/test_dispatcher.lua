@@ -18,6 +18,22 @@ local function assertTrue(cond, label)
   end
 end
 
+-- Mirrors the real plugin's `xml_unescape` (verified equal via
+-- plugin.xml_unescape's own direct tests below): a stub whose `dt.styles.
+-- import` reads a name off <info><name> must unescape it too, since real
+-- darktable stores the unescaped name -- otherwise the stub and the plugin's
+-- own `dtstyle_file_name`-based collision check would disagree on names
+-- containing an XML entity.
+local function stub_xml_unescape(s)
+  if not s then return s end
+  s = s:gsub("&lt;", "<")
+  s = s:gsub("&gt;", ">")
+  s = s:gsub("&quot;", "\"")
+  s = s:gsub("&apos;", "'")
+  s = s:gsub("&amp;", "&")
+  return s
+end
+
 -- ---- Stub dt table ---------------------------------------------------------
 -- Use ids that DO NOT overlap the iteration array's integer indexes (1..N),
 -- so dt.database[id] always resolves via __index without colliding with
@@ -169,7 +185,7 @@ stub_dt.styles = setmetatable({}, {
         if f then
           local content = f:read("*a") or ""
           f:close()
-          local found = content:match("<info>.-<name>(.-)</name>")
+          local found = stub_xml_unescape(content:match("<info>.-<name>(.-)</name>"))
           if found then name = found end
         end
         table.insert(t, {name = name, description = ""})
@@ -1795,26 +1811,64 @@ do
   stub_dt.styles.import = nil
 end
 
--- style.delete: tolerant of "already gone" (hero-fresh was just deleted by
--- the destructive-window test above), real otherwise (against "hero",
--- which still exists from the overwrite=true re-import earlier).
-local del_missing = plugin.methods["style.delete"]({name = "hero-fresh"})
+-- style.delete: fix round 2, item 5 -- gated on BOTH a name prefix (default
+-- "scouter-") and confirm=true, before the dt.styles scan even runs. The
+-- harness's test styles are named "hero"/"hero-fresh" (not "scouter-..."),
+-- so these calls pass an explicit `prefix` matching them.
+local ok_no_prefix, err_no_prefix = pcall(function()
+  return plugin.methods["style.delete"]({name = "hero", confirm = true})
+end)
+assertEq(ok_no_prefix, false,
+  "style.delete refuses a name that does not start with the (default) prefix")
+assertTrue(tostring(err_no_prefix):find("prefix", 1, true) ~= nil,
+  "the refusal names the prefix requirement")
+
+local ok_no_confirm, err_no_confirm = pcall(function()
+  return plugin.methods["style.delete"]({name = "hero", prefix = "hero"})
+end)
+assertEq(ok_no_confirm, false, "style.delete refuses without confirm=true, even with a matching prefix")
+assertTrue(tostring(err_no_confirm):find("confirm", 1, true) ~= nil,
+  "the refusal names the missing confirmation")
+
+-- Tolerant of "already gone" (hero-fresh was just deleted by the
+-- destructive-window test above), real otherwise (against "hero", which
+-- still exists from the overwrite=true re-import earlier).
+local del_missing = plugin.methods["style.delete"](
+  {name = "hero-fresh", prefix = "hero", confirm = true})
 assertEq(del_missing.existed, false, "hero-fresh is already gone (deleted above)")
 assertEq(del_missing.deleted, false, "nothing was deleted")
 local before_delete = 0
 for _ in ipairs(stub_dt.styles) do before_delete = before_delete + 1 end
-local del_real = plugin.methods["style.delete"]({name = "hero"})
+local del_real = plugin.methods["style.delete"]({name = "hero", prefix = "hero", confirm = true})
 assertEq(del_real.existed, true, "hero existed")
 assertEq(del_real.deleted, true, "hero was deleted")
 local after_delete = 0
 for _ in ipairs(stub_dt.styles) do after_delete = after_delete + 1 end
 assertEq(after_delete, before_delete - 1, "style.delete actually removed one style")
 
+-- The default prefix really is "scouter-": a name that DOES start with it
+-- is accepted (still needs confirm=true), proving the refusal above was
+-- about the prefix, not some other reason.
+local ok_default_prefix = plugin.methods["style.delete"](
+  {name = "scouter-throwaway-test-style", confirm = true})
+assertEq(ok_default_prefix.existed, false,
+  "a name starting with the default prefix is accepted (just not present)")
+
+-- xml_unescape: all five entities, and the &amp;lt; ordering case (must not
+-- double-unescape to "<").
+assertEq(plugin.xml_unescape("Tom &amp; Jerry"), "Tom & Jerry", "xml_unescape: &amp;")
+assertEq(plugin.xml_unescape("a &lt;b&gt; c"), "a <b> c", "xml_unescape: &lt; and &gt;")
+assertEq(plugin.xml_unescape('say &quot;hi&quot;'), 'say "hi"', "xml_unescape: &quot;")
+assertEq(plugin.xml_unescape("it&apos;s"), "it's", "xml_unescape: &apos;")
+assertEq(plugin.xml_unescape("&amp;lt;"), "&lt;",
+  "xml_unescape: &amp;lt; unescapes ONE level (to &lt;), not through to <")
+assertEq(plugin.xml_unescape(nil), nil, "xml_unescape: nil in, nil out")
+
 -- <info><name> containing an XML entity (as scouter/core/dtstyle.py's
--- ElementTree writer would escape a literal "&") is read as PLAIN TEXT --
--- Lua has no XML parser here, just a string match -- so the collision check
--- must not crash or mis-extract on it, and must compare byte-for-byte
--- (the same convention the writer and this plain match share end to end).
+-- ElementTree writer would escape a literal "&") is UNESCAPED before the
+-- collision check (fix round 2, item 6): darktable itself stores the
+-- unescaped name, so comparing the raw escaped text would silently never
+-- match a real collision on a name containing any of these characters.
 local escaped_path = export_dir .. "/escaped-name.dtstyle"
 do
   local f = io.open(escaped_path, "w")
@@ -1822,11 +1876,11 @@ do
   f:close()
 end
 local imp_escaped = plugin.methods["style.import_file"]({path = escaped_path, name = "ignored-hint"})
-assertEq(imp_escaped.name, "Tom &amp; Jerry",
-  "the collision-check name is read verbatim (no XML unescaping) from <info><name>")
+assertEq(imp_escaped.name, "Tom & Jerry",
+  "the collision-check name is XML-unescaped from <info><name> (Tom &amp; Jerry -> Tom & Jerry)")
 assertEq(imp_escaped.imported, true, "importing an escaped-name style still succeeds")
--- A second import of the exact same (still-escaped) name is a real collision,
--- proving the name round-trips consistently rather than drifting on a second read.
+-- A second import of the exact same (still-escaped-on-disk) name is a real
+-- collision once unescaped, proving the name round-trips consistently.
 local ok_escaped_collision = pcall(function()
   return plugin.methods["style.import_file"]({path = escaped_path, name = "ignored-hint"})
 end)

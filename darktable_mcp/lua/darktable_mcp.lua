@@ -1514,6 +1514,24 @@ methods["style.apply"] = function(p)
   return {name = p.name, mode = mode, applied = applied, missed = missed, errors = errors}
 end
 
+-- Fix round 2, item 6: `scouter/core/dtstyle.py`'s writer escapes `&`/`<`/`>`
+-- in `<name>` the same way ElementTree escapes `<description>`, so the raw
+-- regex-extracted text can carry `&amp;`/`&lt;`/`&gt;`/`&quot;`/`&apos;`.
+-- Comparing the ESCAPED form against `s.name` (which darktable stores
+-- unescaped) would silently never match a name containing any of those
+-- characters -- unescape before comparing. `&amp;` last, so `&amp;lt;`
+-- unescapes to `&lt;`, not all the way to `<` (matches every XML unescaper's
+-- ordering, including Python's xml.sax.saxutils.unescape defaults).
+local function xml_unescape(s)
+  if not s then return s end
+  s = s:gsub("&lt;", "<")
+  s = s:gsub("&gt;", ">")
+  s = s:gsub("&quot;", "\"")
+  s = s:gsub("&apos;", "'")
+  s = s:gsub("&amp;", "&")
+  return s
+end
+
 -- The <name> a .dtstyle file will actually import as, read straight off the
 -- file's own <info><name>...</name> (fix round 1, should-fix 9): a caller's
 -- `name` parameter is only ever a HINT (dt.styles.import derives the real
@@ -1522,14 +1540,36 @@ end
 -- otherwise a mismatched hint could make the check pass or fail against the
 -- wrong style entirely. A plain string match, not real XML parsing: this is
 -- the same tradeoff `sidecar_signature`/`file_size` already make for a
--- narrow, well-known field, and `scouter/core/dtstyle.py`'s writer escapes
--- `&`/`<`/`>` in `<name>` the same way ElementTree escapes `<description>`.
+-- narrow, well-known field.
 local function dtstyle_file_name(path)
   local f = io.open(path, "r")
   if not f then return nil end
   local content = f:read("*a") or ""
   f:close()
-  return content:match("<info>.-<name>(.-)</name>")
+  return xml_unescape(content:match("<info>.-<name>(.-)</name>"))
+end
+
+-- Fix round 2, nit: sha256 of the first 4KB, appended to `sidecar_signature`'s
+-- mtime+size -- a filesystem whose mtime resolution is coarser than the
+-- write (already `sidecar_signature`'s own reasoning) could ALSO, in theory,
+-- leave the size unchanged for a same-length rewrite; hashing real content
+-- closes that gap for the specific "did this file's content actually
+-- change" question `style.export_file` answers. `shasum` is not guaranteed
+-- present on every host, so a missing/failed hash degrades to "" (still
+-- combined with the always-available mtime+size signature) rather than
+-- erroring -- this is a strengthened confidence check, not the only signal.
+local function export_signature(path)
+  local sig = sidecar_signature(path)
+  local hash = nil
+  local p = io.popen("head -c 4096 " .. shell_quote(path)
+    .. " 2>/dev/null | shasum -a 256 2>/dev/null | awk '{print $1}'")
+  if p then
+    local out = (p:read("*a") or ""):gsub("%s+$", "")
+    p:close()
+    if out ~= "" then hash = out end
+  end
+  if sig == nil and hash == nil then return nil end
+  return (sig or "") .. "|" .. (hash or "")
 end
 
 -- Export an existing style to a .dtstyle file. Its first job is to PIN the file
@@ -1548,10 +1588,10 @@ methods["style.export_file"] = function(p)
   -- fix round 1, should-fix 9: `exported` is only true when the file's own
   -- signature actually advanced -- a `pcall` returning ok=true proves
   -- dt.styles.export did not RAISE, not that it wrote anything.
-  local before_sig = sidecar_signature(path)
+  local before_sig = export_signature(path)
   local ok, err = pcall(dt.styles.export, style, p.dir)
   if not ok then error("style.export_file: " .. tostring(err)) end
-  local after_sig = sidecar_signature(path)
+  local after_sig = export_signature(path)
   local advanced = after_sig ~= nil and after_sig ~= before_sig
   return {name = p.name, path = path, exported = advanced, bytes = file_size(path)}
 end
@@ -1604,9 +1644,29 @@ end
 -- rather than erroring, since its main caller is test/probe cleanup
 -- (fix round 1, should-fix 10) where "nothing to clean up" is a normal,
 -- not exceptional, outcome.
+--
+-- Fix round 2, item 5: this deletes real user data with no undo, so it is
+-- gated TWICE, both before the `dt.styles` scan even runs: `prefix`
+-- (defaults to Scouter's own "scouter-", so a typo'd or malicious `name`
+-- cannot reach an arbitrary style someone actually uses) and `confirm=true`
+-- (no default that makes a bare `{name=...}` call ever delete anything).
 methods["style.delete"] = function(p)
   p = p or {}
   if type(p.name) ~= "string" or p.name == "" then error("style.delete: name required") end
+  local prefix = p.prefix
+  if type(prefix) ~= "string" or prefix == "" then prefix = "scouter-" end
+  if p.name:sub(1, #prefix) ~= prefix then
+    error(string.format(
+      "style.delete: refusing to delete %q -- it does not start with the "
+      .. "required prefix %q (pass a different `prefix` if this is "
+      .. "intentional; the default only lets Scouter clean up its own "
+      .. "throwaway styles)", p.name, prefix))
+  end
+  if not p.confirm then
+    error(string.format(
+      "style.delete: pass confirm=true to actually delete %q -- this call "
+      .. "never deletes without an explicit confirmation", p.name))
+  end
   local style = nil
   for _, s in ipairs(dt.styles) do if s.name == p.name then style = s; break end end
   if not style then return {name = p.name, deleted = false, existed = false} end
@@ -1927,6 +1987,8 @@ return {
     max_depth = IMPORT_MAX_DEPTH,
   },
   cache_dir = cache_dir,
+  xml_unescape = xml_unescape,
+  dtstyle_file_name = dtstyle_file_name,
   safe_request_id = safe_request_id,
   write_file_atomic = write_file_atomic,
   write_response = write_response,

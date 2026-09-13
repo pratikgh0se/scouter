@@ -646,6 +646,7 @@ Transport, error shape and the `nan`/`view` rules are unchanged (phase 1 design 
 | `style.export_file` | `{"name": "hero-harbour", "dir": "/abs/dir"}` | `{"name": "...", "path": "/abs/dir/hero-harbour.dtstyle", "bytes": 4211, "exported": true}` — wraps `dt.styles.export(style, dir)`; used by the schema-pinning probe and by `style.extract --export` |
 | `style.import_file` | `{"path": "/abs/x.dtstyle", "name": "hero-harbour", "overwrite": false}` | `{"name": "...", "imported": true, "replaced": false, "styles_before": 3, "styles_after": 4}` — wraps `dt.styles.import(path)`; when a style of that name exists and `overwrite` is false it errors before importing; with `overwrite` it deletes the old one (`dt.styles.delete`) first and says so in `replaced` |
 | `image.rate` | `{"image_ids": [12, 13], "rating": 2}` | `{"rating": 2, "rated": 2, "missed": [], "per_image": [{"image_id": 12, "rating_before": 0, "rating_after": 2}]}` |
+| `style.delete` | `{"name": "scouter-throwaway", "prefix": "scouter-", "confirm": true}` | `{"name": "...", "deleted": true, "existed": true}` — wraps `dt.styles.delete(style)`; added in task 7 fix round 2 for test/probe cleanup (`tests/test_host_phase2.py`). Deletes real user data with no undo, so it is gated TWICE before the `dt.styles` scan even runs: `name` must start with `prefix` (default `"scouter-"`, so a typo'd or malicious `name` cannot reach an arbitrary style someone actually uses) AND `confirm=true` is required (no default lets a bare `{name=...}` call delete anything). Tolerant of "already gone" (`existed: false`, not an error) once past both gates. |
 
 `image.rate` exists rather than reusing w1ne's `rate_photos {photo_ids, rating} -> {updated}` because `rate_photos` returns only a count and **silently skips ids darktable does not know** — for a 300-frame cull that is exactly the missing-frame case that must be visible. `rate_photos` is left untouched for its existing MCP tool.
 
@@ -668,6 +669,7 @@ Added to `DEFAULT_TIMEOUTS` in `darktable_mcp/bridge/client.py`:
 "style.export_file": 30.0,
 "style.import_file": 60.0,
 "image.rate": 60.0,     # 50 ids per call, each a library write
+"style.delete": 15.0,   # task 7 fix round 2: test/probe cleanup only
 ```
 
 and one **raise**: `"style.apply": 60.0 → 300.0`, because `style.apply_set` now hands it 25 ids per call and each is a history write inside the worker loop. The cross-language invariant holds: the Lua plugin's `STALE_AGE_SECONDS` is 300, equal to the largest budget, so `tests/test_lua_dispatcher.py`'s assertion that it stays **≥** the largest budget still passes; if that test asserts strict `>`, `STALE_AGE_SECONDS` rises to 600 in the same task (task 8 checks and records which).

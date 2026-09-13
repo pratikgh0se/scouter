@@ -5,7 +5,13 @@ from pathlib import Path
 from scouter.core import dtbridge, export, style
 from scouter.core.style import UnsupportedMode
 from scouter.errors import NotInDarkroom, StylePartial
-from tests.scouter_fakes import FAKE_CLI_WRITES_PPM, FakeBridge, TempCache, fake_cli_script
+from tests.scouter_fakes import (
+    FAKE_CLI_WRITES_PPM,
+    FakeBridge,
+    TempCache,
+    fake_cli_script,
+    write_minimal_style_sidecar,
+)
 
 
 class StyleTest(unittest.TestCase):
@@ -14,6 +20,13 @@ class StyleTest(unittest.TestCase):
         self.root = self.cache.start()
         self.raw = self.root / "hero.ORF"
         self.raw.write_bytes(b"raw")
+        # Fix round 2, blocker 1: `no_filter=True` now ALSO reads the sidecar
+        # (to enforce cfg.style.never_include against the whole active
+        # history, not just a caller-requested `modules` list); these tests
+        # exercise phase 1's native `style.create_from_current` path
+        # specifically, which only runs when nothing is forbidden, so the
+        # shared sidecar (one plain `exposure` entry) keeps that true.
+        write_minimal_style_sidecar(self.raw)
         self.bridge = FakeBridge(
             {
                 "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},

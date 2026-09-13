@@ -244,8 +244,10 @@ TOOL_SPECS: list[dict] = [
         "name": "style_extract",
         "description": "Save the image's history as a darktable style, filtered to `modules` "
         "by writing a .dtstyle from the XMP (no darkroom needed). "
-        "`no_filter=true` takes the whole history instead (requires the "
-        "darkroom to show this image). Requires confirm=true when a style "
+        "`no_filter=true` ignores `modules` and keeps every active operation "
+        "instead (native darkroom path when nothing is forbidden; still "
+        "excludes cfg.style.never_include -- crop, retouch, spot white "
+        "balance, ... -- either way). Requires confirm=true when a style "
         "of that name already exists.",
         "inputSchema": _schema(
             {
@@ -270,8 +272,8 @@ TOOL_SPECS: list[dict] = [
                 "no_filter": {
                     "type": "boolean",
                     "default": False,
-                    "description": "skip the .dtstyle filter and take the whole history "
-                    "(phase 1's path; requires the darkroom to show this image)",
+                    "description": "ignore `modules` and keep every active operation "
+                    "(never_include is still excluded either way)",
                 },
             },
             ["image", "name", "modules"],

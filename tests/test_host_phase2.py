@@ -255,7 +255,7 @@ class PinDtstyleFormatTest(unittest.TestCase):
             # in the user's real darktable library, success or failure.
             for name in (style_name, filtered_name):
                 try:
-                    dtbridge.call("style.delete", {"name": name})
+                    dtbridge.call("style.delete", {"name": name, "confirm": True})
                 except Exception as e:
                     print(f"WARNING: cleanup could not delete style {name!r}: {e}")
 
@@ -323,21 +323,40 @@ class PinDtstyleFormatTest(unittest.TestCase):
         from scouter.core import dtbridge
         from scouter.core import dtstyle as dtstyle_module
 
+        # Fix round 2, item 3: a MULTI-plugin request, not just one module --
+        # this is what actually exercises the dense 0..N-1 renumbering
+        # (scouter/core/dtstyle.py's build()) across more than a single
+        # <plugin>, in XMP history order, round-tripped through the real
+        # dt.styles.import.
+        requested_modules = ["exposure", "temperature", "colorin"]
         filtered = registry.call(
             "style.extract",
             "cli",
             image=raw,
             name=filtered_name,
-            modules=["exposure"],
-            description="phase 2 filtered probe",
+            modules=requested_modules,
+            description="phase 2 filtered probe (multi-plugin renumbering)",
         )
         self.assertTrue(filtered.ok, filtered.to_dict())
         self.assertTrue(filtered.data["modules_honoured"])
-        self.assertEqual(filtered.data["operations_included"], ["exposure"])
+        self.assertEqual(sorted(filtered.data["operations_included"]), sorted(requested_modules))
         dtstyle_path = filtered.data["dtstyle_path"]
         self.assertTrue(dtstyle_path and Path(dtstyle_path).is_file())
         written_ops = dtstyle_module.read_operations(dtstyle_path)
-        self.assertEqual(written_ops, ["exposure"])
+        self.assertEqual(sorted(written_ops), sorted(requested_modules))
+        self.assertGreater(len(written_ops), 1, "this is the multi-plugin case, not a single one")
+
+        # Dense 0..N-1 renumbering, in XMP history order (fix round 2, item
+        # 3's wording correction): <num> must be exactly 0..N-1 with no gaps,
+        # regardless of what `num` those entries carried in the source XMP.
+        written_root = ET.fromstring(Path(dtstyle_path).read_text(encoding="utf-8"))
+        nums = [p.findtext("num") for p in written_root.find("style").findall("plugin")]
+        self.assertEqual(
+            nums,
+            [str(i) for i in range(len(nums))],
+            f"<num> must be dense 0..{len(nums) - 1}, got {nums}",
+        )
+        print(f"\nRENUMBERING CHECK: {len(nums)} plugins, <num> sequence = {nums} (dense 0..N-1)")
 
         # The real proof: darktable's own dt.styles now lists a style under
         # this name -- style.import_file (dt.styles.import) accepted our

@@ -61,12 +61,16 @@ class RefusingBridge:
 
 class ConfirmGateTest(unittest.TestCase):
     def setUp(self) -> None:
-        from tests.scouter_fakes import TempCache
+        from tests.scouter_fakes import TempCache, write_minimal_style_sidecar
 
         self.cache = TempCache()
         root = self.cache.start()
         self.raw = str(root / "hero.ORF")
         (root / "hero.ORF").write_bytes(b"raw")
+        # Fix round 2, blocker 1: style.extract(no_filter=True) reads the
+        # sidecar too now (never_include applies to the whole active
+        # history, not just a requested `modules` list).
+        write_minimal_style_sidecar(self.raw)
         # Never /tmp: the gate test writes nothing, but the PATH it plans must
         # still live under the throwaway cache so a regression cannot leave a
         # directory behind in a shared place.

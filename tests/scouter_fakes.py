@@ -154,6 +154,51 @@ FAKE_CLI_WRITES_NOTHING = "exit 0\n"
 FAKE_CLI_DB_LOCKED = 'echo "ERROR: database is locked, probably another instance" >&2\nexit 1\n'
 
 
+#: A minimal, real, parseable sidecar -- one active `exposure` entry, nothing
+#: from `cfg.style.never_include`'s default list (crop, clipping, retouch,
+#: spots, flip, rotatepixels, censorize, watermark, ashift). Fix round 2,
+#: blocker 1: `style.extract(no_filter=True)` now reads the sidecar too (to
+#: enforce `never_include` against the whole active history, not just a
+#: caller-requested `modules` list), so every fake raw file that exercises
+#: it needs a real one; this is the shared, deliberately forbidden-free one
+#: for tests that want phase 1's native `style.create_from_current` path
+#: (which only runs when nothing is forbidden) to actually run.
+MINIMAL_STYLE_SIDECAR = """<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="XMP Core 4.4.0-Exiv2">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:darktable="http://darktable.sf.net/"
+   darktable:history_end="1"
+   darktable:iop_order_version="4"
+   darktable:xmp_version="5">
+   <darktable:history>
+    <rdf:Seq>
+     <rdf:li
+      darktable:num="0"
+      darktable:operation="exposure"
+      darktable:enabled="1"
+      darktable:modversion="7"
+      darktable:params="00000000000080b93333333f00004842000080c00100000001000000"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
+    </rdf:Seq>
+   </darktable:history>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+"""
+
+
+def write_minimal_style_sidecar(raw_path: Path | str) -> Path:
+    """Write `MINIMAL_STYLE_SIDECAR` next to `raw_path`. Returns the sidecar path."""
+    sidecar = Path(str(raw_path) + ".xmp")
+    sidecar.write_text(MINIMAL_STYLE_SIDECAR, encoding="utf-8")
+    return sidecar
+
+
 class FakeCli:
     """Stub of CLIWrapper.export: returns a fixture PPM path without shelling out.
 

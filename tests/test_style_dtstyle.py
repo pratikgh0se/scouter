@@ -88,9 +88,11 @@ class BuildTest(unittest.TestCase):
         root = ET.fromstring(text)
         plugins = root.find("style").findall("plugin")
         self.assertEqual(len(plugins), 1)
-        # <num> is renumbered 0..N-1 in pipeline order (fix round 1,
-        # should-fix 6), never the source XMP's own (gappy) `num` -- the
-        # surviving entry is num-8-in-the-XMP but num-0-in-the-style.
+        # <num> is renumbered densely, 0..N-1, in XMP HISTORY order (fix
+        # round 1, should-fix 6; wording corrected fix round 2, item 3 --
+        # this writer has no access to darktable's true internal pipeline
+        # order), never the source XMP's own (gappy) `num` -- the surviving
+        # entry is num-8-in-the-XMP but num-0-in-the-style.
         self.assertEqual(plugins[0].findtext("num"), "0")
         self.assertEqual(plugins[0].findtext("operation"), "exposure")
 
@@ -220,8 +222,9 @@ class ExtractFilteredTest(unittest.TestCase):
         self.assertNotIn("style.create_from_current", self.bridge.methods_called())
         written = dtstyle.read_operations(result.dtstyle_path)
         self.assertEqual(sorted(written), ["exposure", "sigmoid"])
-        # <num> renumbered 0..N-1 in pipeline order (should-fix 6), and in
-        # multiple-module output the sequence spans every written <plugin>.
+        # <num> renumbered densely, 0..N-1, in XMP HISTORY order (should-fix
+        # 6), and in multiple-module output the sequence spans every
+        # written <plugin>.
         written_root = ET.fromstring(Path(result.dtstyle_path).read_text())
         nums = [p.findtext("num") for p in written_root.find("style").findall("plugin")]
         self.assertEqual(nums, [str(i) for i in range(len(nums))])
@@ -261,6 +264,31 @@ class ExtractFilteredTest(unittest.TestCase):
                 image=str(self.raw), name="hero", modules=["exposure", "crop"], dry_run=True
             )
 
+    def test_no_filter_drops_never_include_from_whole_history(self) -> None:
+        """Fix round 2, blocker 1: `no_filter=True` no longer bypasses
+        `cfg.style.never_include` -- the reference XMP's active history
+        includes `flip` (in the default never_include list), which must be
+        DROPPED from the resulting whole-history style, not refused (crop
+        and flip are near-universal, so refusing whole-history extraction
+        over them would make `no_filter` useless) and not silently kept."""
+        result = style.extract(image=str(self.raw), name="hero", modules=[], no_filter=True)
+        self.assertEqual(result.outcome, "ok")
+        self.assertTrue(result.modules_honoured)
+        self.assertNotIn("flip", result.operations_included)
+        self.assertTrue(any("flip" in w and "never_include" in w for w in result.warnings))
+        written = dtstyle.read_operations(result.dtstyle_path)
+        self.assertNotIn("flip", written)
+        self.assertIn("exposure", written)
+
+    def test_no_filter_refusal_message_does_not_recommend_itself(self) -> None:
+        """Fix round 2, blocker 1: since no_filter also drops (never bypasses)
+        never_include, the filtered path's refusal must not suggest it as an
+        escape hatch -- that would be wrong advice."""
+        with self.assertRaises(UsageError) as ctx:
+            style.extract(image=str(self.raw), name="hero", modules=["exposure", "crop"])
+        self.assertNotIn("no-filter", str(ctx.exception))
+        self.assertNotIn("no_filter", str(ctx.exception))
+
     def test_all_modules_missing_refused(self) -> None:
         with self.assertRaises(UsageError) as ctx:
             style.extract(image=str(self.raw), name="hero", modules=["not-a-real-module"])
@@ -289,6 +317,61 @@ class ExtractFilteredTest(unittest.TestCase):
         self.assertTrue(any("disabled" in w for w in result.warnings))
         written = dtstyle.read_operations(result.dtstyle_path)
         self.assertIn("exposure", written, "still written -- the request is honoured literally")
+
+    def test_disabled_is_reported_per_instance_not_collapsed(self) -> None:
+        """Fix round 2, item 4: `active_by_key` is keyed on `(operation,
+        multi_priority)`, so two instances of the same module never collide
+        -- one instance disabled must not hide, or be hidden by, the other
+        instance's own state."""
+        sidecar_path = self.raw.with_suffix(self.raw.suffix + ".xmp")
+        multi_instance_xmp = """<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="XMP Core 4.4.0-Exiv2">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:darktable="http://darktable.sf.net/"
+   darktable:history_end="2"
+   darktable:iop_order_version="4"
+   darktable:xmp_version="5">
+   <darktable:history>
+    <rdf:Seq>
+     <rdf:li
+      darktable:num="0"
+      darktable:operation="exposure"
+      darktable:enabled="1"
+      darktable:modversion="7"
+      darktable:params="00000000000080b93333333f00004842000080c00100000001000000"
+      darktable:multi_name=""
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="0"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
+     <rdf:li
+      darktable:num="1"
+      darktable:operation="exposure"
+      darktable:enabled="0"
+      darktable:modversion="7"
+      darktable:params="00000000000080b99899993f00004842000080c00100000001000000"
+      darktable:multi_name="second"
+      darktable:multi_name_hand_edited="0"
+      darktable:multi_priority="1"
+      darktable:blendop_version="14"
+      darktable:blendop_params="gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="/>
+    </rdf:Seq>
+   </darktable:history>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+"""
+        sidecar_path.write_text(multi_instance_xmp, encoding="utf-8")
+
+        result = style.extract(image=str(self.raw), name="hero", modules=["exposure"])
+        self.assertEqual(
+            result.modules_disabled,
+            ["exposure#1"],
+            "only instance 1 is disabled; instance 0 must not be flagged too",
+        )
+        written = dtstyle.read_operations(result.dtstyle_path)
+        self.assertEqual(written.count("exposure"), 2, "both instances are still written")
 
     def test_missing_sidecar_is_a_typed_refusal(self) -> None:
         """Fix round 1, blocker 2: FileNotFoundError -> NoSidecar, never a
@@ -332,6 +415,30 @@ class ExtractFilteredTest(unittest.TestCase):
             style.extract(image=str(self.raw), name="hero", modules=["exposure"])
         path = Path(ctx.exception.detail["path"])
         self.assertTrue(path.is_file(), "the .dtstyle must stay on disk for inspection")
+
+    def test_created_false_after_list_styles_is_a_typed_failure(self) -> None:
+        """Fix round 2, blocker 2: `style.import_file` returning without
+        raising only proves darktable did not RAISE, not that it actually
+        created the style -- if a fresh `list_styles` round trip still does
+        not show the name, that is a typed `StyleWriteFailed`, never a
+        silent `outcome="ok"` with `created=False`."""
+
+        def _phantom_import(p: dict) -> dict:
+            # Reports success but never actually registers the name --
+            # the exact "silent no-op" this check exists to catch.
+            return {
+                "name": p["name"],
+                "imported": True,
+                "replaced": False,
+                "styles_before": 0,
+                "styles_after": 0,
+            }
+
+        self.bridge.responses["style.import_file"] = _phantom_import
+        with self.assertRaises(StyleWriteFailed) as ctx:
+            style.extract(image=str(self.raw), name="hero", modules=["exposure"])
+        self.assertIn("was not created", str(ctx.exception))
+        self.assertIn("hero", str(ctx.exception.detail))
 
 
 if __name__ == "__main__":

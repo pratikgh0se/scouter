@@ -4,7 +4,12 @@ import unittest
 from darktable_mcp.bridge.client import BridgeError, BridgeTimeoutError
 from scouter.core import dtbridge
 from scouter.errors import BridgeTimeout, DbLocked, NotInDarkroom, WrongView
-from tests.scouter_fakes import FAKE_CLI_WRITES_PPM, FakeBridge, fake_cli_script
+from tests.scouter_fakes import (
+    FAKE_CLI_WRITES_PPM,
+    FakeBridge,
+    fake_cli_script,
+    write_minimal_style_sidecar,
+)
 
 
 class ClassificationTest(unittest.TestCase):
@@ -146,6 +151,10 @@ class ReadsNeverOpenTheDarkroomTest(unittest.TestCase):
         self.root = self.cache.start()
         self.raw = self.root / "P6281348.ORF"
         self.raw.write_bytes(b"raw")
+        # Fix round 2, blocker 1: style.extract(no_filter=True) reads the
+        # sidecar too now (never_include applies to the whole active
+        # history, not just a requested `modules` list).
+        write_minimal_style_sidecar(self.raw)
         self.bridge = FakeBridge(
             {
                 "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},

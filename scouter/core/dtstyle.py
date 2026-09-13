@@ -95,10 +95,16 @@ def build(parsed: ParsedXmp, name: str, description: str, operations: list[str])
     ET.SubElement(info, "iop_list").text = ""
 
     style_el = ET.SubElement(root, "style")
-    # Fix round 1, should-fix 6: the pinned fixture numbers <num> 0..N-1 in
-    # pipeline order (a whole-history export never skips a slot); a filtered
-    # style with holes in the original XMP `num` sequence must renumber the
-    # same way, not carry the source history's own gappy numbering.
+    # Fix round 1, should-fix 6 (wording corrected fix round 2, item 3): the
+    # pinned fixture numbers <num> densely, 0..N-1, in XMP HISTORY order (a
+    # whole-history export never skips a slot, so its XMP-order and true
+    # pipeline order happen to coincide -- but `entries` here is already
+    # `active_entries`, sorted by the XMP's own `num`, not darktable's
+    # internal pipeline order, which this writer never has access to). A
+    # filtered style with holes in the original XMP `num` sequence must
+    # still renumber densely from 0, not carry the source history's own
+    # gappy numbering -- host-verified (fix round 2, item 3) that darktable
+    # accepts this densely-renumbered, XMP-ordered sequence for import.
     for idx, entry in enumerate(entries):
         plugin = ET.SubElement(style_el, "plugin")
         ET.SubElement(plugin, "num").text = str(idx)

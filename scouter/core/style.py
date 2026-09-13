@@ -113,6 +113,12 @@ def _read_filtered_sidecar(path: str) -> xmp_module.ParsedXmp:
     return parsed
 
 
+#: Fix round 2, item 7: this is a best-effort, background check -- a dead
+#: bridge must not stall the extract for the default 15s fallback timeout
+#: (`DEFAULT_TIMEOUTS` has no entry for `darkroom.current`).
+_STALENESS_CHECK_TIMEOUT_S = 2.0
+
+
 def _sidecar_may_predate_darkroom(image_id: int) -> str | None:
     """A cheap, read-only warning (fix round 1, should-fix 7): darktable only
     writes the sidecar when the darkroom is LEFT (design finding, history.py's
@@ -121,14 +127,17 @@ def _sidecar_may_predate_darkroom(image_id: int) -> str | None:
     sidecar this call is about to read may predate that live state.
 
     Mirrors `_require_darkroom_shows`'s query (`darkroom.current`, no side
-    effects) rather than a fixed sleep or a full commit: darktable does not
-    need to be running at all for the filtered path (that is the whole point
-    of not calling `dtbridge.require_darkroom()` here), so an unreachable
-    bridge is a normal state, not a reason to fail the extract -- it just
-    means there is nothing to compare against, and no warning is added.
+    effects) rather than a fixed sleep or a full commit. The filtered path
+    never needs the DARKROOM (no `dtbridge.require_darkroom()`, no
+    `_require_darkroom_shows`) -- but it does need darktable/the bridge
+    running for `_existing_styles` and `style.import_file` (fix round 2, item
+    7: an earlier draft of this docstring overclaimed "darktable does not
+    need to be running at all", which is only true of THIS ONE optional
+    check). A short, explicit timeout keeps an unreachable bridge from
+    stalling this best-effort check for the 15s default.
     """
     try:
-        current = dtbridge.call("darkroom.current", {})
+        current = dtbridge.call("darkroom.current", {}, timeout=_STALENESS_CHECK_TIMEOUT_S)
     except ScouterError:
         return None
     loaded = current.get("image_id")
@@ -141,6 +150,22 @@ def _sidecar_may_predate_darkroom(image_id: int) -> str | None:
     return None
 
 
+def _verify_created(name: str, *, dtstyle_path: str | None = None) -> bool:
+    """`created` must be genuinely true, or the caller never learns the write
+    silently failed (fix round 2, blocker 2): a fresh `list_styles` round
+    trip is the one source of truth here, never a bridge response field
+    alone (`style.import_file` returning without raising only proves darktable
+    did not RAISE, same lesson as fix round 1's should-fix 9 on the Lua side).
+    """
+    if name in _existing_styles():
+        return True
+    raise StyleWriteFailed(
+        f"style {name!r} was not created: a fresh list_styles round trip does "
+        "not show it, even though the write reported no error",
+        detail={"path": dtstyle_path} if dtstyle_path else {"name": name},
+    )
+
+
 def _extract_whole_history(
     resolved: ResolvedImage,
     name: str,
@@ -151,10 +176,14 @@ def _extract_whole_history(
 ) -> StyleResult:
     """Phase 1's path: the whole history, honestly labelled `modules_honoured=False`.
 
-    Used when the caller passes `no_filter=True`, or when `.dtstyle`
-    filtering itself is unavailable (task 7's host probe found it always is
-    on this darktable build -- see `dtstyle` module docstring -- so
-    `extra_warning` is only ever set by a future build that regresses that).
+    Used when `no_filter=True` AND nothing in the image's active history is
+    in `cfg.style.never_include` (so there is nothing to drop and the native
+    call is equivalent -- fix round 2, blocker 1: when something IS forbidden,
+    `extract` uses the `.dtstyle` writer instead, even under `no_filter`), or
+    when `.dtstyle` filtering itself is unavailable (task 7's host probe
+    found it always is on this darktable build -- see `dtstyle` module
+    docstring -- so `extra_warning` is only ever set by a future build that
+    regresses that).
 
     `style.create_from_current` (the Lua side) builds the style from
     whatever `loaded_darkroom_image()` reports -- the darkroom's OWN idea of
@@ -204,16 +233,26 @@ def extract(
     itself (`scouter.core.dtstyle`, pinned against a real darktable file --
     see that module's docstring), and imports it through the new bridge verb
     `style.import_file` -- so `modules_honoured` is genuinely `True`. This
-    path never touches the darkroom: no `dtbridge.require_darkroom()`, no
-    `_require_darkroom_shows` -- it reads a file, not the live GUI, so a
-    style can be extracted from the lighttable.
+    path never touches the DARKROOM (no `dtbridge.require_darkroom()`, no
+    `_require_darkroom_shows` -- so a style can be extracted from the
+    lighttable), but it does need darktable/the bridge running: `_existing_styles`
+    and `style.import_file` are both real round trips (fix round 2, item 7).
 
-    `no_filter=True` (the escape hatch named in `StyleWriteFailed.fix`) takes
-    phase 1's whole-history path instead (`style.create_from_current`),
-    which DOES require the darkroom and keeps `_require_darkroom_shows`: that
-    Lua call builds the style from whatever the darkroom currently shows, not
-    from `image`. The gate is unchanged either way: `confirm` is required
-    only when a style of that name already exists.
+    `no_filter=True` ignores the `modules` request (every active operation is
+    a candidate, not just the requested ones) rather than bypassing
+    `cfg.style.never_include` -- per-image geometry and repairs (crop,
+    retouch, spot white balance, ...) must never ride a style EITHER way
+    (fix round 2, blocker 1; an earlier round let `--no-filter` bypass this
+    entirely, which was wrong). When none of the image's active operations
+    are in `never_include`, this is phase 1's cheap native path
+    (`style.create_from_current`, which DOES need the darkroom showing
+    `image` -- that Lua call builds the style from whatever the darkroom
+    currently shows, not from `image` itself, hence `_require_darkroom_shows`).
+    When some ARE, they are DROPPED (never a refusal -- crop in particular is
+    close to universal, so refusing whole-history extraction over it would
+    make `no_filter` useless) via the same `.dtstyle` writer the filtered
+    path uses, and named in `forbidden`. The gate is unchanged either way:
+    `confirm` is required only when a style of that name already exists.
     """
     job = job or current_job()
     # Fix round 1, blocker 1: validated BEFORE any path join -- `name` becomes
@@ -225,33 +264,60 @@ def extract(
     existing = _existing_styles()
     replaces = name in existing
 
+    from scouter.config import load as _load_config
+
+    cfg = _load_config()
+    never_include = set(cfg.style.never_include)
+    never_include_sorted = sorted(never_include)
+
     # Fix round 1, should-fix 8: computed BEFORE the dry-run return, so a
     # dry run (or a real run) with a forbidden or entirely-missing module
     # refuses immediately instead of reporting a plan that hides the problem.
+    # Fix round 2, item 4: keyed on (operation, multi_priority), not just
+    # operation -- two instances of the same module (e.g. two `exposure`
+    # sliders) must never collide into one entry and silently lose the
+    # other's `enabled` state.
     forbidden: list[str] = []
-    never_include_sorted: list[str] = []
     modules_missing: list[str] = []
     modules_present: list[str] = []
     modules_disabled: list[str] = []
     parsed: xmp_module.ParsedXmp | None = None
+    active_by_key: dict[tuple[str, int], xmp_module.HistoryEntry] = {}
 
-    if not no_filter:
-        from scouter.config import load as _load_config
-
-        cfg = _load_config()
-        never_include = set(cfg.style.never_include)
-        never_include_sorted = sorted(never_include)
+    if no_filter:
+        # Fix round 2, blocker 1: `no_filter` drops `modules` as a RESTRICTION
+        # (every active operation is a candidate), never `never_include` --
+        # that check is unconditional, so the sidecar has to be read here too.
+        parsed = _read_filtered_sidecar(resolved.path)
+        active_by_key = {
+            (e.operation, e.multi_priority): e for e in xmp_module.active_entries(parsed)
+        }
+        active_ops = {op for op, _prio in active_by_key}
+        forbidden = sorted(active_ops & never_include)
+        modules_present = sorted(active_ops - never_include)
+    else:
         forbidden = sorted(m for m in modules if m in never_include)
-
         if not forbidden:
             parsed = _read_filtered_sidecar(resolved.path)
-            active_by_op = {entry.operation: entry for entry in xmp_module.active_entries(parsed)}
-            modules_present = [m for m in modules if m in active_by_op]
-            modules_missing = [m for m in modules if m not in active_by_op]
-            # Fix round 1, should-fix 5: still written (the request is
-            # honoured literally), but named so the caller is never left
-            # thinking a disabled module is live in the style.
-            modules_disabled = [m for m in modules_present if not active_by_op[m].enabled]
+            active_by_key = {
+                (e.operation, e.multi_priority): e for e in xmp_module.active_entries(parsed)
+            }
+            active_ops = {op for op, _prio in active_by_key}
+            modules_present = [m for m in modules if m in active_ops]
+            modules_missing = [m for m in modules if m not in active_ops]
+
+    if active_by_key:
+        # Fix round 1, should-fix 5: still written (the request is honoured
+        # literally), but named so the caller is never left thinking a
+        # disabled module -- or one disabled INSTANCE of it -- is live.
+        present_set = set(modules_present)
+        modules_disabled = sorted(
+            {
+                (op if prio == 0 else f"{op}#{prio}")
+                for (op, prio), entry in active_by_key.items()
+                if op in present_set and not entry.enabled
+            }
+        )
 
     plan = [
         {
@@ -266,14 +332,18 @@ def extract(
         }
     ]
 
-    if forbidden:
+    # Fix round 2, blocker 1: a forbidden module in the FILTERED path (the
+    # caller explicitly asked for it by name) is still a hard refusal -- only
+    # `no_filter` downgrades a forbidden module already present in the
+    # history to a drop, since it is never explicitly "requested" there.
+    if forbidden and not no_filter:
         raise UsageError(
             f"{forbidden} may never ride a style: per-image geometry and "
             "repairs (cfg.style.never_include) are excluded on purpose. Remove "
-            "them from --modules, or use --no-filter for the whole-history style",
+            "them from --modules and re-run",
             detail={"forbidden": forbidden, "never_include": never_include_sorted},
         )
-    if not no_filter and not modules_present:
+    if not modules_present:
         raise UsageError(
             "none of the requested modules are in the image's active history: "
             "an empty style is not a style",
@@ -296,10 +366,12 @@ def extract(
             ),
         )
 
-    if no_filter:
+    if no_filter and not forbidden:
+        # Nothing to drop: the cheap native path is equivalent and needs no
+        # .dtstyle round trip at all.
         return _extract_whole_history(resolved, name, modules, description, extra_warning=None)
 
-    assert parsed is not None  # guaranteed: not no_filter, not forbidden, modules_present non-empty
+    assert parsed is not None  # guaranteed: forbidden->raised above, modules_present non-empty
 
     sidecar_warning = _sidecar_may_predate_darkroom(resolved.image_id)
 
@@ -330,10 +402,10 @@ def extract(
             },
         )
 
-    # Fix round 1, should-fix 4: `created` is true only once a fresh
-    # `list_styles` round trip actually shows the name -- not just because
-    # `style.import_file` returned without raising.
-    created = name in _existing_styles()
+    # Fix round 1, should-fix 4 / fix round 2, blocker 2: `created` is true
+    # only once a fresh `list_styles` round trip actually shows the name --
+    # never a silent `ok` when it does not (`_verify_created` raises).
+    created = _verify_created(name, dtstyle_path=str(dtstyle_path))
 
     warnings: list[str] = []
     if modules_missing:
@@ -343,6 +415,8 @@ def extract(
             "modules included but their newest entry is disabled (still "
             f"written, honestly labelled): {modules_disabled}"
         )
+    if no_filter and forbidden:
+        warnings.append(f"never_include modules dropped from the whole-history style: {forbidden}")
     if sidecar_warning:
         warnings.append(sidecar_warning)
 
@@ -460,8 +534,8 @@ for verb in (
                 "no_filter",
                 "bool",
                 default=False,
-                help="skip the .dtstyle filter and take the whole history "
-                "(phase 1's path; requires the darkroom to show this image)",
+                help="ignore --modules and keep every active operation "
+                "(never_include is still excluded either way)",
             ),
         ),
         writes=True,
