@@ -135,6 +135,8 @@ class ErrorsTest(unittest.TestCase):
             "exif_unreadable",
             "style_write_failed",
             "encryption_unavailable",
+            "manifest_unauthenticated",
+            "export_all_failed",
         }
         codes = {cls.code for cls in errors.ERROR_CLASSES}
         self.assertEqual(codes, expected)

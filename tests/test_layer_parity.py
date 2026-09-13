@@ -28,7 +28,18 @@ EXPECTED_VERBS = {
     "style.extract",
     "style.apply",
     "export.run",
+    "export.release",
+    "export.verify",
     "metrics.summary",
+    "library.import",
+    "library.verify",
+    "library.register",
+    "library.jobs",
+    "library.relocate",
+    "cull.propose",
+    "cull.apply",
+    "backup.run",
+    "backup.verify",
 }
 
 

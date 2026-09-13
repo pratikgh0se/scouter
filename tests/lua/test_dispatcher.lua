@@ -304,6 +304,34 @@ do
   assertTrue(not ok_empty, "image.rate rejects an empty image_ids list")
 end
 
+-- ---- methods["image.color_labels"] ------------------------------------------
+do
+  images_by_id[101].green = true
+  images_by_id[103].red = true
+  images_by_id[103].purple = true
+
+  local result = internals.methods["image.color_labels"](
+    {image_ids = {"101", "102", "103", "999"}})
+  assertEq(#result.missing, 1, "image.color_labels missing count")
+  assertEq(result.missing[1], 999, "image.color_labels missing unknown id")
+  assertEq(#result.per_image, 3, "image.color_labels per_image count")
+
+  local by_id = {}
+  for _, entry in ipairs(result.per_image) do by_id[entry.image_id] = entry end
+  assertEq(#by_id[101].labels, 1, "image.color_labels 101 has one label")
+  assertEq(by_id[101].labels[1], "green", "image.color_labels 101 is green")
+  assertEq(#by_id[102].labels, 0, "image.color_labels 102 has no labels")
+  assertEq(#by_id[103].labels, 2, "image.color_labels 103 has two labels")
+
+  local ok_empty = pcall(internals.methods["image.color_labels"], {image_ids = {}})
+  assertTrue(not ok_empty, "image.color_labels rejects an empty image_ids list")
+
+  -- Cleanup so later tests are not affected by these stub fields.
+  images_by_id[101].green = nil
+  images_by_id[103].red = nil
+  images_by_id[103].purple = nil
+end
+
 -- ---- methods.import_batch --------------------------------------------------
 do
   -- Stub dt.database.import to record args and return a fake list.
@@ -1479,7 +1507,7 @@ do
     "darkroom.action", "darkroom.status", "module.enable", "module.disable",
     "module.reset", "history.commit", "snapshot.take", "style.create_from_current",
     "style.apply", "image.rate", "style.export_file", "style.import_file",
-    "style.delete",
+    "style.delete", "image.color_labels",
   }
   for _, name in ipairs(expected_scouter_methods) do
     assertTrue(type(plugin.methods[name]) == "function",

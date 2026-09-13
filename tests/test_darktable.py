@@ -280,6 +280,119 @@ class TestCLIWrapperSizeFlags:
         assert "--height" not in cmd
 
 
+class TestCLIWrapperExtraArgs:
+    """`extra_args` (Scouter's preset flags, task 10) split at "--conf" into
+    a pre-`--core` half and a `--core`-region half, exactly ONE `--core` on
+    the line, and the jpg/tif format aliases both reach the right default
+    conf key (fix round 1, blocker 1)."""
+
+    @patch("darktable_mcp.darktable.cli_wrapper.subprocess.run")
+    @patch("shutil.which", return_value="/usr/bin/darktable-cli")
+    def test_preset_extra_args_produce_exactly_one_core(self, _mock_which, mock_run, tmp_path):
+        mock_run.side_effect = fake_run()
+        wrapper = CLIWrapper(configdir=tmp_path / "cfg")
+        extra_args = ["--icc-type", "SRGB", "--conf", "plugins/imageio/format/jpeg/quality=90"]
+        wrapper.export_image(
+            Path("/in.NEF"),
+            tmp_path / "out.jpg",
+            "jpeg",
+            max_width=2048,
+            max_height=2048,
+            extra_args=extra_args,
+        )
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd.count("--core") == 1
+        core_i = cmd.index("--core")
+        assert cmd.index("--icc-type") < core_i
+        conf_indices = [i for i, tok in enumerate(cmd) if tok == "--conf"]
+        assert conf_indices, "no --conf reached the command line"
+        assert all(i > core_i for i in conf_indices)
+        # The preset's own quality (90) is the ONLY jpeg quality conf --
+        # never also the wrapper's own default (95).
+        confs = [cmd[i + 1] for i in conf_indices]
+        assert confs.count("plugins/imageio/format/jpeg/quality=90") == 1
+        assert not any(
+            c.startswith("plugins/imageio/format/jpeg/quality=")
+            and c != "plugins/imageio/format/jpeg/quality=90"
+            for c in confs
+        )
+
+    @patch("darktable_mcp.darktable.cli_wrapper.subprocess.run")
+    @patch("shutil.which", return_value="/usr/bin/darktable-cli")
+    def test_print_tiff_style_extra_args_produce_exactly_one_core(
+        self, _mock_which, mock_run, tmp_path
+    ):
+        mock_run.side_effect = fake_run()
+        wrapper = CLIWrapper(configdir=tmp_path / "cfg")
+        extra_args = [
+            "--icc-type",
+            "ADOBERGB",
+            "--conf",
+            "plugins/imageio/format/tiff/bpp=16",
+            "--conf",
+            "plugins/imageio/format/tiff/compress=5",
+        ]
+        wrapper.export_image(Path("/in.NEF"), tmp_path / "out.tif", "tiff", extra_args=extra_args)
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd.count("--core") == 1
+        core_i = cmd.index("--core")
+        assert cmd.index("--icc-type") < core_i
+        conf_indices = [i for i, tok in enumerate(cmd) if tok == "--conf"]
+        assert all(i > core_i for i in conf_indices)
+        confs = [cmd[i + 1] for i in conf_indices]
+        assert confs.count("plugins/imageio/format/tiff/bpp=16") == 1
+        assert not any(
+            c.startswith("plugins/imageio/format/tiff/bpp=")
+            and c != "plugins/imageio/format/tiff/bpp=16"
+            for c in confs
+        )
+
+    @patch("darktable_mcp.darktable.cli_wrapper.subprocess.run")
+    @patch("shutil.which", return_value="/usr/bin/darktable-cli")
+    def test_style_only_preset_keeps_its_default_format_conf(self, _mock_which, mock_run, tmp_path):
+        """`preview --style X`: extra_args carries no `--conf` of its own
+        (preview has neither quality nor bpp), so the wrapper's normal
+        per-format default (png bpp=8) must still apply -- "skip only the
+        key the preset already sets", never "skip every default whenever
+        extra_args is non-empty"."""
+        mock_run.side_effect = fake_run()
+        wrapper = CLIWrapper(configdir=tmp_path / "cfg")
+        wrapper.export_image(
+            Path("/in.NEF"), tmp_path / "out.png", "png", extra_args=["--style", "X"]
+        )
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd.count("--core") == 1
+        core_i = cmd.index("--core")
+        assert cmd.index("--style") < core_i
+        assert "--conf" in cmd
+        conf_i = cmd.index("--conf")
+        assert conf_i > core_i
+        assert cmd[conf_i + 1] == "plugins/imageio/format/png/bpp=8"
+
+    @patch("darktable_mcp.darktable.cli_wrapper.subprocess.run")
+    @patch("shutil.which", return_value="/usr/bin/darktable-cli")
+    def test_jpg_alias_gets_the_jpeg_quality_conf(self, _mock_which, mock_run, tmp_path):
+        mock_run.side_effect = fake_run()
+        wrapper = CLIWrapper(configdir=tmp_path / "cfg")
+        wrapper.export_image(Path("/in.NEF"), tmp_path / "out.jpg", "jpg", quality=77)
+
+        cmd = mock_run.call_args[0][0]
+        assert any("plugins/imageio/format/jpeg/quality=77" in part for part in cmd)
+
+    @patch("darktable_mcp.darktable.cli_wrapper.subprocess.run")
+    @patch("shutil.which", return_value="/usr/bin/darktable-cli")
+    def test_tif_alias_gets_the_tiff_bpp_conf(self, _mock_which, mock_run, tmp_path):
+        mock_run.side_effect = fake_run()
+        wrapper = CLIWrapper(configdir=tmp_path / "cfg")
+        wrapper.export_image(Path("/in.NEF"), tmp_path / "out.tif", "tif")
+
+        cmd = mock_run.call_args[0][0]
+        assert any("plugins/imageio/format/tiff/bpp=8" in part for part in cmd)
+
+
 class TestBatchExportContract:
     """batch_export returns structured results, not prose the caller must sniff."""
 

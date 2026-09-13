@@ -320,7 +320,7 @@ TOOL_SPECS: list[dict] = [
                 },
                 "preset": {
                     "type": "string",
-                    "enum": ["client-final", "preview"],
+                    "enum": ["preview", "client-proof", "client-final", "print-tiff"],
                     "description": "export preset",
                 },
                 "out_dir": {"type": "string", "description": "destination directory"},
@@ -332,6 +332,248 @@ TOOL_SPECS: list[dict] = [
                 },
             },
             ["images", "preset", "out_dir"],
+        ),
+    },
+    {
+        "name": "export_release",
+        "description": "Export a job's selected frames through a preset, with a checksum "
+        "manifest. Selection is --images if given, else every raw in "
+        "import.json whose rating >= min_rating (client-proof/preview) "
+        "or that carries the configured colour label "
+        "(client-final/print-tiff). Requires confirm=true to overwrite "
+        "an existing preset output.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {"type": "string", "description": "job slug to release"},
+                "preset": {
+                    "type": "string",
+                    "enum": ["preview", "client-proof", "client-final", "print-tiff"],
+                    "description": "export preset",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "disambiguate when the slug matches more than one job",
+                },
+                "min_rating": {
+                    "type": "integer",
+                    "description": "override export.min_rating for rating-based presets",
+                },
+                "images": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "description": "explicit image list, overriding the selection rule",
+                },
+                "style": {
+                    "type": "string",
+                    "description": "apply this style at render time only; nothing in the "
+                    "library changes",
+                },
+                "overwrite_style": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "pass --style-overwrite to darktable-cli (render-only)",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required to overwrite an existing preset output",
+                },
+            },
+            ["job_slug", "preset"],
+        ),
+    },
+    {
+        "name": "export_verify",
+        "description": "Re-hash a release manifest's outputs against it. The manifest's own "
+        ".sha256 sidecar is required, not optional -- a missing sidecar is "
+        "manifest_unauthenticated. Read-only.",
+        "inputSchema": _schema(
+            {
+                "manifest": {
+                    "type": "string",
+                    "description": "path to a manifest-<preset>-<ts>.json written by "
+                    "export.release",
+                },
+                "root": {
+                    "type": "string",
+                    "description": "directory files[].output resolves against; default is "
+                    "the manifest's own <job>/.scouter/ parent. Pass this to verify a "
+                    "manifest shipped beside its exports/ folder instead",
+                },
+            },
+            ["manifest"],
+        ),
+    },
+    {
+        "name": "library_import",
+        "description": "Copy, checksum, rename and register a memory card into the library. "
+        "Refuses with backup_not_configured before reading a single file "
+        "unless the backup gate passes (config.show reports its verdict). "
+        "Always requires confirm=true: an import is always more than one "
+        "file. Originals are copied read-only (chmod 0444) and verified "
+        "with two independent sha256 passes; a darktable that is not "
+        "running does not fail the import (film_roll_registered: false, "
+        "retry with library.register).",
+        "inputSchema": _schema(
+            {
+                "source": {"type": "string", "description": "the card's mount point"},
+                "job_slug": {
+                    "type": "string",
+                    "description": "job directory slug, e.g. harbour-wedding",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "YYYY-MM-DD; default: the earliest capture time",
+                },
+                "camera": {
+                    "type": "string",
+                    "description": "camera slug override; required for a mixed-camera card",
+                },
+                "extensions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "override import.extensions, e.g. ORF,ARW",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: an import always touches more than one file",
+                },
+            },
+            ["source", "job_slug"],
+        ),
+    },
+    {
+        "name": "library_verify",
+        "description": "Re-hash raw/ against the job's .scouter/checksums.sha256 manifest. "
+        "Read-only. `.xmp` sidecars are excluded by suffix, not by silence.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {"type": "string", "description": "job slug to verify"},
+                "date": {
+                    "type": "string",
+                    "description": "disambiguate when the slug matches more than one job",
+                },
+            },
+            ["job_slug"],
+        ),
+    },
+    {
+        "name": "library_register",
+        "description": "Re-register a job's film roll with darktable (e.g. after importing "
+        "with darktable closed). Requires confirm=true: it writes to "
+        "darktable's own library.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {"type": "string", "description": "job slug to register"},
+                "date": {
+                    "type": "string",
+                    "description": "disambiguate when the slug matches more than one job",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: writes to darktable's library",
+                },
+            },
+            ["job_slug"],
+        ),
+    },
+    {
+        "name": "library_jobs",
+        "description": "List every job under the library root: frame count, bytes, a "
+        "ratings histogram from the XMPs' xmp:Rating, and which .scouter "
+        "manifests exist. Read-only.",
+        "inputSchema": _schema({}, []),
+    },
+    {
+        "name": "library_relocate",
+        "description": "Move the library to a new root: rewrite library_root in the config "
+        "(every other key survives untouched) and re-verify every job's "
+        "checksums there. Requires confirm=true: it rewrites the config "
+        "file and its dry run reports which jobs already exist at the "
+        "new root. Never edits darktable's library.db -- darktable's film "
+        "rolls keep pointing at the old paths, so re-import "
+        "<new_root>/<job>/raw for each job afterwards (the result's "
+        "next_step says so).",
+        "inputSchema": _schema(
+            {
+                "new_root": {
+                    "type": "string",
+                    "description": "new library root (must already exist)",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: rewrites the config and writes outside the library",
+                },
+            },
+            ["new_root"],
+        ),
+    },
+    {
+        "name": "cull_propose",
+        "description": "Propose a rating for every frame in a job (or an explicit image "
+        "list), grouped into bursts by capture time and camera. Never "
+        "proposes rating 0 or reject -- stats cannot see eyes, "
+        "expression or a deliberate motion blur, so a flagged frame "
+        "gets rating 1 with its numbers and the human decides. Every "
+        "reason names the numbers behind it. Read-only: writes no "
+        "rating and calls the bridge only for the read-only "
+        "image.lookup behind image resolution.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {
+                    "type": "string",
+                    "description": "job slug; frames come from its import.json",
+                },
+                "images": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "description": "explicit image list, instead of (or alongside) " "--job-slug",
+                },
+                "px": {
+                    "type": "integer",
+                    "description": "stats render size (default: stats.set_px)",
+                },
+                "workers": {
+                    "type": "integer",
+                    "description": "thread pool size (default: stats.workers)",
+                },
+            },
+            [],
+        ),
+    },
+    {
+        "name": "cull_apply",
+        "description": "Apply a cull.propose proposal's ratings via the image.rate bridge "
+        "verb, in batches of 50, verified by polling each changed "
+        "frame's XMP sidecar. Refuses (usage) if any frame's sidecar "
+        "changed since the proposal was written. Requires confirm=true: "
+        "a cull touches many images.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {
+                    "type": "string",
+                    "description": "job slug; loads the newest cull-*.json unless "
+                    "proposal is given",
+                },
+                "proposal": {
+                    "type": "string",
+                    "description": "path to a specific cull-<ts>.json",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: writes ratings via image.rate",
+                },
+            },
+            [],
         ),
     },
     {
@@ -360,6 +602,47 @@ TOOL_SPECS: list[dict] = [
         "work right now?' without attempting one.",
         "inputSchema": _schema(
             {"path": {"type": "string", "description": "override the config path"}}, []
+        ),
+    },
+    {
+        "name": "backup_run",
+        "description": "Tar the small-and-precious set (XMPs, .scouter/, config, "
+        "metrics.db, events.jsonl), hash and encrypt it (age if configured, "
+        "else openssl enc), rsync the raws, write a manifest, and prune old "
+        "archives beyond keep_archives (never the newest two). Refuses when "
+        "the backup gate is not satisfied. Requires confirm=true: it writes "
+        "outside the library and deletes old archives.",
+        "inputSchema": _schema(
+            {
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: writes outside the library and prunes old archives",
+                },
+            },
+            [],
+        ),
+    },
+    {
+        "name": "backup_verify",
+        "description": "Decrypt the newest archive (or --archive TS) to a temp "
+        "directory, compare the ciphertext and plaintext sha256 against the "
+        "manifest, re-hash a sample of members and of the rsynced raws. "
+        "Read-only; writes nothing outside its own temp directory.",
+        "inputSchema": _schema(
+            {
+                "archive": {
+                    "type": "string",
+                    "description": "archive timestamp to verify (default: newest)",
+                },
+                "sample": {
+                    "type": "integer",
+                    "default": 10,
+                    "description": "how many members/raws to re-hash",
+                },
+            },
+            [],
         ),
     },
     {

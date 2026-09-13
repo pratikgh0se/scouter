@@ -508,6 +508,36 @@ methods["image.rate"] = function(p)
   return {rating = rating, rated = rated, missed = missed, per_image = per_image}
 end
 
+-- Read-only colour-label lookup for a list of image ids (task 10 fix round
+-- 0, controller ruling R12): `export.release`'s finals selection needs to
+-- know which raws carry a colour label. darktable's Lua image object
+-- exposes that as five boolean fields (red/yellow/green/blue/purple)
+-- directly on the same object `image.lookup`/`image.rate` already index via
+-- `dt.database[id]` -- no view switch, no import, no write. Honest misses:
+-- an id `dt.database[id]` does not know about lands in `missing`, exactly
+-- like `image.rate`'s `missed`.
+local COLOR_LABELS = {"red", "yellow", "green", "blue", "purple"}
+methods["image.color_labels"] = function(p)
+  p = p or {}
+  local ids = p.image_ids or {}
+  if #ids == 0 then error("image.color_labels: image_ids required and non-empty") end
+  local missing, per_image = {}, {}
+  for _, id in ipairs(ids) do
+    local numeric_id = tonumber(id)
+    local image = dt.database[numeric_id]
+    if not image then
+      table.insert(missing, numeric_id)
+    else
+      local labels = {}
+      for _, color in ipairs(COLOR_LABELS) do
+        if image[color] then table.insert(labels, color) end
+      end
+      table.insert(per_image, {image_id = numeric_id, labels = labels})
+    end
+  end
+  return {missing = missing, per_image = per_image}
+end
+
 -- Count images that landed anywhere under `source_path`.
 --
 -- Matching is by PREFIX, not equality. Each imported directory becomes its
