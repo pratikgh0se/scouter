@@ -8,6 +8,7 @@ The metrics write is best effort: it can never fail the verb.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import functools
 import hashlib
@@ -58,6 +59,11 @@ def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, default=str, separators=(",", ":"))
 
 
+def _utc_now_z() -> str:
+    """UTC timestamp with microseconds and a `Z` suffix, per spec 11.1's example."""
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
 def args_digest(args: dict) -> str:
     payload = canonical_json({k: v for k, v in args.items() if k != "job"})
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
@@ -81,12 +87,19 @@ def emit(event: dict) -> None:
     except OSError as e:
         print(f"scouter: metrics jsonl write failed: {e}", file=sys.stderr)
     try:
-        with _connect() as conn:
-            conn.execute(
-                "INSERT INTO events (" + ",".join(EVENT_KEYS) + ") VALUES ("
-                + ",".join("?" * len(EVENT_KEYS)) + ")",
-                tuple(event[k] for k in EVENT_KEYS),
-            )
+        # `images` is a real JSON array in `event` (so events.jsonl matches
+        # spec 11.1's `"images":[12]`); the sqlite column is TEXT, so encode
+        # it to canonical JSON only for the row, not the in-memory event.
+        row = tuple(
+            canonical_json(event[k]) if k == "images" else event[k] for k in EVENT_KEYS
+        )
+        with contextlib.closing(_connect()) as conn:
+            with conn:
+                conn.execute(
+                    "INSERT INTO events (" + ",".join(EVENT_KEYS) + ") VALUES ("
+                    + ",".join("?" * len(EVENT_KEYS)) + ")",
+                    row,
+                )
     except (sqlite3.Error, OSError, KeyError) as e:
         print(f"scouter: metrics db write failed: {e}", file=sys.stderr)
 
@@ -142,12 +155,12 @@ def instrumented(verb_id: str) -> Callable[[F], F]:
                 bytes_out = len(canonical_json(payload or error or {}))
                 bytes_in = len(canonical_json(bound))
                 event = {
-                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "ts": _utc_now_z(),
                     "job": job,
                     "verb": verb_id,
                     "layer": LAYER.get(),
                     "args_digest": args_digest(bound),
-                    "images": canonical_json(images),
+                    "images": images,
                     "ms": ms,
                     "outcome": outcome,
                     "bytes_in": bytes_in,
@@ -170,7 +183,9 @@ def _since_to_ts(since: str) -> str:
     if factor is None:
         raise ValueError(f"--since must end in d/h/m, got {since!r}")
     delta = timedelta(**{factor: int(since[:-1])})
-    return (datetime.now(timezone.utc) - delta).isoformat()
+    return (datetime.now(timezone.utc) - delta).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z"
+    )
 
 
 def _percentile(values: list[int], q: float) -> int:
@@ -199,11 +214,12 @@ def summary(*, since: str = "7d", job: str | None = None) -> SummaryResult:
     from_ts = _since_to_ts(since)
     rows: dict[str, _VerbRow] = {}
     try:
-        with _connect() as conn:
-            cursor = conn.execute(
-                "SELECT verb, outcome, ms, est_tokens FROM events WHERE ts >= ?", (from_ts,)
-            )
-            records = cursor.fetchall()
+        with contextlib.closing(_connect()) as conn:
+            with conn:
+                cursor = conn.execute(
+                    "SELECT verb, outcome, ms, est_tokens FROM events WHERE ts >= ?", (from_ts,)
+                )
+                records = cursor.fetchall()
     except (sqlite3.Error, OSError):
         records = []
 

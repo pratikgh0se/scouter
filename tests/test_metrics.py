@@ -1,4 +1,3 @@
-import json
 import unittest
 from unittest import mock
 
@@ -30,7 +29,7 @@ class EmitTest(unittest.TestCase):
         self.assertEqual(event["verb"], "test.verb")
         self.assertEqual(event["layer"], "core")
         self.assertEqual(event["outcome"], "ok")
-        self.assertEqual(json.loads(event["images"]), [12])
+        self.assertEqual(event["images"], [12])
         self.assertTrue(event["args_digest"].startswith("sha256:"))
         self.assertEqual(event["est_tokens"], -(-event["bytes_out"] // 4))
         self.assertEqual(len(self.cache.db_rows()), 1)
@@ -70,6 +69,52 @@ class EmitTest(unittest.TestCase):
         finally:
             metrics.LAYER.reset(token)
         self.assertEqual(self.cache.events()[0]["layer"], "mcp")
+
+    def test_emit_200_times_closes_every_sqlite_connection(self) -> None:
+        """emit()/summary() must not leak sqlite connections (fix round 1)."""
+        from scouter.types import Payload
+
+        class _CountingConn:
+            """Wraps a real sqlite3.Connection and records whether it was closed."""
+
+            def __init__(self, conn) -> None:
+                self._conn = conn
+                self.closed = False
+
+            def __getattr__(self, name: str):
+                return getattr(self._conn, name)
+
+            def __enter__(self):
+                self._conn.__enter__()
+                return self
+
+            def __exit__(self, *exc_info):
+                return self._conn.__exit__(*exc_info)
+
+            def close(self) -> None:
+                self.closed = True
+                self._conn.close()
+
+        opened: list[_CountingConn] = []
+        real_connect = metrics.sqlite3.connect
+
+        def tracking_connect(*args, **kwargs):
+            wrapped = _CountingConn(real_connect(*args, **kwargs))
+            opened.append(wrapped)
+            return wrapped
+
+        @metrics.instrumented("test.manyconns")
+        def verb(*, job: str | None = None) -> Payload:
+            return Payload()
+
+        with mock.patch.object(metrics.sqlite3, "connect", side_effect=tracking_connect):
+            for _ in range(200):
+                verb()
+            metrics.summary(since="1d")
+
+        self.assertGreaterEqual(len(opened), 200)
+        for conn in opened:
+            self.assertTrue(conn.closed, "a sqlite connection was left open")
 
     def test_metrics_write_failure_does_not_fail_the_verb(self) -> None:
         from scouter.types import Payload
@@ -146,8 +191,11 @@ class RegistryCoverageTest(unittest.TestCase):
                 with install_doubles(verb_id) as args:
                     try:
                         registry.call(verb_id, "core", **{**SMOKE_ARGS[verb_id], **args})
-                    except Exception as e:  # a failure still has to emit
-                        self.assertIsNotNone(e)
+                    except Exception:
+                        # A verb can legitimately fail here (e.g. a fake bridge
+                        # raising) — the point of this test is the event count
+                        # below, not the call's success.
+                        pass
                 after = self.cache.events()
                 self.assertEqual(
                     len(after) - before, 1,
