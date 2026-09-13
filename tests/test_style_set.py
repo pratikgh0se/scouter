@@ -190,7 +190,12 @@ class StyleSetTest(unittest.TestCase):
         return self.job_path / ".scouter" / "styles-applied.json"
 
     def _seed_ledger(self, entries: list[dict]) -> None:
-        self._ledger_path().write_text(json.dumps(entries))
+        """Fix round 3b: the ledger file is `{"schema": 1, "entries": [...]}`,
+        not a bare array."""
+        self._ledger_path().write_text(json.dumps({"schema": 1, "entries": entries}))
+
+    def _ledger_entries(self) -> list[dict]:
+        return json.loads(self._ledger_path().read_text())["entries"]
 
     def _apply_set(self, known_images: dict[int, str], *, apply=None, style_name="hero", **kwargs):
         """`known_images` builds the FakeBridge's `image.lookup` table; the
@@ -517,7 +522,7 @@ class StyleSetTest(unittest.TestCase):
             images, apply=_apply_all_ok, job_slug="hero-job", force=True
         )
         self.assertEqual(result.applied, 1)
-        entries = json.loads(self._ledger_path().read_text())
+        entries = self._ledger_entries()
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["image_id"], styled_id)
         self.assertEqual(entries[0]["history_end_before"], 9)
@@ -631,7 +636,7 @@ class StyleSetTest(unittest.TestCase):
 
         self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
 
-        entries = json.loads(self._ledger_path().read_text())
+        entries = self._ledger_entries()
         self.assertEqual(len(entries), 2)
         for entry in entries:
             self.assertEqual(entry["style"], "hero")
@@ -649,7 +654,7 @@ class StyleSetTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self._apply_set(images, apply=script, batch=25, job_slug="hero-job")
 
-        entries = json.loads(self._ledger_path().read_text())
+        entries = self._ledger_entries()
         self.assertEqual(len(entries), 25)
         self.assertEqual({e["image_id"] for e in entries}, set(list(images)[:25]))
 
@@ -665,6 +670,87 @@ class StyleSetTest(unittest.TestCase):
         for row in not_attempted:
             self.assertIn("stopped after 2 consecutive batch failures", row["error"])
         self.assertEqual({r["image_id"] for r in not_attempted}, set(list(images)[75:100]))
+
+    # -- fix round 3b (final re-review should-fixes) -----------------------
+
+    def test_timeout_writes_provisional_ledger_entry_and_retry_lands_unknown(self) -> None:
+        """Item 1: a BridgeTimeout batch writes PROVISIONAL ledger entries
+        (history_end_before + outcome="unknown"), so a later retry's guard
+        finds a record and compares -- current history_end still equals
+        history_end_before (nothing committed) -- landing in "unknown"
+        instead of finding no record at all and re-applying blind."""
+        images = self._setup_job(25)  # exactly one batch at the default size
+        for path in images.values():
+            Path(path + ".xmp").write_text(_sidecar_xml(history_end=3))
+        script = _Script([BridgeTimeoutError("darktable stopped responding")])
+
+        bridge, result = self._apply_set(images, apply=script, job_slug="hero-job")
+        self.assertEqual(result.outcome, "partial")
+
+        entries = self._ledger_entries()
+        self.assertEqual(len(entries), 25)
+        for entry in entries:
+            self.assertEqual(entry["outcome"], "unknown")
+            self.assertEqual(entry["history_end_before"], 3)
+
+        # The "retry": a fresh apply_set call against the same job. Nothing
+        # committed in between, so every id must land in "unknown" -- not
+        # be silently re-applied.
+        bridge2, result2 = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+        self.assertEqual(bridge2.count("style.apply"), 0)
+        statuses = _statuses(result2.per_image)
+        for iid in images:
+            self.assertEqual(statuses[iid], "unknown")
+
+    def test_missing_ledger_is_empty_with_no_warning(self) -> None:
+        """Item 2: a ledger that has never been written is the ordinary
+        first-run state -- empty, no warning, nothing skipped."""
+        images = self._setup_job(2)
+        # No ledger file at all.
+        bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+        self.assertEqual(result.applied, 2)
+        self.assertFalse(any("unreadable" in w or "malformed" in w for w in result.warnings))
+
+    def test_corrupt_ledger_forces_unknown_with_a_warning(self) -> None:
+        """Item 2: a ledger that EXISTS but cannot be parsed is not the same
+        as an empty one -- every candidate is forced to "unknown" rather
+        than guessed as "nothing on record, apply normally"."""
+        images = self._setup_job(2)
+        self._ledger_path().parent.mkdir(parents=True, exist_ok=True)
+        self._ledger_path().write_text("{not valid json at all")
+
+        bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+        self.assertEqual(bridge.count("style.apply"), 0)
+        self.assertEqual(result.applied, 0)
+        statuses = _statuses(result.per_image)
+        for iid in images:
+            self.assertEqual(statuses[iid], "unknown")
+        self.assertTrue(
+            any(str(self._ledger_path()) in w for w in result.warnings),
+            f"expected a warning naming the ledger file, got {result.warnings}",
+        )
+
+    def test_malformed_shape_ledger_also_forces_unknown(self) -> None:
+        """Item 2: valid JSON that is not the `{schema, entries}` shape
+        (e.g. a bare array, round 3's own on-disk format) is malformed
+        too, not silently accepted as empty."""
+        images = self._setup_job(2)
+        self._ledger_path().parent.mkdir(parents=True, exist_ok=True)
+        self._ledger_path().write_text(json.dumps([{"image_id": 1, "style": "hero"}]))
+
+        bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+        self.assertEqual(bridge.count("style.apply"), 0)
+        statuses = _statuses(result.per_image)
+        for iid in images:
+            self.assertEqual(statuses[iid], "unknown")
+        self.assertTrue(any("malformed" in w for w in result.warnings))
+
+    def test_ledger_file_carries_schema(self) -> None:
+        images = self._setup_job(1)
+        self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+        payload = json.loads(self._ledger_path().read_text())
+        self.assertEqual(payload["schema"], 1)
+        self.assertIsInstance(payload["entries"], list)
 
     # -- fix round 1: registry integration ---------------------------------
 

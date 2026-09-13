@@ -97,6 +97,21 @@ the first writer's update entirely (last writer wins, not last-writer-merges).
 guarantees nothing about update ordering across writers. If Scouter ever
 grows concurrent job execution, this needs a real lock (e.g. `flock` on
 the ledger file, or a lock directory) before it is safe.
+
+Fix round 3b (final re-review, two should-fixes): a batch that times out
+(`BridgeTimeout`) now writes PROVISIONAL ledger entries too -- the
+pre-apply `history_end_before` plus `outcome="unknown"` -- so a retry's
+guard sees a record and compares (current `history_end` will equal
+`history_end_before`, since nothing committed) instead of finding no
+entry at all and re-applying blind, which could double-stack the style if
+the timed-out call actually landed. `_read_ledger` also now tells
+"missing" (no warning; the ordinary first-run state) apart from
+"unreadable/malformed" (a warning naming the file; every candidate is
+forced to `"unknown"`, never treated as if the ledger were simply empty --
+an unreadable ledger might say a target was already styled, and guessing
+either way is the exact double-stacking risk the ledger exists to avoid).
+The ledger file itself now carries `{"schema": 1, "entries": [...]}`
+instead of a bare array, so a future shape change has somewhere to say so.
 """
 
 from __future__ import annotations
@@ -135,6 +150,10 @@ MAX_CONSECUTIVE_BATCH_FAILURES = 2
 #: same `<job>/.scouter/` directory `import.json` and `checksums.sha256`
 #: already live in.
 LEDGER_FILENAME = "styles-applied.json"
+
+#: Fix round 3b: the ledger file's own schema version, so a future change to
+#: its shape has somewhere to say so instead of guessing from field presence.
+LEDGER_SCHEMA = 1
 
 
 class UnsupportedMode(ScouterError):
@@ -554,20 +573,39 @@ def _ledger_path(job_path: Path) -> Path:
     return config_module.scouter_dir(job_path) / LEDGER_FILENAME
 
 
-def _read_ledger(job_path: Path) -> list[dict]:
+def _read_ledger(job_path: Path) -> tuple[list[dict], str | None]:
     """Every entry ever recorded for this job, every style -- not filtered.
-    Missing, unreadable, or malformed is an empty ledger, not an error: the
-    idempotency guard degrades to "nothing is known to be already styled",
-    never to a crash.
+
+    Returns `(entries, warning)`. Fix round 3b distinguishes two failure
+    modes that round 3 conflated into one silent "empty ledger":
+
+    - **Missing** (no job has ever applied a style yet): `([], None)` --
+      not an error, not worth a warning, the ordinary first-run state.
+    - **Unreadable or malformed** (unparseable JSON, or JSON that is not
+      the `{"schema": 1, "entries": [...]}` shape): `([], warning)`, where
+      `warning` names the file. This is NOT the same as "nothing is
+      known" -- a ledger that exists but cannot be trusted means the
+      caller genuinely does not know whether any target already carries
+      the style, so blindly proceeding as if it were empty risks
+      double-stacking `image:apply_style` on an image the (unreadable)
+      ledger might say was already done. The caller is expected to treat
+      every candidate as `"unknown"` when this warning is non-`None`,
+      never to re-apply blind.
     """
     path = _ledger_path(job_path)
     if not path.is_file():
-        return []
+        return [], None
     try:
         data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return []
-    return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError) as e:
+        return [], f"ledger at {path} is unreadable ({e}); treating every id as unknown"
+    if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
+        return (
+            [],
+            f"ledger at {path} is malformed (not {{schema, entries}}); "
+            "treating every id as unknown",
+        )
+    return data["entries"], None
 
 
 def _upsert_ledger(existing: list[dict], updates: list[dict]) -> list[dict]:
@@ -597,12 +635,18 @@ def _write_ledger_atomic(job_path: Path, entries: list[dict]) -> None:
     file before the rename means the bytes are actually on disk before the
     name that makes them visible is; without it, a crash could still leave
     an empty or truncated file behind the new name on some filesystems.
+
+    Wraps `entries` in `{"schema": LEDGER_SCHEMA, "entries": [...]}` (fix
+    round 3b) -- a bare JSON array has no room to version the shape if a
+    future change needs one; `_read_ledger` is the other half of this
+    contract.
     """
     path = _ledger_path(job_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
+    payload = {"schema": LEDGER_SCHEMA, "entries": entries}
     with tmp.open("w", encoding="utf-8") as f:
-        f.write(json.dumps(entries, indent=2))
+        f.write(json.dumps(payload, indent=2))
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, path)
@@ -820,6 +864,16 @@ def apply_set(
        `history_end_before`), it only skips the SKIP decision -- a forced
        re-application is still a real application, worth recording.
 
+    Fix round 3b (final re-review, two should-fixes): a `BridgeTimeout`
+    batch writes PROVISIONAL ledger entries too (`history_end_before` +
+    `outcome="unknown"`), so a retry's guard finds a record and lands on
+    "unknown" (equal `history_end`) instead of finding nothing and
+    re-applying blind. `_read_ledger` now distinguishes a missing ledger
+    (no warning, the ordinary first-run state) from an unreadable or
+    malformed one (a `warnings` entry naming the file; every candidate is
+    forced to `"unknown"` rather than treated as if nothing were on
+    record). The ledger file now carries a `schema` field.
+
     `StyleSetResult` (`scouter/types.py`) has no new top-level field for
     "unknown" ids, "already carries this style" ids, or "never attempted"
     ids -- every `per_image` row carries a `status` (`"applied"` |
@@ -911,9 +965,19 @@ def apply_set(
     job_path = None
     raw_ledger: list[dict] = []
     ledger_by_id: dict[int, dict] = {}
+    ledger_unreadable = False
     if job_slug:
         job_path = config_module.find_job(cfg, job_slug)
-        raw_ledger = _read_ledger(job_path)
+        raw_ledger, ledger_warning = _read_ledger(job_path)
+        if ledger_warning is not None:
+            # Fix round 3b, item 2: a ledger that EXISTS but cannot be
+            # trusted is not the same as "no ledger" -- proceeding as if it
+            # were empty risks double-stacking `image:apply_style` on an
+            # image the unreadable ledger might already say was styled. So
+            # every resolved target below is forced to "unknown" instead of
+            # "apply", regardless of whether it has an entry.
+            warnings.append(ledger_warning)
+            ledger_unreadable = True
         for entry in raw_ledger:
             if entry.get("style") != name:
                 continue
@@ -931,6 +995,17 @@ def apply_set(
     if not force:
         to_apply = []
         for r in resolved:
+            if ledger_unreadable:
+                guard_unknown_rows.append(
+                    {
+                        "image_id": r.image_id,
+                        "path": r.path,
+                        "status": "unknown",
+                        "error": "ledger unreadable; cannot verify whether this image "
+                        "already carries the style",
+                    }
+                )
+                continue
             entry = ledger_by_id.get(r.image_id)
             try:
                 verdict, note = _idempotency_verdict(r, entry)
@@ -1004,6 +1079,28 @@ def apply_set(
                         "history.read before retrying",
                     }
                 )
+                # Fix round 3b, item 1: a PROVISIONAL ledger entry, with the
+                # pre-apply history_end and an explicit outcome="unknown" --
+                # so a retry's guard sees a record (current history_end will
+                # equal history_end_before, since nothing committed) and
+                # lands in the "unknown" branch instead of treating this as
+                # "no record, apply blindly" and risking a double-stacked
+                # style if the timed-out call actually landed.
+                batch_ledger_updates.append(
+                    {
+                        "image_id": iid,
+                        "style": name,
+                        "applied_at": _now_z(),
+                        "history_end_before": pre_history_end.get(iid),
+                        "outcome": "unknown",
+                    }
+                )
+            if job_path is not None and batch_ledger_updates:
+                current_ledger = _upsert_ledger(current_ledger, batch_ledger_updates)
+                try:
+                    _write_ledger_atomic(job_path, current_ledger)
+                except OSError as e:
+                    warnings.append(f"style ledger not written: {e}")
             if consecutive_failures >= MAX_CONSECUTIVE_BATCH_FAILURES:
                 break
             continue
@@ -1069,6 +1166,7 @@ def apply_set(
                         "style": name,
                         "applied_at": _now_z(),
                         "history_end_before": pre_history_end.get(iid),
+                        "outcome": "applied",
                     }
                 )
 
