@@ -5,16 +5,12 @@ from __future__ import annotations
 import unittest
 
 from scouter import registry
+from scouter.core import dtbridge
 
-# `registry.load_verbs()` is idempotent (`VERB_REGISTRY` is only populated the
-# first time it runs) and any core module's own `register()` calls at import
-# time count as "already populated" -- so if some other test module in this
-# pytest session imports e.g. `scouter.core.style` before this file's tests
-# run, `load_verbs()` silently returns that partial set instead of loading
-# the rest. Importing every verb-registering module here (harmless: importing
-# an already-imported module is a no-op, so this never double-registers a
-# verb) guarantees the full registry regardless of test collection order.
-from scouter.core import darkroom, dtbridge, export, history, scout, style  # noqa: F401
+# `registry.load_verbs()` tracks whether a full load has been attempted (not
+# whether `VERB_REGISTRY` happens to be non-empty), so it always walks every
+# core module regardless of what some other test module imported directly
+# before this one ran. No per-file import workaround needed.
 
 
 class RefusingBridge:

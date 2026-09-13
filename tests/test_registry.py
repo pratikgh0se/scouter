@@ -15,6 +15,7 @@ class LoadVerbsImportGuardTest(unittest.TestCase):
     def setUp(self) -> None:
         self._orig_core_modules = registry._CORE_MODULES
         self._orig_registry = dict(registry.VERB_REGISTRY)
+        self._orig_fully_loaded = registry._FULLY_LOADED
         self._orig_sys_path = list(sys.path)
         self._orig_sys_modules = set(sys.modules)
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -24,6 +25,7 @@ class LoadVerbsImportGuardTest(unittest.TestCase):
         registry._CORE_MODULES = self._orig_core_modules
         registry.VERB_REGISTRY.clear()
         registry.VERB_REGISTRY.update(self._orig_registry)
+        registry._FULLY_LOADED = self._orig_fully_loaded
         sys.path[:] = self._orig_sys_path
         for name in set(sys.modules) - self._orig_sys_modules:
             del sys.modules[name]
@@ -44,6 +46,7 @@ class LoadVerbsImportGuardTest(unittest.TestCase):
 
     def test_absent_module_is_skipped(self) -> None:
         registry.VERB_REGISTRY.clear()
+        registry._FULLY_LOADED = False
         registry._CORE_MODULES = ("scouter_test_totally_absent_module_xyz",)
         self.assertEqual(registry.load_verbs(), {})
 
@@ -53,9 +56,46 @@ class LoadVerbsImportGuardTest(unittest.TestCase):
             "import scouter_test_this_name_does_not_exist_anywhere\n",
         )
         registry.VERB_REGISTRY.clear()
+        registry._FULLY_LOADED = False
         registry._CORE_MODULES = ("scouter_test_broken_core.bad",)
         with self.assertRaises(ImportError):
             registry.load_verbs()
+
+    def test_a_direct_import_of_one_core_module_does_not_truncate_the_registry(
+        self,
+    ) -> None:
+        """A partial `VERB_REGISTRY` (populated by some other code directly
+        importing e.g. `scouter.core.style` before `load_verbs()` ever runs)
+        must not be mistaken for "fully loaded" — `load_verbs()` still has to
+        walk every module in `_CORE_MODULES` and return the complete set.
+
+        Simulates a fresh process: every core module (plus `scouter.core.style`
+        itself) is dropped from `sys.modules` so a plain `import` actually
+        re-executes each module's top-level `register()` calls, exactly like
+        the first import in a real interpreter session would.
+        """
+        core_module_names = list(registry._CORE_MODULES) + ["scouter.core.style"]
+        saved_modules = {
+            name: sys.modules.pop(name) for name in core_module_names if name in sys.modules
+        }
+        try:
+            registry.VERB_REGISTRY.clear()
+            registry._FULLY_LOADED = False
+
+            import scouter.core.style  # noqa: F401  (direct import, bypassing load_verbs())
+
+            self.assertTrue(registry.VERB_REGISTRY)  # style's register() calls ran
+            self.assertFalse(registry._FULLY_LOADED)  # but load_verbs() hasn't run yet
+
+            verbs = registry.load_verbs()
+            groups = {verb.group for verb in verbs.values()}
+            self.assertEqual(
+                groups, {"darkroom", "export", "history", "scout", "style", "metrics"}
+            )
+        finally:
+            for name in core_module_names:
+                sys.modules.pop(name, None)
+            sys.modules.update(saved_modules)
 
 
 class RegistryOkOutcomeTest(unittest.TestCase):

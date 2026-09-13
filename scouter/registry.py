@@ -67,6 +67,13 @@ _CORE_MODULES: tuple[str, ...] = (
 )
 
 
+#: Set once `load_verbs()` has attempted every module in `_CORE_MODULES`, so a
+#: direct import of one core module by other code (or another test) before
+#: `load_verbs()` runs — which populates `VERB_REGISTRY` without this flag —
+#: doesn't get mistaken for "fully loaded" and short-circuit the rest.
+_FULLY_LOADED = False
+
+
 def load_verbs() -> dict[str, Verb]:
     """Import every core module so its `register(...)` calls run. Idempotent.
 
@@ -76,8 +83,15 @@ def load_verbs() -> dict[str, Verb]:
     before the core modules of tasks 7-9 land. Any other `ImportError` — e.g. a
     typo inside a core module that *does* exist, which fails on some other
     name — is re-raised, so it isn't mistaken for an absent module.
+
+    Re-importing an already-imported module is a cheap no-op, so every call
+    walks the full `_CORE_MODULES` list until all of them have been attempted
+    at least once (tracked by `_FULLY_LOADED`, not by `VERB_REGISTRY` being
+    non-empty — a partial registry populated by someone else's direct import
+    of a single core module must not look "done").
     """
-    if not VERB_REGISTRY:
+    global _FULLY_LOADED
+    if not _FULLY_LOADED:
         import importlib
 
         for module_name in _CORE_MODULES:
@@ -90,6 +104,7 @@ def load_verbs() -> dict[str, Verb]:
                 ):
                     continue
                 raise
+        _FULLY_LOADED = True
     return VERB_REGISTRY
 
 
