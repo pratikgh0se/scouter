@@ -139,6 +139,47 @@ class DarkroomCoreTest(unittest.TestCase):
         entries = journal.read_all("job-test")
         self.assertAlmostEqual(entries[-1].before["value"], 1.5500002, places=5)
 
+    def test_reset_invalidates_the_commit_false_fallback_for_its_module(self) -> None:
+        """Fix round 3, item 2: set(commit=False) -> reset -> set -> undo. The
+        reset discarded the module entirely, so the third write's `before`
+        must NOT be the first write's stale `after` (2.0) -- `_last_journal_
+        write` has to stop at the reset, not walk past it."""
+        darkroom.set_param(module="exposure", param="exposure", value=2.0, commit=False)
+        darkroom.reset(module="exposure", confirm=True)
+        darkroom.set_param(module="exposure", param="exposure", value=5.0, commit=False)
+        entries = journal.read_all("job-test")
+        last = entries[-1]
+        self.assertEqual(last.verb, "darkroom.set")
+        self.assertAlmostEqual(last.before["value"], 1.5500002, places=5)
+        result = darkroom.undo_last()
+        assert result.undone is not None
+        self.assertAlmostEqual(result.undone["restored_to"], 1.5500002, places=5)
+
+    def test_before_state_takes_no_fallback_when_the_last_write_committed(self) -> None:
+        """Fix round 3, item 3 (discriminator): a write whose OWN `commit`
+        flag was True must never feed the fallback, even though its `after`
+        exists and a later write is commit=False."""
+        darkroom.set_param(module="exposure", param="exposure", value=2.0, commit=True)
+        darkroom.set_param(module="exposure", param="exposure", value=9.0, commit=False)
+        entries = journal.read_all("job-test")
+        # If the (wrong) fallback fired, before would be 2.0; the honest,
+        # committed-write answer is a fresh XMP read (1.5500002 in this
+        # static fixture).
+        self.assertAlmostEqual(entries[-1].before["value"], 1.5500002, places=5)
+
+    def test_before_state_instance_filter_is_exact(self) -> None:
+        """Fix round 3, item 3 (discriminator): an entry for instance 1 must
+        not feed instance 0's `before`."""
+        darkroom.set_param(module="exposure", param="exposure", value=2.0, instance=1,
+                           commit=False)
+        darkroom.set_param(module="exposure", param="exposure", value=9.0, instance=0,
+                           commit=False)
+        entries = journal.read_all("job-test")
+        last = entries[-1]
+        self.assertEqual(last.instance, 0)
+        # If instance 1's entry wrongly fed instance 0, before would be 2.0.
+        self.assertAlmostEqual(last.before["value"], 1.5500002, places=5)
+
     def test_torn_sidecar_retries_then_raises_commit_timeout(self) -> None:
         (Path(str(self.raw) + ".xmp")).write_text("<not well formed", encoding="utf-8")
         with mock.patch("scouter.core.darkroom.time.sleep"):
@@ -301,10 +342,22 @@ class DarkroomCoreTest(unittest.TestCase):
         self.assertIn("Ctrl-Z", str(ctx.exception))
         self.assertEqual(ctx.exception.code, "unsupported_undo")
 
-    def test_undo_last_dry_run_still_refuses_a_reset(self) -> None:
+    def test_undo_last_dry_run_on_a_reset_entry_is_pure(self) -> None:
+        """Fix round 3, item 1: a dry run must not raise and must not mutate
+        the journal -- it just reports that the entry cannot be undone."""
         darkroom.reset(module="exposure", confirm=True)
+        result = darkroom.undo_last(dry_run=True)
+        self.assertEqual(result.outcome, "dry_run")
+        self.assertIn("cannot undo the reset", result.reason or "")
+        entry = journal.read_all("job-test")[-1]
+        self.assertEqual(entry.verb, "module.reset")
+        self.assertFalse(entry.undone, "a dry run must not mark the entry undone")
+        self.assertIsNone(entry.note)
+        # A REAL call afterwards still refuses (and does mutate) -- the dry
+        # run above changed nothing.
         with self.assertRaises(ScouterError):
-            darkroom.undo_last(dry_run=True)
+            darkroom.undo_last()
+        self.assertTrue(journal.read_all("job-test")[-1].undone)
 
     def test_undo_last_reset_refusal_marks_the_entry_so_older_writes_stay_reachable(
         self,
@@ -332,14 +385,19 @@ class DarkroomCoreTest(unittest.TestCase):
 
     def test_undo_last_names_the_failed_entry_when_that_is_all_there_is(self) -> None:
         """Should-fix 4: a journal that is not empty, but whose only entry
-        failed, is a different (more informative) case than a truly empty one."""
+        failed, is a different (more informative) case than a truly empty one.
+        Fix round 3, nit: a real (non-dry-run) call reports outcome "error"
+        for this, not "dry_run" -- there is no plan to preview."""
         self.bridge.responses["darkroom.action"] = {"nan": True, "view": "darkroom"}
         with self.assertRaises(NotInDarkroom):
             darkroom.set_param(module="exposure", param="exposure", value=2.0, commit=False)
         result = darkroom.undo_last()
-        self.assertEqual(result.outcome, "dry_run")
+        self.assertEqual(result.outcome, "error")
         self.assertIn("failed", result.reason or "")
         self.assertNotIn("journal for job-test is empty", result.reason or "")
+
+        dry_result = darkroom.undo_last(dry_run=True)
+        self.assertEqual(dry_result.outcome, "dry_run")
 
     # -- status / describe_history --------------------------------------
 

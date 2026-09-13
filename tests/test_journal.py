@@ -95,6 +95,30 @@ class JournalTest(unittest.TestCase):
         with self.assertRaises(journal.JournalCorrupt):
             journal.fail("job-test", 99, outcome="error:wrong_view")
 
+    def test_append_creates_the_journal_file_and_its_parent_directory(self) -> None:
+        """Fix round 3, nit 4a: `append` fsyncs the parent directory too, the
+        first time it creates the journal file. Not directly observable from
+        Python, so this checks the externally-visible effect: the file (and
+        its parent) exist and are readable back immediately."""
+        path = paths.journal_path("job-fresh")
+        self.assertFalse(path.exists())
+        self._record(0.7, None)
+        journal.record(
+            "job-fresh", verb="darkroom.set", image_id=1, path="/a/y.ORF",
+            module="exposure", param="exposure", instance=0,
+            before={"source": "xmp", "value": None}, after={"value": 1.0},
+        )
+        self.assertTrue(path.exists())
+        self.assertTrue(path.parent.is_dir())
+        self.assertEqual(len(journal.read_all("job-fresh")), 1)
+        # A second append to the SAME (now-existing) job must not error either.
+        journal.record(
+            "job-fresh", verb="darkroom.set", image_id=1, path="/a/y.ORF",
+            module="exposure", param="exposure", instance=0,
+            before={"source": "xmp", "value": 1.0}, after={"value": 2.0},
+        )
+        self.assertEqual(len(journal.read_all("job-fresh")), 2)
+
     def test_begin_records_the_commit_flag(self) -> None:
         journal.begin(
             "job-test", verb="darkroom.set", image_id=12, path="/a/x.ORF",

@@ -140,10 +140,17 @@ def _write_all(job: str, entries: list[Entry]) -> None:
 
 def append(job: str, entry: Entry) -> Entry:
     path = paths.ensure(paths.journal_path(job))
+    existed = path.exists()
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry.to_dict(), sort_keys=True) + "\n")
         fh.flush()
         os.fsync(fh.fileno())
+    if not existed:
+        # The file's own bytes are durable via the fsync above; the
+        # directory ENTRY that makes the file discoverable at all is a
+        # separate write, only made durable by fsyncing the directory (fix
+        # round 3, nit 4a) -- matters only the moment the journal is created.
+        _fsync_dir(path.parent)
     return entry
 
 

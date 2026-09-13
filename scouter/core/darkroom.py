@@ -131,11 +131,23 @@ def _last_journal_write(job: str, image_id: int, module: str, param: str,
     actually landed a value -- skipping anything undone or failed (fix round
     2, blocker 2): an undone write is reverted, and a failed one never
     happened, so neither is a source of truth for "what Scouter last set."
+
+    A landed `module.reset` for the same image/module/instance stops the
+    search (fix round 3, item 2): reset discards every param of that module,
+    so nothing journaled before it is still valid "current state" for any of
+    them -- not even an entry the reset-refusal path later marked `undone`
+    (that flag only means "don't ask to undo this again"; the reset itself
+    really happened). A reset that itself failed never happened and does not
+    stop the search.
     """
     for entry in reversed(journal.read_all(job)):
+        is_error = entry.outcome is not None and entry.outcome.startswith("error")
+        if (entry.verb == "module.reset" and not is_error and entry.image_id == image_id
+                and entry.module == module and entry.instance == instance):
+            return None
         if entry.undone:
             continue
-        if entry.outcome is not None and entry.outcome.startswith("error"):
+        if is_error:
             continue
         if (entry.image_id == image_id and entry.module == module and entry.param == param
                 and entry.instance == instance and entry.after and "value" in entry.after):
@@ -391,8 +403,11 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
         # facts -- name the failed one when that is why there is nothing here.
         failed = journal.latest_failed(job)
         if failed is not None:
+            # Fix round 3, nit: a real (non-dry-run) call reports this as an
+            # actual error outcome, not "dry_run" -- there is no plan here to
+            # preview, the newest write in the job simply never took effect.
             return UndoResult(
-                outcome="dry_run", seq=failed.seq,
+                outcome="dry_run" if dry_run else "error", seq=failed.seq,
                 reason=(
                     f"nothing to undo: seq {failed.seq} ({failed.verb} on "
                     f"{failed.module}.{failed.param or ''}) failed ({failed.outcome}) "
@@ -403,18 +418,25 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             outcome="dry_run", reason=f"nothing to undo: journal for {job} is empty",
         )
 
-    # Blocker 6: the reset refusal is checked before the dry-run branch, so
-    # `undo_last(dry_run=True)` on a reset entry says honestly that it cannot
-    # be undone rather than pretending a plan exists. Should-fix 5: mark the
-    # entry undone (with a note, not a real undo) so this refusal happens once
-    # per reset and the write underneath it stays reachable on the next call.
+    # Blocker 6 / fix round 3, item 1: a `module.reset` entry can never be
+    # undone. A dry run reports that honestly WITHOUT mutating the journal --
+    # `mark_undone(note=...)` runs only on a real call, after this branch, so
+    # `undo_last(dry_run=True)` is pure (previewing must never have side
+    # effects). Should-fix 5: the real call marks the entry undone (with a
+    # note, not a real undo) so this refusal happens once per reset and the
+    # write underneath it stays reachable on the next call.
     if entry.verb == "module.reset":
-        journal.mark_undone(job, entry.seq, note="skipped: reset is not undoable")
-        raise _UnsupportedUndo(
+        reason = (
             f"cannot undo the reset of {entry.module}: its parameters were discarded. "
-            "darktable's own Ctrl-Z is the only way back",
-            detail={"seq": entry.seq, "module": entry.module},
+            "darktable's own Ctrl-Z is the only way back"
         )
+        if dry_run:
+            return UndoResult(
+                outcome="dry_run", image_id=entry.image_id, path=entry.path, seq=entry.seq,
+                reason=f"{reason} (this entry would be skipped, not undone)",
+            )
+        journal.mark_undone(job, entry.seq, note="skipped: reset is not undoable")
+        raise _UnsupportedUndo(reason, detail={"seq": entry.seq, "module": entry.module})
 
     plan = [{"action": "darkroom.undo_last", "seq": entry.seq, "verb": entry.verb,
              "module": entry.module, "param": entry.param,

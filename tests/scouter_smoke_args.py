@@ -17,7 +17,7 @@ SMOKE_ARGS: dict[str, dict] = {
     "metrics.summary": {"since": "1d"},
     "darkroom.open": {"image": "/tmp/scouter-smoke.ORF"},
     "darkroom.set": {"module": "exposure", "param": "exposure", "value": 1.0,
-                     "commit": False},   # real write path (not dry-run); no real XMP to commit
+                     "commit": True},    # real write path AND a real commit (see install_doubles)
     "darkroom.nudge": {"module": "exposure", "param": "exposure", "steps": 1,
                        "dry_run": True},
     "darkroom.enable": {"module": "exposure", "dry_run": True},
@@ -42,6 +42,8 @@ SMOKE_ARGS: dict[str, dict] = {
 def install_doubles(verb_id: str) -> Iterator[dict]:
     """Install a FakeBridge (and a fake darktable-cli where needed) for one verb."""
     import os
+    import time
+    from pathlib import Path
 
     from scouter import paths
     from scouter.core import dtbridge
@@ -87,6 +89,29 @@ def install_doubles(verb_id: str) -> Iterator[dict]:
         # `preview` writes a .png, which the fake CLI script above matches;
         # the out_dir lives under this test's own temp cache root.
         extra["out_dir"] = str(paths.cache_root() / "smoke-export")
+    if verb_id == "darkroom.set":
+        # SMOKE_ARGS sends commit=True here: exercise the REAL history.commit
+        # (task 8), not just a stubbed acknowledgement, the same trick
+        # DarkroomCommitSeamTest (tests/test_darkroom_core.py) uses -- write a
+        # minimal well-formed sidecar and bump its mtime forward, so
+        # history.commit's own poll (mtime advanced + parses) succeeds.
+        sidecar = Path(raw + ".xmp")
+
+        def commit_response(_params: dict) -> dict:
+            sidecar.write_text(
+                '<?xml version="1.0"?><x:xmpmeta xmlns:x="adobe:ns:meta/">'
+                '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+                '<rdf:Description rdf:about="" xmlns:darktable="http://darktable.sf.net/" '
+                'darktable:history_end="0"><darktable:history><rdf:Seq/></darktable:history>'
+                '</rdf:Description></rdf:RDF></x:xmpmeta>',
+                encoding="utf-8",
+            )
+            future = time.time() + 2
+            os.utime(sidecar, (future, future))
+            return {"strategy_used": "view_bounce", "ok": True, "view_after": "darkroom",
+                    "cpu_ms": 5}
+
+        bridge.responses["history.commit"] = commit_response
     try:
         yield extra
     finally:
@@ -96,3 +121,5 @@ def install_doubles(verb_id: str) -> Iterator[dict]:
                 os.environ.pop("SCOUTER_DARKTABLE_CLI", None)
             else:
                 os.environ["SCOUTER_DARKTABLE_CLI"] = saved_cli
+        if verb_id == "darkroom.set":
+            Path(raw + ".xmp").unlink(missing_ok=True)
