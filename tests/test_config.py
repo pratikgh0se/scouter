@@ -202,6 +202,31 @@ class BackupGateTest(TmpTestCase):
         with self.assertRaises(BackupNotConfigured):
             config.require_backup(cfg)
 
+    def test_import_refuses_without_backup_target(self) -> None:
+        """E1, end to end: `library.import` itself (task 3), not just the gate
+        function in isolation, refuses before reading a single file from a
+        source that does not even exist -- exercised through the real verb,
+        as the design's traceability table names it."""
+        old_cache = os.environ.get("SCOUTER_CACHE")
+        os.environ["SCOUTER_CACHE"] = str(self.tmp / "cache")
+        try:
+            from scouter.core import library
+
+            cfg = self._base(backup={"enabled": False})
+            with mock.patch.object(library.config, "load", return_value=cfg):
+                with self.assertRaises(BackupNotConfigured) as ctx:
+                    library.import_card(
+                        str(self.tmp / "no-such-card-mount"),
+                        "harbour-wedding",
+                        confirm=True,
+                    )
+            self.assertEqual(ctx.exception.detail["check"], "disabled")
+        finally:
+            if old_cache is None:
+                os.environ.pop("SCOUTER_CACHE", None)
+            else:
+                os.environ["SCOUTER_CACHE"] = old_cache
+
 
 class JobLayoutTest(TmpTestCase):
     def test_job_dir_shape(self) -> None:

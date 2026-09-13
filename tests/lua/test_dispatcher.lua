@@ -18,6 +18,22 @@ local function assertTrue(cond, label)
   end
 end
 
+-- Mirrors the real plugin's `xml_unescape` (verified equal via
+-- plugin.xml_unescape's own direct tests below): a stub whose `dt.styles.
+-- import` reads a name off <info><name> must unescape it too, since real
+-- darktable stores the unescaped name -- otherwise the stub and the plugin's
+-- own `dtstyle_file_name`-based collision check would disagree on names
+-- containing an XML entity.
+local function stub_xml_unescape(s)
+  if not s then return s end
+  s = s:gsub("&lt;", "<")
+  s = s:gsub("&gt;", ">")
+  s = s:gsub("&quot;", "\"")
+  s = s:gsub("&apos;", "'")
+  s = s:gsub("&amp;", "&")
+  return s
+end
+
 -- ---- Stub dt table ---------------------------------------------------------
 -- Use ids that DO NOT overlap the iteration array's integer indexes (1..N),
 -- so dt.database[id] always resolves via __index without colliding with
@@ -126,6 +142,9 @@ stub_dt.gui = {
 local styles_exported = {}
 local styles_imported = {}
 local styles_deleted = {}
+-- Scripts a darktable that silently no-ops an export (pcall ok=true, but no
+-- file written / unchanged) -- fix round 1, should-fix 9's mtime-advance test.
+local force_noop_export = false
 
 stub_dt.styles = setmetatable({}, {
   __index = function(t, k)
@@ -137,30 +156,36 @@ stub_dt.styles = setmetatable({}, {
     end
     if k == "export" then
       -- Real dt.styles.export(style, dir) writes `<dir>/<style.name>.dtstyle`.
-      -- The stub does the same (a small marker file) so `file_size` sees a
-      -- real file and style.export_file's `bytes` field is exercised too.
+      -- The stub writes real `<info><name>...</name></info>` content (the
+      -- same shape `dtstyle_file_name` parses in the real plugin) so
+      -- style.export_file's `bytes` field AND style.import_file's
+      -- file-name-based collision check are both exercised against
+      -- something realistic, not an arbitrary marker.
       return function(style, dir)
         table.insert(styles_exported, {name = style.name, dir = dir})
+        if force_noop_export then return end
         local path = dir .. "/" .. style.name .. ".dtstyle"
         local f = io.open(path, "w")
         if not f then error("stub export: could not open " .. path) end
-        f:write("STUB-DTSTYLE:" .. style.name .. "\n")
+        f:write("<darktable_style><info><name>" .. style.name
+                 .. "</name></info></darktable_style>\n")
         f:close()
       end
     end
     if k == "import" then
       -- Real dt.styles.import(path) derives the new style's name from the
-      -- file's own <name>. The stub reads the marker line export() wrote
-      -- (or, for a caller-supplied fixture, a `STUB-DTSTYLE:<name>` first
-      -- line) so import-after-export round-trips under the same name.
+      -- file's own <info><name>. The stub does the same, from whatever
+      -- content is actually on disk (export()'s own write, or a
+      -- caller-supplied fixture) -- never a marker line disconnected from
+      -- what a real .dtstyle looks like.
       return function(path)
         table.insert(styles_imported, path)
         local f = io.open(path, "r")
         local name = "imported-style"
         if f then
-          local first = f:read("*l") or ""
+          local content = f:read("*a") or ""
           f:close()
-          local found = first:match("^STUB%-DTSTYLE:(.+)$")
+          local found = stub_xml_unescape(content:match("<info>.-<name>(.-)</name>"))
           if found then name = found end
         end
         table.insert(t, {name = name, description = ""})
@@ -277,6 +302,34 @@ do
   assertTrue(not ok_low, "image.rate rejects a rating below -1")
   local ok_empty = pcall(internals.methods["image.rate"], {image_ids = {}, rating = 1})
   assertTrue(not ok_empty, "image.rate rejects an empty image_ids list")
+end
+
+-- ---- methods["image.color_labels"] ------------------------------------------
+do
+  images_by_id[101].green = true
+  images_by_id[103].red = true
+  images_by_id[103].purple = true
+
+  local result = internals.methods["image.color_labels"](
+    {image_ids = {"101", "102", "103", "999"}})
+  assertEq(#result.missing, 1, "image.color_labels missing count")
+  assertEq(result.missing[1], 999, "image.color_labels missing unknown id")
+  assertEq(#result.per_image, 3, "image.color_labels per_image count")
+
+  local by_id = {}
+  for _, entry in ipairs(result.per_image) do by_id[entry.image_id] = entry end
+  assertEq(#by_id[101].labels, 1, "image.color_labels 101 has one label")
+  assertEq(by_id[101].labels[1], "green", "image.color_labels 101 is green")
+  assertEq(#by_id[102].labels, 0, "image.color_labels 102 has no labels")
+  assertEq(#by_id[103].labels, 2, "image.color_labels 103 has two labels")
+
+  local ok_empty = pcall(internals.methods["image.color_labels"], {image_ids = {}})
+  assertTrue(not ok_empty, "image.color_labels rejects an empty image_ids list")
+
+  -- Cleanup so later tests are not affected by these stub fields.
+  images_by_id[101].green = nil
+  images_by_id[103].red = nil
+  images_by_id[103].purple = nil
 end
 
 -- ---- methods.import_batch --------------------------------------------------
@@ -1454,6 +1507,7 @@ do
     "darkroom.action", "darkroom.status", "module.enable", "module.disable",
     "module.reset", "history.commit", "snapshot.take", "style.create_from_current",
     "style.apply", "image.rate", "style.export_file", "style.import_file",
+    "style.delete", "image.color_labels",
   }
   for _, name in ipairs(expected_scouter_methods) do
     assertTrue(type(plugin.methods[name]) == "function",
@@ -1700,10 +1754,18 @@ assertTrue(tostring(err_missing):find("not found") ~= nil,
 local export_dir = os.getenv("TMPDIR") or "/tmp"
 local exp = plugin.methods["style.export_file"]({name = "hero", dir = export_dir})
 assertEq(exp.name, "hero", "export_file echoes the style name")
-assertEq(exp.exported, true, "export_file reports exported")
+assertEq(exp.exported, true, "export_file reports exported when the file's signature advanced")
 assertTrue(exp.path:find("hero.dtstyle", 1, true) ~= nil,
   "export_file returns the .dtstyle path")
 assertTrue(exp.bytes > 0, "export_file reports a real, non-zero file size")
+
+-- fix round 1, should-fix 9: a darktable that silently no-ops (pcall ok=true,
+-- nothing written or changed) must NOT be reported as exported=true.
+force_noop_export = true
+local exp_noop = plugin.methods["style.export_file"]({name = "hero", dir = export_dir})
+assertEq(exp_noop.exported, false,
+  "export_file must not claim success when the file's signature did not advance")
+force_noop_export = false
 
 -- style.import_file: existing name without overwrite is refused BEFORE any
 -- delete or import call.
@@ -1717,21 +1779,152 @@ assertTrue(tostring(err_exists):find("already exists") ~= nil,
   "import_file's refusal names the collision")
 assertEq(#styles_deleted, 0, "the refusal deletes nothing")
 
+-- fix round 1, should-fix 9: the collision check is against the FILE's own
+-- <info><name> (here "hero", already existing), never the caller's `name`
+-- hint -- a mismatched hint ("hero-2", which does NOT exist) must not let a
+-- real collision slip through.
+local ok_hint_mismatch, err_hint_mismatch = pcall(function()
+  return plugin.methods["style.import_file"]({path = exp.path, name = "hero-2"})
+end)
+assertEq(ok_hint_mismatch, false,
+  "a non-colliding NAME HINT must not bypass a real collision on the file's own name")
+assertTrue(tostring(err_hint_mismatch):find("\"hero\"", 1, true) ~= nil,
+  "the refusal names the FILE's own style name (hero), not the hint (hero-2)")
+
 -- overwrite=true deletes the old style first, then imports -- replaced=true,
 -- and styles_after accounts for delete-then-import (net unchanged count).
+-- The destructive window is real: an import failure here would leave "hero"
+-- gone with no style re-created (covered by the import-failure test below).
 local imp = plugin.methods["style.import_file"]({path = exp.path, name = "hero", overwrite = true})
 assertEq(imp.imported, true, "import_file reports imported")
+assertEq(imp.name, "hero", "import_file's returned name is the FILE's own name")
 assertEq(imp.replaced, true, "import_file reports the delete-then-import replace")
 assertEq(imp.styles_before, styles_before_refusal, "styles_before matches the pre-import count")
 assertEq(imp.styles_after, styles_before_refusal, "styles_after: one deleted, one imported back")
 assertEq(styles_deleted[#styles_deleted], "hero", "the existing style was deleted before re-import")
 assertEq(styles_imported[#styles_imported], exp.path, "the exported path was the one imported")
 
--- A fresh name (no collision) imports without touching delete at all.
+-- A style whose FILE name genuinely never existed imports cleanly, without
+-- touching delete at all. Written by hand (not via create_from_current +
+-- export, which would already have inserted the name into dt.styles) so
+-- this really is a name dt.styles has never seen.
+local fresh_path = export_dir .. "/hero-fresh-manual.dtstyle"
+do
+  local f = io.open(fresh_path, "w")
+  f:write("<darktable_style><info><name>hero-fresh</name></info></darktable_style>\n")
+  f:close()
+end
 local deletes_before = #styles_deleted
-local imp2 = plugin.methods["style.import_file"]({path = exp.path, name = "hero-2"})
+local imp2 = plugin.methods["style.import_file"]({path = fresh_path, name = "hero-fresh"})
+assertEq(imp2.imported, true, "a genuinely fresh name imports")
 assertEq(imp2.replaced, false, "a fresh name is not reported as replaced")
 assertEq(#styles_deleted, deletes_before, "importing a fresh name deletes nothing")
+
+-- fix round 1, should-fix 9: an import failure AFTER the destructive delete
+-- names that window explicitly, rather than a bare pcall error. "hero-fresh"
+-- now exists (imp2 above), so overwrite=true deletes it before the forced
+-- import failure.
+do
+  -- Setting a real field on stub_dt.styles shadows the metatable's __index
+  -- for "import" specifically (the plugin's own `dt` local IS stub_dt, via
+  -- package.loaded.darktable); setting it back to nil restores the normal
+  -- dynamic dispatch.
+  stub_dt.styles.import = function(path) error("stub-forced import failure") end
+  local ok_destructive, err_destructive = pcall(function()
+    return plugin.methods["style.import_file"]({path = fresh_path, name = "hero-fresh", overwrite = true})
+  end)
+  assertEq(ok_destructive, false, "a forced import failure still raises")
+  assertTrue(tostring(err_destructive):find("destructive window", 1, true) ~= nil,
+    "the error names the destructive window when the delete already happened")
+  stub_dt.styles.import = nil
+end
+
+-- style.delete: fix round 2, item 5 -- gated on BOTH a name prefix (default
+-- "scouter-") and confirm=true, before the dt.styles scan even runs. The
+-- harness's test styles are named "hero"/"hero-fresh" (not "scouter-..."),
+-- so these calls pass an explicit `prefix` matching them.
+local ok_no_prefix, err_no_prefix = pcall(function()
+  return plugin.methods["style.delete"]({name = "hero", confirm = true})
+end)
+assertEq(ok_no_prefix, false,
+  "style.delete refuses a name that does not start with the (default) prefix")
+assertTrue(tostring(err_no_prefix):find("prefix", 1, true) ~= nil,
+  "the refusal names the prefix requirement")
+
+local ok_no_confirm, err_no_confirm = pcall(function()
+  return plugin.methods["style.delete"]({name = "hero", prefix = "hero"})
+end)
+assertEq(ok_no_confirm, false, "style.delete refuses without confirm=true, even with a matching prefix")
+assertTrue(tostring(err_no_confirm):find("confirm", 1, true) ~= nil,
+  "the refusal names the missing confirmation")
+
+-- Tolerant of "already gone" (hero-fresh was just deleted by the
+-- destructive-window test above), real otherwise (against "hero", which
+-- still exists from the overwrite=true re-import earlier).
+local del_missing = plugin.methods["style.delete"](
+  {name = "hero-fresh", prefix = "hero", confirm = true})
+assertEq(del_missing.existed, false, "hero-fresh is already gone (deleted above)")
+assertEq(del_missing.deleted, false, "nothing was deleted")
+local before_delete = 0
+for _ in ipairs(stub_dt.styles) do before_delete = before_delete + 1 end
+local del_real = plugin.methods["style.delete"]({name = "hero", prefix = "hero", confirm = true})
+assertEq(del_real.existed, true, "hero existed")
+assertEq(del_real.deleted, true, "hero was deleted")
+local after_delete = 0
+for _ in ipairs(stub_dt.styles) do after_delete = after_delete + 1 end
+assertEq(after_delete, before_delete - 1, "style.delete actually removed one style")
+
+-- The default prefix really is "scouter-": a name that DOES start with it
+-- is accepted (still needs confirm=true), proving the refusal above was
+-- about the prefix, not some other reason.
+local ok_default_prefix = plugin.methods["style.delete"](
+  {name = "scouter-throwaway-test-style", confirm = true})
+assertEq(ok_default_prefix.existed, false,
+  "a name starting with the default prefix is accepted (just not present)")
+
+-- Fix round 3, item 4: an EXPLICIT empty prefix is refused with a typed
+-- error, never silently rewritten to the "scouter-" default -- prefix=""
+-- would otherwise match every style name (sub(1, 0) == "" for anything).
+local ok_empty_prefix, err_empty_prefix = pcall(function()
+  return plugin.methods["style.delete"]({name = "anything-at-all", prefix = "", confirm = true})
+end)
+assertEq(ok_empty_prefix, false, "an explicit empty prefix is refused, not silently defaulted")
+assertTrue(tostring(err_empty_prefix):find("prefix", 1, true) ~= nil,
+  "the refusal names the prefix requirement")
+assertTrue(tostring(err_empty_prefix):find("non-empty", 1, true) ~= nil,
+  "the refusal explains prefix must be non-empty")
+
+-- xml_unescape: all five entities, and the &amp;lt; ordering case (must not
+-- double-unescape to "<").
+assertEq(plugin.xml_unescape("Tom &amp; Jerry"), "Tom & Jerry", "xml_unescape: &amp;")
+assertEq(plugin.xml_unescape("a &lt;b&gt; c"), "a <b> c", "xml_unescape: &lt; and &gt;")
+assertEq(plugin.xml_unescape('say &quot;hi&quot;'), 'say "hi"', "xml_unescape: &quot;")
+assertEq(plugin.xml_unescape("it&apos;s"), "it's", "xml_unescape: &apos;")
+assertEq(plugin.xml_unescape("&amp;lt;"), "&lt;",
+  "xml_unescape: &amp;lt; unescapes ONE level (to &lt;), not through to <")
+assertEq(plugin.xml_unescape(nil), nil, "xml_unescape: nil in, nil out")
+
+-- <info><name> containing an XML entity (as scouter/core/dtstyle.py's
+-- ElementTree writer would escape a literal "&") is UNESCAPED before the
+-- collision check (fix round 2, item 6): darktable itself stores the
+-- unescaped name, so comparing the raw escaped text would silently never
+-- match a real collision on a name containing any of these characters.
+local escaped_path = export_dir .. "/escaped-name.dtstyle"
+do
+  local f = io.open(escaped_path, "w")
+  f:write("<darktable_style><info><name>Tom &amp; Jerry</name></info></darktable_style>\n")
+  f:close()
+end
+local imp_escaped = plugin.methods["style.import_file"]({path = escaped_path, name = "ignored-hint"})
+assertEq(imp_escaped.name, "Tom & Jerry",
+  "the collision-check name is XML-unescaped from <info><name> (Tom &amp; Jerry -> Tom & Jerry)")
+assertEq(imp_escaped.imported, true, "importing an escaped-name style still succeeds")
+-- A second import of the exact same (still-escaped-on-disk) name is a real
+-- collision once unescaped, proving the name round-trips consistently.
+local ok_escaped_collision = pcall(function()
+  return plugin.methods["style.import_file"]({path = escaped_path, name = "ignored-hint"})
+end)
+assertEq(ok_escaped_collision, false, "the escaped name is still recognised on a second import")
 
 -- darkroom.open selects then switches, and detects an already-open image.
 view_state.current = "lighttable"

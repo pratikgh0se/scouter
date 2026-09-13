@@ -11,6 +11,7 @@ import json
 import sys
 
 from scouter import __version__, paths, registry
+from scouter.cli import tables
 from scouter.errors import EXIT_CODES, ScouterError, exit_code_for
 
 #: Verbs excluded from the parity check because they are diagnostics, not verbs.
@@ -80,7 +81,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"scouter {__version__}")
     parser.add_argument("--job", help="job id for the audit log and the undo journal")
-    parser.add_argument("--pretty", action="store_true", help="indent the JSON output")
+    parser.add_argument(
+        "--pretty",
+        action="store_true",
+        help="for humans: indent the JSON, or swap in an aligned table for the few "
+        "verbs whose payload is one (cull.propose, outliers.list, library.jobs). "
+        "A plain invocation (no --pretty) is the machine contract: compact JSON, always",
+    )
     parser.add_argument(
         "--json", action="store_true", help="accepted and ignored: output is always JSON"
     )
@@ -153,7 +160,17 @@ def main(argv: list[str] | None = None) -> int:
     namespace = parser.parse_args(argv)
     pretty = bool(getattr(namespace, "pretty", False))
 
-    def emit(payload: dict, code: int) -> int:
+    def emit(payload: dict, code: int, verb_for_table: str | None = None) -> int:
+        # `--pretty` is for humans: for the handful of verbs whose payload IS
+        # a table (cull.propose, outliers.list, library.jobs), it swaps the
+        # JSON out for an aligned table read straight off stdout. A plain
+        # invocation (no --pretty) always gets JSON -- that stays the one
+        # machine contract, documented in --help.
+        if pretty and verb_for_table is not None:
+            rendered = tables.render(verb_for_table, payload.get("data", {}))
+            if rendered is not None:
+                print(rendered)
+                return code
         print(json.dumps(payload, indent=2 if pretty else None, sort_keys=True))
         return code
 
@@ -216,7 +233,7 @@ def main(argv: list[str] | None = None) -> int:
             "error": {"code": "error", "message": str(e)},
         }
         return emit(payload, EXIT_CODES["error"])
-    return emit(envelope.to_dict(), exit_code_for(envelope.outcome))
+    return emit(envelope.to_dict(), exit_code_for(envelope.outcome), verb_id)
 
 
 if __name__ == "__main__":

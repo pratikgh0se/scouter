@@ -21,6 +21,7 @@ from collections.abc import Iterator
 SMOKE_RAW = "<smoke-raw>"
 SMOKE_OUT_DIR = "<smoke-out-dir>"
 SMOKE_CONFIG_PATH = "<smoke-config-path>"
+SMOKE_SOURCE_DIR = "<smoke-source-dir>"
 
 SMOKE_ARGS: dict[str, dict] = {
     "metrics.summary": {"since": "1d"},
@@ -55,6 +56,46 @@ SMOKE_ARGS: dict[str, dict] = {
     # here is the one-event count, not a successful apply).
     "style.apply_set": {"images": [SMOKE_RAW], "name": "smoke"},
     "export.run": {"images": [SMOKE_RAW], "preset": "preview", "out_dir": SMOKE_OUT_DIR},
+    # No job named "smoke-job" exists on disk here, so this fails fast (usage:
+    # no such job) -- still exactly one event, which is all this coverage
+    # test asserts (same trick as cull.apply below).
+    "export.release": {"job_slug": "smoke-job", "preset": "preview"},
+    # No manifest at this path, so this fails fast (usage: no manifest) --
+    # still exactly one event.
+    "export.verify": {"manifest": "/nonexistent/no-such-manifest.json"},
+    # library.* calls `scouter.config.load()` with no override, exactly like
+    # production -- there is no `--config` flag for these verbs (design
+    # section 6). `SMOKE_SOURCE_DIR` resolves to this test's own (empty) cache
+    # dir, so `_scan` finds nothing and the call fails fast one way or another
+    # (the backup gate first, if a real config happens to exist on the host;
+    # an empty scan otherwise) -- this coverage test only asserts one event,
+    # not success, and `confirm` is deliberately omitted so nothing is ever
+    # written even if the gate does pass.
+    "library.import": {"source": SMOKE_SOURCE_DIR, "job_slug": "smoke-job"},
+    "library.verify": {"job_slug": "smoke-job"},
+    "library.register": {"job_slug": "smoke-job"},
+    "library.jobs": {},
+    # `confirm` deliberately omitted, same reasoning as library.import above:
+    # a dry run at worst, a fast `usage` error (no config / no library_root /
+    # new_root doesn't exist) at worst-worst -- either way exactly one event,
+    # and nothing is ever written.
+    "library.relocate": {"new_root": SMOKE_SOURCE_DIR},
+    # No real job on disk, so `cull.propose` resolving `--images` (the one
+    # frame `install_doubles` sets up) is enough to exercise it: EXIF comes
+    # from a re-read (no import.json to draw on), and nothing is persisted
+    # since no --job-slug is given -- this coverage test only asserts one
+    # event, not that the proposal was written anywhere.
+    "cull.propose": {"images": [SMOKE_RAW], "px": 64, "workers": 1},
+    # No job named "smoke-job" exists on disk here, so this fails fast
+    # (usage: no such job) -- still exactly one event, which is all this
+    # coverage test asserts.
+    "cull.apply": {"job_slug": "smoke-job"},
+    # dry_run=True: backup.run's gate check runs even for a dry run (design
+    # 4.3's order is gate -> enumerate -> ...), so with no SCOUTER_CONFIG
+    # override here this legitimately errors out on an unconfigured gate --
+    # which is fine, this coverage test only cares about the event count.
+    "backup.run": {"dry_run": True},
+    "backup.verify": {},
 }
 
 
@@ -122,6 +163,8 @@ def install_doubles(verb_id: str) -> Iterator[dict]:
                 "errors": [],
             },
             "list_styles": {"styles": [], "count": 0},
+            # "import_batch" needs no override here: FakeBridge's own default
+            # (tests/scouter_fakes.py) covers library.import/library.register.
         }
     )
     dtbridge.set_bridge(bridge)
@@ -134,6 +177,8 @@ def install_doubles(verb_id: str) -> Iterator[dict]:
             return str(paths.cache_root() / "smoke-export")
         if value == SMOKE_CONFIG_PATH:
             return str(paths.cache_root() / "smoke-config.json")
+        if value == SMOKE_SOURCE_DIR:
+            return str(raw_dir)
         if isinstance(value, list):
             return [_real(item) for item in value]
         return value

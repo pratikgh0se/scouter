@@ -102,8 +102,15 @@ def _render_configdir() -> Path:
     return paths.cli_configdir() / f"call-{token}"
 
 
-def render(raw_path: str, out_path: Path, px: int, ext: str) -> int:
+def render(
+    raw_path: str, out_path: Path, px: int, ext: str, *, extra_args: list[str] | None = None
+) -> int:
     """One darktable-cli render via `CLIWrapper`. Returns elapsed ms.
+
+    `extra_args` (task 10) is threaded straight through to
+    `CLIWrapper.export_image` -- Scouter's own preset flags (`--icc-type`,
+    `--style`, `--style-overwrite`, format `--conf`), built once in
+    `core/export.py::preset_args`. `render` itself stays preset-ignorant.
 
     Ruling 7: no hand-rolled subprocess -- `CLIWrapper.export_image` already
     owns the exit-code-lies-about-success check task 4 proved. `ExportError`
@@ -140,6 +147,7 @@ def render(raw_path: str, out_path: Path, px: int, ext: str) -> int:
             max_width=px,
             max_height=px,
             timeout=180,
+            extra_args=extra_args,
         )
         elapsed_ms = int((time.monotonic() - started) * 1000)
         if not written.exists() or written.stat().st_size == 0:

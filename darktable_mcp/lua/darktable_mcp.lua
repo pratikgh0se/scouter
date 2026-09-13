@@ -508,6 +508,36 @@ methods["image.rate"] = function(p)
   return {rating = rating, rated = rated, missed = missed, per_image = per_image}
 end
 
+-- Read-only colour-label lookup for a list of image ids (task 10 fix round
+-- 0, controller ruling R12): `export.release`'s finals selection needs to
+-- know which raws carry a colour label. darktable's Lua image object
+-- exposes that as five boolean fields (red/yellow/green/blue/purple)
+-- directly on the same object `image.lookup`/`image.rate` already index via
+-- `dt.database[id]` -- no view switch, no import, no write. Honest misses:
+-- an id `dt.database[id]` does not know about lands in `missing`, exactly
+-- like `image.rate`'s `missed`.
+local COLOR_LABELS = {"red", "yellow", "green", "blue", "purple"}
+methods["image.color_labels"] = function(p)
+  p = p or {}
+  local ids = p.image_ids or {}
+  if #ids == 0 then error("image.color_labels: image_ids required and non-empty") end
+  local missing, per_image = {}, {}
+  for _, id in ipairs(ids) do
+    local numeric_id = tonumber(id)
+    local image = dt.database[numeric_id]
+    if not image then
+      table.insert(missing, numeric_id)
+    else
+      local labels = {}
+      for _, color in ipairs(COLOR_LABELS) do
+        if image[color] then table.insert(labels, color) end
+      end
+      table.insert(per_image, {image_id = numeric_id, labels = labels})
+    end
+  end
+  return {missing = missing, per_image = per_image}
+end
+
 -- Count images that landed anywhere under `source_path`.
 --
 -- Matching is by PREFIX, not equality. Each imported directory becomes its
@@ -1514,6 +1544,64 @@ methods["style.apply"] = function(p)
   return {name = p.name, mode = mode, applied = applied, missed = missed, errors = errors}
 end
 
+-- Fix round 2, item 6: `scouter/core/dtstyle.py`'s writer escapes `&`/`<`/`>`
+-- in `<name>` the same way ElementTree escapes `<description>`, so the raw
+-- regex-extracted text can carry `&amp;`/`&lt;`/`&gt;`/`&quot;`/`&apos;`.
+-- Comparing the ESCAPED form against `s.name` (which darktable stores
+-- unescaped) would silently never match a name containing any of those
+-- characters -- unescape before comparing. `&amp;` last, so `&amp;lt;`
+-- unescapes to `&lt;`, not all the way to `<` (matches every XML unescaper's
+-- ordering, including Python's xml.sax.saxutils.unescape defaults).
+local function xml_unescape(s)
+  if not s then return s end
+  s = s:gsub("&lt;", "<")
+  s = s:gsub("&gt;", ">")
+  s = s:gsub("&quot;", "\"")
+  s = s:gsub("&apos;", "'")
+  s = s:gsub("&amp;", "&")
+  return s
+end
+
+-- The <name> a .dtstyle file will actually import as, read straight off the
+-- file's own <info><name>...</name> (fix round 1, should-fix 9): a caller's
+-- `name` parameter is only ever a HINT (dt.styles.import derives the real
+-- name from the file, not from any parameter), so the collision check below
+-- must compare against what the file itself says, not against the hint --
+-- otherwise a mismatched hint could make the check pass or fail against the
+-- wrong style entirely. A plain string match, not real XML parsing: this is
+-- the same tradeoff `sidecar_signature`/`file_size` already make for a
+-- narrow, well-known field.
+local function dtstyle_file_name(path)
+  local f = io.open(path, "r")
+  if not f then return nil end
+  local content = f:read("*a") or ""
+  f:close()
+  return xml_unescape(content:match("<info>.-<name>(.-)</name>"))
+end
+
+-- Fix round 2, nit: sha256 of the first 4KB, appended to `sidecar_signature`'s
+-- mtime+size -- a filesystem whose mtime resolution is coarser than the
+-- write (already `sidecar_signature`'s own reasoning) could ALSO, in theory,
+-- leave the size unchanged for a same-length rewrite; hashing real content
+-- closes that gap for the specific "did this file's content actually
+-- change" question `style.export_file` answers. `shasum` is not guaranteed
+-- present on every host, so a missing/failed hash degrades to "" (still
+-- combined with the always-available mtime+size signature) rather than
+-- erroring -- this is a strengthened confidence check, not the only signal.
+local function export_signature(path)
+  local sig = sidecar_signature(path)
+  local hash = nil
+  local p = io.popen("head -c 4096 " .. shell_quote(path)
+    .. " 2>/dev/null | shasum -a 256 2>/dev/null | awk '{print $1}'")
+  if p then
+    local out = (p:read("*a") or ""):gsub("%s+$", "")
+    p:close()
+    if out ~= "" then hash = out end
+  end
+  if sig == nil and hash == nil then return nil end
+  return (sig or "") .. "|" .. (hash or "")
+end
+
 -- Export an existing style to a .dtstyle file. Its first job is to PIN the file
 -- format: a style made by style.create_from_current is exported here and the
 -- real file is committed as tests/fixtures/hero.dtstyle, so the writer in
@@ -1526,16 +1614,25 @@ methods["style.export_file"] = function(p)
   local style = nil
   for _, s in ipairs(dt.styles) do if s.name == p.name then style = s; break end end
   if not style then error(string.format("style.export_file: style %q not found", p.name)) end
+  local path = p.dir .. "/" .. p.name .. ".dtstyle"
+  -- fix round 1, should-fix 9: `exported` is only true when the file's own
+  -- signature actually advanced -- a `pcall` returning ok=true proves
+  -- dt.styles.export did not RAISE, not that it wrote anything.
+  local before_sig = export_signature(path)
   local ok, err = pcall(dt.styles.export, style, p.dir)
   if not ok then error("style.export_file: " .. tostring(err)) end
-  local path = p.dir .. "/" .. p.name .. ".dtstyle"
-  return {name = p.name, path = path, exported = true, bytes = file_size(path)}
+  local after_sig = export_signature(path)
+  local advanced = after_sig ~= nil and after_sig ~= before_sig
+  return {name = p.name, path = path, exported = advanced, bytes = file_size(path)}
 end
 
 methods["style.import_file"] = function(p)
   p = p or {}
   if type(p.path) ~= "string" or p.path == "" then error("style.import_file: path required") end
-  local name = p.name
+  -- fix round 1, should-fix 9: the collision check is against the name the
+  -- FILE will actually import as, not the caller's `name` hint.
+  local file_name = dtstyle_file_name(p.path)
+  local name = file_name or p.name
   local before, existing = 0, nil
   for _, s in ipairs(dt.styles) do
     before = before + 1
@@ -1552,12 +1649,71 @@ methods["style.import_file"] = function(p)
                          .. tostring(err)) end
     replaced = true
   end
+  -- fix round 1, should-fix 9: the destructive window is REAL and unavoidable
+  -- with this Lua API (there is no atomic "replace" primitive) -- delete has
+  -- already happened above when `replaced` is true, so an import failure
+  -- from here on cannot be rolled back. Named explicitly in the error rather
+  -- than silently leaving the caller to discover the style is just gone.
   local ok, err = pcall(dt.styles.import, p.path)
-  if not ok then error("style.import_file: " .. tostring(err)) end
+  if not ok then
+    if replaced then
+      error(string.format(
+        "style.import_file: import of %q failed AFTER the existing style of "
+        .. "the same name was already deleted (destructive window: it cannot "
+        .. "be restored automatically) -- %s", name, tostring(err)))
+    end
+    error("style.import_file: " .. tostring(err))
+  end
   local after = 0
   for _ in ipairs(dt.styles) do after = after + 1 end
   return {name = name, imported = true, replaced = replaced,
           styles_before = before, styles_after = after}
+end
+
+-- Delete one style by name. Tolerant of "already gone" (existed=false)
+-- rather than erroring, since its main caller is test/probe cleanup
+-- (fix round 1, should-fix 10) where "nothing to clean up" is a normal,
+-- not exceptional, outcome.
+--
+-- Fix round 2, item 5: this deletes real user data with no undo, so it is
+-- gated TWICE, both before the `dt.styles` scan even runs: `prefix`
+-- (defaults to Scouter's own "scouter-", so a typo'd or malicious `name`
+-- cannot reach an arbitrary style someone actually uses) and `confirm=true`
+-- (no default that makes a bare `{name=...}` call ever delete anything).
+methods["style.delete"] = function(p)
+  p = p or {}
+  if type(p.name) ~= "string" or p.name == "" then error("style.delete: name required") end
+  -- Fix round 3, item 4: an OMITTED prefix (nil) defaults to "scouter-", but
+  -- an EXPLICIT empty prefix is refused rather than silently rewritten to
+  -- the same default -- prefix="" would match every style name (an empty
+  -- string is a prefix of everything in Lua's sub(1, 0) == ""), which is
+  -- exactly the safety check this argument exists to prevent bypassing.
+  local prefix = p.prefix
+  if prefix == nil then
+    prefix = "scouter-"
+  elseif type(prefix) ~= "string" or prefix == "" then
+    error("style.delete: prefix must be a non-empty string (omit it to use "
+      .. "the default \"scouter-\"; an explicit empty prefix would match "
+      .. "every style name, defeating the safety check)")
+  end
+  if p.name:sub(1, #prefix) ~= prefix then
+    error(string.format(
+      "style.delete: refusing to delete %q -- it does not start with the "
+      .. "required prefix %q (pass a different `prefix` if this is "
+      .. "intentional; the default only lets Scouter clean up its own "
+      .. "throwaway styles)", p.name, prefix))
+  end
+  if not p.confirm then
+    error(string.format(
+      "style.delete: pass confirm=true to actually delete %q -- this call "
+      .. "never deletes without an explicit confirmation", p.name))
+  end
+  local style = nil
+  for _, s in ipairs(dt.styles) do if s.name == p.name then style = s; break end end
+  if not style then return {name = p.name, deleted = false, existed = false} end
+  local ok, err = pcall(dt.styles.delete, style)
+  if not ok then error("style.delete: " .. tostring(err)) end
+  return {name = p.name, deleted = true, existed = true}
 end
 
 -- ---- Dispatch --------------------------------------------------------------
@@ -1871,6 +2027,8 @@ return {
     max_depth = IMPORT_MAX_DEPTH,
   },
   cache_dir = cache_dir,
+  xml_unescape = xml_unescape,
+  dtstyle_file_name = dtstyle_file_name,
   safe_request_id = safe_request_id,
   write_file_atomic = write_file_atomic,
   write_response = write_response,

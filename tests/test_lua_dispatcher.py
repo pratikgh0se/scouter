@@ -295,6 +295,8 @@ SCOUTER_METHODS = (
     "image.rate",
     "style.export_file",
     "style.import_file",
+    "style.delete",
+    "image.color_labels",
 )
 
 #: Matches both `methods["dotted.name"] = ...` and `methods.bare_name = ...`

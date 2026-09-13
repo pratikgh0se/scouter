@@ -137,12 +137,56 @@ class StyleWriteFailed(ScouterError):
     )
 
 
+class NoSidecar(ScouterError):
+    """`style.extract`'s filtered path needs a real sidecar to read the history
+    from -- a typed refusal (fix round 1, blocker 2), never the raw
+    `FileNotFoundError` `xmp.read_sidecar` raises.
+
+    Deliberately NOT in `ERROR_CLASSES` (spec section 9's darktable failure
+    classes, pinned by `tests/test_paths_errors.py`), same reasoning as
+    `UsageError`: this is Scouter refusing to build a style from a history it
+    cannot read, not one of darktable's own failure modes.
+    """
+
+    code = "no_sidecar"
+    fix = "commit history first (`scouter history commit <image>`), then retry"
+
+
 class EncryptionUnavailable(ScouterError):
     code = "encryption_unavailable"
     fix = (
         "install age (`brew install age`) and set `backup.age_recipient`, or create the "
         "openssl passfile at `detail.passfile` with mode 0600"
     )
+
+
+class ManifestUnauthenticated(ScouterError):
+    """`export.verify`'s manifest has no `.sha256` sidecar next to it.
+
+    `export.release` always writes one alongside the manifest -- a missing
+    sidecar means the manifest cannot be trusted before its own contents are
+    used to check anything else, so this is a hard refusal (fix round 1,
+    blocker 3), never a silently-skipped check.
+    """
+
+    code = "manifest_unauthenticated"
+    fix = (
+        "no <manifest>.sha256 next to the manifest: export.release always writes one. "
+        "Restore it, or re-run export.release to produce a fresh, authenticated manifest"
+    )
+
+
+class ExportAllFailed(ScouterError):
+    """Every frame `export.release` tried to render failed.
+
+    A `ReleaseResult` with `exported=0` and `outcome="ok"` would read as
+    success; this is the typed refusal instead (fix round 1, should-fix 7),
+    raised before the manifest is written -- a manifest describing zero
+    exported files is not a release.
+    """
+
+    code = "export_all_failed"
+    fix = "every render failed; see detail.files for the per-image reasons"
 
 
 #: Process exit codes. 0/1/2 follow shell convention; the rest are one per error
@@ -169,6 +213,9 @@ EXIT_CODES: dict[str, int] = {
     "exif_unreadable": 14,
     "style_write_failed": 15,
     "encryption_unavailable": 16,
+    "manifest_unauthenticated": 17,
+    "export_all_failed": 18,
+    "no_sidecar": 19,
 }
 
 ERROR_CLASSES: tuple[type[ScouterError], ...] = (
@@ -185,6 +232,8 @@ ERROR_CLASSES: tuple[type[ScouterError], ...] = (
     ExifUnreadable,
     StyleWriteFailed,
     EncryptionUnavailable,
+    ManifestUnauthenticated,
+    ExportAllFailed,
 )
 
 

@@ -197,6 +197,10 @@ class StyleResult(Payload):
     dtstyle_path: str | None = None
     operations_included: list[str] = field(default_factory=list)
     modules_missing: list[str] = field(default_factory=list)
+    # Fix round 1, should-fix 5: a requested module whose newest active entry
+    # is disabled is still written (honouring the request literally), but
+    # named here so the caller is never left thinking it is live.
+    modules_disabled: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -240,6 +244,86 @@ class ExportResult(Payload):
 
 
 @dataclass
+class ReleaseResult(Payload):
+    """`export.release`'s result. `selection_rule`/`selected`/`of` mirror the
+    manifest's own `selection` block, so the CLI's summary and the manifest on
+    disk never drift; `manifest_path` is what `export.verify` re-reads."""
+
+    job_slug: str = ""
+    preset: str = ""
+    out_dir: str = ""
+    manifest_path: str = ""
+    selection_rule: str = ""
+    selected: int = 0
+    of: int = 0
+    files: list[ExportedFile] = field(default_factory=list)
+    exported: int = 0
+    failed: int = 0
+    bytes: int = 0
+
+
+@dataclass
+class ImportResult(Payload):
+    """`library.import`'s result. `files`/`totals` mirror `.scouter/import.json`
+    (relative `raw/<name>` destinations, per design section 6) so the two never
+    drift; a dry run leaves both empty and reports the same shape via `plan`.
+
+    `duplicates` lists the byte-identical pairs the import deliberately KEPT
+    BOTH of, as `[already_present_dest, new_dest]` (ruling R17): resume
+    identity is `(source_name, sha256)`, so the same bytes arriving under a
+    different camera filename are a second frame with their own `seq`, never
+    a silent skip and never a refusal. A dry run cannot fill this in (it does
+    not hash every candidate) and leaves it empty."""
+
+    job_slug: str = ""
+    date: str = ""
+    camera: str = ""
+    camera_model: str | None = None
+    camera_make: str | None = None
+    source_root: str = ""
+    files: list[dict] = field(default_factory=list)
+    totals: dict[str, int] = field(default_factory=dict)
+    film_roll_registered: bool = False
+    imported: int = 0
+    scan_incomplete: bool | None = None
+    recursive_honoured: bool | None = None
+    duplicates: list[list[str]] = field(default_factory=list)
+
+
+@dataclass
+class VerifyResult(Payload):
+    job_slug: str = ""
+    checked: int = 0
+    ok: bool = True
+    mismatched: list[dict] = field(default_factory=list)
+    missing: list[str] = field(default_factory=list)
+    extra: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RegisterResult(Payload):
+    job_slug: str = ""
+    film_roll_registered: bool = False
+    imported: int = 0
+    scan_incomplete: bool | None = None
+    recursive_honoured: bool | None = None
+
+
+@dataclass
+class JobsResult(Payload):
+    jobs: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class RelocateResult(Payload):
+    old_root: str = ""
+    new_root: str = ""
+    jobs: list[dict] = field(default_factory=list)
+    darktable_rollpaths_stale: bool = False
+    next_step: str | None = None
+
+
+@dataclass
 class ConfigResult(Payload):
     config_path: str = ""
     config_exists: bool = False
@@ -249,12 +333,72 @@ class ConfigResult(Payload):
 
 
 @dataclass
+class BackupResult(Payload):
+    archive_dir: str = ""
+    manifest_path: str = ""
+    members: int = 0
+    plaintext_bytes: int = 0
+    ciphertext_bytes: int = 0
+    encryption: str = "openssl"
+    rsync_ran: bool = False
+    rsync_files: int = 0
+    rsync_bytes: int = 0
+    rsync_exit: int | None = None
+    pruned: list[str] = field(default_factory=list)
+    ms_tar: int = 0
+    ms_encrypt: int = 0
+    ms_rsync: int = 0
+
+
+@dataclass
+class BackupVerifyResult(Payload):
+    verified: bool = False
+    archive: str = ""
+    checks: list[dict] = field(default_factory=list)
+    sampled_members: list[dict] = field(default_factory=list)
+    sampled_raws: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class SummaryResult(Payload):
     since: str = "7d"
     from_ts: str = ""
     verbs: list[dict] = field(default_factory=list)
     totals: dict[str, Any] = field(default_factory=dict)
     alerts: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class CullResult(Payload):
+    """`cull.propose`'s result. `proposals` carries one entry per frame, each
+    with a `reasons` list that names its numbers (never a bare verdict); the
+    same list is persisted verbatim to `proposal_path` so `cull.apply`
+    consumes exactly the table Pratik read."""
+
+    proposal_path: str = ""
+    job_slug: str = ""
+    groups: list[dict] = field(default_factory=list)
+    proposals: list[dict] = field(default_factory=list)
+    counts: dict[str, int] = field(default_factory=dict)
+    stats: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class CullApplyResult(Payload):
+    """`cull.apply`'s result. `verified`/`unverified` are reported separately
+    (design 8.3) rather than folded into `applied`: darktable owns when it
+    flushes a rating to the sidecar, so an unverified write is real, just not
+    yet visible -- never claimed as a failure."""
+
+    job_slug: str = ""
+    proposal_path: str = ""
+    applied: int = 0
+    unchanged: int = 0
+    would_change: int = 0
+    missed: list[int] = field(default_factory=list)
+    verified: int = 0
+    unverified: int = 0
+    per_image: list[dict] = field(default_factory=list)
 
 
 @dataclass
