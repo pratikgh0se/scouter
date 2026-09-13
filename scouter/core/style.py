@@ -44,18 +44,59 @@ never darktable's. Round 1 matched a history entry's `multi_name` against
 the style name -- an unverified guess about how darktable happens to tag a
 style-created instance, never confirmed against a real host. R16 replaces
 it outright: `apply_set` keeps a per-job ledger,
-`<job>/.scouter/styles-applied.json` (one entry per `(image_id, style)`:
-`applied_at`, `history_end_after` -- the sidecar's `history_end` read
-right after the batch that applied it, best effort). An image counts as
-"already styled" only when the ledger has an entry for it AND the
-CURRENT sidecar's `history_end` is still at or past `history_end_after`
-(an untouched or advanced history since the recorded application); an
-unconfirmed or missing current sidecar is never guessed at -- it is
+`<job>/.scouter/styles-applied.json` (one entry per `(image_id, style)`).
+An unconfirmed or missing current sidecar is never guessed at -- it is
 `"unknown"`, and the frame is skipped without applying, never applied
 blind. A set resolved from `--images` alone, with no `--job-slug`, has no
 job directory and therefore no ledger: nothing is ever skipped that way,
-and a warning says so. See `apply_set`'s own docstring for the exact rule
-and the accounting it implies.
+and a warning says so.
+
+Fix round 3 (Ruling R18) -- the ledger records `history_end_before`, not
+`_after`. Round 2's `history_end_after` was read from the sidecar RIGHT
+AFTER the batch call returned, on the assumption that `image:apply_style`
+had, by then, caused the sidecar to reflect the new history -- but the Lua
+`style.apply` handler never rewrites the sidecar at all (only darktable's
+own commit path does that, the same fact `history.commit` exists because
+of). So `history_end_after` was really just another read of the PRE-apply
+value, and round 2's `>=` check against it was always trivially true --
+inert, contradicting what its own docstring claimed. R18 fixes this by
+recording `history_end_before` (read right BEFORE the batch call that
+applies the style, per id, best effort) and changing the guard to compare
+the CURRENT sidecar's `history_end` against it with the correct sense:
+strictly GREATER means the sidecar has genuinely been rewritten since
+(darktable committed, `history_end` moved) -- "already styled". EQUAL
+means nothing has been committed since the apply -- the guard cannot tell
+"styled but uncommitted" from "never really applied" from a bridge-side
+report, so this is `"unknown"`, not a skip, with a warning naming the fix
+(commit history, or open the image in the darkroom and leave it). LESS
+means the history was rewound since the recorded application -- treated
+as not styled (re-applies), with a warning. `history_end_before=None`
+(the sidecar itself was unreadable at ledger-write time) is `"unknown"`
+too, never "assume still applied" the way round 2's missing-value case
+read -- there is nothing left to compare against, so nothing can be
+concluded either way. See `_idempotency_verdict`'s own docstring for the
+exact branches, and `apply_set`'s own docstring for the accounting.
+
+The ledger is flushed after EVERY successful batch (fix round 3, item 2),
+not once at the end -- a crash between batch 2 and batch 3 of a 300-image
+run must not lose batch 1 and batch 2's ledger entries, which is exactly
+what "keep a ledger" is supposed to prevent. `_write_ledger_atomic` fsyncs
+the temp file before `os.replace`, so a crash mid-write leaves either the
+old file or the new one, never a torn one.
+
+Read-modify-write race (fix round 3, item 3, stated plainly rather than
+solved): the ledger is read once per `apply_set` call and merged/written
+back per batch with no file lock. This is safe for the assumed usage --
+ONE Scouter process working ONE job at a time, which is how every verb in
+this codebase is invoked (there is no daemon, no queue, no concurrent
+`apply_set` calls against the same job by design) -- but it is not safe
+against two processes racing the same job's ledger: the second writer's
+read predates the first writer's write, so the second `os.replace` clobbers
+the first writer's update entirely (last writer wins, not last-writer-merges).
+`os.replace` only guarantees no reader ever sees a half-written file; it
+guarantees nothing about update ordering across writers. If Scouter ever
+grows concurrent job execution, this needs a real lock (e.g. `flock` on
+the ledger file, or a lock directory) before it is safe.
 """
 
 from __future__ import annotations
@@ -549,10 +590,21 @@ def _upsert_ledger(existing: list[dict], updates: list[dict]) -> list[dict]:
 
 
 def _write_ledger_atomic(job_path: Path, entries: list[dict]) -> None:
+    """Temp file + `fsync` + `os.replace` (fix round 3, item 2): called
+    after EVERY successful batch, not once at the end, so a crash between
+    batch 2 and batch 3 of a long run does not lose batch 1 and 2's
+    entries -- the entire point of keeping a ledger. `fsync` on the temp
+    file before the rename means the bytes are actually on disk before the
+    name that makes them visible is; without it, a crash could still leave
+    an empty or truncated file behind the new name on some filesystems.
+    """
     path = _ledger_path(job_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(json.dumps(entries, indent=2))
+    with tmp.open("w", encoding="utf-8") as f:
+        f.write(json.dumps(entries, indent=2))
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, path)
 
 
@@ -589,15 +641,27 @@ def _current_history_end(path: str) -> tuple[int | None, bool]:
 def _idempotency_verdict(
     resolved: ResolvedImage, ledger_entry: dict | None
 ) -> tuple[str, str | None]:
-    """One resolved target's fix-round-2 idempotency verdict.
+    """One resolved target's fix-round-3 (Ruling R18) idempotency verdict.
 
-    Returns `("apply", None)` when there is nothing on record (proceed
-    normally -- the common case, and the ONLY case that does not need a
-    local sidecar read at all); `("already_styled", note)` when the ledger
-    says this image already has the style AND the current sidecar confirms
-    the history has not been rewound past that point; `("unknown", note)`
-    when the ledger has a record but the current sidecar cannot confirm or
-    deny it (item 2) -- never a guess.
+    Returns `("apply", note)` when there is nothing to skip -- either
+    nothing on record at all (`note=None`, the common case, and the ONLY
+    case that needs no local sidecar read), or the ledger's
+    `history_end_before` is a real number the CURRENT sidecar's
+    `history_end` has fallen BELOW (`note` explains the history was
+    rewound since the recorded application, so this is treated as not
+    styled and re-applied, not skipped). `("already_styled", None)` only
+    when the current sidecar's `history_end` is STRICTLY GREATER than the
+    recorded `history_end_before` -- proof the sidecar has genuinely been
+    rewritten (darktable committed) since the apply this ledger entry
+    recorded. `("unknown", note)` covers every case that cannot be told
+    apart from a bridge-side check alone: `history_end_before` itself was
+    `None` (sidecar unreadable when the ledger entry was written -- there
+    is nothing to compare against); the CURRENT sidecar cannot be
+    confirmed (missing, or mid-write); or the current `history_end`
+    EQUALS `history_end_before` (nothing has been committed since the
+    apply -- this cannot be distinguished from "the apply never really
+    landed", so it is never silently treated as "still styled" the way
+    round 2 did).
 
     Never raises: the one thing that could (`xmp.read_sidecar` /
     `xmp.parse`, both plain stdlib calls with no bridge round trip) is
@@ -608,6 +672,13 @@ def _idempotency_verdict(
     """
     if ledger_entry is None:
         return "apply", None
+    before = ledger_entry.get("history_end_before")
+    if before is None:
+        return (
+            "unknown",
+            "ledger record has no history_end_before on file (the sidecar was "
+            "unreadable when it was written); nothing to compare against",
+        )
     history_end, confirmed = _current_history_end(resolved.path)
     if not confirmed:
         return (
@@ -615,16 +686,22 @@ def _idempotency_verdict(
             "commit history first: the current sidecar is missing or mid-write, so "
             "Scouter's ledger record cannot be confirmed against it",
         )
-    expected = ledger_entry.get("history_end_after")
-    if expected is None:
-        return (
-            "already_styled",
-            "ledger record has no history_end_after on file (best-effort read failed "
-            "when it was written); assuming still applied",
-        )
-    if history_end is not None and int(history_end) >= int(expected):
+    before = int(before)
+    current = int(history_end) if history_end is not None else before
+    if current > before:
         return "already_styled", None
-    return "apply", None
+    if current == before:
+        return (
+            "unknown",
+            "sidecar not rewritten since the apply; commit history (or open the "
+            "image in the darkroom and leave it) before retrying",
+        )
+    return (
+        "apply",
+        "history has been rewound since the recorded application "
+        f"(current history_end {current} < recorded {before}); treating as not "
+        "styled",
+    )
 
 
 @metrics.instrumented("style.apply_set")
@@ -713,12 +790,35 @@ def apply_set(
        ("stopped after N consecutive batch failures") -- previously only
        computable by subtraction, never listed.
 
-    After a batch succeeds, every id it applied gets a ledger entry written
-    (`applied_at`, `history_end_after` -- the sidecar's `history_end` read
-    right back, best effort: `None` if the sidecar is not yet confirmed,
-    which the next run's guard treats as "assume still applied", per the
-    module docstring). The ledger is only written when `--job-slug` gave a
-    job directory to write it into.
+    Fix round 3 (Ruling R18) -- the ledger field and its comparison, fixed
+    (see the module docstring for the bug this closes: the Lua `style.apply`
+    handler never rewrites the sidecar, so round 2's `history_end_after`
+    was really a second PRE-apply read, and its `>=` check was inert):
+
+    1. Every batch reads each target's sidecar `history_end` BEFORE the
+       `style.apply` call (`history_end_before`, best effort: `None` if the
+       sidecar cannot be confirmed at that moment). Every id the batch
+       actually applies gets a ledger entry with that pre-apply value.
+       `_idempotency_verdict` now compares the CURRENT `history_end`
+       against `history_end_before` with the correct sense: strictly
+       greater is `"already_styled"` (the sidecar has genuinely been
+       rewritten, i.e. committed, since); equal is `"unknown"` (nothing
+       committed since the apply -- indistinguishable from "never really
+       applied" without a bridge-side check, never silently treated as
+       styled); less is treated as `"apply"` (history rewound since, with
+       a warning); `history_end_before=None` on the ledger record is
+       `"unknown"` too, never "assume still applied".
+    2. The ledger is flushed to disk after EVERY successful batch, not
+       once at the end (`_write_ledger_atomic`, fsynced before the atomic
+       rename) -- so a crash mid-run loses at most the batch in flight,
+       never an earlier one's already-recorded applications.
+    3. The read-modify-write race across concurrent writers is stated
+       plainly in the module docstring, not solved: safe for one Scouter
+       process per job (this codebase's only supported usage today), not
+       safe against two.
+    4. `force=True` still writes the ledger (with this run's own
+       `history_end_before`), it only skips the SKIP decision -- a forced
+       re-application is still a real application, worth recording.
 
     `StyleSetResult` (`scouter/types.py`) has no new top-level field for
     "unknown" ids, "already carries this style" ids, or "never attempted"
@@ -853,6 +953,11 @@ def apply_set(
                     {"image_id": r.image_id, "path": r.path, "status": "unknown", "error": note}
                 )
             else:
+                # Fix round 3: "apply" with a note means the ledger record
+                # was there but the history has been rewound past it --
+                # still applied normally, but worth saying why.
+                if note:
+                    warnings.append(f"image {r.image_id}: {note}")
                 to_apply.append(r)
 
     id_to_path = {r.image_id: r.path for r in to_apply}
@@ -861,7 +966,7 @@ def apply_set(
 
     applied_ids: list[int] = []
     batch_rows: list[dict] = []
-    ledger_updates: list[dict] = []
+    current_ledger: list[dict] = list(raw_ledger)
     missed_ids: list[int] = []
     unknown_ids: list[int] = []
     consecutive_failures = 0
@@ -869,6 +974,13 @@ def apply_set(
 
     for batch_ids in batches:
         batches_run += 1
+        # Fix round 3, item 1: read EACH target's history_end BEFORE this
+        # batch's own apply call -- the Lua `style.apply` handler never
+        # rewrites the sidecar itself (module docstring), so a read taken
+        # after the call is really still a pre-apply read. Best effort:
+        # `None` when the sidecar cannot be confirmed right now.
+        pre_history_end = {iid: _current_history_end(id_to_path[iid])[0] for iid in batch_ids}
+        batch_ledger_updates: list[dict] = []
         try:
             result = dtbridge.call(
                 "style.apply", {"image_ids": batch_ids, "name": name, "mode": mode}
@@ -951,20 +1063,24 @@ def apply_set(
                         "error": None,
                     }
                 )
-                # Ruling R16: record the ledger entry right after this
-                # batch's own apply, best effort -- a sidecar darktable has
-                # not committed yet reads back unconfirmed, and that is
-                # recorded honestly as `history_end_after=None`, not a
-                # guessed number.
-                history_end_after, _confirmed = _current_history_end(id_to_path[iid])
-                ledger_updates.append(
+                batch_ledger_updates.append(
                     {
                         "image_id": iid,
                         "style": name,
                         "applied_at": _now_z(),
-                        "history_end_after": history_end_after,
+                        "history_end_before": pre_history_end.get(iid),
                     }
                 )
+
+        # Fix round 3, item 2: flush after EVERY successful batch, not once
+        # at the end -- a crash between this batch and the next must not
+        # lose what already landed.
+        if job_path is not None and batch_ledger_updates:
+            current_ledger = _upsert_ledger(current_ledger, batch_ledger_updates)
+            try:
+                _write_ledger_atomic(job_path, current_ledger)
+            except OSError as e:
+                warnings.append(f"style ledger not written: {e}")
 
     # Fix round 2, item 6: rows for ids a consecutive-failure stop never
     # reached, previously only inferable by subtraction.
@@ -1010,11 +1126,8 @@ def apply_set(
             f"{sorted(r['image_id'] for r in already_rows)} (force=True to apply again)"
         )
 
-    if job_path is not None and ledger_updates:
-        try:
-            _write_ledger_atomic(job_path, _upsert_ledger(raw_ledger, ledger_updates))
-        except OSError as e:
-            warnings.append(f"style ledger not written: {e}")
+    # Fix round 3, item 2: the ledger is already flushed after every
+    # successful batch, inside the loop above -- nothing left to write here.
 
     if job_slug:
         try:

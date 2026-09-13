@@ -1,6 +1,6 @@
-"""Task 8 + fix rounds 1-2: `style.apply_set` -- batches of 25, the
+"""Task 8 + fix rounds 1-3: `style.apply_set` -- batches of 25, the
 `partial` outcome, honest batch-level error handling, unknown-status
-timeouts, and the ledger-based idempotency guard (Ruling R16).
+timeouts, and the ledger-based idempotency guard (Rulings R16 and R18).
 
 `partial` keeps the successes: any `ScouterError` on one batch marks that
 batch's ids as failed (or, for a real client-side `BridgeTimeout`, as
@@ -16,9 +16,17 @@ same claim as "this failed".
 
 Fix round 2 (Ruling R16) replaced round 1's darktable `multi_name`
 heuristic outright: idempotency is now Scouter's OWN per-job ledger,
-`<job>/.scouter/styles-applied.json`, checked against the CURRENT sidecar's
-`history_end` -- never a guess about how darktable happens to tag history
-entries.
+`<job>/.scouter/styles-applied.json`. Fix round 3 (Ruling R18) fixed the
+ledger's own field and comparison: the Lua `style.apply` handler never
+rewrites the sidecar, so round 2's "read history_end right after the
+apply" was really still a pre-apply read, and its `>=` check was inert.
+The ledger now records `history_end_before` (read right BEFORE the apply)
+and the guard requires the CURRENT sidecar's `history_end` to be STRICTLY
+GREATER than it -- proof the sidecar was genuinely rewritten (committed)
+since. Equal is `"unknown"` (nothing committed since the apply); less is
+treated as rewound (re-applies, with a warning); `history_end_before=None`
+is `"unknown"` too, never "assume still applied". The ledger is flushed
+to disk after every successful batch, not once at the end.
 """
 
 from __future__ import annotations
@@ -393,25 +401,29 @@ class StyleSetTest(unittest.TestCase):
             style.apply_set(name="hero", images=[], confirm=True)
         self.assertEqual(bridge.count("style.apply"), 0)
 
-    # -- fix round 2 (Ruling R16): ledger-based idempotency guard ---------
+    # -- fix round 2 (Ruling R16) / fix round 3 (Ruling R18): ledger-based
+    # idempotency guard, comparing history_end_before -----------------------
 
-    def test_ledger_skip(self) -> None:
-        """A ledger entry whose `history_end_after` the current, CONFIRMED
-        sidecar has not moved past means "already styled" -- decided from
-        Scouter's own record, never darktable's history metadata."""
-        images = self._setup_job(3)
-        styled_id = min(images)
+    def _seed_one(self, styled_id: int, history_end_before) -> None:
         self._seed_ledger(
             [
                 {
                     "image_id": styled_id,
                     "style": "hero",
                     "applied_at": "2026-01-01T00:00:00Z",
-                    "history_end_after": 3,
+                    "history_end_before": history_end_before,
                 }
             ]
         )
-        Path(images[styled_id] + ".xmp").write_text(_sidecar_xml(history_end=3))
+
+    def test_ledger_skip(self) -> None:
+        """Fix round 3: the CURRENT sidecar's history_end must be STRICTLY
+        GREATER than the ledger's history_end_before -- proof the sidecar
+        was genuinely rewritten (committed) since the recorded apply."""
+        images = self._setup_job(3)
+        styled_id = min(images)
+        self._seed_one(styled_id, history_end_before=3)
+        Path(images[styled_id] + ".xmp").write_text(_sidecar_xml(history_end=5))
 
         bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
         apply_calls = [p for m, p in bridge.calls if m == "style.apply"]
@@ -423,20 +435,66 @@ class StyleSetTest(unittest.TestCase):
         self.assertTrue(any("skip decided from Scouter's own record" in w for w in result.warnings))
         self.assertTrue(any("already_styled" in w for w in result.warnings))
 
+    def test_ledger_current_equal_to_before_is_unknown(self) -> None:
+        """Fix round 3, item 1: nothing has been committed since the apply
+        -- indistinguishable from "never really applied" without a bridge
+        check, so this is "unknown", never silently "already styled"."""
+        images = self._setup_job(2)
+        styled_id = min(images)
+        self._seed_one(styled_id, history_end_before=3)
+        Path(images[styled_id] + ".xmp").write_text(_sidecar_xml(history_end=3))
+
+        bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+        statuses = _statuses(result.per_image)
+        self.assertEqual(statuses[styled_id], "unknown")
+        row = next(p for p in result.per_image if p["image_id"] == styled_id)
+        self.assertIn("sidecar not rewritten since the apply", row["error"])
+        self.assertIn("commit history", row["error"])
+        apply_calls = [p for m, p in bridge.calls if m == "style.apply"]
+        applied_ids = {iid for call in apply_calls for iid in call["image_ids"]}
+        self.assertNotIn(styled_id, applied_ids)  # skipped, never applied blind
+
+    def test_ledger_current_less_than_before_is_rewound_and_reapplies(self) -> None:
+        """Fix round 3, item 1: a history rewound past the recorded apply is
+        treated as NOT styled (re-applies), with a warning."""
+        images = self._setup_job(2)
+        styled_id = min(images)
+        self._seed_one(styled_id, history_end_before=5)
+        Path(images[styled_id] + ".xmp").write_text(_sidecar_xml(history_end=3))
+
+        bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+        statuses = _statuses(result.per_image)
+        self.assertEqual(statuses[styled_id], "applied")
+        apply_calls = [p for m, p in bridge.calls if m == "style.apply"]
+        applied_ids = {iid for call in apply_calls for iid in call["image_ids"]}
+        self.assertIn(styled_id, applied_ids)
+        self.assertTrue(any("rewound" in w for w in result.warnings))
+
+    def test_ledger_history_end_before_none_is_unknown(self) -> None:
+        """Fix round 3, item 1: history_end_before=None on the ledger record
+        (the sidecar was unreadable when it was written) is "unknown" --
+        never "assume still applied" the way round 2 read it."""
+        images = self._setup_job(2)
+        styled_id = min(images)
+        self._seed_one(styled_id, history_end_before=None)
+        # Even a confirmed, well-formed current sidecar changes nothing --
+        # there is no baseline to compare it against.
+        Path(images[styled_id] + ".xmp").write_text(_sidecar_xml(history_end=5))
+
+        bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+        statuses = _statuses(result.per_image)
+        self.assertEqual(statuses[styled_id], "unknown")
+        row = next(p for p in result.per_image if p["image_id"] == styled_id)
+        self.assertIn("nothing to compare against", row["error"])
+        apply_calls = [p for m, p in bridge.calls if m == "style.apply"]
+        applied_ids = {iid for call in apply_calls for iid in call["image_ids"]}
+        self.assertNotIn(styled_id, applied_ids)
+
     def test_force_ignores_ledger(self) -> None:
         images = self._setup_job(3)
         styled_id = min(images)
-        self._seed_ledger(
-            [
-                {
-                    "image_id": styled_id,
-                    "style": "hero",
-                    "applied_at": "2026-01-01T00:00:00Z",
-                    "history_end_after": 3,
-                }
-            ]
-        )
-        Path(images[styled_id] + ".xmp").write_text(_sidecar_xml(history_end=3))
+        self._seed_one(styled_id, history_end_before=3)
+        Path(images[styled_id] + ".xmp").write_text(_sidecar_xml(history_end=5))
 
         bridge, result = self._apply_set(
             images, apply=_apply_all_ok, job_slug="hero-job", force=True
@@ -446,6 +504,24 @@ class StyleSetTest(unittest.TestCase):
         self.assertIn(styled_id, applied_ids)
         self.assertEqual(result.applied, 3)
 
+    def test_force_updates_ledger_entry(self) -> None:
+        """Fix round 3, item 4: force=True still writes the ledger (with
+        this run's own history_end_before) -- it only skips the SKIP
+        decision, a forced re-application is still a real one."""
+        images = self._setup_job(1)
+        styled_id = min(images)
+        self._seed_one(styled_id, history_end_before=1)
+        Path(images[styled_id] + ".xmp").write_text(_sidecar_xml(history_end=9))
+
+        bridge, result = self._apply_set(
+            images, apply=_apply_all_ok, job_slug="hero-job", force=True
+        )
+        self.assertEqual(result.applied, 1)
+        entries = json.loads(self._ledger_path().read_text())
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["image_id"], styled_id)
+        self.assertEqual(entries[0]["history_end_before"], 9)
+
     def test_all_already_applied_is_ok_not_partial(self) -> None:
         images = self._setup_job(2)
         self._seed_ledger(
@@ -454,13 +530,13 @@ class StyleSetTest(unittest.TestCase):
                     "image_id": iid,
                     "style": "hero",
                     "applied_at": "2026-01-01T00:00:00Z",
-                    "history_end_after": 3,
+                    "history_end_before": 3,
                 }
                 for iid in images
             ]
         )
         for path in images.values():
-            Path(path + ".xmp").write_text(_sidecar_xml(history_end=5))  # past 3, still styled
+            Path(path + ".xmp").write_text(_sidecar_xml(history_end=5))  # > 3, so "styled"
 
         bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
         self.assertEqual(result.outcome, "ok")
@@ -469,21 +545,12 @@ class StyleSetTest(unittest.TestCase):
         self.assertEqual(bridge.count("style.apply"), 0)
 
     def test_unknown_sidecar_skips_as_unknown(self) -> None:
-        """Fix round 2, item 2: a ledger record whose CURRENT sidecar cannot
-        be confirmed (here: missing entirely) is "unknown", not "already
-        styled" and not silently applied -- never a guess either way."""
+        """A ledger record whose CURRENT sidecar cannot be confirmed (here:
+        missing entirely) is "unknown", not "already styled" and not
+        silently applied -- never a guess either way."""
         images = self._setup_job(2)
         styled_id = min(images)
-        self._seed_ledger(
-            [
-                {
-                    "image_id": styled_id,
-                    "style": "hero",
-                    "applied_at": "2026-01-01T00:00:00Z",
-                    "history_end_after": 3,
-                }
-            ]
-        )
+        self._seed_one(styled_id, history_end_before=3)
         # No sidecar written at all -- the guard cannot verify anything.
 
         bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
@@ -499,16 +566,7 @@ class StyleSetTest(unittest.TestCase):
     def test_torn_sidecar_also_skips_as_unknown(self) -> None:
         images = self._setup_job(1)
         styled_id = min(images)
-        self._seed_ledger(
-            [
-                {
-                    "image_id": styled_id,
-                    "style": "hero",
-                    "applied_at": "2026-01-01T00:00:00Z",
-                    "history_end_after": 3,
-                }
-            ]
-        )
+        self._seed_one(styled_id, history_end_before=3)
         Path(images[styled_id] + ".xmp").write_text("<not really xml, mid-write>")
 
         bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
@@ -540,7 +598,7 @@ class StyleSetTest(unittest.TestCase):
                     "image_id": iid,
                     "style": "hero",
                     "applied_at": "2026-01-01T00:00:00Z",
-                    "history_end_after": 3,
+                    "history_end_before": 3,
                 }
                 for iid in images
             ]
@@ -563,8 +621,10 @@ class StyleSetTest(unittest.TestCase):
         self.assertTrue(any("no --job-slug" in w for w in result.warnings))
 
     def test_ledger_write_after_apply(self) -> None:
-        """`history_end_after` is read from the sidecar right after the
-        batch that applied it, best effort."""
+        """Fix round 3: `history_end_before` is read from the sidecar
+        RIGHT BEFORE the batch that applies it (the Lua handler never
+        rewrites the sidecar itself, so a post-apply read would just be
+        another pre-apply read -- see the module docstring)."""
         images = self._setup_job(2)
         for path in images.values():
             Path(path + ".xmp").write_text(_sidecar_xml(history_end=3))
@@ -575,8 +635,23 @@ class StyleSetTest(unittest.TestCase):
         self.assertEqual(len(entries), 2)
         for entry in entries:
             self.assertEqual(entry["style"], "hero")
-            self.assertEqual(entry["history_end_after"], 3)
+            self.assertEqual(entry["history_end_before"], 3)
             self.assertIn("applied_at", entry)
+
+    def test_crash_after_batch_one_leaves_batch_ones_entries_on_disk(self) -> None:
+        """Fix round 3, item 2: the ledger is flushed after EVERY successful
+        batch, not once at the end -- an unhandled failure during batch 2
+        must not lose what batch 1 already recorded."""
+        images = self._setup_job(50)  # 2 batches at batch=25
+        for path in images.values():
+            Path(path + ".xmp").write_text(_sidecar_xml(history_end=1))
+        script = _Script([_apply_all_ok, RuntimeError("simulated crash")])
+        with self.assertRaises(RuntimeError):
+            self._apply_set(images, apply=script, batch=25, job_slug="hero-job")
+
+        entries = json.loads(self._ledger_path().read_text())
+        self.assertEqual(len(entries), 25)
+        self.assertEqual({e["image_id"] for e in entries}, set(list(images)[:25]))
 
     def test_not_attempted_rows_after_stop(self) -> None:
         """Fix round 2, item 6: `per_image` carries an explicit row for
