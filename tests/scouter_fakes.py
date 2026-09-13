@@ -110,6 +110,18 @@ class FakeBridge:
                 "directories_imported": 1,
                 "scan_incomplete": False,
             },
+            # A sane default for `export.release`'s finals selection
+            # (task 10, ruling R12): every requested id comes back known,
+            # with no colour labels, so a test that isn't specifically
+            # exercising label selection doesn't have to restate this
+            # shape. Override per-test (see tests/test_export_release.py)
+            # for a frame that actually carries a label.
+            "image.color_labels": lambda p: {
+                "missing": [],
+                "per_image": [
+                    {"image_id": image_id, "labels": []} for image_id in p.get("image_ids", [])
+                ],
+            },
             **(responses or {}),
         }
         self.raises = raises or {}

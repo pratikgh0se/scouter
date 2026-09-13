@@ -94,6 +94,19 @@ class ExportReleaseTestBase(unittest.TestCase):
         self._cfg_patch.start()
 
         self.bridge = FakeBridge()
+        # Deterministic image_id per path, assigned in first-seen order --
+        # so a test overriding "image.color_labels" for specific ids can
+        # predict what `dtbridge.resolve_image` will hand it, without every
+        # test having to restate its own "image.lookup" fake.
+        self._image_ids: dict[str, int] = {}
+
+        def _lookup(p: dict) -> dict:
+            path = p["path"]
+            if path not in self._image_ids:
+                self._image_ids[path] = len(self._image_ids) + 1
+            return {"found": True, "image_id": self._image_ids[path], "path": path}
+
+        self.bridge.responses["image.lookup"] = _lookup
         dtbridge.set_bridge(self.bridge)
 
         self._saved_cli = os.environ.get("SCOUTER_DARKTABLE_CLI")
@@ -263,6 +276,49 @@ class ExportReleaseTest(ExportReleaseTestBase):
             self.assertIn("hero-harbour", call["extra_args"] or [])
         # style-overwrite is render-only: nothing in the library changed.
         self.assertEqual(self.bridge.calls, [])
+
+    def test_finals_select_green_labelled_frames_only(self) -> None:
+        """Ruling R12: `client-final`/`print-tiff` select by colour label,
+        not rating -- proven here with all three of `_standard_job`'s frames
+        rated differently (3, 2, 0) but only ONE (f1) carrying the green
+        label, via a single batched `image.color_labels` bridge call."""
+        self._standard_job()
+        green_path = str(self.job_path / "raw" / "f1.orf")
+
+        def color_labels(p: dict) -> dict:
+            green_id = self._image_ids[green_path]
+            per_image = [
+                {"image_id": image_id, "labels": ["green"] if image_id == green_id else []}
+                for image_id in p["image_ids"]
+            ]
+            return {"missing": [], "per_image": per_image}
+
+        self.bridge.responses["image.color_labels"] = color_labels
+
+        result = export.release(self.JOB_SLUG, "client-final", confirm=True)
+        self.assertEqual(result.selection_rule, "color_label=green")
+        self.assertEqual(result.selected, 1)
+        self.assertEqual(result.of, 3)
+        self.assertEqual(result.exported, 1)
+        self.assertEqual(result.files[0].input, green_path)
+        self.assertIn("image.color_labels", self.bridge.methods_called())
+        # One batched call for all three candidates, not one per frame.
+        self.assertEqual(self.bridge.count("image.color_labels"), 1)
+
+    def test_finals_warns_on_an_id_the_bridge_did_not_know(self) -> None:
+        self._standard_job()
+
+        def color_labels(p: dict) -> dict:
+            ids = p["image_ids"]
+            return {
+                "missing": [ids[0]],
+                "per_image": [{"image_id": i, "labels": ["green"]} for i in ids[1:]],
+            }
+
+        self.bridge.responses["image.color_labels"] = color_labels
+        result = export.release(self.JOB_SLUG, "client-final", confirm=True)
+        self.assertEqual(result.exported, 2)
+        self.assertTrue(any("missed" in w or "missing" in w.lower() for w in result.warnings))
 
 
 class ExportVerifyTest(ExportReleaseTestBase):

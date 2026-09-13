@@ -109,26 +109,36 @@ def _now_z() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
-def _label_selected(path: str, label: str, warnings: list[str]) -> bool:
-    """True when the bridge reports `label` on this frame's colour labels.
+def _select_by_label(candidates: list[dict], label: str, warnings: list[str]) -> list[dict]:
+    """Candidates carrying `label` as a colour label, per one batched bridge call.
 
     Read-only, like `image.lookup` (controller ruling R6: "both read through
-    the bridge"). `image.color_labels` is a read-only lookup named after the
-    same convention as `image.lookup`/`image.rate`; the Lua plugin does not
-    implement it yet (out of this task's file list -- see the task report),
-    so a bridge failure here is folded into a single warning rather than a
-    refusal: a finals export must not silently claim zero frames because the
-    plugin has not caught up, it must say so.
+    the bridge"; ruling R12, fix round 0: `image.color_labels` now exists in
+    the Lua plugin, reading darktable's own `red`/`yellow`/`green`/`blue`/
+    `purple` boolean fields off `dt.database[id]`). Every candidate is
+    resolved to an image id first (`dtbridge.resolve_image`, itself
+    read-only) and looked up in ONE call, not one per frame. An id the
+    bridge did not know about (`missing`) is a warning naming it, not a
+    silent drop and not a refusal -- everything else that DOES resolve is
+    still trusted.
     """
-    try:
-        resolved = dtbridge.resolve_image(path)
-        result = dtbridge.call("image.color_labels", {"image_id": resolved.image_id})
-    except Exception as e:  # bridge/plugin gap, not a selection verdict
-        note = f"colour label lookup unavailable ({e}); no frame was label-selected"
-        if note not in warnings:
-            warnings.append(note)
-        return False
-    return label in (result.get("labels") or [])
+    by_image_id = {}
+    for c in candidates:
+        resolved = dtbridge.resolve_image(c["path"])
+        by_image_id[resolved.image_id] = c
+    result = dtbridge.call("image.color_labels", {"image_ids": list(by_image_id)})
+    missing = result.get("missing") or []
+    if missing:
+        warnings.append(
+            f"colour label lookup missed {len(missing)} image id(s) not in darktable's "
+            f"library: {missing}"
+        )
+    selected = []
+    for entry in result.get("per_image") or []:
+        c = by_image_id.get(int(entry["image_id"]))
+        if c is not None and label in (entry.get("labels") or []):
+            selected.append(c)
+    return selected
 
 
 @metrics.instrumented("export.run")
@@ -292,7 +302,7 @@ def release(
             selected.append(c)
         rule = "images"
     elif preset in FINAL_PRESETS:
-        selected = [c for c in candidates if _label_selected(c["path"], label, warnings)]
+        selected = _select_by_label(candidates, label, warnings) if candidates else []
         rule = f"color_label={label}"
     else:
         selected = [c for c in candidates if c["rating"] >= resolved_min_rating]
