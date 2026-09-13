@@ -457,9 +457,11 @@ Phase 1's `style.extract` calls `dt.styles.create`, which takes the whole histor
 
 `params` and `blendop_params` are copied **verbatim from the XMP attribute strings** — the same hex or `gz<level><base64>` text, never decoded and re-encoded. Phase 1's decoder exists for reading; a round-trip through it would risk changing a single float. `modversion` and `blendop_version` likewise come straight from the entry.
 
-### 9.2 The `.dtstyle` schema is **pinned by a probe, not assumed**
+### 9.2 The `.dtstyle` schema, pinned by a probe (task 7, 2026-09-14) — CORRECTED
 
-The expected shape (from darktable's `src/common/styles.c`, **unverified here**) is:
+The shape originally drafted here (read from darktable's `src/common/styles.c`, **unverified**) was wrong on two points. Task 7's host probe (`tests/test_host_phase2.py::test_pin_dtstyle_format`, full capture in `docs/measurements-generated.md`) creates a style with `style.create_from_current`, exports it with the new `style.export_file` verb (`dt.styles.export`), and commits the real file as `tests/fixtures/hero.dtstyle`. The writer (`scouter/core/dtstyle.py`) is asserted **against that fixture's element names and nesting**, never against this section — and per the phase 1 precedent (the `colorbalancergb` slot map, pinned the same way), the fixture won and this section is corrected in task 7's commit.
+
+The real shape:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -467,8 +469,7 @@ The expected shape (from darktable's `src/common/styles.c`, **unverified here**)
   <info>
     <name>hero-harbour</name>
     <description>phase 2 hero</description>
-    <iop_order_version>4</iop_order_version>
-    <iop_order_list></iop_order_list>
+    <iop_list></iop_list>
   </info>
   <style>
     <plugin>
@@ -476,18 +477,16 @@ The expected shape (from darktable's `src/common/styles.c`, **unverified here**)
       <op_params>0000…</op_params><enabled>1</enabled>
       <blendop_params>gz11eJxj…</blendop_params><blendop_version>14</blendop_version>
       <multi_priority>0</multi_priority><multi_name></multi_name>
-      <iop_order>2.0</iop_order>
+      <multi_name_hand_edited>0</multi_name_hand_edited>
     </plugin>
   </style>
 </darktable_style>
 ```
 
-Because that is an unverified claim about another project's file format, **task 7 pins it before the writer is trusted**: a host probe creates a style with the existing `style.create_from_current`, exports it with the new `style.export_file` verb (`dt.styles.export`), and commits the real file as `tests/fixtures/hero.dtstyle`. The writer is then asserted **against the fixture's element names and nesting**, not against this section. If the real file names elements differently, the fixture wins and this section is corrected in task 7's commit (the phase 1 precedent: the `colorbalancergb` slot map was pinned the same way).
+Two corrections from the original draft:
 
-Two fields the XMP does not carry:
-
-- **`<iop_order>`** (a float per plugin). Not in the sidecar. If the pinned fixture requires it, the writer omits the element and the **host** test decides: if darktable imports the style and applying it produces the expected history, the omission is fine and that is recorded in `docs/measurements.md`. If it does not, `style.extract` falls back to `dt.styles.create` (whole history) with `modules_honoured: false` and a warning naming the limitation — phase 1's behaviour, honestly labelled, rather than a broken style.
-- **`<iop_order_list>`** — `darktable:iop_order_list` is **absent** from Pratik's real sidecar (verified 2026-09-14; it carries `darktable:iop_order_version="4"` instead, i.e. a built-in order). The writer copies the list when the XMP has one and emits an empty element when it does not.
+- **No `<iop_order>` per plugin, at all.** The draft worried the writer might need a per-plugin float the XMP cannot supply, forcing a whole-history fallback. Confirmed absent across all 30 `<plugin>` elements of the probe's captured file — that worry does not apply, and `style.extract`'s module filter is never blocked on it.
+- **`<info>` carries `<iop_list>`, not `<iop_order_version>` / `<iop_order_list>`.** The real element is a single comma-separated `name,priority,...` enumeration of darktable's entire BUILT-IN pipeline order (every module gets a `,0` priority) — a pipeline-wide constant, not per-image data. The XMP carries nothing resembling it (a sidecar has only `iop_order_version`, e.g. `iop_order_version="4"` meaning "built-in order" on this camera — verified 2026-09-14, `tests/fixtures/P6281348.ORF.xmp`), so the writer always emits `<iop_list></iop_list>` empty. Host-verified in the same probe session: `style.extract`'s filtered path built a real style this way and `dt.styles.import` accepted it — the resulting style shows up in `list_styles` (`docs/measurements-generated.md`).
 
 `style.extract` result gains `dtstyle_path`, `operations_included: [...]`, `modules_missing: [...]`, and `modules_honoured` now genuinely reports `true`.
 

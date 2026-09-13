@@ -242,10 +242,11 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "style_extract",
-        "description": "Save the darkroom image's current history as a darktable style. "
-        "NOTE: darktable's Lua API cannot filter a style by module, so "
-        "`modules` is recorded but the style carries the whole history. "
-        "Requires confirm=true when a style of that name already exists.",
+        "description": "Save the image's history as a darktable style, filtered to `modules` "
+        "by writing a .dtstyle from the XMP (no darkroom needed). "
+        "`no_filter=true` takes the whole history instead (requires the "
+        "darkroom to show this image). Requires confirm=true when a style "
+        "of that name already exists.",
         "inputSchema": _schema(
             {
                 "image": IMAGE,
@@ -253,7 +254,7 @@ TOOL_SPECS: list[dict] = [
                 "modules": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "modules the caller wants (recorded only)",
+                    "description": "modules to keep -- filtered for real by default",
                 },
                 "description": {
                     "type": "string",
@@ -265,6 +266,12 @@ TOOL_SPECS: list[dict] = [
                     "type": "boolean",
                     "default": False,
                     "description": "required to replace an existing style",
+                },
+                "no_filter": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "skip the .dtstyle filter and take the whole history "
+                    "(phase 1's path; requires the darkroom to show this image)",
                 },
             },
             ["image", "name", "modules"],

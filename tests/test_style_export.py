@@ -56,22 +56,26 @@ class StyleTest(unittest.TestCase):
         self.cache.stop()
 
     def test_extract_is_honest_about_the_missing_module_filter(self) -> None:
-        result = style.extract(image=str(self.raw), name="hero", modules=["exposure", "sigmoid"])
+        result = style.extract(
+            image=str(self.raw), name="hero", modules=["exposure", "sigmoid"], no_filter=True
+        )
         self.assertTrue(result.created)
         self.assertFalse(result.modules_honoured)
         self.assertEqual(result.modules_requested, ["exposure", "sigmoid"])
         self.assertTrue(any("module filter" in w for w in result.warnings))
 
     def test_extract_over_an_existing_name_needs_confirm(self) -> None:
-        result = style.extract(image=str(self.raw), name="old-look", modules=[])
+        result = style.extract(image=str(self.raw), name="old-look", modules=[], no_filter=True)
         self.assertEqual(result.outcome, "dry_run")
         self.assertIn("already exists", result.reason or "")
         self.assertNotIn("style.create_from_current", self.bridge.methods_called())
-        confirmed = style.extract(image=str(self.raw), name="old-look", modules=[], confirm=True)
+        confirmed = style.extract(
+            image=str(self.raw), name="old-look", modules=[], confirm=True, no_filter=True
+        )
         self.assertEqual(confirmed.outcome, "ok")
 
     def test_extract_keeps_the_lua_reported_source(self) -> None:
-        result = style.extract(image=str(self.raw), name="hero", modules=[])
+        result = style.extract(image=str(self.raw), name="hero", modules=[], no_filter=True)
         self.assertEqual(result.source, "action_images")
 
     def test_extract_refuses_when_the_darkroom_shows_another_image(self) -> None:
@@ -92,12 +96,12 @@ class StyleTest(unittest.TestCase):
         }
         before = len(self.bridge.calls)
         with self.assertRaises(NotInDarkroom) as ctx:
-            style.extract(image=str(self.raw), name="hero", modules=[])
+            style.extract(image=str(self.raw), name="hero", modules=[], no_filter=True)
         self.assertIn("darkroom shows 999, requested 12", str(ctx.exception))
         self.assertNotIn("style.create_from_current", self.bridge.methods_called()[before:])
 
     def test_extract_proceeds_when_the_darkroom_matches(self) -> None:
-        result = style.extract(image=str(self.raw), name="hero", modules=[])
+        result = style.extract(image=str(self.raw), name="hero", modules=[], no_filter=True)
         self.assertEqual(result.outcome, "ok")
         self.assertIn("darkroom.current", self.bridge.methods_called())
         self.assertIn("style.create_from_current", self.bridge.methods_called())

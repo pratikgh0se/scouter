@@ -97,3 +97,37 @@ plugin (worker loop writes `~/.cache/darktable-mcp/heartbeat` every tick).
 - Scouter loop at 1024 px, with a live darktable session in the same
   session: **2789 / 2829 / 2832 / 2948 / 3112 ms** (budget 3000 ms) -- the
   3112 ms run failed the budget assertion. Marginal on this host under load.
+
+## Task 7: `.dtstyle` schema, pinned by a host probe (2026-09-14)
+
+Provenance: `docs/measurements-generated.md` (gitignored, host-run output),
+copied here deliberately, by hand, in task 7's commit -- same discipline as
+the rest of this file (see the header note above).
+
+Host: this Mac (Apple M4), real darktable app, real `~/.config/darktable`,
+`P6281348.ORF`. Test: `tests/test_host_phase2.py::test_pin_dtstyle_format`.
+
+Design section 9.2's original schema (read from darktable's source, never
+verified) was wrong on two points, corrected in this task's commit:
+
+- **No `<iop_order>` per plugin, at all** -- confirmed absent across all 30
+  `<plugin>` elements of the captured whole-history style. The module filter
+  is never blocked on this: there is no fallback to trigger.
+- **`<info>` carries `<iop_list>`** (a comma-separated enumeration of
+  darktable's entire built-in pipeline order, priority `0` throughout), not
+  `<iop_order_version>` / `<iop_order_list>` as drafted. The XMP carries
+  nothing resembling it (only `iop_order_version`, e.g. `"4"` on this
+  camera -- "use the built-in order"), so `scouter/core/dtstyle.py`'s writer
+  always emits `<iop_list></iop_list>` empty.
+
+**Verdict: schema pinned, `<iop_order>` not required.** Verified live, in the
+same darktable session: `style.extract(image=HERO, modules=["exposure"])`
+(the real filtered path) built a `.dtstyle` with an empty `<iop_list>`,
+`style.import_file` (`dt.styles.import`) accepted it without complaint, and
+the resulting style showed up in `list_styles` afterwards -- the writer's
+output round-trips through real darktable, not just through Scouter's own
+reader.
+
+The real, committed capture is `tests/fixtures/hero.dtstyle`; the full XML
+and the exact `<info>`/`<plugin>` child order are in
+`docs/measurements-generated.md` (gitignored) and this task's report.

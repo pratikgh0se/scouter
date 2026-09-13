@@ -1322,6 +1322,17 @@ local function sidecar_signature(path)
   return out
 end
 
+-- Bytes at `path`, or 0 when it does not exist. Reuses `sidecar_signature`'s
+-- "<mtime> <size>" form (built from `stat_format_args()`'s STAT_ARGS) rather
+-- than inventing a second, separately-portable `stat` invocation: the size
+-- is always the trailing whitespace-separated token in that signature.
+local function file_size(path)
+  local sig = sidecar_signature(path)
+  if not sig then return 0 end
+  local size = sig:match("(%d+)%s*$")
+  return tonumber(size) or 0
+end
+
 -- Yield-poll until `path`'s signature differs from `before` (nil `before`
 -- means "did not exist"). Returns (changed, waited_ms).
 local function wait_for_sidecar(path, before, budget_ms)
@@ -1501,6 +1512,52 @@ methods["style.apply"] = function(p)
     end
   end
   return {name = p.name, mode = mode, applied = applied, missed = missed, errors = errors}
+end
+
+-- Export an existing style to a .dtstyle file. Its first job is to PIN the file
+-- format: a style made by style.create_from_current is exported here and the
+-- real file is committed as tests/fixtures/hero.dtstyle, so the writer in
+-- scouter/core/dtstyle.py is asserted against darktable's own output rather
+-- than against an assumption about another project's XML.
+methods["style.export_file"] = function(p)
+  p = p or {}
+  if type(p.name) ~= "string" or p.name == "" then error("style.export_file: name required") end
+  if type(p.dir) ~= "string" or p.dir == "" then error("style.export_file: dir required") end
+  local style = nil
+  for _, s in ipairs(dt.styles) do if s.name == p.name then style = s; break end end
+  if not style then error(string.format("style.export_file: style %q not found", p.name)) end
+  local ok, err = pcall(dt.styles.export, style, p.dir)
+  if not ok then error("style.export_file: " .. tostring(err)) end
+  local path = p.dir .. "/" .. p.name .. ".dtstyle"
+  return {name = p.name, path = path, exported = true, bytes = file_size(path)}
+end
+
+methods["style.import_file"] = function(p)
+  p = p or {}
+  if type(p.path) ~= "string" or p.path == "" then error("style.import_file: path required") end
+  local name = p.name
+  local before, existing = 0, nil
+  for _, s in ipairs(dt.styles) do
+    before = before + 1
+    if name and s.name == name then existing = s end
+  end
+  if existing and not p.overwrite then
+    error(string.format("style.import_file: a style named %q already exists; pass "
+          .. "overwrite=true to replace it", name))
+  end
+  local replaced = false
+  if existing and p.overwrite then
+    local ok, err = pcall(dt.styles.delete, existing)
+    if not ok then error("style.import_file: could not delete the existing style: "
+                         .. tostring(err)) end
+    replaced = true
+  end
+  local ok, err = pcall(dt.styles.import, p.path)
+  if not ok then error("style.import_file: " .. tostring(err)) end
+  local after = 0
+  for _ in ipairs(dt.styles) do after = after + 1 end
+  return {name = name, imported = true, replaced = replaced,
+          styles_before = before, styles_after = after}
 end
 
 -- ---- Dispatch --------------------------------------------------------------

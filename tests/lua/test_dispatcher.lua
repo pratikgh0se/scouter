@@ -121,12 +121,58 @@ stub_dt.gui = {
     (view_state.snapshots or 0) + 1 end}},
 }
 
+-- Recorded so the export/import/delete tests can assert what the plugin
+-- actually asked the (stubbed) darktable API to do.
+local styles_exported = {}
+local styles_imported = {}
+local styles_deleted = {}
+
 stub_dt.styles = setmetatable({}, {
   __index = function(t, k)
     if k == "create" then
       return function(image, name, description)
         table.insert(styles_created, {image = image, name = name, description = description})
         table.insert(t, {name = name, description = description})
+      end
+    end
+    if k == "export" then
+      -- Real dt.styles.export(style, dir) writes `<dir>/<style.name>.dtstyle`.
+      -- The stub does the same (a small marker file) so `file_size` sees a
+      -- real file and style.export_file's `bytes` field is exercised too.
+      return function(style, dir)
+        table.insert(styles_exported, {name = style.name, dir = dir})
+        local path = dir .. "/" .. style.name .. ".dtstyle"
+        local f = io.open(path, "w")
+        if not f then error("stub export: could not open " .. path) end
+        f:write("STUB-DTSTYLE:" .. style.name .. "\n")
+        f:close()
+      end
+    end
+    if k == "import" then
+      -- Real dt.styles.import(path) derives the new style's name from the
+      -- file's own <name>. The stub reads the marker line export() wrote
+      -- (or, for a caller-supplied fixture, a `STUB-DTSTYLE:<name>` first
+      -- line) so import-after-export round-trips under the same name.
+      return function(path)
+        table.insert(styles_imported, path)
+        local f = io.open(path, "r")
+        local name = "imported-style"
+        if f then
+          local first = f:read("*l") or ""
+          f:close()
+          local found = first:match("^STUB%-DTSTYLE:(.+)$")
+          if found then name = found end
+        end
+        table.insert(t, {name = name, description = ""})
+      end
+    end
+    if k == "delete" then
+      return function(style)
+        table.insert(styles_deleted, style.name)
+        for i, s in ipairs(t) do
+          if s.name == style.name then table.remove(t, i); return end
+        end
+        error("stub delete: style not found: " .. tostring(style.name))
       end
     end
     return nil
@@ -1407,7 +1453,7 @@ do
     "view.current", "image.lookup", "darkroom.open", "darkroom.current",
     "darkroom.action", "darkroom.status", "module.enable", "module.disable",
     "module.reset", "history.commit", "snapshot.take", "style.create_from_current",
-    "style.apply", "image.rate",
+    "style.apply", "image.rate", "style.export_file", "style.import_file",
   }
   for _, name in ipairs(expected_scouter_methods) do
     assertTrue(type(plugin.methods[name]) == "function",
@@ -1641,6 +1687,51 @@ local ov = plugin.handle({id = "y", method = "style.apply",
   params = {image_ids = {101}, name = "hero", mode = "overwrite"}})
 assertTrue(ov.error ~= nil and ov.error:find("overwrite") ~= nil,
   "overwrite mode refused with an explanation")
+
+-- style.export_file: not-found is a real error, and a successful export
+-- writes a real file whose size file_size() reports honestly.
+local ok_missing, err_missing = pcall(function()
+  return plugin.methods["style.export_file"]({name = "does-not-exist", dir = "/tmp"})
+end)
+assertEq(ok_missing, false, "export_file on an unknown style raises")
+assertTrue(tostring(err_missing):find("not found") ~= nil,
+  "export_file's not-found error names the style")
+
+local export_dir = os.getenv("TMPDIR") or "/tmp"
+local exp = plugin.methods["style.export_file"]({name = "hero", dir = export_dir})
+assertEq(exp.name, "hero", "export_file echoes the style name")
+assertEq(exp.exported, true, "export_file reports exported")
+assertTrue(exp.path:find("hero.dtstyle", 1, true) ~= nil,
+  "export_file returns the .dtstyle path")
+assertTrue(exp.bytes > 0, "export_file reports a real, non-zero file size")
+
+-- style.import_file: existing name without overwrite is refused BEFORE any
+-- delete or import call.
+local styles_before_refusal = 0
+for _ in ipairs(stub_dt.styles) do styles_before_refusal = styles_before_refusal + 1 end
+local ok_exists, err_exists = pcall(function()
+  return plugin.methods["style.import_file"]({path = exp.path, name = "hero"})
+end)
+assertEq(ok_exists, false, "import_file over an existing name without overwrite raises")
+assertTrue(tostring(err_exists):find("already exists") ~= nil,
+  "import_file's refusal names the collision")
+assertEq(#styles_deleted, 0, "the refusal deletes nothing")
+
+-- overwrite=true deletes the old style first, then imports -- replaced=true,
+-- and styles_after accounts for delete-then-import (net unchanged count).
+local imp = plugin.methods["style.import_file"]({path = exp.path, name = "hero", overwrite = true})
+assertEq(imp.imported, true, "import_file reports imported")
+assertEq(imp.replaced, true, "import_file reports the delete-then-import replace")
+assertEq(imp.styles_before, styles_before_refusal, "styles_before matches the pre-import count")
+assertEq(imp.styles_after, styles_before_refusal, "styles_after: one deleted, one imported back")
+assertEq(styles_deleted[#styles_deleted], "hero", "the existing style was deleted before re-import")
+assertEq(styles_imported[#styles_imported], exp.path, "the exported path was the one imported")
+
+-- A fresh name (no collision) imports without touching delete at all.
+local deletes_before = #styles_deleted
+local imp2 = plugin.methods["style.import_file"]({path = exp.path, name = "hero-2"})
+assertEq(imp2.replaced, false, "a fresh name is not reported as replaced")
+assertEq(#styles_deleted, deletes_before, "importing a fresh name deletes nothing")
 
 -- darkroom.open selects then switches, and detects an already-open image.
 view_state.current = "lighttable"
