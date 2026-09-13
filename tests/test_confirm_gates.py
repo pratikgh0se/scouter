@@ -95,6 +95,25 @@ class ConfirmGateTest(unittest.TestCase):
         job_path = config.job_dir(self.cfg, "2026-06-28", self.job_slug)
         (job_path / "raw").mkdir(parents=True)
 
+        # `export.release` reads its candidates from import.json + the raw's
+        # own XMP sidecar (file-based, no bridge call), and gates on an
+        # existing preset output -- so this fixture needs a real one-frame
+        # job (rating high enough to be selected) with that output already
+        # sitting in exports/preview/, deterministically triggering the gate
+        # without touching RefusingBridge at all.
+        release_raw = job_path / "raw" / "gate_0001.orf"
+        release_raw.write_bytes(b"raw")
+        Path(str(release_raw) + ".xmp").write_text('<x xmp:Rating="2"/>', encoding="utf-8")
+        scouter_dir = job_path / ".scouter"
+        scouter_dir.mkdir(parents=True, exist_ok=True)
+        (scouter_dir / "import.json").write_text(
+            json.dumps({"files": [{"dest": "raw/gate_0001.orf", "sha256": "deadbeef"}]}),
+            encoding="utf-8",
+        )
+        release_out_dir = job_path / "exports" / "preview"
+        release_out_dir.mkdir(parents=True, exist_ok=True)
+        (release_out_dir / "gate_0001.png").write_bytes(b"existing")
+
         # `cull.apply` reads its proposal from a real file (`--proposal`, not
         # an image argument), so this harness's usual "None -> self.raw"
         # substitution does not apply to it -- a one-frame proposal that
@@ -135,6 +154,7 @@ class ConfirmGateTest(unittest.TestCase):
         "export.run": {"images": [None, None], "preset": "preview", "out_dir": None},
         "library.import": {"source": None, "job_slug": "gate-hero"},
         "library.register": {"job_slug": "gate-hero"},
+        "export.release": {"job_slug": "gate-hero", "preset": "preview"},
         # `--proposal` is a JSON file path, not an image -- the generic
         # `None -> self.raw` substitution below is for image-shaped args, so
         # this placeholder is swapped for `self.cull_proposal` explicitly in

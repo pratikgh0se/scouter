@@ -203,4 +203,4 @@ class ExportTest(unittest.TestCase):
 
     def test_unknown_preset_is_a_value_error(self) -> None:
         with self.assertRaises(ValueError):
-            export.run(images=[str(self.raw)], preset="print-tiff", out_dir=str(self.out))
+            export.run(images=[str(self.raw)], preset="bogus-preset", out_dir=str(self.out))

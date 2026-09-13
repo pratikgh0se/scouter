@@ -220,6 +220,7 @@ class CLIWrapper:
         max_width: int | None = None,
         max_height: int | None = None,
         timeout: int = EXPORT_TIMEOUT_DEFAULT,
+        extra_args: list[str] | None = None,
     ) -> Path:
         """Export an image using darktable-cli.
 
@@ -240,13 +241,23 @@ class CLIWrapper:
             output_path: Path for output image; the extension is corrected
                 to the one the format actually produces
             format_type: Export format (jpeg, png, tiff)
-            quality: Export quality (1-100)
+            quality: Export quality (1-100); ignored when `extra_args` is given
+                (a preset that supplies its own `--conf` owns quality/depth).
             max_width: Maximum width in pixels, or None for unconstrained.
                 Passed to darktable-cli's `--width` flag; may be given
                 independently of `max_height`.
             max_height: Maximum height in pixels, or None for unconstrained.
                 Passed to darktable-cli's `--height` flag.
             timeout: subprocess timeout in seconds (default 120 s).
+            extra_args: Preset flags (`--icc-type`, `--style`,
+                `--style-overwrite`, `--core --conf ...`) inserted before this
+                wrapper's own `--core --configdir` block, so a caller can shape
+                the export without this wrapper learning about presets. When
+                given, this wrapper's own default per-format `--conf` (quality/
+                bit depth) is skipped -- the preset already owns it, and
+                appending both would leave two conflicting values for
+                darktable-cli to arbitrate. Additive: every existing call site
+                (which passes no `extra_args`) is unaffected.
 
         Returns:
             Path: The file darktable-cli actually wrote
@@ -271,16 +282,20 @@ class CLIWrapper:
                 cmd.extend(["--width", str(max_width or 0)])
                 cmd.extend(["--height", str(max_height or 0)])
 
+            if extra_args:
+                cmd.extend(extra_args)
+
             # Everything after `--core` is handed to the darktable core.
             cmd.extend(["--core", "--configdir", str(self._worker_configdir())])
 
-            fmt = format_type.lower()
-            if fmt == "jpeg":
-                cmd.extend(["--conf", f"plugins/imageio/format/jpeg/quality={quality}"])
-            elif fmt == "png":
-                cmd.extend(["--conf", "plugins/imageio/format/png/bpp=8"])
-            elif fmt == "tiff":
-                cmd.extend(["--conf", "plugins/imageio/format/tiff/bpp=8"])
+            if not extra_args:
+                fmt = format_type.lower()
+                if fmt == "jpeg":
+                    cmd.extend(["--conf", f"plugins/imageio/format/jpeg/quality={quality}"])
+                elif fmt == "png":
+                    cmd.extend(["--conf", "plugins/imageio/format/png/bpp=8"])
+                elif fmt == "tiff":
+                    cmd.extend(["--conf", "plugins/imageio/format/tiff/bpp=8"])
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
