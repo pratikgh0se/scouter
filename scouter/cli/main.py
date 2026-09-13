@@ -11,7 +11,7 @@ import json
 import sys
 
 from scouter import __version__, registry
-from scouter.errors import ScouterError, exit_code_for
+from scouter.errors import EXIT_CODES, ScouterError, exit_code_for
 
 #: Verbs excluded from the parity check because they are diagnostics, not verbs.
 NON_REGISTRY_COMMANDS = ("doctor",)
@@ -42,7 +42,7 @@ def _add_arg(parser: argparse.ArgumentParser, spec) -> None:
             parser.add_argument(spec.name, nargs="+", **kwargs)
         else:
             parser.add_argument(f"--{spec.name.replace('_', '-')}", dest=spec.name,
-                                default=spec.default,
+                                required=spec.required, default=spec.default,
                                 type=lambda v: [p for p in v.split(",") if p], **kwargs)
         return
     kwargs["type"] = _TYPES[spec.type]
@@ -84,7 +84,13 @@ def build_parser() -> argparse.ArgumentParser:
             for spec in verb.args:
                 _add_arg(sub, spec)
 
-    doctor = groups.add_parser("doctor", help="check darktable, the plugin and the view")
+    doctor = groups.add_parser(
+        "doctor",
+        help="check darktable, the plugin and the view",
+        description="Exits 0 when everything checks out, 3 when the bridge timed "
+                    "out reaching darktable, 1 for every other failure (wrong "
+                    "view, missing plugin, etc.).",
+    )
     doctor.set_defaults(_verb=None, _args=[])
     return parser
 
@@ -137,7 +143,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if namespace.group == "doctor":
         report = _doctor()
-        return emit(report, 0 if report["ok"] else 3)
+        if report["ok"]:
+            code = 0
+        elif report["bridge"] == "bridge_timeout":
+            code = 3
+        else:
+            code = 1
+        return emit(report, code)
 
     verb_id = namespace._verb
     kwargs = {name: getattr(namespace, name) for name in namespace._args
@@ -154,6 +166,14 @@ def main(argv: list[str] | None = None) -> int:
         payload = {"verb": verb_id, "layer": "cli", "ok": False, "outcome": "usage",
                    "error": {"code": "usage", "message": str(e)}}
         return emit(payload, 2)
+    except KeyboardInterrupt:
+        payload = {"verb": verb_id, "layer": "cli", "ok": False, "outcome": "error",
+                   "error": {"code": "interrupted", "message": "interrupted by the user"}}
+        return emit(payload, 130)
+    except Exception as e:  # noqa: BLE001 - last resort so the CLI always emits JSON
+        payload = {"verb": verb_id, "layer": "cli", "ok": False, "outcome": "error",
+                   "error": {"code": "error", "message": str(e)}}
+        return emit(payload, EXIT_CODES["error"])
     return emit(envelope.to_dict(), exit_code_for(envelope.outcome))
 
 
