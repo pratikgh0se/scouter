@@ -12,10 +12,12 @@ its darkroom, so it must never run by accident in CI or a plain `pytest tests`.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
 import subprocess
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -89,23 +91,53 @@ class HeroEditIntegrationTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        # The plugin has to be the one in this working tree, and darktable only
-        # loads it at start, so install it before launching (phase 0 finding 8.4).
-        INSTALLED_PLUGIN.parent.mkdir(parents=True, exist_ok=True)
-        cls._plugin_existed_before = INSTALLED_PLUGIN.exists()
-        if cls._plugin_existed_before:
-            cls._plugin_backup = INSTALLED_PLUGIN.read_bytes()
-        shutil.copy(PLUGIN_SRC, INSTALLED_PLUGIN)
+        # Two phases, each with its own unwind. `unittest` does NOT call
+        # tearDownClass when setUpClass raises, so every failure path here has
+        # to quit darktable and put ~/.config/darktable back itself (final
+        # review, should-fix 1) -- otherwise a crash mid-setup leaves the real
+        # darktable config carrying our plugin and a running GUI behind.
+        cls._install_plugin()
+        try:
+            cls._launch_and_wait()
+        except BaseException:
+            if cls.proc is not None:
+                _quit(cls.proc)
+            cls._cleanup_plugin_install()
+            cls._restore_job_env()
+            raise
 
-        luarc = INSTALLED_PLUGIN.parent.parent / "luarc"
-        cls._luarc_path = luarc
-        line = 'require "darktable_mcp"\n'
-        cls._luarc_existed_before = luarc.exists()
-        if not luarc.exists() or line not in luarc.read_text():
-            cls._luarc_line_added = True
-            with luarc.open("a") as fh:
-                fh.write(line)
+    @classmethod
+    def _install_plugin(cls) -> None:
+        """Install the working tree's plugin, atomically with its own restore.
 
+        darktable only loads Lua at start, so this has to touch the REAL
+        ~/.config/darktable (there is no throwaway --configdir that would
+        still load the plugin). Every step records what it is about to change
+        BEFORE changing it, and any failure unwinds everything recorded so
+        far, so a half-finished install is never left behind.
+        """
+        try:
+            INSTALLED_PLUGIN.parent.mkdir(parents=True, exist_ok=True)
+            cls._plugin_existed_before = INSTALLED_PLUGIN.exists()
+            if cls._plugin_existed_before:
+                cls._plugin_backup = INSTALLED_PLUGIN.read_bytes()
+            shutil.copy(PLUGIN_SRC, INSTALLED_PLUGIN)
+
+            luarc = INSTALLED_PLUGIN.parent.parent / "luarc"
+            cls._luarc_path = luarc
+            line = 'require "darktable_mcp"\n'
+            cls._luarc_existed_before = luarc.exists()
+            if not luarc.exists() or line not in luarc.read_text():
+                # Recorded before the write, so a failed append still unwinds.
+                cls._luarc_line_added = True
+                with luarc.open("a") as fh:
+                    fh.write(line)
+        except BaseException:
+            cls._cleanup_plugin_install()
+            raise
+
+    @classmethod
+    def _launch_and_wait(cls) -> None:
         # ONE job for the whole scripted conversation. `darkroom.undo_last`
         # undoes the newest write in the CURRENT job's journal, and
         # `scouter.paths.current_job()` derives a fresh id per process-second
@@ -139,49 +171,45 @@ class HeroEditIntegrationTest(unittest.TestCase):
                     break
             time.sleep(1.0)
 
-        if reached_darkroom:
-            # A REAL readiness check, replacing task 12's blind 25s settle.
-            #
-            # That settle was a misdiagnosis. Task 12 round 1 re-measured the
-            # same window from inside a dt.control.dispatch coroutine
-            # (spike/scouter_view_switch_probe.lua) and the darkroom pipe
-            # answered a real `dt.gui.action` on the FIRST attempt, 0ms after
-            # `view.current` first said "darkroom" -- so there is nothing to
-            # sleep off. What actually failed in task 12 was the commit, for
-            # an unrelated reason (write_sidecar_files; see the plugin's
-            # comment block).
-            #
-            # So instead of a fixed sleep, ask the bridge the question the
-            # test depends on -- is an image loaded in the darkroom? -- and
-            # proceed as soon as it answers. `darkroom.current` is read-only:
-            # it never selects, switches views, or imports.
-            ready_started = time.monotonic()
-            deadline = ready_started + 60
-            detail = "never answered"
-            while time.monotonic() < deadline:
-                try:
-                    current = dtbridge.call("darkroom.current", timeout=10.0)
-                except Exception as e:
-                    detail = str(e)
-                else:
-                    if current.get("image_id") is not None:
-                        cls.readiness_s = time.monotonic() - ready_started
-                        print(f"\ndarkroom readiness (real check, not a sleep): "
-                              f"{cls.readiness_s:.2f}s -- {current}")
-                        return
-                    detail = f"no image loaded yet: {current}"
-                time.sleep(0.5)
-            _quit(cls.proc)
-            cls._cleanup_plugin_install()
+        if not reached_darkroom:
             raise unittest.SkipTest(
-                f"the darkroom never reported a loaded image within 60s ({detail})"
+                f"darktable did not reach the darkroom within 90s (last view: {last})"
             )
 
-        _quit(cls.proc)
-        cls._cleanup_plugin_install()
-        raise unittest.SkipTest(
-            f"darktable did not reach the darkroom within 90s (last view: {last})"
-        )
+        # A REAL readiness check, replacing task 12's blind 25s settle.
+        #
+        # That settle was a misdiagnosis. Task 12 round 1 re-measured the
+        # same window from inside a dt.control.dispatch coroutine
+        # (spike/scouter_view_switch_probe.lua) and the darkroom pipe
+        # answered a real `dt.gui.action` on the FIRST attempt, 0ms after
+        # `view.current` first said "darkroom" -- so there is nothing to
+        # sleep off. What actually failed in task 12 was the commit, for
+        # an unrelated reason (write_sidecar_files; see the plugin's
+        # comment block).
+        #
+        # So instead of a fixed sleep, ask the bridge the question the
+        # test depends on -- is an image loaded in the darkroom? -- and
+        # proceed as soon as it answers. `darkroom.current` is read-only:
+        # it never selects, switches views, or imports.
+        ready_started = time.monotonic()
+        deadline = ready_started + 60
+        detail = "never answered"
+        while time.monotonic() < deadline:
+            try:
+                current = dtbridge.call("darkroom.current", timeout=10.0)
+            except Exception as e:
+                detail = str(e)
+            else:
+                if current.get("image_id") is not None:
+                    cls.readiness_s = time.monotonic() - ready_started
+                    print(
+                        f"\ndarkroom readiness (real check, not a sleep): "
+                        f"{cls.readiness_s:.2f}s -- {current}"
+                    )
+                    return
+                detail = f"no image loaded yet: {current}"
+            time.sleep(0.5)
+        raise unittest.SkipTest(f"the darkroom never reported a loaded image within 60s ({detail})")
 
     @classmethod
     def _restore_job_env(cls) -> None:
@@ -289,7 +317,18 @@ class HeroEditIntegrationTest(unittest.TestCase):
         stats = registry.call("scout.stats", "cli", image=raw, px=1024)
         self.assertTrue(stats.ok, stats.to_dict())
         self.assertEqual(stats.data["px_used"], 1024)
-        self.assertLess(stats.ms, 3000, f"Scouter loop took {stats.ms} ms")
+        # Ruling 29: the design target is 3.0s (docs/measurements.md measured
+        # 1.96s in isolation), but this runs with the real darktable GUI alive
+        # and contending for the machine. So the assertion is 4.0s and
+        # anything over the 3.0s target is printed as a warning -- a slow loop
+        # is visible in the output without turning GUI contention into a red
+        # suite.
+        self.assertLess(stats.ms, 4000, f"Scouter loop took {stats.ms} ms")
+        if stats.ms > 3000:
+            print(
+                f"WARNING: Scouter loop {stats.ms} ms is over the 3000 ms design "
+                f"target (under the 4000 ms assertion; GUI contention, ruling 29)"
+            )
         self.assertEqual(len(stats.data["histogram"]["r"]), 256)
         print(f"LIVE scout.stats loop: {stats.ms} ms at {stats.data['px_used']} px")
 
@@ -311,9 +350,7 @@ class HeroEditIntegrationTest(unittest.TestCase):
 
         # ...then make one more edit that IS decodable and undo THAT, which is
         # what E3 actually asks for: an undo verified from the sidecar.
-        again = registry.call(
-            "darkroom.set", "cli", module="sigmoid", param="contrast", value=1.10
-        )
+        again = registry.call("darkroom.set", "cli", module="sigmoid", param="contrast", value=1.10)
         self.assertTrue(again.ok, again.to_dict())
         undo = registry.call("darkroom.undo_last", "cli")
         self.assertTrue(undo.ok, undo.to_dict())
@@ -350,8 +387,12 @@ class HeroEditIntegrationTest(unittest.TestCase):
         # run-unique sigmoid contrast does move, every run.
         probe_value = 1.20 + (int(time.time()) % 11) * 0.01
         uncommitted = registry.call(
-            "darkroom.set", "cli", module="sigmoid", param="contrast",
-            value=probe_value, commit=False,
+            "darkroom.set",
+            "cli",
+            module="sigmoid",
+            param="contrast",
+            value=probe_value,
+            commit=False,
         )
         self.assertTrue(uncommitted.ok, uncommitted.to_dict())
         commit_only = registry.call("history.commit", "cli", image=raw)
@@ -375,11 +416,25 @@ class HeroEditIntegrationTest(unittest.TestCase):
         for verb_id in ("darkroom.open", "darkroom.set", "scout.stats", "darkroom.undo_last"):
             self.assertIn(verb_id, verbs)
         self.assertTrue(paths.events_path().exists())
-        self.assertTrue(
-            any(
-                paths.audit_path(job).exists() for job in [os.environ.get("SCOUTER_JOB", "")] if job
-            )
-            or True
+        # A REAL assertion (rulings 14/15; the `or True` that used to end this
+        # expression made it unfalsifiable): this conversation pinned
+        # $SCOUTER_JOB in setUpClass, so the audit log for that exact job must
+        # exist and must carry a line for every verb this test drove.
+        job = os.environ["SCOUTER_JOB"]
+        audit = paths.audit_path(job)
+        self.assertTrue(audit.exists(), f"no audit log at {audit} for job {job}")
+        audited = [
+            json.loads(line)
+            for line in audit.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        audited_verbs = {row["verb"] for row in audited}
+        for verb_id in ("darkroom.open", "darkroom.set", "scout.stats", "darkroom.undo_last"):
+            self.assertIn(verb_id, audited_verbs, f"{verb_id} is missing from {audit}")
+        self.assertTrue(all(row["job"] == job for row in audited))
+        print(
+            f"LIVE audit log: {len(audited)} lines in {audit} "
+            f"({len(audited_verbs)} distinct verbs)"
         )
 
     def test_colorbalancergb_slot_probe_pins_the_layout(self) -> None:
@@ -399,10 +454,42 @@ class HeroEditIntegrationTest(unittest.TestCase):
         entry = max(
             (e for e in read.entries if e.operation == "colorbalancergb"), key=lambda e: e.num
         )
-        shutil.copy(
-            xmp.sidecar_path(raw),
-            Path(__file__).resolve().parent / "fixtures" / "colorbalancergb.xmp",
-        )
+        # This used to `shutil.copy` the live sidecar STRAIGHT OVER
+        # tests/fixtures/colorbalancergb.xmp (final review, should-fix 4): a
+        # host run silently rewrote the committed fixture that the unit suite
+        # asserts against, so the fixture could never disagree with the host
+        # and the unit test could not fail. The capture now goes to a
+        # throwaway file, and the committed fixture is ASSERTED against
+        # instead: same module, same modversion, still decodable.
+        captured = Path(tempfile.gettempdir()) / f"scouter-cbrgb-{os.getpid()}.xmp"
+        try:
+            shutil.copy(xmp.sidecar_path(raw), captured)
+            fixture = Path(__file__).resolve().parent / "fixtures" / "colorbalancergb.xmp"
+            self.assertTrue(fixture.is_file(), f"the committed fixture {fixture} is missing")
+            fixture_entry = max(
+                (
+                    e
+                    for e in xmp.parse(fixture.read_text(encoding="utf-8")).entries
+                    if e.operation == "colorbalancergb"
+                ),
+                key=lambda e: e.num,
+            )
+            self.assertEqual(
+                fixture_entry.modversion,
+                entry.modversion,
+                f"this host writes colorbalancergb v{entry.modversion} but the committed "
+                f"fixture is v{fixture_entry.modversion}: the pinned layout in "
+                f"scouter/core/xmp.py covers a different version. The live sidecar was "
+                f"captured at {captured} -- review it and update the fixture deliberately.",
+            )
+            assert fixture_entry.decoded is not None
+            self.assertIn("contrast", fixture_entry.decoded)
+            print(
+                f"colorbalancergb fixture agrees with this host: v{entry.modversion}, "
+                f"fixture contrast={fixture_entry.decoded['contrast']:.4f}"
+            )
+        finally:
+            captured.unlink(missing_ok=True)
         assert entry.decoded is not None
         # Task 12 PINNED this layout (xmp.LAYOUTS[("colorbalancergb", 5)] ->
         # named_slots, slot 31 of 33 is `contrast`), so the decoder now hands

@@ -152,9 +152,7 @@ def decode_module(operation: str, modversion: int, blob: bytes) -> tuple[dict | 
         return decoded, None
     expected = layout["size"]
     if expected is not None and len(blob) != expected:
-        return None, (
-            f"{operation} v{modversion} layout expects {expected} bytes, got {len(blob)}"
-        )
+        return None, (f"{operation} v{modversion} layout expects {expected} bytes, got {len(blob)}")
     decoded = {}
     for name, fmt, offset in layout["fields"]:
         size = struct.calcsize(fmt)
@@ -222,16 +220,16 @@ def parse(text: str) -> ParsedXmp:
         seq = root.find(f".//{{{DT_NS}}}history/{{{RDF_NS}}}Seq")
         for li in list(seq) if seq is not None else []:
             attrs = {
-                k.split("}", 1)[1]: v
-                for k, v in li.attrib.items()
-                if k.startswith(f"{{{DT_NS}}}")
+                k.split("}", 1)[1]: v for k, v in li.attrib.items() if k.startswith(f"{{{DT_NS}}}")
             }
             entries.append(_entry_from_attrs(attrs, history_end))
     else:
         header = {m.group("key"): m.group("value") for m in _DESC_RE.finditer(text)}
         history_end = int(header.get("history_end", "0") or 0)
         for match in _LI_RE.finditer(text):
-            attrs = {m.group("key"): m.group("value") for m in _ATTR_RE.finditer(match.group("attrs"))}
+            attrs = {
+                m.group("key"): m.group("value") for m in _ATTR_RE.finditer(match.group("attrs"))
+            }
             if "operation" in attrs:
                 entries.append(_entry_from_attrs(attrs, history_end))
 
@@ -246,8 +244,7 @@ def parse(text: str) -> ParsedXmp:
     )
 
 
-def latest_value(parsed: ParsedXmp, operation: str, param: str,
-                 instance: int = 0) -> float | None:
+def latest_value(parsed: ParsedXmp, operation: str, param: str, instance: int = 0) -> float | None:
     """The active value of one module parameter, newest entry wins.
 
     `instance` maps onto darktable's `multi_priority`. Returns None when the

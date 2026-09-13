@@ -809,17 +809,43 @@ local function find_image_by_path(path)
   return nil
 end
 
+-- The film roll a library image belongs to, as a path, or nil. Indexing an
+-- unknown field on a dt image userdata RAISES, so this is pcall-guarded.
+local function image_film_path(image)
+  local ok, film = pcall(function() return image.film end)
+  if not ok or film == nil then return nil end
+  local ok2, path = pcall(function() return film.path end)
+  if ok2 and type(path) == "string" and path ~= "" then return path end
+  return nil
+end
+
+-- Resolve an image by PATH or by ID, purely out of dt.database -- no GUI
+-- touch whatsoever: no selection, no view switch, no import. This is the only
+-- resolution a read verb (history.read, scout.*) or a dry run is allowed to
+-- use; `darkroom.open` actively loads an image and belongs to write verbs
+-- (final review, blocker 2).
+--
+-- An id is looked up with dt.database[id], which is documented to return the
+-- image or nil -- it does not raise for an unknown id, but it is pcall-guarded
+-- anyway so a future stricter build cannot turn a miss into a bridge error.
 methods["image.lookup"] = function(p)
   p = p or {}
-  local image = find_image_by_path(p.path)
+  local image = nil
+  if p.image_id ~= nil then
+    local ok, found = pcall(function() return dt.database[tonumber(p.image_id)] end)
+    if ok then image = found end
+  end
+  if not image and p.path then image = find_image_by_path(p.path) end
   if not image then
-    return {found = false, image_id = nil, path = p.path, filename = nil, rating = nil}
+    return {found = false, image_id = tonumber(p.image_id), path = p.path,
+            filename = nil, film = nil, rating = nil}
   end
   return {
     found = true,
     image_id = tonumber(image.id),
     path = _image_full_path(image),
     filename = image.filename,
+    film = image_film_path(image),
     rating = image.rating or 0,
   }
 end
@@ -1227,13 +1253,30 @@ local function image_sidecar_path(image)
   return nil
 end
 
--- "<fractional mtime> <size>" for `path`, or nil when it does not exist.
--- Lua has no stat(2), and whole-second os.time granularity cannot tell two
--- writes in the same second apart -- which is exactly the resolution a commit
--- needs. stat(1) can.
+-- stat(1) is not portable: BSD/macOS spells the format `-f '%Fm %z'`, GNU
+-- coreutils (Linux) spells it `-c '%Y %s'` and rejects -f outright. Detected
+-- once, from `uname -s`, rather than guessing per call.
+local function stat_format_args()
+  local p = io.popen("uname -s 2>/dev/null")
+  local uname = ""
+  if p then
+    uname = (p:read("*a") or ""):gsub("%s+$", "")
+    p:close()
+  end
+  if uname == "Linux" then return "-c '%Y %s'" end
+  return "-f '%Fm %z'"
+end
+
+local STAT_ARGS = stat_format_args()
+
+-- "<mtime> <size>" for `path`, or nil when it does not exist. Lua has no
+-- stat(2), and whole-second os.time granularity cannot tell two writes in the
+-- same second apart -- which is exactly the resolution a commit needs. stat(1)
+-- can (fractional on macOS, whole seconds plus the size on Linux, which is why
+-- the size is part of the signature).
 local function sidecar_signature(path)
   if type(path) ~= "string" or path == "" then return nil end
-  local p = io.popen("stat -f '%Fm %z' " .. shell_quote(path) .. " 2>/dev/null")
+  local p = io.popen("stat " .. STAT_ARGS .. " " .. shell_quote(path) .. " 2>/dev/null")
   if not p then return nil end
   local out = p:read("*a") or ""
   p:close()
@@ -1284,9 +1327,13 @@ methods["history.commit"] = function(p)
   end
   -- strategy == "auto" or "view_bounce".
   --
-  -- The bounce alone is NOT a commit: it only flushes the darkroom pipe, and
-  -- darktable only turns that flush into a sidecar write when
-  -- write_sidecar_files is "after edit". See the comment block above.
+  -- The bounce alone is NOT a commit: it flushes the darkroom pipe, and
+  -- darktable turns that flush into a sidecar write only when the history
+  -- ACTUALLY CHANGED (and only while the user's own "store XMP sidecar files"
+  -- preference allows it -- a preference this plugin never reads and never
+  -- writes; the earlier claim that it could be set from Lua was wrong, see the
+  -- comment block above). So the write is confirmed below by watching the
+  -- sidecar itself, never assumed from a successful bounce.
   local image = darkroom_image()
   local sidecar = image_sidecar_path(image)
   local before = sidecar and sidecar_signature(sidecar) or nil

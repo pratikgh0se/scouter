@@ -12,16 +12,21 @@ from scouter.types import ExportedFile, ExportResult
 
 #: preset -> (extension, longest edge in px or 0 for full size, quality)
 PRESETS: dict[str, dict] = {
-    "client-final": {"ext": "jpg", "px": 0, "quality": 95,
-                     "note": "full-size sRGB JPEG q95"},
-    "preview": {"ext": "png", "px": 1024, "quality": 95,
-                "note": "1024 px PNG for review"},
+    "client-final": {"ext": "jpg", "px": 0, "quality": 95, "note": "full-size sRGB JPEG q95"},
+    "preview": {"ext": "png", "px": 1024, "quality": 95, "note": "1024 px PNG for review"},
 }
 
 
 @metrics.instrumented("export.run")
-def run(images: list[str | int], preset: str, out_dir: str, *, confirm: bool = False,
-        dry_run: bool = False, job: str | None = None) -> ExportResult:
+def run(
+    images: list[str | int],
+    preset: str,
+    out_dir: str,
+    *,
+    confirm: bool = False,
+    dry_run: bool = False,
+    job: str | None = None,
+) -> ExportResult:
     """Export one or more images through a preset. Gated on overwrite and on n>1."""
     job = job or current_job()
     if preset not in PRESETS:
@@ -36,8 +41,14 @@ def run(images: list[str | int], preset: str, out_dir: str, *, confirm: bool = F
     existing = [str(out) for _, out in planned if out.exists()]
 
     plan = [
-        {"action": "export.run", "image_id": item.image_id, "input": item.path,
-         "output": str(out), "exists": out.exists(), "preset": preset}
+        {
+            "action": "export.run",
+            "image_id": item.image_id,
+            "input": item.path,
+            "output": str(out),
+            "exists": out.exists(),
+            "preset": preset,
+        }
         for item, out in planned
     ]
     needs_confirm = len(planned) > 1 or bool(existing)
@@ -48,7 +59,10 @@ def run(images: list[str | int], preset: str, out_dir: str, *, confirm: bool = F
         if existing:
             reasons.append(f"{len(existing)} output file(s) already exist")
         return ExportResult(
-            outcome="dry_run", preset=preset, out_dir=str(destination), plan=plan,
+            outcome="dry_run",
+            preset=preset,
+            out_dir=str(destination),
+            plan=plan,
             image_id=resolved[0].image_id if resolved else None,
             path=resolved[0].path if resolved else None,
             reason=(
@@ -63,35 +77,65 @@ def run(images: list[str | int], preset: str, out_dir: str, *, confirm: bool = F
     for item, out in planned:
         try:
             scout.render(item.path, out, spec["px"] or 0, spec["ext"])
-        except Exception as e:                     # one bad file must not lose the rest
-            files.append(ExportedFile(input=item.path, output=None, ok=False, bytes=0,
-                                      error=str(e)))
+        except Exception as e:  # one bad file must not lose the rest
+            files.append(
+                ExportedFile(input=item.path, output=None, ok=False, bytes=0, error=str(e))
+            )
             continue
-        files.append(ExportedFile(input=item.path, output=str(out), ok=True,
-                                  bytes=out.stat().st_size, error=None))
+        files.append(
+            ExportedFile(
+                input=item.path, output=str(out), ok=True, bytes=out.stat().st_size, error=None
+            )
+        )
     exported = sum(1 for f in files if f.ok)
     return ExportResult(
-        preset=preset, out_dir=str(destination), files=files, exported=exported,
+        preset=preset,
+        out_dir=str(destination),
+        files=files,
+        exported=exported,
         failed=len(files) - exported,
         image_id=resolved[0].image_id if resolved else None,
         path=resolved[0].path if resolved else None,
-        warnings=[spec["note"]] + (
+        warnings=[spec["note"]]
+        + (
             [f"{len(files) - exported} file(s) failed; see `files[].error`"]
-            if exported != len(files) else []
+            if exported != len(files)
+            else []
         ),
     )
 
 
 register(
-    Verb(id="export.run", group="export", fn=run,
-         args=(ArgSpec("images", "list[str]", required=True, positional=True,
-                       help="one or more paths or image ids"),
-               ArgSpec("preset", "str", required=True, choices=tuple(PRESETS),
-                       help="client-final (full-size JPEG) or preview (1024 px PNG)"),
-               ArgSpec("out_dir", "str", required=True, help="destination directory"),
-               ArgSpec("dry_run", "bool", default=False, help="plan only"),
-               ArgSpec("confirm", "bool", default=False,
-                       help="required for more than one image, or to overwrite files")),
-         writes=True, gated=True,
-         summary="Export images through a preset into a directory.")
+    Verb(
+        id="export.run",
+        group="export",
+        fn=run,
+        args=(
+            ArgSpec(
+                "images",
+                "list[str]",
+                required=True,
+                positional=True,
+                help="one or more paths or image ids",
+            ),
+            ArgSpec(
+                "preset",
+                "str",
+                required=True,
+                choices=tuple(PRESETS),
+                help="client-final (full-size JPEG) or preview (1024 px PNG)",
+            ),
+            ArgSpec("out_dir", "str", required=True, help="destination directory"),
+            ArgSpec("dry_run", "bool", default=False, help="plan only"),
+            ArgSpec(
+                "confirm",
+                "bool",
+                default=False,
+                help="required for more than one image, or to overwrite files",
+            ),
+        ),
+        writes=True,
+        gated=True,
+        summary="Export images through a preset into a directory.",
+    )
 )

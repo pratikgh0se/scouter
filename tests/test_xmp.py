@@ -100,16 +100,14 @@ class TruncatedTest(unittest.TestCase):
 
     def test_regex_fallback_still_finds_complete_entries(self) -> None:
         text = REFERENCE.read_text()
-        parsed = xmp.parse(text[:-40])          # chop the closing tags only
+        parsed = xmp.parse(text[:-40])  # chop the closing tags only
         self.assertFalse(parsed.well_formed)
         self.assertTrue(any(e.operation == "exposure" for e in parsed.entries))
 
 
 class SidecarPathTest(unittest.TestCase):
     def test_sidecar_path_appends_xmp_to_the_whole_filename(self) -> None:
-        self.assertEqual(
-            xmp.sidecar_path("/a/P6281348.ORF"), Path("/a/P6281348.ORF.xmp")
-        )
+        self.assertEqual(xmp.sidecar_path("/a/P6281348.ORF"), Path("/a/P6281348.ORF.xmp"))
 
 
 class ColorbalancergbTest(unittest.TestCase):

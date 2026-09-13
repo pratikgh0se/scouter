@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import time
@@ -13,32 +14,60 @@ from tests.scouter_fakes import FakeBridge, TempCache
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "P6281348.ORF.xmp"
 
 
-class DarkroomCoreTest(unittest.TestCase):
+class _DarkroomFixture(unittest.TestCase):
+    """The shared fixture: temp cache, a FakeBridge, and a recording `_commit`.
+
+    Carries no tests of its own -- the suites below inherit it so each one
+    gets the fixture without re-running the others' cases.
+    """
+
     def setUp(self) -> None:
         self.cache = TempCache()
         root = self.cache.start()
         self.raw = root / "P6281348.ORF"
         self.raw.write_bytes(b"not really a raw")
         shutil.copy(FIXTURE, str(self.raw) + ".xmp")
-        self.bridge = FakeBridge({
-            # No "darkroom.open" stub here (fix round 2, blocker 1): none of
-            # the verbs under test send it any more (set/nudge/enable/reset
-            # read via darkroom.current; undo_last verifies via darkroom.
-            # current too). Its absence makes a regression back to
-            # force-switch-via-open fail loudly instead of silently passing.
-            "darkroom.current": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
-                                 "source": "action_images"},
-            "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-            "darkroom.action": lambda p: {"nan": False, "status": p.get("value"),
-                                          "view": "darkroom", **p},
-            "darkroom.status": {"position": 0.6429, "nan": False, "view": "darkroom"},
-            "module.enable": {"module": "exposure", "action": "enable", "nan": False,
-                              "view": "darkroom"},
-            "module.disable": {"module": "exposure", "action": "disable", "nan": False,
-                               "view": "darkroom"},
-            "module.reset": {"module": "exposure", "action": "reset", "nan": False,
-                             "view": "darkroom"},
-        })
+        self.bridge = FakeBridge(
+            {
+                # No "darkroom.open" stub here (fix round 2, blocker 1): none of
+                # the verbs under test send it any more (set/nudge/enable/reset
+                # read via darkroom.current; undo_last verifies via darkroom.
+                # current too). Its absence makes a regression back to
+                # force-switch-via-open fail loudly instead of silently passing.
+                "darkroom.current": {
+                    "image_id": 12,
+                    "path": str(self.raw),
+                    "view": "darkroom",
+                    "source": "action_images",
+                },
+                "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+                "darkroom.action": lambda p: {
+                    "nan": False,
+                    "status": p.get("value"),
+                    "view": "darkroom",
+                    **p,
+                },
+                "darkroom.status": {"position": 0.6429, "nan": False, "view": "darkroom"},
+                "module.enable": {
+                    "module": "exposure",
+                    "action": "enable",
+                    "nan": False,
+                    "view": "darkroom",
+                },
+                "module.disable": {
+                    "module": "exposure",
+                    "action": "disable",
+                    "nan": False,
+                    "view": "darkroom",
+                },
+                "module.reset": {
+                    "module": "exposure",
+                    "action": "reset",
+                    "nan": False,
+                    "view": "darkroom",
+                },
+            }
+        )
         dtbridge.set_bridge(self.bridge)
 
         # Isolate darkroom.py's own logic from `scouter.core.history` (task 8)
@@ -53,9 +82,7 @@ class DarkroomCoreTest(unittest.TestCase):
             self.commit_calls.append((job, image, strategy))
             return CommitResult(committed=True, warnings=[])
 
-        self._commit_patcher = mock.patch(
-            "scouter.core.darkroom._commit", side_effect=fake_commit
-        )
+        self._commit_patcher = mock.patch("scouter.core.darkroom._commit", side_effect=fake_commit)
         self._commit_patcher.start()
         self.addCleanup(self._commit_patcher.stop)
 
@@ -63,11 +90,12 @@ class DarkroomCoreTest(unittest.TestCase):
         dtbridge.set_bridge(None)
         self.cache.stop()
 
+
+class DarkroomCoreTest(_DarkroomFixture):
     # -- set_param -----------------------------------------------------
 
     def test_set_sends_an_absolute_set_and_journals_the_previous_value(self) -> None:
-        result = darkroom.set_param(module="exposure", param="exposure", value=2.0,
-                                    commit=False)
+        result = darkroom.set_param(module="exposure", param="exposure", value=2.0, commit=False)
         self.assertEqual(result.requested, 2.0)
         self.assertAlmostEqual(result.previous or 0, 1.5500002, places=5)
         sent = [p for m, p in self.bridge.calls if m == "darkroom.action"][-1]
@@ -125,8 +153,7 @@ class DarkroomCoreTest(unittest.TestCase):
         self._commit_patcher.start()
 
     def test_dry_run_sends_no_action_and_resolves_nothing(self) -> None:
-        result = darkroom.set_param(module="exposure", param="exposure", value=2.0,
-                                    dry_run=True)
+        result = darkroom.set_param(module="exposure", param="exposure", value=2.0, dry_run=True)
         self.assertEqual(result.outcome, "dry_run")
         self.assertEqual(self.bridge.calls, [])
         self.assertEqual(result.plan[0]["value"], 2.0)
@@ -202,10 +229,8 @@ class DarkroomCoreTest(unittest.TestCase):
     def test_before_state_instance_filter_is_exact(self) -> None:
         """Fix round 3, item 3 (discriminator): an entry for instance 1 must
         not feed instance 0's `before`."""
-        darkroom.set_param(module="exposure", param="exposure", value=2.0, instance=1,
-                           commit=False)
-        darkroom.set_param(module="exposure", param="exposure", value=9.0, instance=0,
-                           commit=False)
+        darkroom.set_param(module="exposure", param="exposure", value=2.0, instance=1, commit=False)
+        darkroom.set_param(module="exposure", param="exposure", value=9.0, instance=0, commit=False)
         entries = journal.read_all("job-test")
         last = entries[-1]
         self.assertEqual(last.instance, 0)
@@ -213,12 +238,32 @@ class DarkroomCoreTest(unittest.TestCase):
         self.assertAlmostEqual(last.before["value"], 1.5500002, places=5)
 
     def test_torn_sidecar_retries_then_raises_commit_timeout(self) -> None:
-        (Path(str(self.raw) + ".xmp")).write_text("<not well formed", encoding="utf-8")
-        with mock.patch("scouter.core.darkroom.time.sleep"):
+        """A mid-write sidecar is retried a bounded number of times, then
+        reported -- never read as a missing value.
+
+        The retry count itself is asserted (final review nit: the old version
+        only checked the message, so dropping the retry loop entirely would
+        still have passed): one sleep per retry except the last, and the
+        refusal names the file so it is actionable.
+        """
+        sidecar = Path(str(self.raw) + ".xmp")
+        sidecar.write_text("<not well formed", encoding="utf-8")
+        with mock.patch("scouter.core.darkroom.time.sleep") as sleep:
             with self.assertRaises(CommitTimeout) as ctx:
-                darkroom.set_param(module="exposure", param="exposure", value=2.0,
-                                   commit=False)
+                darkroom.set_param(module="exposure", param="exposure", value=2.0, commit=False)
         self.assertIn("torn write", str(ctx.exception))
+        self.assertIn(str(sidecar), str(ctx.exception))
+        self.assertEqual(ctx.exception.detail["attempts"], darkroom._TORN_RETRIES)
+        self.assertEqual(sleep.call_count, darkroom._TORN_RETRIES - 1)
+        self.assertEqual(
+            [call.args[0] for call in sleep.call_args_list],
+            [darkroom._TORN_SLEEP_S] * (darkroom._TORN_RETRIES - 1),
+        )
+        # The torn read happens while computing `before`, i.e. BEFORE anything
+        # is sent: no action reached darktable and nothing was journalled, so
+        # there is no half-recorded write to reconcile later.
+        self.assertNotIn("darkroom.action", self.bridge.methods_called())
+        self.assertEqual(journal.read_all("job-test"), [])
 
     # -- nudge -----------------------------------------------------------
 
@@ -302,7 +347,9 @@ class DarkroomCoreTest(unittest.TestCase):
         mismatch, rather than force-switching via `darkroom.open`."""
         darkroom.set_param(module="exposure", param="exposure", value=2.0, commit=False)
         self.bridge.responses["darkroom.current"] = {
-            "image_id": 99, "path": "/other/path.ORF", "view": "darkroom",
+            "image_id": 99,
+            "path": "/other/path.ORF",
+            "view": "darkroom",
             "source": "action_images",
         }
         with self.assertRaises(NotInDarkroom) as ctx:
@@ -323,8 +370,13 @@ class DarkroomCoreTest(unittest.TestCase):
 
     def test_undo_last_respects_instance(self) -> None:
         entry = journal.begin(
-            "job-test", verb="darkroom.set", image_id=12, path=str(self.raw),
-            module="exposure", param="exposure", instance=2,
+            "job-test",
+            verb="darkroom.set",
+            image_id=12,
+            path=str(self.raw),
+            module="exposure",
+            param="exposure",
+            instance=2,
             before={"source": "xmp", "value": 0.5, "enabled": True, "history_end": 14},
         )
         journal.complete("job-test", entry.seq, after={"value": 1.0})
@@ -345,8 +397,13 @@ class DarkroomCoreTest(unittest.TestCase):
         # call here would be the no-op case (next test); seed the journal
         # directly to exercise the "it really was off before" branch.
         entry = journal.begin(
-            "job-test", verb="module.enable", image_id=12, path=str(self.raw),
-            module="exposure", param="", instance=0,
+            "job-test",
+            verb="module.enable",
+            image_id=12,
+            path=str(self.raw),
+            module="exposure",
+            param="",
+            instance=0,
             before={"source": "xmp", "enabled": False, "history_end": 14},
         )
         journal.complete("job-test", entry.seq, after={"action": "enable", "enabled": True})
@@ -357,8 +414,13 @@ class DarkroomCoreTest(unittest.TestCase):
 
     def test_undo_last_of_enable_is_a_noop_when_already_enabled_before(self) -> None:
         entry = journal.begin(
-            "job-test", verb="module.enable", image_id=12, path=str(self.raw),
-            module="exposure", param="", instance=0,
+            "job-test",
+            verb="module.enable",
+            image_id=12,
+            path=str(self.raw),
+            module="exposure",
+            param="",
+            instance=0,
             before={"source": "xmp", "enabled": True, "history_end": 14},
         )
         journal.complete("job-test", entry.seq, after={"action": "enable", "enabled": True})
@@ -451,6 +513,230 @@ class DarkroomCoreTest(unittest.TestCase):
         self.assertTrue(all(e.enabled is not None for e in result.entries))
 
 
+class NonFiniteValueTest(_DarkroomFixture):
+    """Should-fix 5: nan/inf is refused as `usage` before any bridge call.
+
+    nan is also the bridge's own "not in the darkroom" signal, so sending one
+    makes the answer unreadable; and JSON cannot carry it either.
+    """
+
+    def test_a_non_finite_set_value_is_refused_before_the_bridge(self) -> None:
+        from scouter.errors import UsageError
+
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                before = len(self.bridge.calls)
+                with self.assertRaises(UsageError) as ctx:
+                    darkroom.set_param(module="exposure", param="exposure", value=value)
+                self.assertEqual(ctx.exception.code, "usage")
+                self.assertEqual(self.bridge.calls[before:], [])
+                self.assertEqual(journal.read_all("job-test"), [])
+
+    def test_a_non_finite_nudge_step_count_is_refused_before_the_bridge(self) -> None:
+        from scouter.errors import UsageError
+
+        for steps in (float("nan"), float("inf"), 1.5):
+            with self.subTest(steps=steps):
+                before = len(self.bridge.calls)
+                with self.assertRaises(UsageError):
+                    darkroom.nudge(module="exposure", param="exposure", steps=steps)
+                self.assertEqual(self.bridge.calls[before:], [])
+
+    def test_a_dry_run_refuses_a_non_finite_value_too(self) -> None:
+        from scouter.errors import UsageError
+
+        with self.assertRaises(UsageError):
+            darkroom.set_param(
+                module="exposure", param="exposure", value=float("nan"), dry_run=True
+            )
+
+
+class JobImageGuardTest(_DarkroomFixture):
+    """Ruling 30: a write refuses when the darkroom shows a different image.
+
+    `darkroom.current` reports the SELECTION, so "something is loaded" is not
+    proof it is the image this job opened. Every write compares the two and
+    names both ids when they disagree.
+    """
+
+    def _open_and_then_switch_to(self, other_id: int) -> None:
+        darkroom.open_image(image=str(self.raw))
+        self.bridge.responses["darkroom.current"] = {
+            "image_id": other_id,
+            "path": "/elsewhere/other.ORF",
+            "view": "darkroom",
+            "source": "action_images",
+        }
+
+    def test_open_records_the_job_image(self) -> None:
+        from scouter import paths
+
+        self.bridge.responses["darkroom.open"] = {
+            "image_id": 12,
+            "path": str(self.raw),
+            "view": "darkroom",
+            "opened": True,
+            "already_open": False,
+        }
+        darkroom.open_image(image=str(self.raw))
+        state = json.loads(paths.job_state_path("job-test").read_text())
+        self.assertEqual(state["opened_image_id"], 12)
+
+    def test_set_refuses_when_the_darkroom_shows_another_image(self) -> None:
+        self.bridge.responses["darkroom.open"] = {
+            "image_id": 12,
+            "path": str(self.raw),
+            "view": "darkroom",
+            "opened": True,
+            "already_open": False,
+        }
+        self._open_and_then_switch_to(77)
+        before = len(self.bridge.calls)
+        with self.assertRaises(NotInDarkroom) as ctx:
+            darkroom.set_param(module="exposure", param="exposure", value=2.0)
+        self.assertIn("darkroom.current reports 77, job opened 12", str(ctx.exception))
+        # Refused before any write reached darktable, and before journalling.
+        sent = [m for m, _ in self.bridge.calls[before:]]
+        self.assertNotIn("darkroom.action", sent)
+        self.assertEqual(journal.read_all("job-test"), [])
+
+    def test_nudge_enable_reset_and_undo_refuse_the_same_way(self) -> None:
+        self.bridge.responses["darkroom.open"] = {
+            "image_id": 12,
+            "path": str(self.raw),
+            "view": "darkroom",
+            "opened": True,
+            "already_open": False,
+        }
+        self._open_and_then_switch_to(77)
+        calls = (
+            lambda: darkroom.nudge(module="exposure", param="exposure", steps=1),
+            lambda: darkroom.enable(module="exposure"),
+            lambda: darkroom.reset(module="exposure", confirm=True),
+        )
+        for call in calls:
+            with self.subTest(call=call):
+                with self.assertRaises(NotInDarkroom) as ctx:
+                    call()
+                self.assertIn("job opened 12", str(ctx.exception))
+
+    def test_undo_last_refuses_when_the_darkroom_shows_another_image(self) -> None:
+        self.bridge.responses["darkroom.open"] = {
+            "image_id": 12,
+            "path": str(self.raw),
+            "view": "darkroom",
+            "opened": True,
+            "already_open": False,
+        }
+        darkroom.open_image(image=str(self.raw))
+        darkroom.set_param(module="exposure", param="exposure", value=2.0, commit=False)
+        self.bridge.responses["darkroom.current"] = {
+            "image_id": 77,
+            "path": "/elsewhere/other.ORF",
+            "view": "darkroom",
+            "source": "action_images",
+        }
+        with self.assertRaises(NotInDarkroom) as ctx:
+            darkroom.undo_last()
+        self.assertIn("77", str(ctx.exception))
+
+    def test_a_job_that_never_opened_anything_is_not_second_guessed(self) -> None:
+        """No recorded image means nothing to contradict -- the write proceeds."""
+        result = darkroom.set_param(module="exposure", param="exposure", value=2.0, commit=False)
+        self.assertEqual(result.image_id, 12)
+
+
+class CommitReadbackTest(unittest.TestCase):
+    """Should-fix 6: a commit that wrote nothing is resolved by reading back.
+
+    darktable writes a sidecar only when the history actually CHANGES, so a
+    write asking for the state the image already has produces no write and the
+    poll loop times out -- while the XMP already says what was asked for.
+    `set` resolved that; `nudge`, `enable`/`disable` and `undo` did not.
+    """
+
+    def setUp(self) -> None:
+        self.cache = TempCache()
+        root = self.cache.start()
+        self.raw = root / "P6281348.ORF"
+        self.raw.write_bytes(b"not really a raw")
+        shutil.copy(FIXTURE, str(self.raw) + ".xmp")
+        self.bridge = FakeBridge(
+            {
+                "darkroom.current": {
+                    "image_id": 12,
+                    "path": str(self.raw),
+                    "view": "darkroom",
+                    "source": "action_images",
+                },
+                "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+                "darkroom.action": lambda p: {
+                    "nan": False,
+                    "status": p.get("value"),
+                    "view": "darkroom",
+                    **p,
+                },
+                "module.enable": {"nan": False, "view": "darkroom"},
+                "module.disable": {"nan": False, "view": "darkroom"},
+                "module.reset": {"nan": False, "view": "darkroom"},
+                # A commit that never writes the sidecar: the poll loop times out.
+                "history.commit": {
+                    "strategy_used": "view_bounce",
+                    "ok": False,
+                    "view_after": "darkroom",
+                    "cpu_ms": 5,
+                    "detail": "nothing to write",
+                },
+            }
+        )
+        dtbridge.set_bridge(self.bridge)
+
+    def tearDown(self) -> None:
+        dtbridge.set_bridge(None)
+        self.cache.stop()
+
+    def _timeout(self) -> CommitTimeout:
+        return CommitTimeout("darktable did not write the sidecar in time")
+
+    def test_a_nudge_whose_value_is_already_on_disk_is_committed_honestly(self) -> None:
+        # The fixture's exposure is 1.5500002; the bridge reports that as the
+        # value the last step landed on, so the XMP already agrees.
+        self.bridge.responses["darkroom.action"] = lambda p: {
+            "nan": False,
+            "status": 1.5500002,
+            "view": "darkroom",
+            **p,
+        }
+        with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
+            result = darkroom.nudge(module="exposure", param="exposure", steps=1)
+        self.assertTrue(result.committed)
+        self.assertTrue(any("no new sidecar" in w for w in result.warnings))
+
+    def test_a_nudge_that_did_not_land_still_raises_commit_timeout(self) -> None:
+        self.bridge.responses["darkroom.action"] = lambda p: {
+            "nan": False,
+            "status": 9.0,
+            "view": "darkroom",
+            **p,
+        }
+        with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
+            with self.assertRaises(CommitTimeout):
+                darkroom.nudge(module="exposure", param="exposure", steps=1)
+
+    def test_an_enable_of_an_already_enabled_module_is_committed_honestly(self) -> None:
+        # The fixture has exposure enabled, which is what `enable` asks for.
+        with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
+            result = darkroom.enable(module="exposure")
+        self.assertTrue(result.committed)
+        self.assertTrue(any("no new sidecar" in w for w in result.warnings))
+
+    def test_a_reset_timeout_is_never_dressed_up_as_a_commit(self) -> None:
+        """`reset` cannot be confirmed from the XMP, so its timeout propagates."""
+        with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
+            with self.assertRaises(CommitTimeout):
+                darkroom.reset(module="exposure", confirm=True)
+
+
 class DarkroomCommitSeamTest(unittest.TestCase):
     """Exercises `darkroom._commit` UNPATCHED: the real `history.commit`
     (task 8) against a FakeBridge whose response makes the sidecar's mtime
@@ -471,19 +757,38 @@ class DarkroomCommitSeamTest(unittest.TestCase):
             sidecar = Path(str(self.raw) + ".xmp")
             future = time.time() + 2
             os.utime(sidecar, (future, future))
-            return {"strategy_used": "view_bounce", "ok": True, "view_after": "darkroom",
-                    "cpu_ms": 5}
+            return {
+                "strategy_used": "view_bounce",
+                "ok": True,
+                "view_after": "darkroom",
+                "cpu_ms": 5,
+            }
 
-        self.bridge = FakeBridge({
-            "darkroom.current": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
-                                 "source": "action_images"},
-            "darkroom.open": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
-                              "opened": False, "already_open": True},
-            "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-            "darkroom.action": lambda p: {"nan": False, "status": p.get("value"),
-                                          "view": "darkroom", **p},
-            "history.commit": commit_response,
-        })
+        self.bridge = FakeBridge(
+            {
+                "darkroom.current": {
+                    "image_id": 12,
+                    "path": str(self.raw),
+                    "view": "darkroom",
+                    "source": "action_images",
+                },
+                "darkroom.open": {
+                    "image_id": 12,
+                    "path": str(self.raw),
+                    "view": "darkroom",
+                    "opened": False,
+                    "already_open": True,
+                },
+                "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+                "darkroom.action": lambda p: {
+                    "nan": False,
+                    "status": p.get("value"),
+                    "view": "darkroom",
+                    **p,
+                },
+                "history.commit": commit_response,
+            }
+        )
         dtbridge.set_bridge(self.bridge)
 
     def tearDown(self) -> None:

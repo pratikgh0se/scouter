@@ -33,8 +33,8 @@ class Raster:
 
     width: int
     height: int
-    bit_depth: int          # the file's depth: 8 or 16
-    data: bytes             # width * height * 3 bytes, one byte per sample
+    bit_depth: int  # the file's depth: 8 or 16
+    data: bytes  # width * height * 3 bytes, one byte per sample
 
     @property
     def samples(self) -> int:
@@ -61,7 +61,7 @@ def _tokens(data: bytes, count: int) -> tuple[list[bytes], int]:
         if start == i:
             raise ValueError("truncated PPM header")
         out.append(data[start:i])
-    return out, i + 1        # skip exactly one whitespace byte after maxval
+    return out, i + 1  # skip exactly one whitespace byte after maxval
 
 
 def parse_p6(data: bytes) -> Raster:
@@ -190,7 +190,7 @@ def downscale(raster: Raster, px: int) -> Raster:
     longest = max(raster.width, raster.height)
     if longest <= px:
         return raster
-    step = -(-longest // px)                  # ceil
+    step = -(-longest // px)  # ceil
     new_w = max(1, -(-raster.width // step))
     new_h = max(1, -(-raster.height // step))
     out = bytearray(new_w * new_h * 3)

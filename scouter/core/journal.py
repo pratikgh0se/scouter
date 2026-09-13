@@ -159,8 +159,18 @@ def next_seq(job: str) -> int:
     return (entries[-1].seq + 1) if entries else 1
 
 
-def begin(job: str, *, verb: str, image_id: int, path: str, module: str, param: str,
-         instance: int, before: dict, commit: bool = True) -> Entry:
+def begin(
+    job: str,
+    *,
+    verb: str,
+    image_id: int,
+    path: str,
+    module: str,
+    param: str,
+    instance: int,
+    before: dict,
+    commit: bool = True,
+) -> Entry:
     """Append the journal line for a write *before* the bridge action runs.
 
     `after` starts `None`: the entry says "Scouter is about to do this" and
@@ -217,8 +227,18 @@ def fail(job: str, seq: int, *, outcome: str) -> None:
     _write_all(job, entries)
 
 
-def record(job: str, *, verb: str, image_id: int, path: str, module: str, param: str,
-           instance: int, before: dict, after: dict) -> Entry:
+def record(
+    job: str,
+    *,
+    verb: str,
+    image_id: int,
+    path: str,
+    module: str,
+    param: str,
+    instance: int,
+    before: dict,
+    after: dict,
+) -> Entry:
     """Convenience: `begin` + `complete` in one call.
 
     For a caller with no intermediate state between "about to write" and
@@ -226,8 +246,16 @@ def record(job: str, *, verb: str, image_id: int, path: str, module: str, param:
     in `darkroom.py` use `begin`/`complete`/`fail` directly instead, so a
     failure between the two is visible in the journal (blocker 4).
     """
-    entry = begin(job, verb=verb, image_id=image_id, path=path, module=module, param=param,
-                 instance=instance, before=before)
+    entry = begin(
+        job,
+        verb=verb,
+        image_id=image_id,
+        path=path,
+        module=module,
+        param=param,
+        instance=instance,
+        before=before,
+    )
     complete(job, entry.seq, after=after)
     entry.after = after
     return entry

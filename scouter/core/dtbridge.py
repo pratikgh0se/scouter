@@ -12,7 +12,7 @@ from darktable_mcp.bridge.client import (
     BridgeTimeoutError,
 )
 from scouter.core import xmp
-from scouter.errors import BridgeTimeout, NotInDarkroom, WrongView
+from scouter.errors import BridgeTimeout, NotInDarkroom, ScouterError, WrongView
 from scouter.types import ResolvedImage
 
 #: `dt.gui.action` paths for the phase-1 modules. A module/param pair not in
@@ -105,32 +105,75 @@ def require_darkroom() -> str:
     return view
 
 
-def resolve_image(image: str | int) -> ResolvedImage:
-    """Accept a path or an image id and return both, plus the sidecar path."""
-    if isinstance(image, int) or (isinstance(image, str) and image.isdigit()):
-        opened = call("darkroom.open", {"image_id": int(image)})
-    else:
-        opened = call("image.lookup", {"path": str(image)})
-        if not opened.get("found"):
-            opened = call("darkroom.open", {"path": str(image)})
-    path = str(opened["path"])
-    return ResolvedImage(
-        image_id=int(opened["image_id"]), path=path, xmp_path=str(xmp.sidecar_path(path))
+class ImageNotFound(ScouterError):
+    """The image is not in darktable's library, and this verb may not import it.
+
+    A `usage` outcome (exit 2), not one of spec section 9's darktable failure
+    classes: nothing failed, the caller named an image darktable does not know.
+    Deliberately not in `errors.ERROR_CLASSES` for that reason.
+    """
+
+    code = "usage"
+    fix = (
+        "open the image in darktable first (`scouter darkroom open <path>`), which "
+        "imports it into the library, then re-run this read"
     )
 
 
-def action(path: str, *, instance: int = 0, element: str = "value",
-           effect: str = "set", value: float = 0.0) -> dict:
+def resolve_image(image: str | int, *, may_import: bool = False) -> ResolvedImage:
+    """Accept a path or an image id and return both, plus the sidecar path.
+
+    Resolution goes through `image.lookup`, which reads `dt.database` and
+    touches no GUI state at all -- for BOTH an id and a path (final review,
+    blocker 2). It used to go through `darkroom.open`, which meant every read
+    verb (`history.read`, `scout.*`) and every dry run switched the darkroom
+    onto the image being read, and imported it if it was unknown. Reading must
+    never move the user's darkroom.
+
+    `may_import=True` is for write verbs only, on a real (non-dry) call: an
+    unknown path is then registered through `darkroom.open`, which is the Lua
+    API's own way to add an image (ruling 4) -- and which does load it in the
+    darkroom, so the caller is asking for that side effect knowingly.
+    """
+    as_id: int | None = None
+    if isinstance(image, int):
+        as_id = int(image)
+    elif isinstance(image, str) and image.isdigit():
+        as_id = int(image)
+
+    key = {"image_id": as_id} if as_id is not None else {"path": str(image)}
+    found = call("image.lookup", key)
+    if not found.get("found"):
+        if as_id is not None:
+            # An id that is not in the library cannot be imported -- there is
+            # no path to import. This is a dead reference either way.
+            raise ImageNotFound(
+                f"no image with id {as_id} in darktable's library",
+                detail={"image_id": as_id},
+            )
+        if not may_import:
+            raise ImageNotFound(
+                f"{image} is not in darktable's library",
+                detail={"path": str(image)},
+            )
+        found = call("darkroom.open", {"path": str(image)})
+    path = str(found["path"])
+    return ResolvedImage(
+        image_id=int(found["image_id"]), path=path, xmp_path=str(xmp.sidecar_path(path))
+    )
+
+
+def action(
+    path: str, *, instance: int = 0, element: str = "value", effect: str = "set", value: float = 0.0
+) -> dict:
     """One `dt.gui.action`. A nan return is `not_in_darkroom`, never a value."""
     result = call(
         "darkroom.action",
-        {"path": path, "instance": instance, "element": element,
-         "effect": effect, "value": value},
+        {"path": path, "instance": instance, "element": element, "effect": effect, "value": value},
     )
     if result.get("nan"):
         raise NotInDarkroom(
             f"action {path} returned nan (view is {result.get('view')})",
-            detail={"path": path, "view": result.get("view"), "element": element,
-                    "effect": effect},
+            detail={"path": path, "view": result.get("view"), "element": element, "effect": effect},
         )
     return result

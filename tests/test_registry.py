@@ -89,26 +89,98 @@ class LoadVerbsImportGuardTest(unittest.TestCase):
 
             verbs = registry.load_verbs()
             groups = {verb.group for verb in verbs.values()}
-            self.assertEqual(
-                groups, {"darkroom", "export", "history", "scout", "style", "metrics"}
-            )
+            self.assertEqual(groups, {"darkroom", "export", "history", "scout", "style", "metrics"})
         finally:
             for name in core_module_names:
                 sys.modules.pop(name, None)
             sys.modules.update(saved_modules)
 
 
+class _FakeResult:
+    """The minimal shape `registry.call` needs back from a verb function."""
+
+    def __init__(self, outcome: str) -> None:
+        self.outcome = outcome
+
+    def to_dict(self) -> dict:
+        return {"outcome": self.outcome, "detail": "from the test verb"}
+
+
 class RegistryOkOutcomeTest(unittest.TestCase):
+    """Which outcomes count as success -- asserted THROUGH `registry.call`.
+
+    This used to re-state call()'s own `outcome in ("ok", "dry_run")`
+    expression, which could not fail: the assertion and the code under test
+    were the same line written twice (parked nit from task 2, final review
+    should-fix 10). A throwaway verb is registered instead, so the envelope
+    really is built by the code that ships.
+    """
+
+    VERB_ID = "metrics.registry_ok_probe"
+
+    def setUp(self) -> None:
+        from tests.scouter_fakes import TempCache
+
+        self.cache = TempCache()
+        self.cache.start()
+        self.outcome = "ok"
+        registry.load_verbs()  # so the throwaway verb is not clobbered
+        self.verb = registry.Verb(
+            id=self.VERB_ID,
+            group="metrics",
+            fn=self._probe,
+            args=(),
+            writes=False,
+            gated=False,
+            summary="test-only probe verb",
+        )
+        registry.register(self.verb)
+        self.addCleanup(registry.VERB_REGISTRY.pop, self.VERB_ID, None)
+        self.addCleanup(self.cache.stop)
+
+    def _probe(self, *, job: str | None = None) -> _FakeResult:
+        self.seen_job = job
+        return _FakeResult(self.outcome)
+
     def test_ok_and_dry_run_are_success_everything_else_is_not(self) -> None:
-        # Mirrors the expression registry.call() uses to build Envelope.ok,
-        # since call() needs scouter.metrics (task 8+) to run end-to-end.
         for outcome, expected in (
             ("ok", True),
             ("dry_run", True),
             ("error", False),
             ("error:wrong_view", False),
         ):
-            self.assertEqual(outcome in ("ok", "dry_run"), expected, outcome)
+            with self.subTest(outcome=outcome):
+                self.outcome = outcome
+                envelope = registry.call(self.VERB_ID, "core")
+                self.assertEqual(envelope.ok, expected, outcome)
+                self.assertEqual(envelope.outcome, outcome)
+                self.assertEqual(envelope.data["detail"], "from the test verb")
+
+    def test_call_passes_the_ambient_job_through_to_the_verb(self) -> None:
+        envelope = registry.call(self.VERB_ID, "core")
+        self.assertEqual(self.seen_job, "job-test")
+        self.assertEqual(envelope.job, "job-test")
+
+    def test_a_scouter_error_from_the_verb_becomes_an_error_envelope(self) -> None:
+        from scouter.errors import WrongView
+
+        def boom(*, job: str | None = None):
+            raise WrongView("the view is lighttable")
+
+        registry.VERB_REGISTRY[self.VERB_ID] = registry.Verb(
+            id=self.VERB_ID,
+            group="metrics",
+            fn=boom,
+            args=(),
+            writes=False,
+            gated=False,
+            summary="test-only probe verb",
+        )
+        envelope = registry.call(self.VERB_ID, "core")
+        self.assertFalse(envelope.ok)
+        self.assertEqual(envelope.outcome, "error:wrong_view")
+        assert envelope.error is not None
+        self.assertEqual(envelope.error["code"], "wrong_view")
 
 
 if __name__ == "__main__":

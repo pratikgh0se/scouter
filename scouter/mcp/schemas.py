@@ -273,8 +273,8 @@ TOOL_SPECS: list[dict] = [
     {
         "name": "style_apply",
         "description": "Apply a style to ONE image (applying to a set is phase 2). "
-        "mode=append adds to the history; mode=overwrite is a history "
-        "overwrite and requires confirm=true.",
+        "mode=append adds to the history; mode=overwrite is refused with "
+        "unsupported_mode, because darktable's Lua API cannot replace history.",
         "inputSchema": _schema(
             {
                 "image": IMAGE,
@@ -283,14 +283,10 @@ TOOL_SPECS: list[dict] = [
                     "type": "string",
                     "enum": ["append", "overwrite"],
                     "default": "append",
-                    "description": "append adds to history; overwrite replaces it",
+                    "description": "append adds to history; overwrite is refused "
+                    "(unsupported_mode), never silently downgraded to append",
                 },
                 "dry_run": DRY_RUN,
-                "confirm": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "required for mode=overwrite",
-                },
             },
             ["image", "name"],
         ),

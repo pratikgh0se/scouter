@@ -14,7 +14,6 @@ from pathlib import Path
 
 from darktable_mcp.darktable.cli_wrapper import CLIWrapper
 from darktable_mcp.utils.errors import DarktableNotFoundError, ExportError
-
 from scouter import metrics, paths
 from scouter.core import dtbridge, ppm, xmp
 from scouter.errors import CliWroteNothing, DbLocked, ScouterError
@@ -70,8 +69,7 @@ def cli_binary() -> str:
     if found:
         return found
     raise CliMissing(
-        "darktable-cli not found: looked at $SCOUTER_DARKTABLE_CLI, "
-        f"{_MAC_CLI_PATH}, and $PATH"
+        "darktable-cli not found: looked at $SCOUTER_DARKTABLE_CLI, " f"{_MAC_CLI_PATH}, and $PATH"
     )
 
 
@@ -105,19 +103,50 @@ def render(raw_path: str, out_path: Path, px: int, ext: str) -> int:
     is darktable-cli-shaped, not one of Scouter's typed errors, so its
     message is classified here into `db_locked` or `cli_wrote_nothing` the
     same way `core.dtbridge` classifies the Lua bridge's own failures.
+
+    The render goes to a hidden sibling temp file and is moved into place with
+    `os.replace` (final review, should-fix 9). This used to unlink `out_path`
+    first, which destroyed a perfectly good previous render before knowing
+    whether the new one would even be produced -- a failed render left the
+    caller with neither file. `os.replace` within one directory is atomic, so
+    `out_path` is always either the old render or the complete new one.
+
+    The temp name keeps `out_path`'s own suffix on purpose:
+    `CLIWrapper.export_image` normalises the extension to the one the format
+    really writes and returns the path it actually wrote, so a `.part` suffix
+    would come back as a different path. That returned path is what is moved.
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    if out_path.exists():
-        out_path.unlink()
+    token = f"{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex[:8]}"
+    tmp_out = out_path.with_name(f".{out_path.stem}.{token}.part{out_path.suffix}")
+    written = tmp_out
+    published = False
     configdir = _render_configdir()
     configdir.mkdir(parents=True, exist_ok=True)
     cli = CLIWrapper(darktable_cli_path=cli_binary(), configdir=configdir)
     started = time.monotonic()
     try:
-        cli.export_image(
-            Path(raw_path), out_path, format_type=ext,
-            max_width=px, max_height=px, timeout=180,
+        written = cli.export_image(
+            Path(raw_path),
+            tmp_out,
+            format_type=ext,
+            max_width=px,
+            max_height=px,
+            timeout=180,
         )
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        if not written.exists() or written.stat().st_size == 0:
+            raise CliWroteNothing(
+                f"darktable-cli reported success but wrote no usable file for {out_path}",
+                detail={
+                    "configdir": str(configdir),
+                    "raw_path": raw_path,
+                    "temp_path": str(written),
+                },
+            )
+        os.replace(written, out_path)
+        published = True
+        return elapsed_ms
     except DarktableNotFoundError as e:
         raise CliMissing(str(e)) from e
     except ExportError as e:
@@ -133,7 +162,12 @@ def render(raw_path: str, out_path: Path, px: int, ext: str) -> int:
         ) from e
     finally:
         shutil.rmtree(configdir, ignore_errors=True)
-    return int((time.monotonic() - started) * 1000)
+        # Anything left of a render that never got published is scratch, and
+        # `out_path` itself is never touched here -- only the temp names.
+        if not published:
+            tmp_out.unlink(missing_ok=True)
+            if written != tmp_out:
+                written.unlink(missing_ok=True)
 
 
 def _stats_scratch_path(px: int, ext: str) -> Path:
@@ -152,13 +186,14 @@ def _raster_for(raw_path: str, px: int) -> tuple[ppm.Raster, int]:
     out = _stats_scratch_path(px, "ppm")
     render_ms = render(raw_path, out, px, "ppm")
     raster = ppm.parse_p6(out.read_bytes())
-    out.unlink(missing_ok=True)          # stats do not need the pixels kept
+    out.unlink(missing_ok=True)  # stats do not need the pixels kept
     return raster, render_ms
 
 
 @metrics.instrumented("scout.stats")
-def stats(image: str | int, *, px: int = 1024, budget_s: float = 3.0,
-          job: str | None = None) -> StatsResult:
+def stats(
+    image: str | int, *, px: int = 1024, budget_s: float = 3.0, job: str | None = None
+) -> StatsResult:
     """Histogram, clipping, luminance percentiles, WB ratios and sharpness."""
     _validate_px(px)
     resolved = dtbridge.resolve_image(image)
@@ -183,9 +218,15 @@ def stats(image: str | int, *, px: int = 1024, budget_s: float = 3.0,
         "luminance histogram is an estimate from the channel histograms (design 6.2)"
     )
     return StatsResult(
-        image_id=resolved.image_id, path=resolved.path, px_requested=px,
-        px_used=px_used, render_ms=render_ms, analyse_ms=analyse_ms,
-        stats=asdict(image_stats), histogram=hist, warnings=warnings,
+        image_id=resolved.image_id,
+        path=resolved.path,
+        px_requested=px,
+        px_used=px_used,
+        render_ms=render_ms,
+        analyse_ms=analyse_ms,
+        stats=asdict(image_stats),
+        histogram=hist,
+        warnings=warnings,
     )
 
 
@@ -248,8 +289,9 @@ def _prune_preview_cache() -> None:
 
 
 @metrics.instrumented("scout.preview")
-def preview(image: str | int, *, px: int = 1024, fmt: str = "png",
-            job: str | None = None) -> PreviewResult:
+def preview(
+    image: str | int, *, px: int = 1024, fmt: str = "png", job: str | None = None
+) -> PreviewResult:
     """Render a viewable preview and return its PATH, never its bytes."""
     if fmt not in ("png", "ppm"):
         raise ValueError(f"fmt must be png or ppm, got {fmt!r}")
@@ -259,15 +301,23 @@ def preview(image: str | int, *, px: int = 1024, fmt: str = "png",
     out = paths.preview_dir() / _cache_key(resolved.path, px, fmt)
     sidecar_mtime = _sidecar_mtime(resolved.path)
     fresh = (
-        out.exists() and out.stat().st_size > 0
+        out.exists()
+        and out.stat().st_size > 0
         and (sidecar_mtime is None or out.stat().st_mtime >= sidecar_mtime)
     )
     if fresh:
         return PreviewResult(
-            image_id=resolved.image_id, path=resolved.path, preview_path=str(out),
-            fmt=fmt, bytes=out.stat().st_size, px_requested=px, cached=True,
-            warnings=["preview served from cache (stable name, re-rendered only "
-                      "when the sidecar is newer than the cached file)"],
+            image_id=resolved.image_id,
+            path=resolved.path,
+            preview_path=str(out),
+            fmt=fmt,
+            bytes=out.stat().st_size,
+            px_requested=px,
+            cached=True,
+            warnings=[
+                "preview served from cache (stable name, re-rendered only "
+                "when the sidecar is newer than the cached file)"
+            ],
         )
     render_ms = render(resolved.path, out, px, fmt)
     width = height = 0
@@ -275,17 +325,24 @@ def preview(image: str | int, *, px: int = 1024, fmt: str = "png",
         raster = ppm.parse_p6(out.read_bytes())
         width, height = raster.width, raster.height
     return PreviewResult(
-        image_id=resolved.image_id, path=resolved.path, preview_path=str(out),
-        fmt=fmt, width=width, height=height, bytes=out.stat().st_size,
-        px_requested=px, render_ms=render_ms, cached=False,
-        warnings=["read the file at `preview_path`; Scouter never inlines pixels "
-                  "(design 6.3)"],
+        image_id=resolved.image_id,
+        path=resolved.path,
+        preview_path=str(out),
+        fmt=fmt,
+        width=width,
+        height=height,
+        bytes=out.stat().st_size,
+        px_requested=px,
+        render_ms=render_ms,
+        cached=False,
+        warnings=["read the file at `preview_path`; Scouter never inlines pixels " "(design 6.3)"],
     )
 
 
 @metrics.instrumented("scout.compare")
-def compare(a: str | int, b: str | int, *, px: int = 1024, budget_s: float = 3.0,
-            job: str | None = None) -> CompareResult:
+def compare(
+    a: str | int, b: str | int, *, px: int = 1024, budget_s: float = 3.0, job: str | None = None
+) -> CompareResult:
     """Numeric distance between two images' current renders.
 
     `delta` is `stats(b) - stats(a)`, field by field: a positive
@@ -303,8 +360,10 @@ def compare(a: str | int, b: str | int, *, px: int = 1024, budget_s: float = 3.0
     left = stats.__wrapped__(a, px=px, budget_s=budget_s, job=job)
     right = stats.__wrapped__(b, px=px, budget_s=budget_s, job=job)
     ls, rs = left.stats, right.stats
-    warnings = ["deltas are b minus a; sharpness is comparable only between "
-                "renders of the same frame (design 6.2)"]
+    warnings = [
+        "deltas are b minus a; sharpness is comparable only between "
+        "renders of the same frame (design 6.2)"
+    ]
     if left.px_used != right.px_used:
         warnings.append(
             f"a rendered at {left.px_used}px but b at {right.px_used}px (one of "
@@ -322,11 +381,11 @@ def compare(a: str | int, b: str | int, *, px: int = 1024, budget_s: float = 3.0
         "sharpness": round(rs["sharpness"] - ls["sharpness"], 6),
     }
     return CompareResult(
-        a={"image_id": left.image_id, "path": left.path, "stats": ls,
-           "px_used": left.px_used},
-        b={"image_id": right.image_id, "path": right.path, "stats": rs,
-           "px_used": right.px_used},
-        delta=delta, image_id=left.image_id, path=left.path,
+        a={"image_id": left.image_id, "path": left.path, "stats": ls, "px_used": left.px_used},
+        b={"image_id": right.image_id, "path": right.path, "stats": rs, "px_used": right.px_used},
+        delta=delta,
+        image_id=left.image_id,
+        path=left.path,
         warnings=warnings,
     )
 
@@ -334,26 +393,51 @@ def compare(a: str | int, b: str | int, *, px: int = 1024, budget_s: float = 3.0
 PX_ARG = ArgSpec("px", "int", default=1024, help="longest edge of the render, 64..4096")
 
 for verb in (
-    Verb(id="scout.stats", group="scout", fn=stats,
-         args=(ArgSpec("image", "image", required=True, positional=True,
-                       help="path or image id"), PX_ARG,
-               ArgSpec("budget_s", "float", default=3.0,
-                       help="loop budget; over it, re-render at 512px")),
-         writes=False, gated=False,
-         summary="Histogram, clipping, luminance percentiles, WB ratios, sharpness."),
-    Verb(id="scout.preview", group="scout", fn=preview,
-         args=(ArgSpec("image", "image", required=True, positional=True,
-                       help="path or image id"), PX_ARG,
-               ArgSpec("fmt", "str", default="png", choices=("png", "ppm"),
-                       help="preview file format")),
-         writes=False, gated=False,
-         summary="Render a preview to a file and return its path."),
-    Verb(id="scout.compare", group="scout", fn=compare,
-         args=(ArgSpec("a", "image", required=True, positional=True, help="first image"),
-               ArgSpec("b", "image", required=True, positional=True, help="second image"),
-               PX_ARG,
-               ArgSpec("budget_s", "float", default=3.0,
-                       help="loop budget; over it, re-render at 512px")),
-         writes=False, gated=False, summary="Numeric distance between two renders."),
+    Verb(
+        id="scout.stats",
+        group="scout",
+        fn=stats,
+        args=(
+            ArgSpec("image", "image", required=True, positional=True, help="path or image id"),
+            PX_ARG,
+            ArgSpec(
+                "budget_s", "float", default=3.0, help="loop budget; over it, re-render at 512px"
+            ),
+        ),
+        writes=False,
+        gated=False,
+        summary="Histogram, clipping, luminance percentiles, WB ratios, sharpness.",
+    ),
+    Verb(
+        id="scout.preview",
+        group="scout",
+        fn=preview,
+        args=(
+            ArgSpec("image", "image", required=True, positional=True, help="path or image id"),
+            PX_ARG,
+            ArgSpec(
+                "fmt", "str", default="png", choices=("png", "ppm"), help="preview file format"
+            ),
+        ),
+        writes=False,
+        gated=False,
+        summary="Render a preview to a file and return its path.",
+    ),
+    Verb(
+        id="scout.compare",
+        group="scout",
+        fn=compare,
+        args=(
+            ArgSpec("a", "image", required=True, positional=True, help="first image"),
+            ArgSpec("b", "image", required=True, positional=True, help="second image"),
+            PX_ARG,
+            ArgSpec(
+                "budget_s", "float", default=3.0, help="loop budget; over it, re-render at 512px"
+            ),
+        ),
+        writes=False,
+        gated=False,
+        summary="Numeric distance between two renders.",
+    ),
 ):
     register(verb)

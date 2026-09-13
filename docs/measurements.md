@@ -1,6 +1,13 @@
 # Scouter measurements
 
-Written by `tests/test_commit_trigger_host.py` (task 1). Host: this Mac, darktable 5.4.1, Apple M4.
+Provenance: these numbers were produced by `tests/test_commit_trigger_host.py`
+on task 1's host run (this Mac, darktable 5.4.1, Apple M4, 2026-09-13) and are
+committed as the reviewed record. **The test no longer rewrites this file**: a
+host run writes `docs/measurements-generated.md` instead, and numbers are
+copied across here deliberately, by hand, with the change explained in the
+commit (final review, should-fix 3). The isolated-configdir baseline below is
+therefore stable and citable; task 12's numbers under a live GUI are in
+`.superpowers/sdd/2026-09-13-scouter-phase1/task-12-report.md`.
 
 ## Commit trigger (phase 1 design 8.1)
 

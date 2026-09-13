@@ -17,8 +17,14 @@ class RefusingBridge:
     """Any call is a test failure: a gated dry run must not touch darktable."""
 
     WRITE_METHODS = {
-        "darkroom.action", "module.enable", "module.disable", "module.reset",
-        "history.commit", "style.create_from_current", "style.apply", "snapshot.take",
+        "darkroom.action",
+        "module.enable",
+        "module.disable",
+        "module.reset",
+        "history.commit",
+        "style.create_from_current",
+        "style.apply",
+        "snapshot.take",
     }
 
     def __init__(self, test: unittest.TestCase, raw: str) -> None:
@@ -29,7 +35,8 @@ class RefusingBridge:
     def call(self, method: str, params: dict, timeout: float | None = None):
         self.calls.append(method)
         self.test.assertNotIn(
-            method, self.WRITE_METHODS,
+            method,
+            self.WRITE_METHODS,
             f"a gated verb called the writing bridge method {method} without confirm",
         )
         if method == "view.current":
@@ -37,8 +44,13 @@ class RefusingBridge:
         if method == "image.lookup":
             return {"found": True, "image_id": 1, "path": self.raw}
         if method == "darkroom.open":
-            return {"image_id": 1, "path": self.raw, "view": "darkroom",
-                    "opened": False, "already_open": True}
+            return {
+                "image_id": 1,
+                "path": self.raw,
+                "view": "darkroom",
+                "opened": False,
+                "already_open": True,
+            }
         if method == "list_styles":
             # style.extract is gated only when a style of the requested name
             # already exists (design 10.3); GATED_ARGS below asks for "hero",
@@ -55,6 +67,10 @@ class ConfirmGateTest(unittest.TestCase):
         root = self.cache.start()
         self.raw = str(root / "hero.ORF")
         (root / "hero.ORF").write_bytes(b"raw")
+        # Never /tmp: the gate test writes nothing, but the PATH it plans must
+        # still live under the throwaway cache so a regression cannot leave a
+        # directory behind in a shared place.
+        self.out_dir = str(root / "gate-out")
         self.bridge = RefusingBridge(self, self.raw)
         dtbridge.set_bridge(self.bridge)
 
@@ -66,10 +82,12 @@ class ConfirmGateTest(unittest.TestCase):
     GATED_ARGS = {
         "darkroom.reset": {"module": "exposure"},
         "style.extract": {"image": None, "name": "hero", "modules": []},
-        "style.apply": {"image": None, "name": "hero", "mode": "overwrite"},
-        "export.run": {"images": [None, None], "preset": "preview",
-                       "out_dir": "/tmp/scouter-gate-out"},
+        "export.run": {"images": [None, None], "preset": "preview", "out_dir": None},
     }
+    # `style.apply` is deliberately NOT here (final review, should-fix 7): its
+    # only would-be gate was mode=overwrite, which darktable cannot do at all,
+    # so it is refused with `unsupported_mode` instead of being offered as a
+    # confirmable action. `tests/test_style_export.py` asserts that refusal.
 
     def test_the_gated_set_is_exactly_what_the_design_lists(self) -> None:
         gated = {vid for vid, verb in registry.load_verbs().items() if verb.gated}
@@ -79,14 +97,25 @@ class ConfirmGateTest(unittest.TestCase):
         for verb_id, args in self.GATED_ARGS.items():
             with self.subTest(verb=verb_id):
                 filled = {
-                    k: (self.raw if v is None else
-                        [self.raw] * len(v) if isinstance(v, list) and v and v[0] is None
-                        else v)
+                    k: (
+                        self.out_dir
+                        if k == "out_dir"
+                        else (
+                            self.raw
+                            if v is None
+                            else (
+                                [self.raw] * len(v)
+                                if isinstance(v, list) and v and v[0] is None
+                                else v
+                            )
+                        )
+                    )
                     for k, v in args.items()
                 }
                 envelope = registry.call(verb_id, "core", **filled)
                 self.assertEqual(
-                    envelope.outcome, "dry_run",
+                    envelope.outcome,
+                    "dry_run",
                     f"{verb_id} without confirm must be a dry run, got {envelope.outcome}",
                 )
                 self.assertTrue(envelope.data["plan"], f"{verb_id} dry run has no plan")

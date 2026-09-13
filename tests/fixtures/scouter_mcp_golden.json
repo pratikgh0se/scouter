@@ -453,15 +453,10 @@
     "name": "scout_stats"
   },
   {
-    "description": "Apply a style to ONE image (applying to a set is phase 2). mode=append adds to the history; mode=overwrite is a history overwrite and requires confirm=true.",
+    "description": "Apply a style to ONE image (applying to a set is phase 2). mode=append adds to the history; mode=overwrite is refused with unsupported_mode, because darktable's Lua API cannot replace history.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
-        "confirm": {
-          "default": false,
-          "description": "required for mode=overwrite",
-          "type": "boolean"
-        },
         "dry_run": {
           "default": false,
           "description": "plan only: return what would happen and send nothing",
@@ -476,7 +471,7 @@
         },
         "mode": {
           "default": "append",
-          "description": "append adds to history; overwrite replaces it",
+          "description": "append adds to history; overwrite is refused (unsupported_mode), never silently downgraded to append",
           "enum": [
             "append",
             "overwrite"

@@ -17,9 +17,10 @@ import math
 import sqlite3
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from scouter import paths
 from scouter.errors import ScouterError
@@ -46,8 +47,19 @@ CREATE INDEX IF NOT EXISTS events_verb_outcome ON events(verb, outcome);
 """
 
 EVENT_KEYS = (
-    "ts", "job", "verb", "layer", "args_digest", "images", "ms", "outcome",
-    "bytes_in", "bytes_out", "est_tokens", "phase", "version",
+    "ts",
+    "job",
+    "verb",
+    "layer",
+    "args_digest",
+    "images",
+    "ms",
+    "outcome",
+    "bytes_in",
+    "bytes_out",
+    "est_tokens",
+    "phase",
+    "version",
 )
 
 
@@ -90,14 +102,15 @@ def emit(event: dict) -> None:
         # `images` is a real JSON array in `event` (so events.jsonl matches
         # spec 11.1's `"images":[12]`); the sqlite column is TEXT, so encode
         # it to canonical JSON only for the row, not the in-memory event.
-        row = tuple(
-            canonical_json(event[k]) if k == "images" else event[k] for k in EVENT_KEYS
-        )
+        row = tuple(canonical_json(event[k]) if k == "images" else event[k] for k in EVENT_KEYS)
         with contextlib.closing(_connect()) as conn:
             with conn:
                 conn.execute(
-                    "INSERT INTO events (" + ",".join(EVENT_KEYS) + ") VALUES ("
-                    + ",".join("?" * len(EVENT_KEYS)) + ")",
+                    "INSERT INTO events ("
+                    + ",".join(EVENT_KEYS)
+                    + ") VALUES ("
+                    + ",".join("?" * len(EVENT_KEYS))
+                    + ")",
                     row,
                 )
     except (sqlite3.Error, OSError, KeyError) as e:
@@ -183,8 +196,10 @@ def _since_to_ts(since: str) -> str:
     if factor is None:
         raise ValueError(f"--since must end in d/h/m, got {since!r}")
     delta = timedelta(**{factor: int(since[:-1])})
-    return (datetime.now(timezone.utc) - delta).isoformat(timespec="microseconds").replace(
-        "+00:00", "Z"
+    return (
+        (datetime.now(timezone.utc) - delta)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
     )
 
 
@@ -243,10 +258,15 @@ def summary(*, since: str = "7d", job: str | None = None) -> SummaryResult:
         rate = row.errors / row.calls if row.calls else 0.0
         verbs.append(
             {
-                "verb": row.verb, "calls": row.calls, "ok": row.ok,
-                "dry_run": row.dry_run, "errors": row.errors,
-                "error_rate": round(rate, 4), "by_class": row.by_class,
-                "p50_ms": _percentile(row.ms, 0.5), "p95_ms": _percentile(row.ms, 0.95),
+                "verb": row.verb,
+                "calls": row.calls,
+                "ok": row.ok,
+                "dry_run": row.dry_run,
+                "errors": row.errors,
+                "error_rate": round(rate, 4),
+                "by_class": row.by_class,
+                "p50_ms": _percentile(row.ms, 0.5),
+                "p95_ms": _percentile(row.ms, 0.95),
                 "est_tokens": row.est_tokens,
                 "est_tokens_mean": round(row.est_tokens / row.calls, 1) if row.calls else 0.0,
             }
@@ -254,9 +274,11 @@ def summary(*, since: str = "7d", job: str | None = None) -> SummaryResult:
         if row.calls >= 20 and rate > 0.10:
             alerts.append(
                 {
-                    "verb": row.verb, "error_rate": round(rate, 4), "calls": row.calls,
+                    "verb": row.verb,
+                    "error_rate": round(rate, 4),
+                    "calls": row.calls,
                     "message": f"{row.verb} failed {rate:.0%} of {row.calls} calls "
-                               "(threshold 10% over 20 calls)",
+                    "(threshold 10% over 20 calls)",
                 }
             )
 
@@ -285,9 +307,12 @@ def _register() -> None:
 
     register(
         Verb(
-            id="metrics.summary", group="metrics", fn=summary,
+            id="metrics.summary",
+            group="metrics",
+            fn=summary,
             args=(ArgSpec("since", "str", default="7d", help="window, e.g. 7d / 12h / 30m"),),
-            writes=False, gated=False,
+            writes=False,
+            gated=False,
             summary="Per-verb calls, error rate, latency and estimated tokens.",
         )
     )

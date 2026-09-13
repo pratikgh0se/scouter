@@ -51,11 +51,84 @@ class PathsTest(unittest.TestCase):
             self.assertTrue(target.parent.is_dir())
 
 
+class JobValidationTest(unittest.TestCase):
+    """B3: a job id becomes a file name, so traversal must be impossible."""
+
+    def setUp(self) -> None:
+        self._env = dict(os.environ)
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._env)
+
+    def test_a_traversal_job_is_a_usage_error_everywhere_it_enters(self) -> None:
+        bad = "../../x"
+        with self.assertRaises(errors.UsageError) as ctx:
+            paths.validate_job(bad)
+        self.assertEqual(ctx.exception.code, "usage")
+        self.assertEqual(errors.exit_code_for("error:usage"), 2)
+        for factory in (paths.audit_path, paths.journal_path, paths.job_state_path):
+            with self.subTest(factory=factory.__name__):
+                with self.assertRaises(errors.UsageError):
+                    factory(bad)
+
+    def test_the_ambient_job_from_the_environment_is_validated(self) -> None:
+        os.environ["SCOUTER_JOB"] = "../../x"
+        with self.assertRaises(errors.UsageError):
+            paths.current_job()
+
+    def test_registry_call_refuses_a_traversal_job_before_running_the_verb(self) -> None:
+        from scouter import registry
+
+        with self.assertRaises(errors.UsageError):
+            registry.call("history.read", "cli", image="/nope.ORF", job="../../x")
+
+    def test_the_cli_refuses_a_traversal_job_with_exit_code_2(self) -> None:
+        import contextlib
+        import io
+        import json as _json
+
+        from scouter.cli.main import main
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = main(["--job", "../../x", "history", "read", "/nope.ORF"])
+        self.assertEqual(code, 2)
+        payload = _json.loads(out.getvalue())
+        self.assertEqual(payload["error"]["code"], "usage")
+
+    def test_the_mcp_adapter_refuses_a_traversal_job(self) -> None:
+        import json as _json
+
+        from scouter.mcp.server import ScouterServer
+
+        payload = _json.loads(
+            ScouterServer().call("history_read", {"image": "/nope.ORF", "job": "../../x"})
+        )
+        self.assertEqual(payload["outcome"], "error:usage")
+
+    def test_good_job_ids_are_accepted_unchanged(self) -> None:
+        for job in ("job-test", "j", "job-20260914-120000-123", "a" * 64, "A_b.c-1"):
+            with self.subTest(job=job):
+                self.assertEqual(paths.validate_job(job), job)
+
+    def test_bad_job_ids_are_all_refused(self) -> None:
+        for job in ("", ".hidden", "a/b", "a" * 65, "with space", "-leading", "x\ny"):
+            with self.subTest(job=job):
+                with self.assertRaises(errors.UsageError):
+                    paths.validate_job(job)
+
+
 class ErrorsTest(unittest.TestCase):
     def test_every_spec_error_class_exists_with_a_unique_code(self) -> None:
         expected = {
-            "bridge_timeout", "wrong_view", "not_in_darkroom", "cli_wrote_nothing",
-            "db_locked", "style_partial", "commit_timeout",
+            "bridge_timeout",
+            "wrong_view",
+            "not_in_darkroom",
+            "cli_wrote_nothing",
+            "db_locked",
+            "style_partial",
+            "commit_timeout",
         }
         codes = {cls.code for cls in errors.ERROR_CLASSES}
         self.assertEqual(codes, expected)
@@ -83,8 +156,13 @@ class ErrorsTest(unittest.TestCase):
 class EnvelopeTest(unittest.TestCase):
     def test_to_dict_omits_error_key_when_none(self) -> None:
         env = Envelope(
-            verb="darkroom.open", layer="cli", job="job-1", ok=True,
-            outcome="ok", ms=12, data={"opened": True},
+            verb="darkroom.open",
+            layer="cli",
+            job="job-1",
+            ok=True,
+            outcome="ok",
+            ms=12,
+            data={"opened": True},
         )
         d = env.to_dict()
         self.assertNotIn("error", d)
@@ -97,8 +175,14 @@ class EnvelopeTest(unittest.TestCase):
     def test_to_dict_includes_error_key_when_set(self) -> None:
         err = errors.WrongView("not in darkroom").to_dict()
         env = Envelope(
-            verb="darkroom.set", layer="mcp", job="job-2", ok=False,
-            outcome="error:wrong_view", ms=3, data={}, error=err,
+            verb="darkroom.set",
+            layer="mcp",
+            job="job-2",
+            ok=False,
+            outcome="error:wrong_view",
+            ms=3,
+            data={},
+            error=err,
         )
         d = env.to_dict()
         self.assertIn("error", d)
@@ -107,8 +191,13 @@ class EnvelopeTest(unittest.TestCase):
 
     def test_to_dict_cleans_nan_and_inf_in_data(self) -> None:
         env = Envelope(
-            verb="darkroom.status", layer="python", job="job-3", ok=True,
-            outcome="ok", ms=1, data={"positions": {"x": float("nan"), "y": float("inf")}},
+            verb="darkroom.status",
+            layer="python",
+            job="job-3",
+            ok=True,
+            outcome="ok",
+            ms=1,
+            data={"positions": {"x": float("nan"), "y": float("inf")}},
         )
         d = env.to_dict()
         self.assertIsNone(d["data"]["positions"]["x"])

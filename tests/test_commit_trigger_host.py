@@ -1,6 +1,9 @@
 """Task 1: measure the commit trigger and the Scouter loop on this Mac.
 
-Host-only. Writes docs/measurements.md. Never leaves darktable running.
+Host-only. Writes `docs/measurements-generated.md` -- NOT
+`docs/measurements.md`, which is the committed, reviewed record and is no
+longer rewritten wholesale by a test run (final review, should-fix 3). Never
+leaves darktable running.
 """
 
 from __future__ import annotations
@@ -10,6 +13,7 @@ import os
 import shutil
 import signal
 import subprocess
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -18,12 +22,17 @@ REPO = Path(__file__).resolve().parent.parent
 DARKTABLE = Path("/Applications/darktable.app/Contents/MacOS/darktable")
 DARKTABLE_CLI = Path("/Applications/darktable.app/Contents/MacOS/darktable-cli")
 HERO = Path("/Users/pratik/Pictures/EditingTrial/P6281348.ORF")
-MEASUREMENTS = REPO / "docs" / "measurements.md"
+#: Generated, git-ignored-by-convention sibling of the committed
+#: docs/measurements.md. A test run must not rewrite a reviewed document.
+MEASUREMENTS = REPO / "docs" / "measurements-generated.md"
 LOOP_BUDGET_S = 3.0
 
 _MISSING = []
 if os.environ.get("SCOUTER_HOST_TESTS") != "1":
-    _MISSING.append("SCOUTER_HOST_TESTS=1 not set (this launches darktable and rewrites docs/measurements.md)")
+    _MISSING.append(
+        "SCOUTER_HOST_TESTS=1 not set (this launches darktable and writes "
+        "docs/measurements-generated.md)"
+    )
 if not DARKTABLE.is_file():
     _MISSING.append(f"darktable app ({DARKTABLE} not present)")
 if not HERO.is_file():
@@ -37,13 +46,26 @@ SKIP_REASON = (
 
 
 def _quit_darktable(proc: subprocess.Popen[bytes]) -> None:
-    """Graceful quit, then SIGTERM, then SIGKILL. Never leaves it running."""
-    subprocess.run(
-        ["osascript", "-e", 'tell application "darktable" to quit'],
-        capture_output=True,
-        timeout=30,
-        check=False,
-    )
+    """Graceful quit, then SIGTERM, then SIGKILL. Never leaves it running.
+
+    EVERY subprocess call here is guarded against TimeoutExpired (final
+    review, should-fix 3). `osascript` can hang on a stuck AppleEvent -- this
+    happened for real on this Mac during task 12 -- and `subprocess.run`'s
+    timeout raises rather than returning, so an unguarded call would abort
+    this function before the SIGTERM/SIGKILL escalation ever ran and leave
+    darktable alive. The final `proc.wait` is guarded too: a process wedged in
+    the kernel cannot be killed, and this function must still return so the
+    caller's own assertions (and config restore) run.
+    """
+    try:
+        subprocess.run(
+            ["osascript", "-e", 'tell application "darktable" to quit'],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        pass
     try:
         proc.wait(timeout=20)
         return
@@ -56,7 +78,10 @@ def _quit_darktable(proc: subprocess.Popen[bytes]) -> None:
     except subprocess.TimeoutExpired:
         pass
     proc.kill()
-    proc.wait(timeout=10)
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 @unittest.skipUnless(not _MISSING, SKIP_REASON)
@@ -64,7 +89,7 @@ class CommitTriggerMeasurement(unittest.TestCase):
     maxDiff = None
 
     def test_probe_records_a_commit_strategy_and_a_loop_time(self) -> None:
-        tmp = Path(os.environ.get("TMPDIR", "/tmp")) / f"scouter-probe-{os.getpid()}"
+        tmp = Path(tempfile.mkdtemp(prefix=f"scouter-probe-{os.getpid()}-"))
         try:
             self._run(tmp)
         finally:
@@ -103,7 +128,8 @@ class CommitTriggerMeasurement(unittest.TestCase):
         by_name = {r["probe"]: r for r in records if "value" in r}
         self.assertIn("set_exposure_0_9", by_name)
         self.assertNotEqual(
-            by_name["set_exposure_0_9"]["value"], "nan",
+            by_name["set_exposure_0_9"]["value"],
+            "nan",
             "absolute set returned nan: darkroom was not active (phase 0 finding 2)",
         )
 
@@ -135,9 +161,20 @@ class CommitTriggerMeasurement(unittest.TestCase):
             t0 = time.monotonic()
             subprocess.run(
                 [
-                    str(DARKTABLE_CLI), str(HERO), str(ppm),
-                    "--width", "1024", "--height", "1024", "--out-ext", "ppm",
-                    "--core", "--configdir", str(cli_cfg), "--library", ":memory:",
+                    str(DARKTABLE_CLI),
+                    str(HERO),
+                    str(ppm),
+                    "--width",
+                    "1024",
+                    "--height",
+                    "1024",
+                    "--out-ext",
+                    "ppm",
+                    "--core",
+                    "--configdir",
+                    str(cli_cfg),
+                    "--library",
+                    ":memory:",
                 ],
                 capture_output=True,
                 timeout=120,
@@ -149,7 +186,7 @@ class CommitTriggerMeasurement(unittest.TestCase):
 
             t1 = time.monotonic()
             head = data.split(b"\n", 3)
-            payload = data[len(head[0]) + len(head[1]) + len(head[2]) + 3:]
+            payload = data[len(head[0]) + len(head[1]) + len(head[2]) + 3 :]
             hi = payload[0::2] if b"65535" in head[2] else payload
             from collections import Counter
 
@@ -164,12 +201,16 @@ class CommitTriggerMeasurement(unittest.TestCase):
         best_total = render_s + stats_s
         MEASUREMENTS.parent.mkdir(parents=True, exist_ok=True)
         MEASUREMENTS.write_text(
-            "# Scouter measurements\n\n"
-            "Written by `tests/test_commit_trigger_host.py` (task 1). Host: this Mac, "
+            "# Scouter measurements (generated)\n\n"
+            "GENERATED FILE -- rewritten in full by "
+            "`tests/test_commit_trigger_host.py` on every host run. The reviewed, "
+            "committed record is `docs/measurements.md`; copy numbers across "
+            "deliberately, do not point anything at this file.\n\n"
+            f"Run at {time.strftime('%Y-%m-%d %H:%M:%S %z')}. Host: this Mac, "
             "darktable 5.4.1, Apple M4.\n\n"
             "## Commit trigger (phase 1 design 8.1)\n\n"
             f"- accepted candidates: {accepted or 'none'}\n"
-            f"- **strategy adopted for `history.commit(strategy=\"auto\")`: `{strategy}`**\n"
+            f'- **strategy adopted for `history.commit(strategy="auto")`: `{strategy}`**\n'
             f"- view after C1: {by_name.get('view_after_c1', {}).get('value')}\n"
             f"- view bounce (C3) cost, wall clock: "
             f"{round(bounce_wall_ms) if bounce_wall_ms is not None else 'unknown'} ms\n"
@@ -186,11 +227,13 @@ class CommitTriggerMeasurement(unittest.TestCase):
             f"- **loop total: {best_total:.3f} s** (budget {LOOP_BUDGET_S} s)\n\n"
             # Indented block, not a fenced one: a fence inside a Python string
             # inside this plan's own code fence would close the fence.
-            "## Raw probe records\n\n"
-            + "\n".join("    " + json.dumps(r) for r in records)
-            + "\n"
+            "## Raw probe records\n\n" + "\n".join("    " + json.dumps(r) for r in records) + "\n"
         )
-        self.assertLess(best_total, LOOP_BUDGET_S, f"Scouter loop {best_total:.3f}s over the 3s budget")
+        self.assertLess(
+            best_total,
+            LOOP_BUDGET_S,
+            f"Scouter loop {best_total:.3f}s over the {LOOP_BUDGET_S}s budget",
+        )
 
 
 if __name__ == "__main__":

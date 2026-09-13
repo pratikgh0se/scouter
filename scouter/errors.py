@@ -31,6 +31,20 @@ class ScouterError(Exception):
         }
 
 
+class UsageError(ScouterError):
+    """The caller's own arguments are wrong: exit code 2, like argparse's.
+
+    Deliberately NOT in `ERROR_CLASSES` (which enumerates spec section 9's
+    darktable/bridge failure classes, and which `tests/test_paths_errors.py`
+    pins): `usage` is a caller mistake, not a runtime failure of darktable --
+    but it does have a row in `EXIT_CODES` already, so a shell script can
+    branch on it the same way it branches on a bad flag.
+    """
+
+    code = "usage"
+    fix = "fix the argument and re-run; `--help` lists the accepted values"
+
+
 class BridgeTimeout(ScouterError):
     code = "bridge_timeout"
     fix = (

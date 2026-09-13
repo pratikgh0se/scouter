@@ -93,7 +93,14 @@ def test_every_shell_invocation_is_quoted():
         # A single os.execute(string.format(...)) can span several lines, so
         # look at a window rather than one line.
         window = source[match.start() : match.start() + 500]
-        if "shell_quote(" not in window:
+        # A command built with NO Lua concatenation and no format call cannot
+        # interpolate anything: it is a constant string (e.g. `uname -s`), so
+        # there is nothing for shell_quote() to quote. Only the argument list
+        # itself is inspected for that, not the 500-char window, so a nearby
+        # unrelated concatenation cannot excuse a real offender.
+        args = window[window.index("(") + 1 : window.find(")") if ")" in window else None]
+        interpolates = ".." in args or "format" in args
+        if interpolates and "shell_quote(" not in window:
             line_no = source[: match.start()].count("\n") + 1
             offenders.append(f"line {line_no}: {match.group(0)}")
     assert not offenders, (
@@ -175,15 +182,13 @@ def test_loaded_darkroom_image_never_calls_the_display_image_getter():
         "loaded_darkroom_image mentions display_image -- the no-arg getter "
         "deadlocks the worker coroutine for the rest of the session"
     )
-    assert "action_images" in body, (
-        "loaded_darkroom_image must read the selection via dt.gui.action_images"
-    )
+    assert (
+        "action_images" in body
+    ), "loaded_darkroom_image must read the selection via dt.gui.action_images"
     # Nowhere in the plugin may display_image be called without an argument.
     # (Comment lines are excluded: the plugin documents the banned call by
     # name, which is the point of the comment.)
-    code = "\n".join(
-        line for line in source.splitlines() if not line.lstrip().startswith("--")
-    )
+    code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("--"))
     for banned in ("pcall(view.display_image)", "pcall(v.display_image)", "display_image()"):
         assert banned not in code, f"the plugin calls the display_image getter: {banned}"
 
@@ -200,9 +205,7 @@ def test_the_plugin_never_writes_a_darktable_preference():
     view-switch repair. All it actually did was litter the user's config.
     """
     source = PLUGIN.read_text(encoding="utf-8")
-    code = "\n".join(
-        line for line in source.splitlines() if not line.lstrip().startswith("--")
-    )
+    code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("--"))
     assert "preferences.write" not in code, (
         "the plugin writes a darktable preference; it is inert for core keys "
         "and leaves a stray lua/<script>/<key> entry in the user's darktablerc"
@@ -224,9 +227,9 @@ def test_history_commit_confirms_the_sidecar_on_disk():
         "history.commit does not retry the bounce; the FIRST commit of a "
         "session can land mid-render and flush nothing"
     )
-    assert "pcall(commit_view_bounce)" in body, (
-        "the bounce must run under pcall so the loop can stop cleanly"
-    )
+    assert (
+        "pcall(commit_view_bounce)" in body
+    ), "the bounce must run under pcall so the loop can stop cleanly"
     for field in ("sidecar_written", "sidecar_wait_ms", "sidecar ="):
         assert field in body, f"history.commit does not report {field}"
 
@@ -277,9 +280,18 @@ def test_stale_age_outlasts_every_client_timeout():
 
 
 SCOUTER_METHODS = (
-    "view.current", "image.lookup", "darkroom.open", "darkroom.action",
-    "darkroom.status", "module.enable", "module.disable", "module.reset",
-    "history.commit", "snapshot.take", "style.create_from_current", "style.apply",
+    "view.current",
+    "image.lookup",
+    "darkroom.open",
+    "darkroom.action",
+    "darkroom.status",
+    "module.enable",
+    "module.disable",
+    "module.reset",
+    "history.commit",
+    "snapshot.take",
+    "style.create_from_current",
+    "style.apply",
 )
 
 #: Matches both `methods["dotted.name"] = ...` and `methods.bare_name = ...`
@@ -310,8 +322,7 @@ def test_plugin_registers_every_scouter_method():
     registered = _registered_method_names(source)
     missing_from_source = [m for m in SCOUTER_METHODS if m not in registered]
     assert not missing_from_source, (
-        f"{missing_from_source} not found as `methods[...] = ` assignments in "
-        f"{PLUGIN}"
+        f"{missing_from_source} not found as `methods[...] = ` assignments in " f"{PLUGIN}"
     )
 
     # (2) Dynamic: run the existing tests/lua harness, which stubs `dt` and
@@ -361,14 +372,14 @@ def test_history_commit_auto_does_not_reach_the_sidecar_ladder():
     source = PLUGIN.read_text(encoding="utf-8")
     body = source.split('methods["history.commit"] = function', 1)
     assert len(body) == 2, 'methods["history.commit"] not found in the plugin'
-    body = body[1].split('\nmethods[', 1)[0]
+    body = body[1].split("\nmethods[", 1)[0]
     assert 'strategy == "auto" or strategy == "sidecar_action"' not in body, (
         'history.commit still gates the sidecar ladder behind "auto" -- auto '
         "must use only the proven view_bounce floor"
     )
     assert 'if strategy == "sidecar_action" then' in body, (
         "the sidecar ladder is no longer reachable via an explicit "
-        "strategy=\"sidecar_action\" request"
+        'strategy="sidecar_action" request'
     )
 
 
@@ -382,7 +393,7 @@ def test_history_commit_reports_cpu_ms_not_ms():
     source = PLUGIN.read_text(encoding="utf-8")
     body = source.split('methods["history.commit"] = function', 1)
     assert len(body) == 2, 'methods["history.commit"] not found in the plugin'
-    body = body[1].split('\nmethods[', 1)[0]
+    body = body[1].split("\nmethods[", 1)[0]
     assert "os.clock()" in body, "history.commit no longer times itself with os.clock()"
     assert "os.time()" not in body, "history.commit must not time itself with os.time()"
     assert body.count("cpu_ms = (os.clock()") == 3, (
@@ -401,10 +412,10 @@ def test_history_commit_rejects_unknown_strategy():
     source = PLUGIN.read_text(encoding="utf-8")
     body = source.split('methods["history.commit"] = function', 1)
     assert len(body) == 2, 'methods["history.commit"] not found in the plugin'
-    body = body[1].split('\nmethods[', 1)[0]
-    assert "unknown strategy" in body, (
-        "history.commit no longer rejects an unrecognised strategy value"
-    )
+    body = body[1].split("\nmethods[", 1)[0]
+    assert (
+        "unknown strategy" in body
+    ), "history.commit no longer rejects an unrecognised strategy value"
     for valid in ('"auto"', '"view_bounce"', '"sidecar_action"'):
         assert valid in body, f"unknown-strategy error must list {valid} as valid"
 
@@ -436,16 +447,12 @@ def test_ids_match_behaves_correctly():
     # Secondary, still-useful static check: darkroom.open must actually USE
     # ids_match, not the old bare unguarded tonumber(...) == tonumber(...).
     source = PLUGIN.read_text(encoding="utf-8")
-    open_body = source.split('methods["darkroom.open"] = function', 1)[1].split(
-        '\nmethods[', 1
-    )[0]
+    open_body = source.split('methods["darkroom.open"] = function', 1)[1].split("\nmethods[", 1)[0]
     assert "tonumber(loaded.id) == tonumber(image.id)" not in open_body, (
-        "darkroom.open's already-open check reverted to the unguarded id "
-        "comparison"
+        "darkroom.open's already-open check reverted to the unguarded id " "comparison"
     )
     assert "tonumber(final_image.id) == tonumber(image.id)" not in open_body, (
-        "darkroom.open's post-switch verification reverted to the unguarded "
-        "id comparison"
+        "darkroom.open's post-switch verification reverted to the unguarded " "id comparison"
     )
     assert open_body.count("ids_match(") == 2, (
         "darkroom.open should call ids_match(...) exactly twice: the "
@@ -458,12 +465,10 @@ def test_darkroom_open_wrong_image_is_an_rpc_error():
     {opened=false, error=...} result a caller could ignore. Fix round 2
     should-fix 4."""
     source = PLUGIN.read_text(encoding="utf-8")
-    open_body = source.split('methods["darkroom.open"] = function', 1)[1].split(
-        '\nmethods[', 1
-    )[0]
-    assert 'error("wrong image loaded: "' in open_body, (
-        "darkroom.open no longer raises on a wrong-image outcome"
-    )
+    open_body = source.split('methods["darkroom.open"] = function', 1)[1].split("\nmethods[", 1)[0]
+    assert (
+        'error("wrong image loaded: "' in open_body
+    ), "darkroom.open no longer raises on a wrong-image outcome"
     assert "opened = false," not in open_body, (
         "darkroom.open still builds an {opened=false, ...} result table for "
         "the wrong-image case instead of erroring"
@@ -482,8 +487,7 @@ def test_switch_to_darkroom_selects_before_display_image():
     selection_pos = body.find("dt.gui.selection")
     display_image_pos = body.find("view.display_image")
     assert selection_pos != -1 and display_image_pos != -1, (
-        "switch_to_darkroom no longer calls both dt.gui.selection and "
-        "view.display_image"
+        "switch_to_darkroom no longer calls both dt.gui.selection and " "view.display_image"
     )
     assert selection_pos < display_image_pos, (
         "switch_to_darkroom calls display_image before selection -- the "
@@ -513,12 +517,12 @@ def test_commit_view_bounce_yield_polls_both_legs():
     """
     source = PLUGIN.read_text(encoding="utf-8")
     body = source.split("local function commit_view_bounce", 1)[1].split("\nend", 1)[0]
-    assert 'wait_for_view("lighttable")' in body, (
-        "the outbound leg must yield-poll until the lighttable is really current"
-    )
-    assert "return_to_darkroom(" in body, (
-        "the return leg must go through return_to_darkroom, which yield-polls"
-    )
+    assert (
+        'wait_for_view("lighttable")' in body
+    ), "the outbound leg must yield-poll until the lighttable is really current"
+    assert (
+        "return_to_darkroom(" in body
+    ), "the return leg must go through return_to_darkroom, which yield-polls"
 
 
 def test_display_image_is_never_the_view_changing_call():
@@ -541,8 +545,7 @@ def test_display_image_is_never_the_view_changing_call():
         "the darkroom -- from the lighttable that call is a silent no-op"
     )
     assert 'wait_for_view("darkroom")' in body, (
-        "switch_to_darkroom must yield-poll the view after the switch, not "
-        "read it immediately"
+        "switch_to_darkroom must yield-poll the view after the switch, not " "read it immediately"
     )
 
 
@@ -557,8 +560,7 @@ def test_commit_view_bounce_refuses_outside_darkroom():
     assert len(body) == 2, "commit_view_bounce not found in the plugin"
     body = body[1].split("\nend", 1)[0]
     assert '"not in darkroom"' in body, (
-        "commit_view_bounce does not refuse when the starting view is not "
-        "the darkroom"
+        "commit_view_bounce does not refuse when the starting view is not " "the darkroom"
     )
 
 
@@ -573,10 +575,9 @@ def test_darkroom_open_verifies_the_loaded_image():
     source = PLUGIN.read_text(encoding="utf-8")
     body = source.split('methods["darkroom.open"] = function', 1)
     assert len(body) == 2, 'methods["darkroom.open"] not found in the plugin'
-    body = body[1].split('\nmethods[', 1)[0]
+    body = body[1].split("\nmethods[", 1)[0]
     assert "wrong image loaded" in body, (
-        "darkroom.open no longer verifies the loaded image id against the "
-        "requested one"
+        "darkroom.open no longer verifies the loaded image id against the " "requested one"
     )
 
 
@@ -585,10 +586,9 @@ def test_darkroom_action_requires_a_numeric_value_for_set():
     source = PLUGIN.read_text(encoding="utf-8")
     body = source.split('methods["darkroom.action"] = function', 1)
     assert len(body) == 2, 'methods["darkroom.action"] not found in the plugin'
-    body = body[1].split('\nmethods[', 1)[0]
+    body = body[1].split("\nmethods[", 1)[0]
     assert 'type(p.value) ~= "number"' in body, (
-        "darkroom.action no longer guards effect=\"set\" against a missing "
-        "or non-numeric value"
+        'darkroom.action no longer guards effect="set" against a missing ' "or non-numeric value"
     )
 
 

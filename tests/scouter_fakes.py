@@ -6,7 +6,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 
 class TempCache:
@@ -78,6 +78,17 @@ class FakeBridge:
 
     def call(self, method: str, params: dict, timeout: float | None = None) -> Any:
         self.calls.append((method, dict(params)))
+        # `darkroom.open {}` is NOT a query for "which image is loaded" -- the
+        # real plugin errors out (`darkroom.open: no image for nil`) because
+        # there is nothing to load. A fake that answered it anyway made the
+        # inoperable no-arg `history.commit` path look fine in the unit suite
+        # for three rounds (final review, blocker 1). Read-only "what is
+        # loaded" has its own method: `darkroom.current`.
+        if method == "darkroom.open" and not (params.get("image_id") or params.get("path")):
+            raise AssertionError(
+                "darkroom.open was called with no image_id and no path; the real "
+                "plugin raises for that. Use darkroom.current to READ the loaded image."
+            )
         if method in self.raises:
             raise self.raises[method]
         value = self.responses.get(method)
@@ -100,8 +111,12 @@ def fake_cli_script(tmp: Path, body: str) -> Path:
 
 
 #: A fake darktable-cli that writes a valid 2x1 8-bit P6 for any output path.
-FAKE_CLI_WRITES_PPM = 'out=""\nfor a in "$@"; do case "$a" in *.ppm|*.png) out="$a";; esac; done\n' \
-    'printf "P6\\n2 1\\n255\\n" > "$out"\nprintf "\\377\\000\\000\\000\\377\\000" >> "$out"\n'
+FAKE_CLI_WRITES_PPM = (
+    'out=""\n'
+    'for a in "$@"; do case "$a" in *.ppm|*.png) out="$a";; esac; done\n'
+    'printf "P6\\n2 1\\n255\\n" > "$out"\n'
+    'printf "\\377\\000\\000\\000\\377\\000" >> "$out"\n'
+)
 
 #: A fake darktable-cli that exits 0 and writes nothing (the known failure).
 FAKE_CLI_WRITES_NOTHING = "exit 0\n"

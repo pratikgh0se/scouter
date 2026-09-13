@@ -1874,6 +1874,30 @@ assertEq(lu.image_id, 101, "lookup id")
 local lu2 = plugin.methods["image.lookup"]({path = "/nope.NEF"})
 assertEq(lu2.found, false, "lookup miss reports found=false")
 
+-- image.lookup by ID (final review, blocker 2). Reads are not allowed to
+-- resolve through darkroom.open, which loads an image and moves the user's
+-- darkroom, so image.lookup answers for an id out of dt.database too -- and
+-- must touch NO GUI state at all while doing it.
+do
+  local actions_before = #action_log
+  local selections_before = #selection_log
+  local view_before = view_state.current
+  local by_id = plugin.methods["image.lookup"]({image_id = 102})
+  assertEq(by_id.found, true, "image.lookup resolves an integer id")
+  assertEq(by_id.image_id, 102, "image.lookup by id returns that id")
+  assertEq(by_id.path, "/photos/DSC_0002.NEF", "image.lookup by id returns the full path")
+  assertTrue(by_id.film == nil or type(by_id.film) == "string",
+    "image.lookup reports the film roll as a path or not at all")
+  local by_string_id = plugin.methods["image.lookup"]({image_id = "103"})
+  assertEq(by_string_id.image_id, 103, "image.lookup coerces a numeric string id")
+  local miss = plugin.methods["image.lookup"]({image_id = 9999})
+  assertEq(miss.found, false, "an unknown id reports found=false rather than raising")
+  assertEq(miss.image_id, 9999, "and echoes the id that was asked for")
+  assertEq(#action_log, actions_before, "image.lookup issues no dt.gui.action")
+  assertEq(#selection_log, selections_before, "image.lookup never selects an image")
+  assertEq(view_state.current, view_before, "image.lookup never switches the view")
+end
+
 -- snapshot.take prefers the documented lib API.
 local sn = plugin.methods["snapshot.take"]()
 assertEq(sn.taken, true, "snapshot taken")

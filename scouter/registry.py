@@ -7,8 +7,12 @@ is registered but missing from a layer fails CI.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle: types imports nothing of ours
+    from scouter.types import Envelope
 
 
 @dataclass(frozen=True)
@@ -16,7 +20,7 @@ class ArgSpec:
     """One argument, described once for every layer."""
 
     name: str
-    type: str                      # "str" | "int" | "float" | "bool" | "image" | "list[str]"
+    type: str  # "str" | "int" | "float" | "bool" | "image" | "list[str]"
     required: bool = False
     default: Any = None
     help: str = ""
@@ -33,7 +37,7 @@ class Verb:
     writes: bool
     gated: bool
     summary: str
-    cli_name: str = ""             # defaults to the verb's tail with - for _
+    cli_name: str = ""  # defaults to the verb's tail with - for _
 
     @property
     def cli_command(self) -> str:
@@ -108,18 +112,21 @@ def load_verbs() -> dict[str, Verb]:
     return VERB_REGISTRY
 
 
-def call(verb_id: str, layer: str, **kwargs: Any) -> "Envelope":
+def call(verb_id: str, layer: str, **kwargs: Any) -> Envelope:
     """Invoke a verb through the layer contract. Emits exactly one event."""
     from scouter import metrics
     from scouter.errors import ScouterError
-    from scouter.paths import current_job
+    from scouter.paths import current_job, validate_job
     from scouter.types import Envelope
 
     verbs = load_verbs()
     if verb_id not in verbs:
         raise KeyError(f"unknown verb {verb_id!r}; known: {sorted(verbs)}")
     verb = verbs[verb_id]
-    job = kwargs.get("job") or current_job()
+    # Validate the job id HERE, not just where it becomes a path: this is the
+    # one door every layer comes through, and a bad job id must be a typed
+    # `usage` error (exit 2) rather than a traversal into the cache root.
+    job = validate_job(kwargs["job"]) if kwargs.get("job") else current_job()
     kwargs["job"] = job
 
     token = metrics.LAYER.set(layer)
@@ -127,8 +134,14 @@ def call(verb_id: str, layer: str, **kwargs: Any) -> "Envelope":
         result = verb.fn(**kwargs)
     except ScouterError as e:
         return Envelope(
-            verb=verb_id, layer=layer, job=job, ok=False,
-            outcome=f"error:{e.code}", ms=metrics.last_ms(), data={}, error=e.to_dict(),
+            verb=verb_id,
+            layer=layer,
+            job=job,
+            ok=False,
+            outcome=f"error:{e.code}",
+            ms=metrics.last_ms(),
+            data={},
+            error=e.to_dict(),
         )
     finally:
         metrics.LAYER.reset(token)
@@ -139,6 +152,11 @@ def call(verb_id: str, layer: str, **kwargs: Any) -> "Envelope":
     # well as "ok"; only those two count as success, everything else — an
     # "error:<code>" string a core function returned instead of raising — does not.
     return Envelope(
-        verb=verb_id, layer=layer, job=job, ok=outcome in ("ok", "dry_run"),
-        outcome=outcome, ms=metrics.last_ms(), data=data,
+        verb=verb_id,
+        layer=layer,
+        job=job,
+        ok=outcome in ("ok", "dry_run"),
+        outcome=outcome,
+        ms=metrics.last_ms(),
+        data=data,
     )

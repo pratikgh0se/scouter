@@ -167,8 +167,16 @@ scouter doctor                      # darktable, plugin, current view, cache pat
 
 darktable must be **running**, with the image open in the **darkroom**: slider
 actions exist only there, and `scouter` says so (`wrong_view`, exit code 4)
-instead of failing quietly. Turn on darktable's *write sidecar file for each
-image* preference — the XMP sidecar is how Scouter reads values back.
+instead of failing quietly.
+
+Leave darktable's own *store XMP sidecar files* preference at a setting that
+writes sidecars (the default *on import and after edit*): the XMP sidecar is
+how Scouter reads every value back. Scouter **never reads or changes that
+preference** — it cannot, from Lua (a `dt.preferences.write` for it only
+creates a script-namespaced key and leaves the core setting alone, which an
+earlier round proved the hard way). With sidecar writing off, a commit simply
+never lands and `scouter` reports `commit_timeout` (exit 10) rather than
+claiming a write it cannot see.
 
 The plugin loads through `~/.config/darktable/luarc` (`require "darktable_mcp"`),
 same as the original `darktable-mcp` tools — `darktable-mcp install-plugin`
@@ -180,10 +188,14 @@ writes both the plugin file and that `luarc` line for you.
 scouter darkroom open ~/Pictures/EditingTrial/P6281348.ORF
 scouter darkroom set exposure exposure 1.2
 scouter darkroom set sigmoid contrast 1.35
-scouter scout stats ~/Pictures/EditingTrial/P6281348.ORF --px 1024 --pretty
+scouter --pretty scout stats ~/Pictures/EditingTrial/P6281348.ORF --px 1024
 scouter darkroom undo-last
-scouter history read ~/Pictures/EditingTrial/P6281348.ORF --pretty
+scouter --pretty history read ~/Pictures/EditingTrial/P6281348.ORF
 ```
+
+`--pretty` and `--job` belong to `scouter` itself, so they go **before** the
+group and command (`scouter --pretty scout stats ...`); per-verb flags such as
+`--px`, `--dry-run` and `--yes` go after it.
 
 Every write is one darktable history item you can see and undo yourself.
 `undo-last` sets the parameter back to its previous value, which adds a history
@@ -192,10 +204,12 @@ item rather than rewriting history — so your own Ctrl-Z still works.
 ### Safety
 
 - Writers take `--dry-run`; gated verbs (`darkroom reset`, `style extract` over
-  an existing name, `style apply --mode overwrite`, `export run` over existing
-  files or more than one image) print the plan and do nothing until `--yes`.
-  `style apply` always **appends** to history; `mode=overwrite` is refused
-  outright with the reason, never silently downgraded to append.
+  an existing name, `export run` over existing files or more than one image)
+  print the plan and do nothing until `--yes`.
+  `style apply` always **appends** to history; `--mode overwrite` is not a
+  gate but a refusal — it fails immediately with `unsupported_mode`, before
+  anything reaches darktable, because no `--yes` can make darktable replace a
+  history it has no API to replace.
 - Scouter never renders its own pixels, and never touches `library.db`.
   Pixels come from `darktable-cli` in an isolated config dir; edits go through
   `dt.gui.action`; history is read from the XMP sidecar.
@@ -209,12 +223,14 @@ These are load-bearing, not incidental — read them before scripting against Sc
   so every write's commit briefly bounces the view out to the lighttable and
   back (design 8.1's `view_bounce`, the only strategy phase 0/1 proved
   actually commits). Measured at ~500ms wall clock on this Mac against a
-  small library (`docs/measurements.md`); task 12's host run found it can cost
-  much more under load or a heavier `~/.config/darktable`, and that the return
-  leg back into the darkroom is not always reliable — `scouter` reports this
-  honestly (a `commit_timeout`, or a `darkroom.open` that fails outright
-  rather than silently reporting a view it never reached) instead of assuming
-  the bounce landed.
+  small library (`docs/measurements.md`), ~0.8s end to end through the bridge
+  under a live GUI. The view switch is asynchronous, so the plugin yield-polls
+  until the view really changed and confirms the commit by watching the
+  sidecar itself — never by assuming the bounce landed. darktable writes a
+  sidecar only when the history actually changed, so a write asking for the
+  value the image already has produces no write; Scouter resolves that by
+  reading the value back and says so in a warning, and still reports
+  `commit_timeout` when the value genuinely is not there.
 - **`darkroom status` reports slider *positions*, not values.** `dt.gui.action`'s
   read-back is a normalised 0..1 position in the slider's visible range, and
   phase 1 has no verified position→value table for every slider — use
@@ -225,9 +241,11 @@ These are load-bearing, not incidental — read them before scripting against Sc
   `modules` list still applies the *whole* style and reports
   `modules_honoured: false` — never a silent partial application dressed up
   as a filtered one.
-- **`style apply --mode overwrite` is refused, not downgraded.** Overwrite
-  requires `--yes`; without it Scouter prints the plan and makes no history
-  change, rather than falling back to append.
+- **`style apply --mode overwrite` is refused, not downgraded.** darktable's
+  Lua API only appends a style (`image:apply_style`), so overwrite is rejected
+  with `unsupported_mode` before any bridge call — there is no confirmation
+  that makes it work, and it never silently falls back to append. An
+  export-only overwrite is `darktable-cli --style-overwrite`.
 
 ### Observability
 
@@ -236,7 +254,7 @@ and one row to `~/.cache/scouter/metrics.db`, plus a full-fidelity audit line to
 `~/.cache/scouter/audit/<job>.jsonl`.
 
 ```sh
-scouter metrics summary --since 7d --pretty
+scouter --pretty metrics summary --since 7d
 ```
 
 ### Exit codes
@@ -249,7 +267,7 @@ scouter metrics summary --since 7d --pretty
 
 ```sh
 python3 -m pytest tests -q          # no darktable needed; host-only tests skip
-SCOUTER_HOST_TESTS=1 python3 -m pytest tests/test_host_integration.py -q -s   # needs darktable + the ORFs, and this env var
+SCOUTER_HOST_TESTS=1 python3 -m pytest tests/test_host_integration.py tests/test_commit_trigger_host.py -q -s   # needs darktable + the ORF, and this env var
 ```
 
 The host-only suite (`tests/test_host_integration.py`,

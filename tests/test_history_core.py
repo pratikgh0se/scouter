@@ -18,11 +18,20 @@ class HistoryReadTest(unittest.TestCase):
         self.raw.write_bytes(b"raw")
         self.sidecar = Path(str(self.raw) + ".xmp")
         shutil.copy(FIXTURE, self.sidecar)
-        dtbridge.set_bridge(FakeBridge({
-            "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-            "darkroom.open": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
-                              "opened": False, "already_open": True},
-        }))
+        dtbridge.set_bridge(
+            FakeBridge(
+                {
+                    "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+                    "darkroom.open": {
+                        "image_id": 12,
+                        "path": str(self.raw),
+                        "view": "darkroom",
+                        "opened": False,
+                        "already_open": True,
+                    },
+                }
+            )
+        )
 
     def tearDown(self) -> None:
         dtbridge.set_bridge(None)
@@ -70,8 +79,19 @@ class HistoryCommitTest(unittest.TestCase):
         shutil.copy(FIXTURE, self.sidecar)
         self.base = {
             "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-            "darkroom.open": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
-                              "opened": False, "already_open": True},
+            "darkroom.current": {
+                "image_id": 12,
+                "path": str(self.raw),
+                "view": "darkroom",
+                "source": "action_images",
+            },
+            "darkroom.open": {
+                "image_id": 12,
+                "path": str(self.raw),
+                "view": "darkroom",
+                "opened": False,
+                "already_open": True,
+            },
         }
 
     def tearDown(self) -> None:
@@ -83,9 +103,13 @@ class HistoryCommitTest(unittest.TestCase):
 
         def commit(_params: dict) -> dict:
             time.sleep(0.01)
-            self.sidecar.write_text(text)          # a real rewrite bumps the mtime
-            return {"strategy_used": "sidecar_action", "ok": True,
-                    "view_after": "darkroom", "cpu_ms": 10}
+            self.sidecar.write_text(text)  # a real rewrite bumps the mtime
+            return {
+                "strategy_used": "sidecar_action",
+                "ok": True,
+                "view_after": "darkroom",
+                "cpu_ms": 10,
+            }
 
         dtbridge.set_bridge(FakeBridge({**self.base, "history.commit": commit}))
         result = history.commit(image=str(self.raw), timeout_s=2.0)
@@ -93,23 +117,37 @@ class HistoryCommitTest(unittest.TestCase):
         self.assertEqual(result.strategy_used, "sidecar_action")
 
     def test_commit_times_out_with_the_strategy_in_the_detail(self) -> None:
-        dtbridge.set_bridge(FakeBridge({
-            **self.base,
-            "history.commit": {"strategy_used": "view_bounce", "ok": False,
-                               "view_after": "darkroom", "cpu_ms": 5,
-                               "detail": "view switch failed"},
-        }))
+        dtbridge.set_bridge(
+            FakeBridge(
+                {
+                    **self.base,
+                    "history.commit": {
+                        "strategy_used": "view_bounce",
+                        "ok": False,
+                        "view_after": "darkroom",
+                        "cpu_ms": 5,
+                        "detail": "view switch failed",
+                    },
+                }
+            )
+        )
         with self.assertRaises(CommitTimeout) as ctx:
             history.commit(image=str(self.raw), timeout_s=0.2)
         self.assertEqual(ctx.exception.detail["strategy_used"], "view_bounce")
         self.assertIn("view switch failed", str(ctx.exception.detail["bridge_detail"]))
 
     def test_strategy_is_forwarded_to_the_bridge(self) -> None:
-        bridge = FakeBridge({
-            **self.base,
-            "history.commit": {"strategy_used": "view_bounce", "ok": True,
-                               "view_after": "darkroom", "cpu_ms": 5},
-        })
+        bridge = FakeBridge(
+            {
+                **self.base,
+                "history.commit": {
+                    "strategy_used": "view_bounce",
+                    "ok": True,
+                    "view_after": "darkroom",
+                    "cpu_ms": 5,
+                },
+            }
+        )
         dtbridge.set_bridge(bridge)
         with self.assertRaises(CommitTimeout):
             history.commit(image=str(self.raw), timeout_s=0.1, strategy="view_bounce")
@@ -122,12 +160,39 @@ class HistoryCommitTest(unittest.TestCase):
         def commit(_params: dict) -> dict:
             time.sleep(0.01)
             self.sidecar.write_text(text)
-            return {"strategy_used": "view_bounce", "ok": True,
-                    "view_after": "darkroom", "cpu_ms": 5}
+            return {
+                "strategy_used": "view_bounce",
+                "ok": True,
+                "view_after": "darkroom",
+                "cpu_ms": 5,
+            }
 
-        dtbridge.set_bridge(FakeBridge({**self.base, "history.commit": commit}))
+        bridge = FakeBridge({**self.base, "history.commit": commit})
+        dtbridge.set_bridge(bridge)
         result = history.commit(timeout_s=2.0)
         self.assertEqual(result.image_id, 12)
+        # Final review, blocker 1: the darkroom image is READ through
+        # `darkroom.current`, never through `darkroom.open {}` -- which the
+        # real plugin refuses outright (FakeBridge now refuses it too, so this
+        # assertion can actually fail).
+        self.assertIn("darkroom.current", bridge.methods_called())
+        self.assertNotIn("darkroom.open", bridge.methods_called())
+
+    def test_commit_without_an_image_refuses_when_the_darkroom_is_empty(self) -> None:
+        """No image loaded is an honest `not_in_darkroom`, not a crash."""
+        from scouter.errors import NotInDarkroom
+
+        dtbridge.set_bridge(
+            FakeBridge(
+                {
+                    **self.base,
+                    "darkroom.current": {"view": "lighttable", "source": "action_images"},
+                }
+            )
+        )
+        with self.assertRaises(NotInDarkroom) as ctx:
+            history.commit(timeout_s=0.2)
+        self.assertIn("nothing to commit", str(ctx.exception))
 
     def test_commit_surfaces_view_after_and_warns_off_darkroom(self) -> None:
         text = self.sidecar.read_text()
@@ -135,8 +200,12 @@ class HistoryCommitTest(unittest.TestCase):
         def commit(_params: dict) -> dict:
             time.sleep(0.01)
             self.sidecar.write_text(text)
-            return {"strategy_used": "sidecar_action", "ok": True,
-                    "view_after": "lighttable", "cpu_ms": 5}
+            return {
+                "strategy_used": "sidecar_action",
+                "ok": True,
+                "view_after": "lighttable",
+                "cpu_ms": 5,
+            }
 
         dtbridge.set_bridge(FakeBridge({**self.base, "history.commit": commit}))
         result = history.commit(image=str(self.raw), timeout_s=2.0)
@@ -149,20 +218,32 @@ class HistoryCommitTest(unittest.TestCase):
         def commit(_params: dict) -> dict:
             time.sleep(0.01)
             self.sidecar.write_text(text)
-            return {"strategy_used": "sidecar_action", "ok": True,
-                    "view_after": "darkroom", "cpu_ms": 5}
+            return {
+                "strategy_used": "sidecar_action",
+                "ok": True,
+                "view_after": "darkroom",
+                "cpu_ms": 5,
+            }
 
         dtbridge.set_bridge(FakeBridge({**self.base, "history.commit": commit}))
         result = history.commit(image=str(self.raw), timeout_s=2.0)
         self.assertFalse(any("view" in w for w in result.warnings))
 
     def test_timeout_detail_carries_ok_and_view_after(self) -> None:
-        dtbridge.set_bridge(FakeBridge({
-            **self.base,
-            "history.commit": {"strategy_used": "view_bounce", "ok": False,
-                               "view_after": "darkroom", "cpu_ms": 5,
-                               "detail": "view switch failed"},
-        }))
+        dtbridge.set_bridge(
+            FakeBridge(
+                {
+                    **self.base,
+                    "history.commit": {
+                        "strategy_used": "view_bounce",
+                        "ok": False,
+                        "view_after": "darkroom",
+                        "cpu_ms": 5,
+                        "detail": "view switch failed",
+                    },
+                }
+            )
+        )
         with self.assertRaises(CommitTimeout) as ctx:
             history.commit(image=str(self.raw), timeout_s=0.1)
         self.assertEqual(ctx.exception.detail["ok"], False)
@@ -177,10 +258,14 @@ class HistoryCommitTest(unittest.TestCase):
         text = self.sidecar.read_text()
 
         def commit(_params: dict) -> dict:
-            time.sleep(0.01)                        # guarantee the mtime ticks
+            time.sleep(0.01)  # guarantee the mtime ticks
             self.sidecar.write_text(text)
-            return {"strategy_used": "sidecar_action", "ok": True,
-                    "view_after": "darkroom", "cpu_ms": 1}
+            return {
+                "strategy_used": "sidecar_action",
+                "ok": True,
+                "view_after": "darkroom",
+                "cpu_ms": 1,
+            }
 
         dtbridge.set_bridge(FakeBridge({**self.base, "history.commit": commit}))
         result = history.commit(image=str(self.raw), timeout_s=0.0)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import unittest
 
 from scouter import registry
@@ -9,11 +10,23 @@ from scouter.cli.main import NON_REGISTRY_COMMANDS, build_parser
 from scouter.mcp import schemas
 
 EXPECTED_VERBS = {
-    "darkroom.open", "darkroom.set", "darkroom.nudge", "darkroom.enable",
-    "darkroom.reset", "darkroom.undo_last", "darkroom.status",
-    "darkroom.describe_history", "history.read", "history.commit",
-    "scout.stats", "scout.preview", "scout.compare",
-    "style.extract", "style.apply", "export.run", "metrics.summary",
+    "darkroom.open",
+    "darkroom.set",
+    "darkroom.nudge",
+    "darkroom.enable",
+    "darkroom.reset",
+    "darkroom.undo_last",
+    "darkroom.status",
+    "darkroom.describe_history",
+    "history.read",
+    "history.commit",
+    "scout.stats",
+    "scout.preview",
+    "scout.compare",
+    "style.extract",
+    "style.apply",
+    "export.run",
+    "metrics.summary",
 }
 
 
@@ -40,9 +53,7 @@ class ParityTest(unittest.TestCase):
 
     def test_the_mcp_tool_table_matches_the_registry(self) -> None:
         tools = {tool["name"]: tool for tool in schemas.TOOL_SPECS}
-        self.assertEqual(
-            set(tools), {v.mcp_name for v in registry.load_verbs().values()}
-        )
+        self.assertEqual(set(tools), {v.mcp_name for v in registry.load_verbs().values()})
 
     def test_argument_names_agree_between_the_registry_and_the_mcp_schema(self) -> None:
         tools = {tool["name"]: tool for tool in schemas.TOOL_SPECS}
@@ -50,8 +61,48 @@ class ParityTest(unittest.TestCase):
             with self.subTest(verb=verb.id):
                 schema = tools[verb.mcp_name]["inputSchema"]
                 self.assertEqual(
-                    set(schema["properties"]), {a.name for a in verb.args},
+                    set(schema["properties"]),
+                    {a.name for a in verb.args},
                     f"{verb.id}: the MCP schema and the registry disagree on argument names",
                 )
                 required = {a.name for a in verb.args if a.required}
                 self.assertEqual(set(schema.get("required", [])), required)
+
+    def test_argument_names_agree_between_the_registry_and_the_core_functions(self) -> None:
+        """The third leg (final review nit): the registry is also pinned against
+        the functions it actually calls.
+
+        Without this, an ArgSpec could agree with the MCP schema and the CLI
+        while naming a parameter the core function does not have -- a
+        `TypeError` at call time that no parity test would catch. `job` is the
+        one parameter every core function takes and no layer exposes as a verb
+        argument (it comes from `--job` / $SCOUTER_JOB), so it is excluded.
+        """
+        for verb in registry.load_verbs().values():
+            with self.subTest(verb=verb.id):
+                fn = getattr(verb.fn, "__wrapped__", verb.fn)
+                signature = inspect.signature(fn)
+                accepted = {
+                    name
+                    for name, param in signature.parameters.items()
+                    if name != "job" and param.kind not in (param.VAR_POSITIONAL, param.VAR_KEYWORD)
+                }
+                self.assertEqual(
+                    {a.name for a in verb.args},
+                    accepted,
+                    f"{verb.id}: the registry and {fn.__module__}.{fn.__name__} "
+                    "disagree on argument names",
+                )
+                required = {
+                    name
+                    for name, param in signature.parameters.items()
+                    if name != "job"
+                    and param.default is param.empty
+                    and param.kind not in (param.VAR_POSITIONAL, param.VAR_KEYWORD)
+                }
+                self.assertEqual(
+                    {a.name for a in verb.args if a.required},
+                    required,
+                    f"{verb.id}: the registry and {fn.__module__}.{fn.__name__} "
+                    "disagree on which arguments are required",
+                )

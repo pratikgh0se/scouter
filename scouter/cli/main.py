@@ -10,7 +10,7 @@ import argparse
 import json
 import sys
 
-from scouter import __version__, registry
+from scouter import __version__, paths, registry
 from scouter.errors import EXIT_CODES, ScouterError, exit_code_for
 
 #: Verbs excluded from the parity check because they are diagnostics, not verbs.
@@ -25,25 +25,36 @@ def _add_arg(parser: argparse.ArgumentParser, spec) -> None:
         kwargs["choices"] = list(spec.choices)
     if spec.type == "bool":
         if spec.name == "dry_run":
-            parser.add_argument("--dry-run", dest="dry_run", action="store_true",
-                                help=spec.help)
+            parser.add_argument("--dry-run", dest="dry_run", action="store_true", help=spec.help)
         elif spec.name == "confirm":
-            parser.add_argument("--yes", dest="confirm", action="store_true",
-                                help=spec.help)
+            parser.add_argument("--yes", dest="confirm", action="store_true", help=spec.help)
         elif spec.name == "commit" and spec.default is True:
-            parser.add_argument("--no-commit", dest="commit", action="store_false",
-                                help="do not commit history after the write")
+            parser.add_argument(
+                "--no-commit",
+                dest="commit",
+                action="store_false",
+                help="do not commit history after the write",
+            )
         else:
-            parser.add_argument(f"--{spec.name.replace('_', '-')}", dest=spec.name,
-                                action="store_true", help=spec.help)
+            parser.add_argument(
+                f"--{spec.name.replace('_', '-')}",
+                dest=spec.name,
+                action="store_true",
+                help=spec.help,
+            )
         return
     if spec.type == "list[str]":
         if spec.positional:
             parser.add_argument(spec.name, nargs="+", **kwargs)
         else:
-            parser.add_argument(f"--{spec.name.replace('_', '-')}", dest=spec.name,
-                                required=spec.required, default=spec.default,
-                                type=lambda v: [p for p in v.split(",") if p], **kwargs)
+            parser.add_argument(
+                f"--{spec.name.replace('_', '-')}",
+                dest=spec.name,
+                required=spec.required,
+                default=spec.default,
+                type=lambda v: [p for p in v.split(",") if p],
+                **kwargs,
+            )
         return
     kwargs["type"] = _TYPES[spec.type]
     if spec.positional:
@@ -52,21 +63,27 @@ def _add_arg(parser: argparse.ArgumentParser, spec) -> None:
             kwargs["default"] = spec.default
         parser.add_argument(spec.name, **kwargs)
     else:
-        parser.add_argument(f"--{spec.name.replace('_', '-')}", dest=spec.name,
-                            required=spec.required, default=spec.default, **kwargs)
+        parser.add_argument(
+            f"--{spec.name.replace('_', '-')}",
+            dest=spec.name,
+            required=spec.required,
+            default=spec.default,
+            **kwargs,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="scouter",
         description="Live darktable editing core. Every command prints one JSON "
-                    "object on stdout; logs go to stderr.",
+        "object on stdout; logs go to stderr.",
     )
     parser.add_argument("--version", action="version", version=f"scouter {__version__}")
     parser.add_argument("--job", help="job id for the audit log and the undo journal")
     parser.add_argument("--pretty", action="store_true", help="indent the JSON output")
-    parser.add_argument("--json", action="store_true",
-                        help="accepted and ignored: output is always JSON")
+    parser.add_argument(
+        "--json", action="store_true", help="accepted and ignored: output is always JSON"
+    )
     groups = parser.add_subparsers(dest="group", required=True)
 
     verbs = registry.load_verbs()
@@ -78,8 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
         group_parser = groups.add_parser(group_name, help=f"{group_name} verbs")
         commands = group_parser.add_subparsers(dest="command", required=True)
         for verb in sorted(by_group[group_name], key=lambda v: v.cli_command):
-            sub = commands.add_parser(verb.cli_command, help=verb.summary,
-                                      description=verb.summary)
+            sub = commands.add_parser(verb.cli_command, help=verb.summary, description=verb.summary)
             sub.set_defaults(_verb=verb.id, _args=[a.name for a in verb.args])
             for spec in verb.args:
                 _add_arg(sub, spec)
@@ -88,8 +104,9 @@ def build_parser() -> argparse.ArgumentParser:
         "doctor",
         help="check darktable, the plugin and the view",
         description="Exits 0 when everything checks out, 3 when the bridge timed "
-                    "out reaching darktable, 1 for every other failure (wrong "
-                    "view, missing plugin, etc.).",
+        "out reaching darktable, 2 for a usage error (a bad flag or "
+        "job id), 1 for every other failure (wrong view, missing "
+        "plugin, etc.).",
     )
     doctor.set_defaults(_verb=None, _args=[])
     return parser
@@ -106,9 +123,8 @@ def _doctor() -> dict:
     report: dict = {
         "verb": "doctor",
         "darktable": "/Applications/darktable.app/Contents/MacOS/darktable",
-        "darktable_present": Path(
-            "/Applications/darktable.app/Contents/MacOS/darktable"
-        ).is_file() or bool(shutil.which("darktable")),
+        "darktable_present": Path("/Applications/darktable.app/Contents/MacOS/darktable").is_file()
+        or bool(shutil.which("darktable")),
         "plugin_installed": plugin.is_file(),
         "plugin_path": str(plugin),
         "cache_root": str(paths.cache_root()),
@@ -152,27 +168,53 @@ def main(argv: list[str] | None = None) -> int:
         return emit(report, code)
 
     verb_id = namespace._verb
-    kwargs = {name: getattr(namespace, name) for name in namespace._args
-              if getattr(namespace, name, None) is not None}
-    if namespace.job:
-        kwargs["job"] = namespace.job
+    kwargs = {
+        name: getattr(namespace, name)
+        for name in namespace._args
+        if getattr(namespace, name, None) is not None
+    }
     try:
+        # `--job` becomes a file name under the cache root, so it is validated
+        # before anything opens a file with it. Inside the try so the refusal
+        # comes back as the same JSON envelope every other failure does.
+        if namespace.job:
+            kwargs["job"] = paths.validate_job(namespace.job)
         envelope = registry.call(verb_id, "cli", **kwargs)
     except ScouterError as e:
-        payload = {"verb": verb_id, "layer": "cli", "ok": False,
-                   "outcome": f"error:{e.code}", "error": e.to_dict()}
+        payload = {
+            "verb": verb_id,
+            "layer": "cli",
+            "ok": False,
+            "outcome": f"error:{e.code}",
+            "error": e.to_dict(),
+        }
         return emit(payload, exit_code_for(f"error:{e.code}"))
     except ValueError as e:
-        payload = {"verb": verb_id, "layer": "cli", "ok": False, "outcome": "usage",
-                   "error": {"code": "usage", "message": str(e)}}
+        payload = {
+            "verb": verb_id,
+            "layer": "cli",
+            "ok": False,
+            "outcome": "usage",
+            "error": {"code": "usage", "message": str(e)},
+        }
         return emit(payload, 2)
     except KeyboardInterrupt:
-        payload = {"verb": verb_id, "layer": "cli", "ok": False, "outcome": "error",
-                   "error": {"code": "interrupted", "message": "interrupted by the user"}}
+        payload = {
+            "verb": verb_id,
+            "layer": "cli",
+            "ok": False,
+            "outcome": "error",
+            "error": {"code": "interrupted", "message": "interrupted by the user"},
+        }
         return emit(payload, 130)
     except Exception as e:  # noqa: BLE001 - last resort so the CLI always emits JSON
-        payload = {"verb": verb_id, "layer": "cli", "ok": False, "outcome": "error",
-                   "error": {"code": "error", "message": str(e)}}
+        payload = {
+            "verb": verb_id,
+            "layer": "cli",
+            "ok": False,
+            "outcome": "error",
+            "error": {"code": "error", "message": str(e)},
+        }
         return emit(payload, EXIT_CODES["error"])
     return emit(envelope.to_dict(), exit_code_for(envelope.outcome))
 

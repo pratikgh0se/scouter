@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
+import math
+import os
+import tempfile
 import time
+from collections.abc import Callable
 
-from scouter import metrics
+from scouter import metrics, paths
 from scouter.core import dtbridge, journal, xmp
-from scouter.errors import CommitTimeout, NotInDarkroom, ScouterError
+from scouter.errors import CommitTimeout, NotInDarkroom, ScouterError, UsageError
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
 from scouter.types import (
@@ -40,6 +45,113 @@ class _UnsupportedUndo(ScouterError):
 
     code = "unsupported_undo"
     fix = "press Ctrl-Z in darktable; Scouter cannot restore discarded params"
+
+
+def _require_finite(name: str, value: float) -> float:
+    """Reject nan/inf BEFORE any bridge call (final review, should-fix 5).
+
+    `dt.gui.action(..., "set", nan)` is not a no-op: nan is also the bridge's
+    own "not in the darkroom / module not in the pipe" signal, so sending one
+    makes the reply indistinguishable from that failure, and JSON has no
+    literal for it either (`Envelope.to_dict` turns one into null). A caller
+    mistake is worth a typed `usage` error, not a slider set to garbage.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as e:
+        raise UsageError(
+            f"{name} must be a number, got {value!r}", detail={"argument": name}
+        ) from e
+    if not math.isfinite(number):
+        raise UsageError(
+            f"{name} must be a finite number, got {number!r}",
+            detail={"argument": name, "value": repr(number)},
+        )
+    return number
+
+
+def _job_state_write(job: str, state: dict) -> None:
+    """Replace this job's state file atomically. Best-effort by design."""
+    path = paths.ensure(paths.job_state_path(job))
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".state-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, sort_keys=True)
+        os.replace(tmp_name, path)
+    except OSError:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+
+
+def _job_state_read(job: str) -> dict:
+    path = paths.job_state_path(job)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _record_opened_image(job: str, image_id: int, path: str) -> None:
+    """Remember which image THIS job opened (ruling 30)."""
+    _job_state_write(job, {"opened_image_id": int(image_id), "opened_path": path})
+
+
+def _require_job_image(job: str, loaded_image_id: int) -> None:
+    """Refuse a write when the darkroom no longer shows the job's own image.
+
+    Ruling 30: `darkroom.current` reads the SELECTION (`dt.gui.action_images`
+    -- the display_image getter deadlocks the worker, see the plugin), so
+    "an image is loaded" is not by itself proof it is the one this job opened.
+    If the job has opened an image and the darkroom now reports a different
+    one, the write would land on somebody else's photo: refuse, and say both
+    ids. A job that has never opened anything has nothing to compare against
+    and is left alone.
+    """
+    expected = _job_state_read(job).get("opened_image_id")
+    if expected is None or int(expected) == int(loaded_image_id):
+        return
+    raise NotInDarkroom(
+        f"darkroom.current reports {int(loaded_image_id)}, job opened {int(expected)}: "
+        "refusing to write to an image this job did not open",
+        fix=(
+            "re-open the image you meant (`scouter darkroom open <image>`), or "
+            "start a new job (--job / $SCOUTER_JOB)"
+        ),
+        detail={"loaded_image_id": int(loaded_image_id), "job_image_id": int(expected), "job": job},
+    )
+
+
+def _commit_with_readback(
+    job: str, image_id: int, *, confirm: Callable[[], bool], what: str, strategy: str = "auto"
+) -> tuple[bool, list[str]]:
+    """`_commit`, with a commit timeout resolved by reading the XMP back.
+
+    Final review, should-fix 6: `darkroom.set` already did this, and every
+    other writer did not -- so a write whose journal entry says `completed`
+    and whose value is already on disk came back as `commit_timeout`.
+    darktable writes a sidecar only when the history actually CHANGES, so a
+    write that asks for the state the image already has legitimately produces
+    no write at all. `confirm()` re-reads the sidecar; if it agrees with what
+    was asked for, the request is satisfied and says so in a warning. If it
+    does not, the timeout is re-raised untouched -- a write that never landed
+    is never reported as committed.
+    """
+    try:
+        result = _commit(job, image_id, strategy=strategy)
+    except CommitTimeout:
+        if not confirm():
+            raise
+        return True, [
+            f"darktable wrote no new sidecar for {what}: the state requested is the "
+            "one the XMP already carried, so there was no history change to write. "
+            "Confirmed by reading it back from the sidecar."
+        ]
+    return result.committed, list(result.warnings)
 
 
 def _commit(job: str, image_id: int, *, strategy: str = "auto") -> CommitResult:
@@ -125,8 +237,9 @@ def _read_state(path: str, module: str, param: str, instance: int) -> dict:
     return {**state, "value": _read_value(path, module, param, instance)}
 
 
-def _last_journal_write(job: str, image_id: int, module: str, param: str,
-                        instance: int) -> journal.Entry | None:
+def _last_journal_write(
+    job: str, image_id: int, module: str, param: str, instance: int
+) -> journal.Entry | None:
     """The newest entry for this exact (image, module, param, instance) that
     actually landed a value -- skipping anything undone or failed (fix round
     2, blocker 2): an undone write is reverted, and a failed one never
@@ -142,21 +255,33 @@ def _last_journal_write(job: str, image_id: int, module: str, param: str,
     """
     for entry in reversed(journal.read_all(job)):
         is_error = entry.outcome is not None and entry.outcome.startswith("error")
-        if (entry.verb == "module.reset" and not is_error and entry.image_id == image_id
-                and entry.module == module and entry.instance == instance):
+        if (
+            entry.verb == "module.reset"
+            and not is_error
+            and entry.image_id == image_id
+            and entry.module == module
+            and entry.instance == instance
+        ):
             return None
         if entry.undone:
             continue
         if is_error:
             continue
-        if (entry.image_id == image_id and entry.module == module and entry.param == param
-                and entry.instance == instance and entry.after and "value" in entry.after):
+        if (
+            entry.image_id == image_id
+            and entry.module == module
+            and entry.param == param
+            and entry.instance == instance
+            and entry.after
+            and "value" in entry.after
+        ):
             return entry
     return None
 
 
-def _before_state(job: str, image_id: int, path: str, module: str, param: str,
-                  instance: int) -> dict:
+def _before_state(
+    job: str, image_id: int, path: str, module: str, param: str, instance: int
+) -> dict:
     """The `before` state for a new write on this slider.
 
     Ordinarily this is whatever the XMP currently shows. But when the last
@@ -203,8 +328,12 @@ def _current_image() -> dtbridge.ResolvedImage:
 @metrics.instrumented("darkroom.open")
 def open_image(image: str | int, *, job: str | None = None) -> OpenResult:
     """Load `image` in the darkroom, importing it into the library if needed."""
+    job = job or current_job()
     key = {"image_id": int(image)} if str(image).isdigit() else {"path": str(image)}
     result = dtbridge.call("darkroom.open", key)
+    # Ruling 30: this job now owns that image. Every later write in the job
+    # checks `darkroom.current` against it and refuses if they disagree.
+    _record_opened_image(job, int(result["image_id"]), str(result["path"]))
     return OpenResult(
         image_id=int(result["image_id"]),
         path=str(result["path"]),
@@ -215,9 +344,16 @@ def open_image(image: str | int, *, job: str | None = None) -> OpenResult:
 
 
 @metrics.instrumented("darkroom.set")
-def set_param(module: str, param: str, value: float, *, instance: int = 0,
-              commit: bool = True, dry_run: bool = False,
-              job: str | None = None) -> SetResult:
+def set_param(
+    module: str,
+    param: str,
+    value: float,
+    *,
+    instance: int = 0,
+    commit: bool = True,
+    dry_run: bool = False,
+    job: str | None = None,
+) -> SetResult:
     """Set one module parameter to an absolute value (phase 0 finding 1).
 
     A dry run makes no darktable calls at all -- not even to learn which image
@@ -225,24 +361,47 @@ def set_param(module: str, param: str, value: float, *, instance: int = 0,
     action that would be sent, never a value or an image id.
     """
     job = job or current_job()
+    value = _require_finite("value", value)
     if dry_run:
         return SetResult(
-            outcome="dry_run", module=module, param=param, instance=instance, requested=value,
-            plan=[{"action": "darkroom.set", "path": dtbridge.action_path(module, param),
-                   "effect": "set", "value": value, "instance": instance}],
+            outcome="dry_run",
+            module=module,
+            param=param,
+            instance=instance,
+            requested=value,
+            plan=[
+                {
+                    "action": "darkroom.set",
+                    "path": dtbridge.action_path(module, param),
+                    "effect": "set",
+                    "value": value,
+                    "instance": instance,
+                }
+            ],
             reason="dry run: no darktable calls were made; the darkroom image was not resolved",
         )
     resolved = _current_image()
+    _require_job_image(job, resolved.image_id)
     dtbridge.require_darkroom()
     before_state = _before_state(job, resolved.image_id, resolved.path, module, param, instance)
     entry = journal.begin(
-        job, verb="darkroom.set", image_id=resolved.image_id, path=resolved.path,
-        module=module, param=param, instance=instance, before=before_state, commit=commit,
+        job,
+        verb="darkroom.set",
+        image_id=resolved.image_id,
+        path=resolved.path,
+        module=module,
+        param=param,
+        instance=instance,
+        before=before_state,
+        commit=commit,
     )
     try:
         dtbridge.action(
             dtbridge.action_path(module, param),
-            instance=instance, element="value", effect="set", value=value,
+            instance=instance,
+            element="value",
+            effect="set",
+            value=value,
         )
     except Exception as e:
         code = e.code if isinstance(e, ScouterError) else "error"
@@ -290,16 +449,30 @@ def set_param(module: str, param: str, value: float, *, instance: int = 0,
                 "`requested` is what was sent, `applied` is unknown"
             )
     return SetResult(
-        image_id=resolved.image_id, path=resolved.path, module=module, param=param,
-        instance=instance, requested=value, applied=applied, previous=before_state.get("value"),
-        committed=committed, warnings=warnings,
+        image_id=resolved.image_id,
+        path=resolved.path,
+        module=module,
+        param=param,
+        instance=instance,
+        requested=value,
+        applied=applied,
+        previous=before_state.get("value"),
+        committed=committed,
+        warnings=warnings,
     )
 
 
 @metrics.instrumented("darkroom.nudge")
-def nudge(module: str, param: str, steps: int = 1, *, instance: int = 0,
-          commit: bool = True, dry_run: bool = False,
-          job: str | None = None) -> SetResult:
+def nudge(
+    module: str,
+    param: str,
+    steps: int = 1,
+    *,
+    instance: int = 0,
+    commit: bool = True,
+    dry_run: bool = False,
+    job: str | None = None,
+) -> SetResult:
     """Move a slider by `steps` of darktable's own default step (+/-).
 
     Journals *before* the loop, not after (fix round 1, blocker 2): a crash
@@ -309,28 +482,56 @@ def nudge(module: str, param: str, steps: int = 1, *, instance: int = 0,
     regardless of how many landed, so a partial nudge is still fully undoable.
     """
     job = job or current_job()
+    # `steps` is an int in every layer's schema, but MCP arguments arrive as
+    # whatever JSON carried, so a float nan/inf can reach here (should-fix 5).
+    steps_number = _require_finite("steps", steps)
+    if steps_number != int(steps_number):
+        raise UsageError(
+            f"steps must be a whole number of slider steps, got {steps!r}",
+            detail={"argument": "steps"},
+        )
+    steps = int(steps_number)
     path_ = dtbridge.action_path(module, param)
     effect = "up" if steps >= 0 else "down"
     if dry_run:
         return SetResult(
-            outcome="dry_run", module=module, param=param, instance=instance,
-            plan=[{"action": "darkroom.nudge", "path": path_, "effect": effect,
-                   "repeats": abs(steps), "instance": instance}],
+            outcome="dry_run",
+            module=module,
+            param=param,
+            instance=instance,
+            plan=[
+                {
+                    "action": "darkroom.nudge",
+                    "path": path_,
+                    "effect": effect,
+                    "repeats": abs(steps),
+                    "instance": instance,
+                }
+            ],
             reason="dry run: no darktable calls were made; the darkroom image was not resolved",
         )
     resolved = _current_image()
+    _require_job_image(job, resolved.image_id)
     dtbridge.require_darkroom()
     before_state = _before_state(job, resolved.image_id, resolved.path, module, param, instance)
     entry = journal.begin(
-        job, verb="darkroom.nudge", image_id=resolved.image_id, path=resolved.path,
-        module=module, param=param, instance=instance, before=before_state, commit=commit,
+        job,
+        verb="darkroom.nudge",
+        image_id=resolved.image_id,
+        path=resolved.path,
+        module=module,
+        param=param,
+        instance=instance,
+        before=before_state,
+        commit=commit,
     )
     landed = 0
     last_status: float | None = None
     try:
         for _ in range(abs(steps)):
-            result = dtbridge.action(path_, instance=instance, element="value",
-                                     effect=effect, value=1)
+            result = dtbridge.action(
+                path_, instance=instance, element="value", effect=effect, value=1
+            )
             landed += 1
             status_value = result.get("status")
             if isinstance(status_value, (int, float)):
@@ -351,24 +552,57 @@ def nudge(module: str, param: str, steps: int = 1, *, instance: int = 0,
 
     committed, applied, warnings = False, None, []
     if commit:
-        commit_result = _commit(job, resolved.image_id, strategy="auto")
-        committed, warnings = commit_result.committed, list(commit_result.warnings)
+        # Same commit-timeout resolution `set` has (should-fix 6): the honest
+        # confirmation for a nudge is the value darktable itself reported for
+        # the last step (`after["value"]`) already being in the sidecar.
+        landed_value = after.get("value")
+
+        def _confirm_nudge() -> bool:
+            if landed_value is None:
+                return False
+            return _close(_read_value(resolved.path, module, param, instance), landed_value)
+
+        committed, warnings = _commit_with_readback(
+            job,
+            resolved.image_id,
+            confirm=_confirm_nudge,
+            what=f"{module}.{param}",
+        )
         applied = _read_value(resolved.path, module, param, instance)
     return SetResult(
-        image_id=resolved.image_id, path=resolved.path, module=module, param=param,
-        instance=instance, requested=None, applied=applied, previous=before_state.get("value"),
-        committed=committed, warnings=warnings,
+        image_id=resolved.image_id,
+        path=resolved.path,
+        module=module,
+        param=param,
+        instance=instance,
+        requested=None,
+        applied=applied,
+        previous=before_state.get("value"),
+        committed=committed,
+        warnings=warnings,
     )
 
 
-def _do_module_action(action_name: str, method: str, *, module: str, instance: int,
-                      dry_run: bool, confirm: bool, job: str | None) -> ModuleResult:
+def _do_module_action(
+    action_name: str,
+    method: str,
+    *,
+    module: str,
+    instance: int,
+    dry_run: bool,
+    confirm: bool,
+    job: str | None,
+) -> ModuleResult:
     job = job or current_job()
     gated = action_name == "reset"
     plan = [{"action": f"module.{action_name}", "module": module, "instance": instance}]
     if dry_run or (gated and not confirm):
         return ModuleResult(
-            outcome="dry_run", module=module, action=action_name, instance=instance, plan=plan,
+            outcome="dry_run",
+            module=module,
+            action=action_name,
+            instance=instance,
+            plan=plan,
             reason=(
                 "reset discards this module's parameters and cannot be undone by "
                 "Scouter (design 8.2); re-run with --yes / confirm=true"
@@ -377,11 +611,18 @@ def _do_module_action(action_name: str, method: str, *, module: str, instance: i
             ),
         )
     resolved = _current_image()
+    _require_job_image(job, resolved.image_id)
     dtbridge.require_darkroom()
     before_state = _module_state(resolved.path, module, instance)
     entry = journal.begin(
-        job, verb=f"module.{action_name}", image_id=resolved.image_id, path=resolved.path,
-        module=module, param="", instance=instance, before=before_state,
+        job,
+        verb=f"module.{action_name}",
+        image_id=resolved.image_id,
+        path=resolved.path,
+        module=module,
+        param="",
+        instance=instance,
+        before=before_state,
     )
     try:
         dtbridge.call(method, {"module": module, "instance": instance})
@@ -389,32 +630,77 @@ def _do_module_action(action_name: str, method: str, *, module: str, instance: i
         code = e.code if isinstance(e, ScouterError) else "error"
         journal.fail(job, entry.seq, outcome=f"error:{code}")
         raise
-    commit_result = _commit(job, resolved.image_id, strategy="auto")
+    # Should-fix 6: enable/disable can be confirmed from the XMP (the module's
+    # own `enabled` flag), so a commit that wrote nothing because the module
+    # was ALREADY in the requested state is reported honestly instead of as a
+    # commit_timeout. `reset` cannot be confirmed this way -- it discards
+    # params, and the sidecar cannot tell "reset to defaults" from "never
+    # touched" -- so its timeout is left to propagate, which is the honest
+    # answer there.
+    expected_enabled = {"enable": True, "disable": False}.get(action_name)
+
+    def _confirm_module() -> bool:
+        if expected_enabled is None:
+            return False
+        return _module_enabled(resolved.path, module, instance) is expected_enabled
+
+    committed, warnings = _commit_with_readback(
+        job,
+        resolved.image_id,
+        confirm=_confirm_module,
+        what=f"{module} ({action_name})",
+    )
     after_state = _module_state(resolved.path, module, instance)
     journal.complete(
         job, entry.seq, after={"action": action_name, "enabled": after_state["enabled"]}
     )
     return ModuleResult(
-        image_id=resolved.image_id, path=resolved.path, module=module, action=action_name,
-        instance=instance, enabled=after_state["enabled"],
-        committed=commit_result.committed, warnings=list(commit_result.warnings),
+        image_id=resolved.image_id,
+        path=resolved.path,
+        module=module,
+        action=action_name,
+        instance=instance,
+        enabled=after_state["enabled"],
+        committed=committed,
+        warnings=warnings,
     )
 
 
 @metrics.instrumented("darkroom.enable")
-def enable(module: str, *, instance: int = 0, dry_run: bool = False,
-          job: str | None = None) -> ModuleResult:
+def enable(
+    module: str, *, instance: int = 0, dry_run: bool = False, job: str | None = None
+) -> ModuleResult:
     """Enable a module. Not gated -- `reset` is the only destructive verb here."""
-    return _do_module_action("enable", "module.enable", module=module, instance=instance,
-                             dry_run=dry_run, confirm=True, job=job)
+    return _do_module_action(
+        "enable",
+        "module.enable",
+        module=module,
+        instance=instance,
+        dry_run=dry_run,
+        confirm=True,
+        job=job,
+    )
 
 
 @metrics.instrumented("darkroom.reset")
-def reset(module: str, *, instance: int = 0, confirm: bool = False,
-         dry_run: bool = False, job: str | None = None) -> ModuleResult:
+def reset(
+    module: str,
+    *,
+    instance: int = 0,
+    confirm: bool = False,
+    dry_run: bool = False,
+    job: str | None = None,
+) -> ModuleResult:
     """Reset a module to its defaults. Gated: discards params, needs `confirm`."""
-    return _do_module_action("reset", "module.reset", module=module, instance=instance,
-                             dry_run=dry_run, confirm=confirm, job=job)
+    return _do_module_action(
+        "reset",
+        "module.reset",
+        module=module,
+        instance=instance,
+        dry_run=dry_run,
+        confirm=confirm,
+        job=job,
+    )
 
 
 @metrics.instrumented("darkroom.undo_last")
@@ -433,7 +719,8 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             # actual error outcome, not "dry_run" -- there is no plan here to
             # preview, the newest write in the job simply never took effect.
             return UndoResult(
-                outcome="dry_run" if dry_run else "error", seq=failed.seq,
+                outcome="dry_run" if dry_run else "error",
+                seq=failed.seq,
                 reason=(
                     f"nothing to undo: seq {failed.seq} ({failed.verb} on "
                     f"{failed.module}.{failed.param or ''}) failed ({failed.outcome}) "
@@ -441,7 +728,8 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
                 ),
             )
         return UndoResult(
-            outcome="dry_run", reason=f"nothing to undo: journal for {job} is empty",
+            outcome="dry_run",
+            reason=f"nothing to undo: journal for {job} is empty",
         )
 
     # Blocker 6 / fix round 3, item 1: a `module.reset` entry can never be
@@ -458,19 +746,34 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
         )
         if dry_run:
             return UndoResult(
-                outcome="dry_run", image_id=entry.image_id, path=entry.path, seq=entry.seq,
+                outcome="dry_run",
+                image_id=entry.image_id,
+                path=entry.path,
+                seq=entry.seq,
                 reason=f"{reason} (this entry would be skipped, not undone)",
             )
         journal.mark_undone(job, entry.seq, note="skipped: reset is not undoable")
         raise _UnsupportedUndo(reason, detail={"seq": entry.seq, "module": entry.module})
 
-    plan = [{"action": "darkroom.undo_last", "seq": entry.seq, "verb": entry.verb,
-             "module": entry.module, "param": entry.param,
-             "restore_to": entry.before.get("value")}]
+    plan = [
+        {
+            "action": "darkroom.undo_last",
+            "seq": entry.seq,
+            "verb": entry.verb,
+            "module": entry.module,
+            "param": entry.param,
+            "restore_to": entry.before.get("value"),
+        }
+    ]
     if dry_run:
-        return UndoResult(outcome="dry_run", image_id=entry.image_id, path=entry.path,
-                          seq=entry.seq, plan=plan,
-                          reason="dry run: no action was sent to darktable")
+        return UndoResult(
+            outcome="dry_run",
+            image_id=entry.image_id,
+            path=entry.path,
+            seq=entry.seq,
+            plan=plan,
+            reason="dry run: no action was sent to darktable",
+        )
 
     # Blocker 1: verify Scouter is about to act on the image it journaled --
     # by READING, never by force-switching. `darkroom.current` has no side
@@ -484,11 +787,15 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             f"no image is loaded in the darkroom (expected image {entry.image_id})",
             detail={"expected_image_id": entry.image_id, "view": current.get("view")},
         )
+    _require_job_image(job, int(current_id))
     if int(current_id) != entry.image_id:
         raise NotInDarkroom(
             f"another image is loaded: {int(current_id)}",
-            detail={"expected_image_id": entry.image_id, "loaded_image_id": int(current_id),
-                    "view": current.get("view")},
+            detail={
+                "expected_image_id": entry.image_id,
+                "loaded_image_id": int(current_id),
+                "view": current.get("view"),
+            },
         )
     dtbridge.require_darkroom()
 
@@ -504,16 +811,24 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             verified = True
         else:
             dtbridge.call("module.disable", {"module": entry.module, "instance": entry.instance})
-            commit_result = _commit(job, entry.image_id, strategy="auto")
-            committed = commit_result.committed
-            warnings = list(commit_result.warnings)
+            committed, warnings = _commit_with_readback(
+                job,
+                entry.image_id,
+                confirm=lambda: _module_enabled(entry.path, entry.module, entry.instance) is False,
+                what=f"{entry.module} (disable)",
+            )
             verified = _module_enabled(entry.path, entry.module, entry.instance) is False
             if not verified:
                 warnings.append(
                     f"could not verify {entry.module} was disabled after undo (seq {entry.seq})"
                 )
-        undone = {"verb": entry.verb, "module": entry.module, "param": entry.param,
-                  "restored_to": None, "verified": verified}
+        undone = {
+            "verb": entry.verb,
+            "module": entry.module,
+            "param": entry.param,
+            "restored_to": None,
+            "verified": verified,
+        }
     else:
         previous = entry.before.get("value")
         if previous is None:
@@ -525,11 +840,19 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             )
         dtbridge.action(
             dtbridge.action_path(entry.module, entry.param),
-            instance=entry.instance, element="value", effect="set", value=float(previous),
+            instance=entry.instance,
+            element="value",
+            effect="set",
+            value=float(previous),
         )
-        commit_result = _commit(job, entry.image_id, strategy="auto")
-        committed = commit_result.committed
-        warnings = list(commit_result.warnings)
+        committed, warnings = _commit_with_readback(
+            job,
+            entry.image_id,
+            confirm=lambda: _close(
+                _read_value(entry.path, entry.module, entry.param, entry.instance), float(previous)
+            ),
+            what=f"{entry.module}.{entry.param} (undo)",
+        )
         # Blocker 5: verify from the XMP after the commit. `restored_to` is
         # what was actually read back, not the value that was requested.
         actual = _read_value(entry.path, entry.module, entry.param, entry.instance)
@@ -539,29 +862,47 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
                 f"could not verify the restore for seq {entry.seq}: read back {actual!r}, "
                 f"expected {previous!r}"
             )
-        undone = {"verb": entry.verb, "module": entry.module, "param": entry.param,
-                  "restored_to": actual, "verified": verified}
+        undone = {
+            "verb": entry.verb,
+            "module": entry.module,
+            "param": entry.param,
+            "restored_to": actual,
+            "verified": verified,
+        }
 
     journal.mark_undone(job, entry.seq)
     return UndoResult(
-        image_id=entry.image_id, path=entry.path, seq=entry.seq,
-        undone=undone, committed=committed, warnings=warnings,
+        image_id=entry.image_id,
+        path=entry.path,
+        seq=entry.seq,
+        undone=undone,
+        committed=committed,
+        warnings=warnings,
     )
 
 
 @metrics.instrumented("darkroom.status")
-def status(module: str | None = None, param: str | None = None, *, instance: int = 0,
-          job: str | None = None) -> StatusResult:
+def status(
+    module: str | None = None,
+    param: str | None = None,
+    *,
+    instance: int = 0,
+    job: str | None = None,
+) -> StatusResult:
     """Slider POSITIONS (normalised 0..1), never values (design 7.3)."""
     view = dtbridge.current_view()
     positions: dict[str, float | None] = {}
     nan: dict[str, bool] = {}
     if module is None:
-        return StatusResult(view=view, positions=positions, nan=nan,
-                            warnings=["no module given: only the view was queried"])
-    pairs = [(module, param)] if param else [
-        (m, p) for (m, p) in dtbridge.ACTION_PATHS if m == module
-    ]
+        return StatusResult(
+            view=view,
+            positions=positions,
+            nan=nan,
+            warnings=["no module given: only the view was queried"],
+        )
+    pairs = (
+        [(module, param)] if param else [(m, p) for (m, p) in dtbridge.ACTION_PATHS if m == module]
+    )
     for mod, par in pairs:
         path = dtbridge.action_path(mod, par)
         result = dtbridge.call("darkroom.status", {"path": path, "instance": instance})
@@ -569,15 +910,18 @@ def status(module: str | None = None, param: str | None = None, *, instance: int
         positions[key] = result.get("position")
         nan[key] = bool(result.get("nan"))
     return StatusResult(
-        view=view, positions=positions, nan=nan,
-        warnings=["positions are normalised slider positions, not parameter values; "
-                  "read values with `history read` (design 7.3)"],
+        view=view,
+        positions=positions,
+        nan=nan,
+        warnings=[
+            "positions are normalised slider positions, not parameter values; "
+            "read values with `history read` (design 7.3)"
+        ],
     )
 
 
 @metrics.instrumented("darkroom.describe_history")
-def describe_history(image: str | int | None = None, *,
-                     job: str | None = None) -> HistoryResult:
+def describe_history(image: str | int | None = None, *, job: str | None = None) -> HistoryResult:
     """The darkroom image's history, as darktable committed it.
 
     Delegates to `scouter.core.history.read` (task 8). `.__wrapped__` (falling
@@ -592,52 +936,135 @@ def describe_history(image: str | int | None = None, *,
     return read_fn(target, job=job)
 
 
-IMAGE_ARG = ArgSpec("image", "image", required=True, positional=True,
-                    help="absolute path to the raw, or a darktable image id")
-MODULE_ARG = ArgSpec("module", "str", required=True, positional=True,
-                     help="darktable module name, e.g. exposure")
-PARAM_ARG = ArgSpec("param", "str", required=True, positional=True,
-                    help="parameter name, e.g. exposure / contrast / temperature")
+IMAGE_ARG = ArgSpec(
+    "image",
+    "image",
+    required=True,
+    positional=True,
+    help="absolute path to the raw, or a darktable image id",
+)
+MODULE_ARG = ArgSpec(
+    "module", "str", required=True, positional=True, help="darktable module name, e.g. exposure"
+)
+PARAM_ARG = ArgSpec(
+    "param",
+    "str",
+    required=True,
+    positional=True,
+    help="parameter name, e.g. exposure / contrast / temperature",
+)
 INSTANCE_ARG = ArgSpec("instance", "int", default=0, help="module instance (multi_priority)")
 DRY_RUN_ARG = ArgSpec("dry_run", "bool", default=False, help="plan only, send nothing")
-COMMIT_ARG = ArgSpec("commit", "bool", default=True,
-                     help="commit history to the XMP after the write")
+COMMIT_ARG = ArgSpec(
+    "commit", "bool", default=True, help="commit history to the XMP after the write"
+)
 
 for verb in (
-    Verb(id="darkroom.open", group="darkroom", fn=open_image, args=(IMAGE_ARG,),
-         writes=False, gated=False, summary="Load an image in the darkroom."),
-    Verb(id="darkroom.set", group="darkroom", fn=set_param,
-         args=(MODULE_ARG, PARAM_ARG,
-               ArgSpec("value", "float", required=True, positional=True,
-                       help="absolute value in the slider's own unit"),
-               INSTANCE_ARG, COMMIT_ARG, DRY_RUN_ARG),
-         writes=True, gated=False,
-         summary="Set one module parameter to an absolute value."),
-    Verb(id="darkroom.nudge", group="darkroom", fn=nudge,
-         args=(MODULE_ARG, PARAM_ARG,
-               ArgSpec("steps", "int", default=1, help="steps up (+) or down (-)"),
-               INSTANCE_ARG, COMMIT_ARG, DRY_RUN_ARG),
-         writes=True, gated=False,
-         summary="Move a slider by darktable's own default step."),
-    Verb(id="darkroom.enable", group="darkroom", fn=enable,
-         args=(MODULE_ARG, INSTANCE_ARG, DRY_RUN_ARG),
-         writes=True, gated=False, summary="Enable a module."),
-    Verb(id="darkroom.reset", group="darkroom", fn=reset,
-         args=(MODULE_ARG, INSTANCE_ARG, DRY_RUN_ARG,
-               ArgSpec("confirm", "bool", default=False,
-                       help="required: reset discards this module's parameters")),
-         writes=True, gated=True, summary="Reset a module to its defaults."),
-    Verb(id="darkroom.undo_last", group="darkroom", fn=undo_last, args=(DRY_RUN_ARG,),
-         writes=True, gated=False,
-         summary="Revert the newest Scouter write in this job."),
-    Verb(id="darkroom.status", group="darkroom", fn=status,
-         args=(ArgSpec("module", "str", positional=True, help="module to query"),
-               ArgSpec("param", "str", positional=True, help="parameter to query"),
-               INSTANCE_ARG),
-         writes=False, gated=False, summary="Slider positions and the current view."),
-    Verb(id="darkroom.describe_history", group="darkroom", fn=describe_history,
-         args=(ArgSpec("image", "image", help="defaults to the darkroom image",
-                       positional=True),),
-         writes=False, gated=False, summary="The darkroom image's committed history."),
+    Verb(
+        id="darkroom.open",
+        group="darkroom",
+        fn=open_image,
+        args=(IMAGE_ARG,),
+        writes=False,
+        gated=False,
+        summary="Load an image in the darkroom.",
+    ),
+    Verb(
+        id="darkroom.set",
+        group="darkroom",
+        fn=set_param,
+        args=(
+            MODULE_ARG,
+            PARAM_ARG,
+            ArgSpec(
+                "value",
+                "float",
+                required=True,
+                positional=True,
+                help="absolute value in the slider's own unit",
+            ),
+            INSTANCE_ARG,
+            COMMIT_ARG,
+            DRY_RUN_ARG,
+        ),
+        writes=True,
+        gated=False,
+        summary="Set one module parameter to an absolute value.",
+    ),
+    Verb(
+        id="darkroom.nudge",
+        group="darkroom",
+        fn=nudge,
+        args=(
+            MODULE_ARG,
+            PARAM_ARG,
+            ArgSpec("steps", "int", default=1, help="steps up (+) or down (-)"),
+            INSTANCE_ARG,
+            COMMIT_ARG,
+            DRY_RUN_ARG,
+        ),
+        writes=True,
+        gated=False,
+        summary="Move a slider by darktable's own default step.",
+    ),
+    Verb(
+        id="darkroom.enable",
+        group="darkroom",
+        fn=enable,
+        args=(MODULE_ARG, INSTANCE_ARG, DRY_RUN_ARG),
+        writes=True,
+        gated=False,
+        summary="Enable a module.",
+    ),
+    Verb(
+        id="darkroom.reset",
+        group="darkroom",
+        fn=reset,
+        args=(
+            MODULE_ARG,
+            INSTANCE_ARG,
+            DRY_RUN_ARG,
+            ArgSpec(
+                "confirm",
+                "bool",
+                default=False,
+                help="required: reset discards this module's parameters",
+            ),
+        ),
+        writes=True,
+        gated=True,
+        summary="Reset a module to its defaults.",
+    ),
+    Verb(
+        id="darkroom.undo_last",
+        group="darkroom",
+        fn=undo_last,
+        args=(DRY_RUN_ARG,),
+        writes=True,
+        gated=False,
+        summary="Revert the newest Scouter write in this job.",
+    ),
+    Verb(
+        id="darkroom.status",
+        group="darkroom",
+        fn=status,
+        args=(
+            ArgSpec("module", "str", positional=True, help="module to query"),
+            ArgSpec("param", "str", positional=True, help="parameter to query"),
+            INSTANCE_ARG,
+        ),
+        writes=False,
+        gated=False,
+        summary="Slider positions and the current view.",
+    ),
+    Verb(
+        id="darkroom.describe_history",
+        group="darkroom",
+        fn=describe_history,
+        args=(ArgSpec("image", "image", help="defaults to the darkroom image", positional=True),),
+        writes=False,
+        gated=False,
+        summary="The darkroom image's committed history.",
+    ),
 ):
     register(verb)

@@ -11,30 +11,39 @@ file, extend it.
 from __future__ import annotations
 
 import contextlib
-from typing import Iterator
+from collections.abc import Iterator
+
+#: Placeholders `install_doubles` rewrites into paths under the CURRENT test's
+#: temp cache root (final review nit). These used to be literal `/tmp/...`
+#: paths, and `darkroom.set`'s smoke run really did write
+#: `/tmp/scouter-smoke.ORF.xmp` on the host -- a unit test must not write
+#: outside its own throwaway directory.
+SMOKE_RAW = "<smoke-raw>"
+SMOKE_OUT_DIR = "<smoke-out-dir>"
 
 SMOKE_ARGS: dict[str, dict] = {
     "metrics.summary": {"since": "1d"},
-    "darkroom.open": {"image": "/tmp/scouter-smoke.ORF"},
-    "darkroom.set": {"module": "exposure", "param": "exposure", "value": 1.0,
-                     "commit": True},    # real write path AND a real commit (see install_doubles)
-    "darkroom.nudge": {"module": "exposure", "param": "exposure", "steps": 1,
-                       "dry_run": True},
+    "darkroom.open": {"image": SMOKE_RAW},
+    "darkroom.set": {
+        "module": "exposure",
+        "param": "exposure",
+        "value": 1.0,
+        "commit": True,
+    },  # real write path AND a real commit (see install_doubles)
+    "darkroom.nudge": {"module": "exposure", "param": "exposure", "steps": 1, "dry_run": True},
     "darkroom.enable": {"module": "exposure", "dry_run": True},
-    "darkroom.reset": {"module": "exposure"},            # gated: dry run by default
+    "darkroom.reset": {"module": "exposure"},  # gated: dry run by default
     "darkroom.undo_last": {"dry_run": True},
     "darkroom.status": {"module": "exposure", "param": "exposure"},
-    "darkroom.describe_history": {"image": "/tmp/scouter-smoke.ORF"},
-    "history.read": {"image": "/tmp/scouter-smoke.ORF"},
-    "history.commit": {"image": "/tmp/scouter-smoke.ORF", "timeout_s": 0.05},
-    "scout.stats": {"image": "/tmp/scouter-smoke.ORF", "px": 64},
-    "scout.preview": {"image": "/tmp/scouter-smoke.ORF", "px": 64, "fmt": "ppm"},
-    "scout.compare": {"a": "/tmp/scouter-smoke.ORF", "b": "/tmp/scouter-smoke.ORF",
-                      "px": 64},
-    "style.extract": {"image": "/tmp/scouter-smoke.ORF", "name": "smoke", "modules": []},
-    "style.apply": {"image": "/tmp/scouter-smoke.ORF", "name": "smoke"},
-    "export.run": {"images": ["/tmp/scouter-smoke.ORF"], "preset": "preview",
-                   "out_dir": "/tmp/scouter-smoke-export"},   # out_dir overridden below
+    "darkroom.describe_history": {"image": SMOKE_RAW},
+    "history.read": {"image": SMOKE_RAW},
+    "history.commit": {"image": SMOKE_RAW, "timeout_s": 0.05},
+    "scout.stats": {"image": SMOKE_RAW, "px": 64},
+    "scout.preview": {"image": SMOKE_RAW, "px": 64, "fmt": "ppm"},
+    "scout.compare": {"a": SMOKE_RAW, "b": SMOKE_RAW, "px": 64},
+    "style.extract": {"image": SMOKE_RAW, "name": "smoke", "modules": []},
+    "style.apply": {"image": SMOKE_RAW, "name": "smoke"},
+    "export.run": {"images": [SMOKE_RAW], "preset": "preview", "out_dir": SMOKE_OUT_DIR},
 }
 
 
@@ -49,32 +58,76 @@ def install_doubles(verb_id: str) -> Iterator[dict]:
     from scouter.core import dtbridge
     from tests.scouter_fakes import FAKE_CLI_WRITES_PPM, FakeBridge, fake_cli_script
 
-    raw = "/tmp/scouter-smoke.ORF"
-    bridge = FakeBridge({
-        "darkroom.open": {"image_id": 1, "path": raw, "view": "darkroom",
-                          "opened": False, "already_open": True},
-        "darkroom.current": {"image_id": 1, "path": raw, "view": "darkroom",
-                             "source": "action_images"},
-        "image.lookup": {"found": True, "image_id": 1, "path": raw},
-        "darkroom.action": lambda p: {"nan": False, "status": p.get("value"),
-                                      "view": "darkroom", **p},
-        "darkroom.status": {"position": 0.5, "nan": False, "view": "darkroom"},
-        "module.enable": {"nan": False, "view": "darkroom"},
-        "module.disable": {"nan": False, "view": "darkroom"},
-        "module.reset": {"nan": False, "view": "darkroom"},
-        "history.commit": {"strategy_used": "sidecar_action", "ok": True,
-                           "view_after": "darkroom", "cpu_ms": 10},
-        "snapshot.take": {"taken": True, "view": "darkroom"},
-        "style.create_from_current": {"name": "smoke", "created": True,
-                                      "existing_replaced": False,
-                                      "modules_requested": 0, "modules_honoured": False},
-        "style.apply": {"name": "smoke", "mode": "append", "applied": 1,
-                        "missed": [], "errors": []},
-        "list_styles": {"styles": [], "count": 0},
-    })
+    # Everything this helper touches lives under the current test's temp cache
+    # root ($SCOUTER_CACHE, set by TempCache), never in /tmp.
+    raw_dir = paths.cache_root() / "smoke"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    raw = str(raw_dir / "scouter-smoke.ORF")
+    bridge = FakeBridge(
+        {
+            "darkroom.open": {
+                "image_id": 1,
+                "path": raw,
+                "view": "darkroom",
+                "opened": False,
+                "already_open": True,
+            },
+            "darkroom.current": {
+                "image_id": 1,
+                "path": raw,
+                "view": "darkroom",
+                "source": "action_images",
+            },
+            "image.lookup": {"found": True, "image_id": 1, "path": raw},
+            "darkroom.action": lambda p: {
+                "nan": False,
+                "status": p.get("value"),
+                "view": "darkroom",
+                **p,
+            },
+            "darkroom.status": {"position": 0.5, "nan": False, "view": "darkroom"},
+            "module.enable": {"nan": False, "view": "darkroom"},
+            "module.disable": {"nan": False, "view": "darkroom"},
+            "module.reset": {"nan": False, "view": "darkroom"},
+            "history.commit": {
+                "strategy_used": "sidecar_action",
+                "ok": True,
+                "view_after": "darkroom",
+                "cpu_ms": 10,
+            },
+            "snapshot.take": {"taken": True, "view": "darkroom"},
+            "style.create_from_current": {
+                "name": "smoke",
+                "created": True,
+                "existing_replaced": False,
+                "modules_requested": 0,
+                "modules_honoured": False,
+            },
+            "style.apply": {
+                "name": "smoke",
+                "mode": "append",
+                "applied": 1,
+                "missed": [],
+                "errors": [],
+            },
+            "list_styles": {"styles": [], "count": 0},
+        }
+    )
     dtbridge.set_bridge(bridge)
     saved_cli = os.environ.get("SCOUTER_DARKTABLE_CLI")
-    extra: dict = {}
+
+    def _real(value):
+        if value == SMOKE_RAW:
+            return raw
+        if value == SMOKE_OUT_DIR:
+            return str(paths.cache_root() / "smoke-export")
+        if isinstance(value, list):
+            return [_real(item) for item in value]
+        return value
+
+    # Every placeholder in this verb's SMOKE_ARGS, resolved against this
+    # test's own cache root. Merged OVER SMOKE_ARGS by the caller.
+    extra: dict = {k: _real(v) for k, v in SMOKE_ARGS[verb_id].items()}
     needs_cli = verb_id.startswith("scout.") or verb_id == "export.run"
     if needs_cli:
         # scout.* and export.run shell out to darktable-cli (via CLIWrapper);
@@ -85,10 +138,6 @@ def install_doubles(verb_id: str) -> Iterator[dict]:
         cli_dir.mkdir(parents=True, exist_ok=True)
         script = fake_cli_script(cli_dir, FAKE_CLI_WRITES_PPM)
         os.environ["SCOUTER_DARKTABLE_CLI"] = str(script)
-    if verb_id == "export.run":
-        # `preview` writes a .png, which the fake CLI script above matches;
-        # the out_dir lives under this test's own temp cache root.
-        extra["out_dir"] = str(paths.cache_root() / "smoke-export")
     if verb_id == "darkroom.set":
         # SMOKE_ARGS sends commit=True here: exercise the REAL history.commit
         # (task 8), not just a stubbed acknowledgement, the same trick
@@ -103,13 +152,17 @@ def install_doubles(verb_id: str) -> Iterator[dict]:
                 '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
                 '<rdf:Description rdf:about="" xmlns:darktable="http://darktable.sf.net/" '
                 'darktable:history_end="0"><darktable:history><rdf:Seq/></darktable:history>'
-                '</rdf:Description></rdf:RDF></x:xmpmeta>',
+                "</rdf:Description></rdf:RDF></x:xmpmeta>",
                 encoding="utf-8",
             )
             future = time.time() + 2
             os.utime(sidecar, (future, future))
-            return {"strategy_used": "view_bounce", "ok": True, "view_after": "darkroom",
-                    "cpu_ms": 5}
+            return {
+                "strategy_used": "view_bounce",
+                "ok": True,
+                "view_after": "darkroom",
+                "cpu_ms": 5,
+            }
 
         bridge.responses["history.commit"] = commit_response
     try:

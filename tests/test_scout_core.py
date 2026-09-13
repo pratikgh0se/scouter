@@ -22,11 +22,20 @@ class ScoutTest(unittest.TestCase):
         self.root = self.cache.start()
         self.raw = self.root / "P6281348.ORF"
         self.raw.write_bytes(b"raw")
-        dtbridge.set_bridge(FakeBridge({
-            "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-            "darkroom.open": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
-                              "opened": False, "already_open": True},
-        }))
+        dtbridge.set_bridge(
+            FakeBridge(
+                {
+                    "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+                    "darkroom.open": {
+                        "image_id": 12,
+                        "path": str(self.raw),
+                        "view": "darkroom",
+                        "opened": False,
+                        "already_open": True,
+                    },
+                }
+            )
+        )
         self._saved_cli = os.environ.get("SCOUTER_DARKTABLE_CLI")
 
     def tearDown(self) -> None:
@@ -103,7 +112,7 @@ class ScoutTest(unittest.TestCase):
         result = scout.compare(a=str(self.raw), b=str(self.raw), px=256)
         self.assertEqual(result.a["px_used"], 256)
         self.assertEqual(result.b["px_used"], 256)
-        self.assertEqual(len(result.warnings), 1)   # no px-mismatch warning
+        self.assertEqual(len(result.warnings), 1)  # no px-mismatch warning
 
     def test_compare_warns_when_px_used_differs_between_a_and_b(self) -> None:
         # Stub `stats.__wrapped__` directly rather than forcing a real budget
@@ -113,8 +122,12 @@ class ScoutTest(unittest.TestCase):
         from scouter.types import StatsResult
 
         flat_stats = {
-            "luminance_mean": 0.0, "luminance_p50": 0, "clipped_high_pct": 0.0,
-            "clipped_low_pct": 0.0, "wb_ratio_rg": 1.0, "wb_ratio_bg": 1.0,
+            "luminance_mean": 0.0,
+            "luminance_p50": 0,
+            "clipped_high_pct": 0.0,
+            "clipped_low_pct": 0.0,
+            "wb_ratio_rg": 1.0,
+            "wb_ratio_bg": 1.0,
             "sharpness": 0.0,
         }
         calls = {"n": 0}
@@ -122,8 +135,9 @@ class ScoutTest(unittest.TestCase):
         def fake_stats(image, *, px=1024, budget_s=3.0, job=None):
             calls["n"] += 1
             used = px if calls["n"] == 1 else scout.FALLBACK_PX
-            return StatsResult(image_id=12, path=str(image), px_requested=px,
-                               px_used=used, stats=dict(flat_stats))
+            return StatsResult(
+                image_id=12, path=str(image), px_requested=px, px_used=used, stats=dict(flat_stats)
+            )
 
         with mock.patch.object(scout.stats, "__wrapped__", fake_stats):
             result = scout.compare(a=str(self.raw), b=str(self.raw), px=1024)
@@ -177,8 +191,10 @@ class ScoutTest(unittest.TestCase):
 
     def test_missing_cli_binary_is_the_typed_error(self) -> None:
         os.environ.pop("SCOUTER_DARKTABLE_CLI", None)
-        with mock.patch.object(scout, "_MAC_CLI_PATH", self.root / "no-such-binary"), \
-             mock.patch("shutil.which", return_value=None):
+        with (
+            mock.patch.object(scout, "_MAC_CLI_PATH", self.root / "no-such-binary"),
+            mock.patch("shutil.which", return_value=None),
+        ):
             with self.assertRaises(scout.CliMissing) as ctx:
                 scout.cli_binary()
         self.assertEqual(ctx.exception.code, "cli_missing")
@@ -193,15 +209,15 @@ class ScoutTest(unittest.TestCase):
         self.assertFalse(first.cached)
 
         time.sleep(0.01)
-        sidecar.write_text("<b/>")          # a real edit+commit advances mtime
+        sidecar.write_text("<b/>")  # a real edit+commit advances mtime
 
         second = scout.preview(image=str(self.raw), px=64, fmt="ppm")
         self.assertEqual(first.preview_path, second.preview_path)
-        self.assertFalse(second.cached)      # re-rendered: the sidecar moved on
+        self.assertFalse(second.cached)  # re-rendered: the sidecar moved on
 
         third = scout.preview(image=str(self.raw), px=64, fmt="ppm")
         self.assertEqual(second.preview_path, third.preview_path)
-        self.assertTrue(third.cached)        # nothing changed since `second`
+        self.assertTrue(third.cached)  # nothing changed since `second`
 
     def test_preview_prunes_files_older_than_7_days(self) -> None:
         self._use_cli(FAKE_CLI_WRITES_PPM)

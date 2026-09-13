@@ -186,7 +186,8 @@ class RegistryCoverageTest(unittest.TestCase):
         self.assertTrue(verbs, "no verbs registered")
         missing = sorted(set(verbs) - set(SMOKE_ARGS))
         self.assertEqual(
-            missing, [],
+            missing,
+            [],
             "every registered verb needs smoke args in tests/scouter_smoke_args.py "
             f"so this coverage test can call it; missing: {missing}",
         )
@@ -203,7 +204,8 @@ class RegistryCoverageTest(unittest.TestCase):
                         pass
                 after = self.cache.events()
                 self.assertEqual(
-                    len(after) - before, 1,
+                    len(after) - before,
+                    1,
                     f"{verb_id} emitted {len(after) - before} events, expected exactly 1",
                 )
                 self.assertEqual(after[-1]["verb"], verb_id)
@@ -242,29 +244,46 @@ class WriteVerbSingleEventTest(unittest.TestCase):
         text = self.sidecar.read_text()
 
         def fake_commit(_params: dict) -> dict:
-            time.sleep(0.01)                # guarantee the mtime tick
-            self.sidecar.write_text(text)   # a real rewrite, like darktable's own
-            return {"strategy_used": "sidecar_action", "ok": True,
-                    "view_after": "darkroom", "cpu_ms": 5}
+            time.sleep(0.01)  # guarantee the mtime tick
+            self.sidecar.write_text(text)  # a real rewrite, like darktable's own
+            return {
+                "strategy_used": "sidecar_action",
+                "ok": True,
+                "view_after": "darkroom",
+                "cpu_ms": 5,
+            }
 
-        dtbridge.set_bridge(FakeBridge({
-            "darkroom.open": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
-                              "opened": False, "already_open": True},
-            "darkroom.current": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
-                                 "source": "action_images"},
-            "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-            "darkroom.action": lambda p: {"nan": False, "view": "darkroom", **p},
-            "history.commit": fake_commit,
-        }))
+        dtbridge.set_bridge(
+            FakeBridge(
+                {
+                    "darkroom.open": {
+                        "image_id": 12,
+                        "path": str(self.raw),
+                        "view": "darkroom",
+                        "opened": False,
+                        "already_open": True,
+                    },
+                    "darkroom.current": {
+                        "image_id": 12,
+                        "path": str(self.raw),
+                        "view": "darkroom",
+                        "source": "action_images",
+                    },
+                    "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+                    "darkroom.action": lambda p: {"nan": False, "view": "darkroom", **p},
+                    "history.commit": fake_commit,
+                }
+            )
+        )
 
         before = len(self.cache.events())
-        result = darkroom.set_param("exposure", "exposure", 1.2, commit=True,
-                                    job="job-test")
+        result = darkroom.set_param("exposure", "exposure", 1.2, commit=True, job="job-test")
         after = self.cache.events()
 
         self.assertTrue(result.committed)
         self.assertEqual(
-            len(after) - before, 1,
+            len(after) - before,
+            1,
             f"darkroom.set with commit=True emitted {len(after) - before} events, "
             "expected exactly 1 (history.commit must run un-instrumented, via "
             "`.__wrapped__`, when called from another core verb)",

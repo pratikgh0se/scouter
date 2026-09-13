@@ -13,7 +13,7 @@ import time
 
 from scouter import metrics
 from scouter.core import dtbridge, xmp
-from scouter.errors import CommitTimeout
+from scouter.errors import CommitTimeout, NotInDarkroom
 from scouter.registry import ArgSpec, Verb, register
 from scouter.types import CommitResult, HistoryResult
 
@@ -36,7 +36,9 @@ def read(image: str | int, *, job: str | None = None) -> HistoryResult:
         text, mtime = xmp.read_sidecar(resolved.path)
     except FileNotFoundError:
         return HistoryResult(
-            image_id=resolved.image_id, path=resolved.path, source="xmp",
+            image_id=resolved.image_id,
+            path=resolved.path,
+            source="xmp",
             confirmed=False,
             warnings=[
                 f"no sidecar at {resolved.xmp_path}: darktable has not committed this "
@@ -57,11 +59,17 @@ def read(image: str | int, *, job: str | None = None) -> HistoryResult:
             "params returned as opaque hex (no verified layout): " + ", ".join(undecoded)
         )
     return HistoryResult(
-        image_id=resolved.image_id, path=resolved.path,
-        history_end=parsed.history_end, xmp_version=parsed.xmp_version,
-        iop_order_version=parsed.iop_order_version, current_hash=parsed.current_hash,
-        xmp_mtime=mtime, entries=parsed.entries, source="xmp",
-        confirmed=parsed.well_formed, warnings=warnings,
+        image_id=resolved.image_id,
+        path=resolved.path,
+        history_end=parsed.history_end,
+        xmp_version=parsed.xmp_version,
+        iop_order_version=parsed.iop_order_version,
+        current_hash=parsed.current_hash,
+        xmp_mtime=mtime,
+        entries=parsed.entries,
+        source="xmp",
+        confirmed=parsed.well_formed,
+        warnings=warnings,
     )
 
 
@@ -81,11 +89,18 @@ def _sidecar_signature(sidecar) -> tuple[int, int]:
 
 
 @metrics.instrumented("history.commit")
-def commit(image: str | int | None = None, *, timeout_s: float = 5.0,
-           strategy: str = "auto", job: str | None = None) -> CommitResult:
+def commit(
+    image: str | int | None = None,
+    *,
+    timeout_s: float = 5.0,
+    strategy: str = "auto",
+    job: str | None = None,
+) -> CommitResult:
     """Make darktable write this image's history to its sidecar, then verify."""
     target = image if image is not None else _darkroom_image()
-    resolved = dtbridge.resolve_image(target)
+    # A writer, so an unknown path may be imported (that is `darkroom.open`'s
+    # documented job); reads below never pass `may_import`.
+    resolved = dtbridge.resolve_image(target, may_import=True)
     sidecar = xmp.sidecar_path(resolved.path)
     before_ns, before_size = _sidecar_signature(sidecar)
 
@@ -113,10 +128,14 @@ def commit(image: str | int | None = None, *, timeout_s: float = 5.0,
                 "`darkroom.open`"
             )
         return CommitResult(
-            image_id=resolved.image_id, path=resolved.path,
-            strategy_used=strategy_used, committed=True, view_after=view_after,
+            image_id=resolved.image_id,
+            path=resolved.path,
+            strategy_used=strategy_used,
+            committed=True,
+            view_after=view_after,
             ms=int((time.monotonic() - started) * 1000),
-            xmp_mtime=sidecar.stat().st_mtime, warnings=warnings,
+            xmp_mtime=sidecar.stat().st_mtime,
+            warnings=warnings,
         )
 
     deadline = started + timeout_s
@@ -136,30 +155,71 @@ def commit(image: str | int | None = None, *, timeout_s: float = 5.0,
     raise CommitTimeout(
         f"darktable did not write {sidecar} within {timeout_s:g}s using the "
         f"{strategy_used} strategy",
-        detail={"strategy_used": strategy_used, "image_id": resolved.image_id,
-                "xmp": str(sidecar), "ok": ok, "view_after": view_after,
-                "ms": int((time.monotonic() - started) * 1000),
-                "bridge_detail": result.get("detail")},
+        detail={
+            "strategy_used": strategy_used,
+            "image_id": resolved.image_id,
+            "xmp": str(sidecar),
+            "ok": ok,
+            "view_after": view_after,
+            "ms": int((time.monotonic() - started) * 1000),
+            "bridge_detail": result.get("detail"),
+        },
     )
 
 
 def _darkroom_image() -> int:
-    return int(dtbridge.call("darkroom.open", {})["image_id"])
+    """The darkroom's loaded image id, via the read-only `darkroom.current`.
+
+    Never `darkroom.open {}` (final review, blocker 1): that method LOADS an
+    image and errors outright when given nothing to load, so a no-argument
+    `history.commit` was inoperable against the real plugin -- it could only
+    ever raise. `darkroom.current` is the bridge's own read-only report of
+    what is loaded, and is what `core.darkroom` already uses.
+    """
+    result = dtbridge.call("darkroom.current", {})
+    image_id = result.get("image_id")
+    if image_id is None:
+        raise NotInDarkroom(
+            "no image is loaded in the darkroom, so there is nothing to commit "
+            f"(view is {result.get('view', 'unknown')}); pass an image explicitly",
+            detail={"view": result.get("view")},
+        )
+    return int(image_id)
 
 
 for verb in (
-    Verb(id="history.read", group="history", fn=read,
-         args=(ArgSpec("image", "image", required=True, positional=True,
-                       help="path or image id"),),
-         writes=False, gated=False, summary="Read the image's committed history."),
-    Verb(id="history.commit", group="history", fn=commit,
-         args=(ArgSpec("image", "image", positional=True,
-                       help="path or image id; defaults to the darkroom image"),
-               ArgSpec("timeout_s", "float", default=5.0, help="seconds to wait"),
-               ArgSpec("strategy", "str", default="auto",
-                       choices=("auto", "sidecar_action", "view_bounce"),
-                       help="commit trigger; auto picks the cheapest that works")),
-         writes=True, gated=False,
-         summary="Make darktable write history to the XMP, and verify it."),
+    Verb(
+        id="history.read",
+        group="history",
+        fn=read,
+        args=(ArgSpec("image", "image", required=True, positional=True, help="path or image id"),),
+        writes=False,
+        gated=False,
+        summary="Read the image's committed history.",
+    ),
+    Verb(
+        id="history.commit",
+        group="history",
+        fn=commit,
+        args=(
+            ArgSpec(
+                "image",
+                "image",
+                positional=True,
+                help="path or image id; defaults to the darkroom image",
+            ),
+            ArgSpec("timeout_s", "float", default=5.0, help="seconds to wait"),
+            ArgSpec(
+                "strategy",
+                "str",
+                default="auto",
+                choices=("auto", "sidecar_action", "view_bounce"),
+                help="commit trigger; auto picks the cheapest that works",
+            ),
+        ),
+        writes=True,
+        gated=False,
+        summary="Make darktable write history to the XMP, and verify it.",
+    ),
 ):
     register(verb)

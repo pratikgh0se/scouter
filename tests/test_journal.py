@@ -15,9 +15,15 @@ class JournalTest(unittest.TestCase):
 
     def _record(self, value: float, previous: float | None) -> journal.Entry:
         return journal.record(
-            "job-test", verb="darkroom.set", image_id=12, path="/a/x.ORF",
-            module="exposure", param="exposure", instance=0,
-            before={"source": "xmp", "value": previous}, after={"value": value},
+            "job-test",
+            verb="darkroom.set",
+            image_id=12,
+            path="/a/x.ORF",
+            module="exposure",
+            param="exposure",
+            instance=0,
+            before={"source": "xmp", "value": previous},
+            after={"value": value},
         )
 
     def test_seq_increments_and_latest_open_is_the_newest(self) -> None:
@@ -48,8 +54,13 @@ class JournalTest(unittest.TestCase):
 
     def test_begin_leaves_after_null_until_complete(self) -> None:
         entry = journal.begin(
-            "job-test", verb="darkroom.set", image_id=12, path="/a/x.ORF",
-            module="exposure", param="exposure", instance=0,
+            "job-test",
+            verb="darkroom.set",
+            image_id=12,
+            path="/a/x.ORF",
+            module="exposure",
+            param="exposure",
+            instance=0,
             before={"source": "xmp", "value": 0.7},
         )
         self.assertIsNone(journal.read_all("job-test")[0].after)
@@ -58,8 +69,13 @@ class JournalTest(unittest.TestCase):
 
     def test_fail_sets_outcome_and_leaves_after_null(self) -> None:
         entry = journal.begin(
-            "job-test", verb="darkroom.set", image_id=12, path="/a/x.ORF",
-            module="exposure", param="exposure", instance=0,
+            "job-test",
+            verb="darkroom.set",
+            image_id=12,
+            path="/a/x.ORF",
+            module="exposure",
+            param="exposure",
+            instance=0,
             before={"source": "xmp", "value": 0.7},
         )
         journal.fail("job-test", entry.seq, outcome="error:not_in_darkroom")
@@ -104,32 +120,55 @@ class JournalTest(unittest.TestCase):
         self.assertFalse(path.exists())
         self._record(0.7, None)
         journal.record(
-            "job-fresh", verb="darkroom.set", image_id=1, path="/a/y.ORF",
-            module="exposure", param="exposure", instance=0,
-            before={"source": "xmp", "value": None}, after={"value": 1.0},
+            "job-fresh",
+            verb="darkroom.set",
+            image_id=1,
+            path="/a/y.ORF",
+            module="exposure",
+            param="exposure",
+            instance=0,
+            before={"source": "xmp", "value": None},
+            after={"value": 1.0},
         )
         self.assertTrue(path.exists())
         self.assertTrue(path.parent.is_dir())
         self.assertEqual(len(journal.read_all("job-fresh")), 1)
         # A second append to the SAME (now-existing) job must not error either.
         journal.record(
-            "job-fresh", verb="darkroom.set", image_id=1, path="/a/y.ORF",
-            module="exposure", param="exposure", instance=0,
-            before={"source": "xmp", "value": 1.0}, after={"value": 2.0},
+            "job-fresh",
+            verb="darkroom.set",
+            image_id=1,
+            path="/a/y.ORF",
+            module="exposure",
+            param="exposure",
+            instance=0,
+            before={"source": "xmp", "value": 1.0},
+            after={"value": 2.0},
         )
         self.assertEqual(len(journal.read_all("job-fresh")), 2)
 
     def test_begin_records_the_commit_flag(self) -> None:
         journal.begin(
-            "job-test", verb="darkroom.set", image_id=12, path="/a/x.ORF",
-            module="exposure", param="exposure", instance=0,
-            before={"source": "xmp", "value": 0.7}, commit=False,
+            "job-test",
+            verb="darkroom.set",
+            image_id=12,
+            path="/a/x.ORF",
+            module="exposure",
+            param="exposure",
+            instance=0,
+            before={"source": "xmp", "value": 0.7},
+            commit=False,
         )
         self.assertFalse(journal.read_all("job-test")[0].commit)
         # `begin` without `commit` defaults to True.
         journal.begin(
-            "job-test", verb="darkroom.set", image_id=12, path="/a/x.ORF",
-            module="exposure", param="exposure", instance=0,
+            "job-test",
+            verb="darkroom.set",
+            image_id=12,
+            path="/a/x.ORF",
+            module="exposure",
+            param="exposure",
+            instance=0,
             before={"source": "xmp", "value": 1.0},
         )
         self.assertTrue(journal.read_all("job-test")[1].commit)
@@ -137,8 +176,13 @@ class JournalTest(unittest.TestCase):
     def test_latest_open_skips_a_failed_entry(self) -> None:
         self._record(0.7, None)
         entry = journal.begin(
-            "job-test", verb="darkroom.set", image_id=12, path="/a/x.ORF",
-            module="exposure", param="exposure", instance=0,
+            "job-test",
+            verb="darkroom.set",
+            image_id=12,
+            path="/a/x.ORF",
+            module="exposure",
+            param="exposure",
+            instance=0,
             before={"source": "xmp", "value": 1.5},
         )
         journal.fail("job-test", entry.seq, outcome="error:not_in_darkroom")
@@ -148,8 +192,13 @@ class JournalTest(unittest.TestCase):
 
     def test_latest_failed_finds_the_failed_entry_the_open_one_skips(self) -> None:
         entry = journal.begin(
-            "job-test", verb="darkroom.set", image_id=12, path="/a/x.ORF",
-            module="exposure", param="exposure", instance=0,
+            "job-test",
+            verb="darkroom.set",
+            image_id=12,
+            path="/a/x.ORF",
+            module="exposure",
+            param="exposure",
+            instance=0,
             before={"source": "xmp", "value": 0.7},
         )
         journal.fail("job-test", entry.seq, outcome="error:not_in_darkroom")

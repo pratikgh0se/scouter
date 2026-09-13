@@ -18,7 +18,7 @@ from mcp.types import (
     TextContent,
 )
 
-from scouter import registry
+from scouter import paths, registry
 from scouter.errors import ScouterError
 from scouter.mcp import schemas
 
@@ -68,6 +68,12 @@ class ScouterServer:
                 sort_keys=True,
             )
         try:
+            # An agent can pass `job` even though no tool schema advertises it,
+            # and a job id becomes a file name under the cache root -- so it is
+            # validated here as well as in `registry.call`, before anything
+            # opens a file with it.
+            if arguments.get("job"):
+                paths.validate_job(arguments["job"])
             envelope = registry.call(verb_id, "mcp", **arguments)
         except ScouterError as e:
             # Defensive: registry.call already catches ScouterError raised by

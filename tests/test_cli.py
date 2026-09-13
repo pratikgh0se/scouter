@@ -4,9 +4,10 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 from scouter.cli.main import build_parser, main
 from tests.scouter_fakes import FakeBridge, TempCache
@@ -37,9 +38,7 @@ class ParserTest(unittest.TestCase):
 
         for verb in registry.load_verbs().values():
             with self.subTest(verb=verb.id):
-                args = self.parser.parse_args(
-                    [verb.group, verb.cli_command, *_min_args(verb)]
-                )
+                args = self.parser.parse_args([verb.group, verb.cli_command, *_min_args(verb)])
                 self.assertEqual(args._verb, verb.id)
 
     def test_dry_run_and_yes_spellings(self) -> None:
@@ -99,14 +98,27 @@ class ExitCodeTest(unittest.TestCase):
         from scouter.core import dtbridge
 
         raw = str(self.root / "hero.ORF")
-        dtbridge.set_bridge(FakeBridge({
-            "view.current": {"view": "lighttable"},
-            "image.lookup": {"found": True, "image_id": 1, "path": raw},
-            "darkroom.open": {"image_id": 1, "path": raw, "view": "lighttable",
-                              "opened": False, "already_open": False},
-            "darkroom.current": {"image_id": 1, "path": raw, "view": "lighttable",
-                                 "source": "action_images"},
-        }))
+        dtbridge.set_bridge(
+            FakeBridge(
+                {
+                    "view.current": {"view": "lighttable"},
+                    "image.lookup": {"found": True, "image_id": 1, "path": raw},
+                    "darkroom.open": {
+                        "image_id": 1,
+                        "path": raw,
+                        "view": "lighttable",
+                        "opened": False,
+                        "already_open": False,
+                    },
+                    "darkroom.current": {
+                        "image_id": 1,
+                        "path": raw,
+                        "view": "lighttable",
+                        "source": "action_images",
+                    },
+                }
+            )
+        )
         code = main(["darkroom", "set", "exposure", "exposure", "1.5"])
         self.assertEqual(code, 4)
 
@@ -114,11 +126,20 @@ class ExitCodeTest(unittest.TestCase):
         from scouter.core import dtbridge
 
         raw = str(self.root / "hero.ORF")
-        dtbridge.set_bridge(FakeBridge({
-            "image.lookup": {"found": True, "image_id": 1, "path": raw},
-            "darkroom.open": {"image_id": 1, "path": raw, "view": "darkroom",
-                              "opened": False, "already_open": True},
-        }))
+        dtbridge.set_bridge(
+            FakeBridge(
+                {
+                    "image.lookup": {"found": True, "image_id": 1, "path": raw},
+                    "darkroom.open": {
+                        "image_id": 1,
+                        "path": raw,
+                        "view": "darkroom",
+                        "opened": False,
+                        "already_open": True,
+                    },
+                }
+            )
+        )
         code = main(["darkroom", "reset", "exposure"])
         self.assertEqual(code, 5)
 
@@ -128,7 +149,12 @@ class UnhandledErrorTest(unittest.TestCase):
     exit code, even for a bug in a verb's own fn."""
 
     def setUp(self) -> None:
-        os.environ.setdefault("SCOUTER_CACHE", "/tmp/scouter-cli-unhandled-test")
+        # A throwaway cache root, restored afterwards: a unit test must not
+        # write to /tmp (or to the developer's real ~/.cache/scouter), which
+        # `setdefault("/tmp/...")` used to do (final review nit).
+        self.cache = TempCache()
+        self.cache.start()
+        self.addCleanup(self.cache.stop)
 
     def test_an_unexpected_exception_becomes_error_json_and_exit_1(self) -> None:
         import io
@@ -164,21 +190,37 @@ class UnhandledErrorTest(unittest.TestCase):
 
 
 class SubprocessTest(unittest.TestCase):
+    """The real CLI in a real subprocess. Its $SCOUTER_CACHE is a temp dir, so
+    these runs never touch /tmp or the developer's own cache."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="scouter-cli-test-")
+        self.tmp = Path(self._tmpdir.name)
+        self.addCleanup(self._tmpdir.cleanup)
+
     def test_stdout_is_exactly_one_json_object(self) -> None:
-        env = dict(os.environ, SCOUTER_CACHE="/tmp/scouter-cli-test")
+        env = dict(os.environ, SCOUTER_CACHE=str(self.tmp / "doctor-cache"))
         proc = subprocess.run(
             [sys.executable, "-m", "scouter", "doctor"],
-            cwd=REPO, capture_output=True, text=True, env=env, timeout=60,
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
         )
         payload = json.loads(proc.stdout)
         self.assertEqual(payload["verb"], "doctor")
         self.assertIn("cache_root", payload)
 
     def test_metrics_summary_runs_with_no_darktable(self) -> None:
-        env = dict(os.environ, SCOUTER_CACHE="/tmp/scouter-cli-test2")
+        env = dict(os.environ, SCOUTER_CACHE=str(self.tmp / "metrics-cache"))
         proc = subprocess.run(
             [sys.executable, "-m", "scouter", "metrics", "summary", "--since", "1d"],
-            cwd=REPO, capture_output=True, text=True, env=env, timeout=60,
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         payload = json.loads(proc.stdout)

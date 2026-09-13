@@ -81,6 +81,14 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+# N818 wants every exception class to end in "Error". Scouter's error classes
+# are named by the phase 1 spec (section 9's table: BridgeTimeout, WrongView,
+# NotInDarkroom, CliWroteNothing, DbLocked, StylePartial, CommitTimeout) and
+# their names appear in the spec, the README and the audit log's `code`
+# mapping. Renaming them to satisfy a style rule would put the code out of
+# step with its own contract, so the rule is switched off deliberately rather
+# than suppressed line by line.
+ignore = ["N818"]
 
 [tool.mypy]
 python_version = "3.10"
