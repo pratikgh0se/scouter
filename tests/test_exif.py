@@ -1,0 +1,161 @@
+"""Tests for `scouter.core.exif`.
+
+`tests/fixtures/exif-orf-header.bin` is a 64 KiB byte slice of the head of
+Pratik's own P6281348.ORF (a real Olympus E-M10 Mark III raw), kept so the
+reader is tested against a real camera's header and not a synthetic one.
+"""
+
+from __future__ import annotations
+
+import struct
+from pathlib import Path
+
+import pytest
+
+from scouter.config import Config
+from scouter.core import exif
+from scouter.errors import ExifUnreadable
+
+FIXTURE = Path(__file__).parent / "fixtures" / "exif-orf-header.bin"
+
+
+def _build_header(endian_bytes: bytes, endian: str, magic: int, make: str, model: str) -> bytes:
+    """A synthetic single-IFD TIFF header: byte order, magic, IFD0 offset, then
+    IFD0 with Make and Model as ASCII values living past the 12-byte entry."""
+    ifd0_offset = 8
+    make_bytes = make.encode("ascii") + b"\x00"
+    model_bytes = model.encode("ascii") + b"\x00"
+
+    entries = []
+
+    # two entries: MAKE, MODEL, both ASCII (type 2), values stored after the IFD.
+    num_entries = 2
+    ifd_size = 2 + num_entries * 12 + 4  # count + entries + next-ifd pointer
+    values_offset = ifd0_offset + ifd_size
+
+    make_offset = values_offset
+    model_offset = make_offset + len(make_bytes)
+
+    entries.append(struct.pack(endian + "HHI", exif.MAKE, 2, len(make_bytes)))
+    entries.append(struct.pack(endian + "I", make_offset))
+    entries.append(struct.pack(endian + "HHI", exif.MODEL, 2, len(model_bytes)))
+    entries.append(struct.pack(endian + "I", model_offset))
+
+    header = endian_bytes
+    header += struct.pack(endian + "H", magic)
+    header += struct.pack(endian + "I", ifd0_offset)
+    header += struct.pack(endian + "H", num_entries)
+    header += entries[0] + entries[1]
+    header += entries[2] + entries[3]
+    header += struct.pack(endian + "I", 0)  # next IFD offset
+    header += make_bytes + model_bytes
+    return header
+
+
+def test_real_orf_header():
+    tags = exif.read_tags(FIXTURE)
+    assert tags.byte_order == "II"
+    assert tags.magic == 20306
+    assert tags.make == "OLYMPUS CORPORATION"
+    assert tags.model == "E-M10 Mark III"
+    assert tags.captured_at == "2026-06-28 15:49:28"
+    assert tags.exposure_time == 0.02
+    assert tags.source == "ifd0+exififd"
+
+
+def test_magic_42_accepted():
+    header = _build_header(b"II", "<", 42, "ACME", "X100")
+    tmp = FIXTURE.parent / "_tmp_magic42.bin"
+    tmp.write_bytes(header)
+    try:
+        tags = exif.read_tags(tmp)
+        assert tags.magic == 42
+        assert tags.make == "ACME"
+        assert tags.model == "X100"
+    finally:
+        tmp.unlink()
+
+
+def test_big_endian():
+    header = _build_header(b"MM", ">", 42, "ACME", "X100")
+    tmp = FIXTURE.parent / "_tmp_bigendian.bin"
+    tmp.write_bytes(header)
+    try:
+        tags = exif.read_tags(tmp)
+        assert tags.byte_order == "MM"
+        assert tags.magic == 42
+        assert tags.make == "ACME"
+        assert tags.model == "X100"
+    finally:
+        tmp.unlink()
+
+
+def test_unknown_magic_refused():
+    header = _build_header(b"II", "<", 1234, "ACME", "X100")
+    tmp = FIXTURE.parent / "_tmp_badmagic.bin"
+    tmp.write_bytes(header)
+    try:
+        with pytest.raises(ExifUnreadable) as exc:
+            exif.read_tags(tmp)
+        assert exc.value.detail["magic"] == 1234
+    finally:
+        tmp.unlink()
+
+
+def test_truncated_header_degrades():
+    tmp = FIXTURE.parent / "_tmp_truncated.bin"
+    tmp.write_bytes(FIXTURE.read_bytes()[:64])
+    try:
+        tags = exif.read_tags(tmp)
+        assert tags.source == "none"
+        assert tags.model is None
+    finally:
+        tmp.unlink()
+
+
+def test_value_past_the_limit_is_none_not_a_guess():
+    tags = exif.read_tags(FIXTURE, limit=512)
+    assert tags.model is None
+
+
+def test_camera_slug_mapping_and_fallback():
+    cfg = Config(cameras=(("E-M10 Mark III", "em10iii"),))
+    mapped_tags = exif.ExifTags(byte_order="II", magic=20306, model="E-M10 Mark III")
+    assert exif.camera_slug(mapped_tags, cfg) == "em10iii"
+
+    empty_cfg = Config()
+    unmapped_tags = exif.ExifTags(byte_order="II", magic=20306, model="E-M10 Mark III")
+    assert exif.camera_slug(unmapped_tags, empty_cfg) == "em10markiii"
+
+    no_model_tags = exif.ExifTags(byte_order="II", magic=20306, model=None)
+    with pytest.raises(ExifUnreadable):
+        exif.camera_slug(no_model_tags, empty_cfg)
+
+
+def test_capture_key_orders_missing_time_last():
+    with_time = exif.ExifTags(
+        byte_order="II", magic=20306, captured_at="2026-06-28 15:49:28", subsec=0
+    )
+    without_time = exif.ExifTags(byte_order="II", magic=20306, captured_at=None)
+    key_with = exif.capture_key(with_time, "a.orf")
+    key_without = exif.capture_key(without_time, "b.orf")
+    assert sorted([key_without, key_with]) == [key_with, key_without]
+
+
+def test_datetime_offsets_round_trip():
+    data = bytearray(FIXTURE.read_bytes())
+    offsets = exif.datetime_offsets(FIXTURE)
+    assert len(offsets) >= 1
+
+    new_time = b"2030:01:02 03:04:05\x00"
+    for offset, length in offsets:
+        assert length == len(new_time)
+        data[offset : offset + length] = new_time
+
+    tmp = FIXTURE.parent / "_tmp_patched.bin"
+    tmp.write_bytes(bytes(data))
+    try:
+        tags = exif.read_tags(tmp)
+        assert tags.captured_at == "2030-01-02 03:04:05"
+    finally:
+        tmp.unlink()
