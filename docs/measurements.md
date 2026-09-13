@@ -32,3 +32,61 @@ Written by `tests/test_commit_trigger_host.py` (task 1). Host: this Mac, darktab
     {"probe": "c3_view_bounce_cpu", "value": 1, "ms": 241, "note": "lighttable then darkroom (CPU time via os.clock, not wall clock)"}
     {"probe": "view_after_c3", "value": "darkroom", "ms": 0, "note": null}
     {"probe": "done"}
+
+## Task 12 fix round 1: view switches from the worker coroutine (2026-09-14)
+
+Host: this Mac (Apple M4), darktable 5.4.1, Lua API 9.6.0, real
+`~/.config/darktable`, `P6281348.ORF`. Probes:
+`spike/scouter_view_switch_probe.lua`, `spike/scouter_sidecar_probe.lua`,
+`spike/scouter_sidecar_probe2.lua`, plus a heartbeat-instrumented copy of the
+plugin (worker loop writes `~/.cache/darktable-mcp/heartbeat` every tick).
+
+### View switching, measured from inside a `dt.control.dispatch` coroutine
+
+- `dt.gui.current_view(v)` is **asynchronous**. Reading the view immediately
+  after the call returns the OLD view: leaving the darkroom still reported
+  `darkroom` at 0 ms, then `lighttable` after 150 ms of yielding.
+- The switch **does land** from the worker coroutine, reliably and fast:
+  darkroom -> lighttable 150 ms, lighttable -> darkroom **50 ms**. "Coroutine
+  GUI mutations get silently dropped" is false.
+- `dt.gui.views.darkroom.display_image(image)` called **from the lighttable**
+  does not switch the view at all: `pcall` ok=true, view stayed `lighttable`
+  for the full 10 s budget, twice. From **inside** the darkroom the same call
+  works and swaps the loaded image.
+- `dt.gui.views.darkroom.display_image()` (no argument, the documented
+  *getter*) **deadlocks the worker coroutine permanently**. Heartbeat froze at
+  "display_image getter -- about to call" and never advanced: not in 4 s, not
+  in 72 s. `pcall` does not help -- it is a block, not an error. Every later
+  bridge request then times out behind it.
+
+### Darkroom readiness
+
+- Task 12's 25 s blind settle was a misdiagnosis of the deadlock above. The
+  pipe itself answers a real `dt.gui.action` on the **first attempt, 0 ms**
+  after `view.current` first reports `darkroom`.
+- Replaced by a real readiness check (poll `darkroom.current` until it reports
+  a loaded image). Measured: **0.12-0.17 s**, four runs.
+
+### Commit
+
+- The view bounce writes the sidecar only when the history has actually
+  **changed**. Setting a slider to the value it already holds adds no history
+  item, so nothing is written -- correctly. `darkroom.set` resolves that by
+  reading the value back from the XMP.
+- No Lua API or action path writes a sidecar directly: every "write sidecar
+  files" spelling returns nan from the lighttable (where that panel lives) as
+  well as from the darkroom; there is no `dt.database.write_*`; and
+  `dt.gui.libs.image` exposes no method.
+- `dt.preferences.write("darktable", "write_sidecar_files", ...)` does **not**
+  reach darktable's core preference: it creates `lua/darktable/write_sidecar_files`
+  in darktablerc and leaves the core setting (`on import`) untouched. It is
+  inert and was removed.
+- `history.commit` latency, verified against the sidecar on disk:
+  **765 / 770 / 781 / 1305 ms** (four runs).
+- `darkroom.set` with a value the XMP already carried (the repeat-run case):
+  5.5-5.7 s, which is the two bounces plus their sidecar waits before the
+  readback resolves it. With a value that really moves: ~1.8 s.
+- `darkroom.undo_last` (set + commit + XMP verification): 1106-1801 ms.
+- Scouter loop at 1024 px, with a live darktable session in the same
+  session: **2789 / 2829 / 2832 / 2948 / 3112 ms** (budget 3000 ms) -- the
+  3112 ms run failed the budget assertion. Marginal on this host under load.

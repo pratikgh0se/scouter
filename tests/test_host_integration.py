@@ -72,6 +72,9 @@ class HeroEditIntegrationTest(unittest.TestCase):
 
     maxDiff = None
     proc: subprocess.Popen[bytes] | None = None
+    #: Seconds between `view.current` first reporting "darkroom" and the bridge
+    #: confirming an image is loaded. Measured, not assumed.
+    readiness_s: float | None = None
 
     # Cleanup bookkeeping: this machine had no luarc and no lua/ dir before
     # this test suite ever ran (task brief context). We install into the
@@ -103,6 +106,16 @@ class HeroEditIntegrationTest(unittest.TestCase):
             with luarc.open("a") as fh:
                 fh.write(line)
 
+        # ONE job for the whole scripted conversation. `darkroom.undo_last`
+        # undoes the newest write in the CURRENT job's journal, and
+        # `scouter.paths.current_job()` derives a fresh id per process-second
+        # unless $SCOUTER_JOB pins one -- so without this every registry.call
+        # here would journal into its own job and undo_last would correctly
+        # report "nothing to undo: journal is empty". A conversation is one
+        # job; step 9 already assumes $SCOUTER_JOB is set.
+        cls._job_before = os.environ.get("SCOUTER_JOB")
+        os.environ["SCOUTER_JOB"] = f"job-hostint-{os.getpid()}-{int(time.time())}"
+
         cls.proc = subprocess.Popen(
             [str(DARKTABLE), str(HERO)],
             stdout=subprocess.DEVNULL,
@@ -127,28 +140,55 @@ class HeroEditIntegrationTest(unittest.TestCase):
             time.sleep(1.0)
 
         if reached_darkroom:
-            # Host finding (task 12, this Mac/M4, darktable 5.4.1): `view.
-            # current` flips to "darkroom" well before the pixel pipeline has
-            # actually finished its first full-size render of a 20 MP raw.
-            # Issuing bridge calls in that window -- even lightweight,
-            # side-effect-free ones like `darkroom.current` -- gets no
-            # response at all for the rest of that window (dt.control.dispatch
-            # is cooperative with darktable's own busy main thread, so the
-            # worker coroutine simply doesn't run until the render settles).
-            # Measured directly against this bridge (bypassing pytest) with
-            # P6281348.ORF: a single call issued immediately after "darkroom"
-            # times out at its full 30s budget every time; the same call after
-            # a 25s settle answers in under 1s. A blind settle sleep here (no
-            # bridge traffic) is deliberate -- polling during the busy window
-            # just queues more abandoned requests behind the one that matters.
-            time.sleep(25.0)
-            return
+            # A REAL readiness check, replacing task 12's blind 25s settle.
+            #
+            # That settle was a misdiagnosis. Task 12 round 1 re-measured the
+            # same window from inside a dt.control.dispatch coroutine
+            # (spike/scouter_view_switch_probe.lua) and the darkroom pipe
+            # answered a real `dt.gui.action` on the FIRST attempt, 0ms after
+            # `view.current` first said "darkroom" -- so there is nothing to
+            # sleep off. What actually failed in task 12 was the commit, for
+            # an unrelated reason (write_sidecar_files; see the plugin's
+            # comment block).
+            #
+            # So instead of a fixed sleep, ask the bridge the question the
+            # test depends on -- is an image loaded in the darkroom? -- and
+            # proceed as soon as it answers. `darkroom.current` is read-only:
+            # it never selects, switches views, or imports.
+            ready_started = time.monotonic()
+            deadline = ready_started + 60
+            detail = "never answered"
+            while time.monotonic() < deadline:
+                try:
+                    current = dtbridge.call("darkroom.current", timeout=10.0)
+                except Exception as e:
+                    detail = str(e)
+                else:
+                    if current.get("image_id") is not None:
+                        cls.readiness_s = time.monotonic() - ready_started
+                        print(f"\ndarkroom readiness (real check, not a sleep): "
+                              f"{cls.readiness_s:.2f}s -- {current}")
+                        return
+                    detail = f"no image loaded yet: {current}"
+                time.sleep(0.5)
+            _quit(cls.proc)
+            cls._cleanup_plugin_install()
+            raise unittest.SkipTest(
+                f"the darkroom never reported a loaded image within 60s ({detail})"
+            )
 
         _quit(cls.proc)
         cls._cleanup_plugin_install()
         raise unittest.SkipTest(
             f"darktable did not reach the darkroom within 90s (last view: {last})"
         )
+
+    @classmethod
+    def _restore_job_env(cls) -> None:
+        if getattr(cls, "_job_before", None) is None:
+            os.environ.pop("SCOUTER_JOB", None)
+        else:
+            os.environ["SCOUTER_JOB"] = cls._job_before
 
     @classmethod
     def _cleanup_plugin_install(cls) -> None:
@@ -188,6 +228,7 @@ class HeroEditIntegrationTest(unittest.TestCase):
             ), "darktable is still running after _quit's full escalation"
         finally:
             cls._cleanup_plugin_install()
+            cls._restore_job_env()
 
     def test_edits_one_orf_end_to_end(self) -> None:
         from scouter import registry
@@ -208,7 +249,11 @@ class HeroEditIntegrationTest(unittest.TestCase):
         self.assertTrue(exposure.ok, exposure.to_dict())
         self.assertTrue(exposure.data["committed"])
         self.assertAlmostEqual(exposure.data["applied"], 1.20, places=3)
-
+        print(
+            f"\nLIVE set latency: darkroom.set exposure={1.20} -> {exposure.ms} ms "
+            f"(applied {exposure.data['applied']}, committed "
+            f"{exposure.data['committed']}); warnings={exposure.data.get('warnings')}"
+        )
         # 3. Contrast through sigmoid.
         contrast = registry.call(
             "darkroom.set", "cli", module="sigmoid", param="contrast", value=1.35
@@ -234,6 +279,11 @@ class HeroEditIntegrationTest(unittest.TestCase):
         )
         assert exposure_entry.decoded is not None
         self.assertAlmostEqual(exposure_entry.decoded["exposure"], 1.20, places=3)
+        print(
+            f"LIVE readback from the XMP darktable wrote: history_end="
+            f"{read.history_end}, active operations={sorted(set(operations))}, "
+            f"exposure={exposure_entry.decoded['exposure']:.4f}"
+        )
 
         # 6. The Scouter loop runs and fits the budget.
         stats = registry.call("scout.stats", "cli", image=raw, px=1024)
@@ -241,14 +291,76 @@ class HeroEditIntegrationTest(unittest.TestCase):
         self.assertEqual(stats.data["px_used"], 1024)
         self.assertLess(stats.ms, 3000, f"Scouter loop took {stats.ms} ms")
         self.assertEqual(len(stats.data["histogram"]["r"]), 256)
+        print(f"LIVE scout.stats loop: {stats.ms} ms at {stats.data['px_used']} px")
 
-        # 7. E3: undo the last step (the white balance) and verify the XMP.
+        # 7. E3: undo the last step and verify it from the XMP.
+        #
+        # The white balance CANNOT be the verified undo, and this live run is
+        # what proved it (task 12 fix round 1). `temperature.temperature` is a
+        # Kelvin GUI slider with no counterpart in darktable's stored params:
+        # the sidecar holds channel coefficients (coeff_r/g/b/g2 + preset, see
+        # xmp.LAYOUTS[("temperature", 4)]), so the previous Kelvin value is
+        # not recoverable from the XMP and `undo_last` refuses -- correctly,
+        # and with exactly that reason. Assert the honest refusal first,
+        # because a silent guess there would be the real bug...
+        refused = registry.call("darkroom.undo_last", "cli")
+        self.assertFalse(refused.ok, refused.to_dict())
+        self.assertIn("temperature", refused.to_dict()["error"]["message"])
+        self.assertIn("never readable from the XMP", refused.to_dict()["error"]["message"])
+        print(f"LIVE honest refusal: {refused.to_dict()['error']['message']}")
+
+        # ...then make one more edit that IS decodable and undo THAT, which is
+        # what E3 actually asks for: an undo verified from the sidecar.
+        again = registry.call(
+            "darkroom.set", "cli", module="sigmoid", param="contrast", value=1.10
+        )
+        self.assertTrue(again.ok, again.to_dict())
         undo = registry.call("darkroom.undo_last", "cli")
         self.assertTrue(undo.ok, undo.to_dict())
-        self.assertEqual(undo.data["undone"]["module"], "temperature")
+        self.assertEqual(undo.data["undone"]["module"], "sigmoid")
+        self.assertAlmostEqual(undo.data["undone"]["restored_to"], 1.35, places=3)
         after = history.read(image=image_id)
         self.assertGreater(
             after.history_end, read.history_end, "undo must add a history item, not delete one"
+        )
+        readback = max(
+            (e for e in after.entries if e.operation == "sigmoid" and e.active),
+            key=lambda e: e.num,
+        )
+        assert readback.decoded is not None
+        self.assertAlmostEqual(readback.decoded["contrast"], 1.35, places=3)
+        print(
+            f"LIVE undo verified from the XMP: undone={undo.data['undone']['module']}."
+            f"{undo.data['undone']['param']} restored to "
+            f"{undo.data['undone']['restored_to']:.4f} (XMP reads "
+            f"{readback.decoded['contrast']:.4f}), verified="
+            f"{undo.data['undone']['verified']}, history_end {read.history_end} -> "
+            f"{after.history_end} in {undo.ms} ms"
+        )
+
+        # 7b. Commit latency on its own, measured after everything that
+        # asserts a value.
+        #
+        # It has to follow an edit that is NOT committed and that genuinely
+        # MOVES: darktable writes a sidecar only when the history actually
+        # changes, so timing a commit with nothing to write measures a no-op.
+        # (`exposure.black` is the wrong probe for this and the live run said
+        # so: the black-level slider quantises, so a 1e-5 nudge lands on the
+        # value already stored and produces no history item at all.) A
+        # run-unique sigmoid contrast does move, every run.
+        probe_value = 1.20 + (int(time.time()) % 11) * 0.01
+        uncommitted = registry.call(
+            "darkroom.set", "cli", module="sigmoid", param="contrast",
+            value=probe_value, commit=False,
+        )
+        self.assertTrue(uncommitted.ok, uncommitted.to_dict())
+        commit_only = registry.call("history.commit", "cli", image=raw)
+        self.assertTrue(commit_only.ok, commit_only.to_dict())
+        print(
+            f"LIVE commit latency: history.commit -> {commit_only.ms} ms "
+            f"(strategy {commit_only.data['strategy_used']}, view_after "
+            f"{commit_only.data['view_after']}, committed "
+            f"{commit_only.data['committed']})"
         )
 
         # 8. A gated verb still refuses without --yes, even mid-conversation.
@@ -292,13 +404,26 @@ class HeroEditIntegrationTest(unittest.TestCase):
             Path(__file__).resolve().parent / "fixtures" / "colorbalancergb.xmp",
         )
         assert entry.decoded is not None
-        floats = entry.decoded.get("floats", [])
-        matches = [i for i, v in enumerate(floats) if abs(v - 0.2) < 1e-4]
-        print(
-            f"colorbalancergb v{entry.modversion}: 0.2 found at float slots {matches} "
-            f"of {len(floats)}; pin the named layout in scouter/core/xmp.py LAYOUTS"
-        )
-        self.assertTrue(matches, "the value set through the bridge is not in the params")
+        # Task 12 PINNED this layout (xmp.LAYOUTS[("colorbalancergb", 5)] ->
+        # named_slots, slot 31 of 33 is `contrast`), so the decoder now hands
+        # back the named field and no longer exposes the raw float vector.
+        # Assert the named value; fall back to the slot scan only for a
+        # modversion whose layout is not pinned yet, which is what that scan
+        # exists to discover.
+        if "contrast" in entry.decoded:
+            print(
+                f"colorbalancergb v{entry.modversion}: pinned named layout decoded "
+                f"contrast={entry.decoded['contrast']:.4f}"
+            )
+            self.assertAlmostEqual(entry.decoded["contrast"], 0.2, places=3)
+        else:
+            floats = entry.decoded.get("floats", [])
+            matches = [i for i, v in enumerate(floats) if abs(v - 0.2) < 1e-4]
+            print(
+                f"colorbalancergb v{entry.modversion}: 0.2 found at float slots {matches} "
+                f"of {len(floats)}; pin the named layout in scouter/core/xmp.py LAYOUTS"
+            )
+            self.assertTrue(matches, "the value set through the bridge is not in the params")
 
 
 if __name__ == "__main__":

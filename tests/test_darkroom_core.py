@@ -92,6 +92,38 @@ class DarkroomCoreTest(unittest.TestCase):
         assert entry is not None
         self.assertTrue(entry.commit)
 
+    def test_commit_timeout_is_satisfied_by_a_confirming_readback(self) -> None:
+        """A set to the value the XMP already carries is committed, not failed.
+
+        Host finding (task 12 fix round 1): darktable writes a sidecar only
+        when the history actually CHANGES. Setting a slider to the value it
+        already holds adds no history item, so nothing is written and the
+        commit times out -- while the sidecar already says exactly what was
+        asked for. Re-running the same edit must not report a failure.
+        """
+        self._commit_patcher.stop()
+        with mock.patch(
+            "scouter.core.darkroom._commit",
+            side_effect=CommitTimeout("darktable did not write the sidecar"),
+        ):
+            result = darkroom.set_param(module="exposure", param="exposure", value=1.5500002)
+        self._commit_patcher.start()
+        self.assertTrue(result.committed)
+        self.assertTrue(
+            any("no history change to write" in w for w in result.warnings), result.warnings
+        )
+
+    def test_commit_timeout_still_raises_when_the_readback_disagrees(self) -> None:
+        """A write that genuinely never landed is never reported as committed."""
+        self._commit_patcher.stop()
+        with mock.patch(
+            "scouter.core.darkroom._commit",
+            side_effect=CommitTimeout("darktable did not write the sidecar"),
+        ):
+            with self.assertRaises(CommitTimeout):
+                darkroom.set_param(module="exposure", param="exposure", value=4.25)
+        self._commit_patcher.start()
+
     def test_dry_run_sends_no_action_and_resolves_nothing(self) -> None:
         result = darkroom.set_param(module="exposure", param="exposure", value=2.0,
                                     dry_run=True)

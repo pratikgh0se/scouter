@@ -143,11 +143,92 @@ def test_import_batch_does_not_echo_an_unhonoured_recursive_flag():
     assert "recursive_honoured" in body, (
         "import_batch does not report whether the requested recursion mode " "actually happened"
     )
-    # The plugin must not silently rewrite a persistent user preference.
-    assert "preferences.write" not in source, (
-        "the plugin writes a darktable preference; flipping a persistent user "
-        "setting from the background worker is its own bug"
+    # import_batch must not rewrite the user's recursion preference: it has an
+    # alternative (enumerate the tree itself) and takes it. The plugin-wide
+    # version of this rule is test_the_plugin_never_writes_a_darktable_preference.
+    assert "preferences.write" not in body, (
+        "import_batch writes a darktable preference; flipping a persistent "
+        "user setting from the background worker is its own bug, and "
+        "import_batch does not need to -- it enumerates the tree instead"
     )
+
+
+def test_loaded_darkroom_image_never_calls_the_display_image_getter():
+    """The no-arg display_image() getter deadlocks the worker. Permanently.
+
+    Host-proven with a per-tick heartbeat file (task 12 fix round 1,
+    darktable 5.4.1): the first `darkroom.current` of a session freezes with
+    the heartbeat reading "display_image getter -- about to call" and never
+    advances -- not in 4s, not in 72s. The worker coroutine runs on
+    darktable's own main thread, so it blocks the thread that would have to
+    unblock it, and every later bridge request times out behind it. That, not
+    a busy pixel pipeline, is what task 12 recorded as Finding 2.
+
+    `pcall` does not rescue a block, so the only safe rule is: never call it.
+    The one-argument SETTER is a different call and stays allowed.
+    """
+    source = PLUGIN.read_text(encoding="utf-8")
+    body = source.split("local function loaded_darkroom_image", 1)
+    assert len(body) == 2, "loaded_darkroom_image not found in the plugin"
+    body = body[1].split("\nend", 1)[0]
+    assert "display_image" not in body, (
+        "loaded_darkroom_image mentions display_image -- the no-arg getter "
+        "deadlocks the worker coroutine for the rest of the session"
+    )
+    assert "action_images" in body, (
+        "loaded_darkroom_image must read the selection via dt.gui.action_images"
+    )
+    # Nowhere in the plugin may display_image be called without an argument.
+    # (Comment lines are excluded: the plugin documents the banned call by
+    # name, which is the point of the comment.)
+    code = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("--")
+    )
+    for banned in ("pcall(view.display_image)", "pcall(v.display_image)", "display_image()"):
+        assert banned not in code, f"the plugin calls the display_image getter: {banned}"
+
+
+def test_the_plugin_never_writes_a_darktable_preference():
+    """No persistent user preference is rewritten, anywhere in the plugin.
+
+    Task 12 fix round 1 briefly set darktable's `write_sidecar_files` from
+    `history.commit`, believing that preference gated whether a commit could
+    land. Two host facts killed it: the Lua preferences API writes a
+    SCRIPT-namespaced key (`lua/darktable/write_sidecar_files` appeared in
+    darktablerc) and never touches the core setting, so the override was
+    inert -- and the commits it appeared to fix were in fact fixed by the
+    view-switch repair. All it actually did was litter the user's config.
+    """
+    source = PLUGIN.read_text(encoding="utf-8")
+    code = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("--")
+    )
+    assert "preferences.write" not in code, (
+        "the plugin writes a darktable preference; it is inert for core keys "
+        "and leaves a stray lua/<script>/<key> entry in the user's darktablerc"
+    )
+
+
+def test_history_commit_confirms_the_sidecar_on_disk():
+    """A commit must report what actually reached disk, and why if it didn't."""
+    source = PLUGIN.read_text(encoding="utf-8")
+    body = source.split('methods["history.commit"] = function', 1)
+    assert len(body) == 2, "history.commit not found in the plugin"
+    body = body[1].split("\nmethods.", 1)[0].split('\nmethods["', 1)[0]
+
+    assert "wait_for_sidecar(sidecar, before)" in body, (
+        "history.commit does not watch the sidecar, so it can only report "
+        "that the views moved -- which is not a commit"
+    )
+    assert "COMMIT_BOUNCE_ATTEMPTS" in body, (
+        "history.commit does not retry the bounce; the FIRST commit of a "
+        "session can land mid-render and flush nothing"
+    )
+    assert "pcall(commit_view_bounce)" in body, (
+        "the bounce must run under pcall so the loop can stop cleanly"
+    )
+    for field in ("sidecar_written", "sidecar_wait_ms", "sidecar ="):
+        assert field in body, f"history.commit does not report {field}"
 
 
 def test_stale_age_outlasts_every_client_timeout():
@@ -412,14 +493,56 @@ def test_switch_to_darkroom_selects_before_display_image():
 
 def test_commit_view_bounce_retry_sleeps_first():
     """The single retry of the second (into-darkroom) switch must be preceded
-    by the same settle sleep as the first bounce. Fix round 2 should-fix 6."""
+    by the same lighttable dwell as the first bounce. Fix round 2 should-fix 6."""
     source = PLUGIN.read_text(encoding="utf-8")
     body = source.split("local function commit_view_bounce", 1)
     assert len(body) == 2, "commit_view_bounce not found in the plugin"
     body = body[1].split("\nend", 1)[0]
-    assert body.count("dt.control.sleep(300)") == 2, (
-        "commit_view_bounce must sleep(300) before the first attempt AND "
-        "again before the retry of the second switch"
+    assert body.count("dt.control.sleep(VIEW_BOUNCE_DWELL_MS)") == 2, (
+        "commit_view_bounce must dwell in the lighttable before the first "
+        "attempt AND again before the retry of the second switch"
+    )
+
+
+def test_commit_view_bounce_yield_polls_both_legs():
+    """Neither leg may be verified by an immediate view read.
+
+    Task 12 fix round 1, host-proven: `dt.gui.current_view(v)` returns before
+    the switch has happened, so reading the view straight afterwards answers
+    with the OLD view. Both legs must go through wait_for_view instead.
+    """
+    source = PLUGIN.read_text(encoding="utf-8")
+    body = source.split("local function commit_view_bounce", 1)[1].split("\nend", 1)[0]
+    assert 'wait_for_view("lighttable")' in body, (
+        "the outbound leg must yield-poll until the lighttable is really current"
+    )
+    assert "return_to_darkroom(" in body, (
+        "the return leg must go through return_to_darkroom, which yield-polls"
+    )
+
+
+def test_display_image_is_never_the_view_changing_call():
+    """display_image must only be called from inside the darkroom.
+
+    Host finding (task 12 fix round 1, spike/scouter_view_switch_probe.lua):
+    `dt.gui.views.darkroom.display_image(image)` called from the lighttable
+    reports pcall ok=true and does NOT switch the view -- it stayed
+    "lighttable" for the full 10s budget, twice. Preferring it unconditionally
+    (fix round 1) is what broke the commit bounce's return leg. So inside
+    switch_to_darkroom the display_image call must be guarded by an
+    already-in-the-darkroom test.
+    """
+    source = PLUGIN.read_text(encoding="utf-8")
+    body = source.split("local function switch_to_darkroom", 1)[1].split("\nend\n", 1)[0]
+    first_display = body.index("view.display_image, image")
+    guard = body.index('current_view_name() == "darkroom"')
+    assert guard < first_display, (
+        "switch_to_darkroom calls display_image before checking that it is in "
+        "the darkroom -- from the lighttable that call is a silent no-op"
+    )
+    assert 'wait_for_view("darkroom")' in body, (
+        "switch_to_darkroom must yield-poll the view after the switch, not "
+        "read it immediately"
     )
 
 

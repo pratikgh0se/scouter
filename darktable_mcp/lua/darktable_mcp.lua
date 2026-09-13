@@ -727,6 +727,55 @@ end
 
 local function is_nan(v) return type(v) == "number" and v ~= v end
 
+-- ---- View switching is ASYNCHRONOUS ----------------------------------------
+--
+-- Host-proven on this Mac (darktable 5.4.1, Lua API 9.6.0) by
+-- spike/scouter_view_switch_probe.lua, run from a dt.control.dispatch
+-- coroutine exactly like worker_loop:
+--
+--   * `dt.gui.current_view(v)` returns BEFORE the switch has happened.
+--     Querying the view immediately afterwards returns the OLD view -- the
+--     probe left the darkroom and `current_view()` still said "darkroom" at
+--     0ms, then said "lighttable" after 150ms of yielding. Phase 0 saw the
+--     identical thing. So reading the view straight after the call is not a
+--     verification, it is a stale read, and acting on it is the bug.
+--   * The switch DOES land, reliably, from the worker coroutine: 150ms out,
+--     50ms back in the probe. "coroutine mutations get dropped" is false.
+--   * `dt.gui.views.darkroom.display_image(image)` does NOT switch the view
+--     when called from the lighttable: pcall reports ok=true and the view
+--     stayed "lighttable" for the full 10s budget, twice. It only works from
+--     INSIDE the darkroom, where it swaps the loaded image (which
+--     `current_view(darkroom)` cannot do, being a no-op for the current
+--     view). So the two calls are not interchangeable: each is correct on
+--     exactly one side of the boundary.
+--
+-- Everything below follows from that: switch, then YIELD-POLL until the view
+-- really is what we asked for, and never let display_image be the call that
+-- is supposed to change the view.
+local VIEW_SETTLE_POLL_MS = 50
+local VIEW_SETTLE_BUDGET_MS = 5000
+-- How long to stay in the lighttable mid-bounce. Leaving the darkroom is what
+-- makes darktable flush the pipe's history to the sidecar; task 1's probe used
+-- 500ms and the XMP advanced, so this dwell is deliberate, not a guess.
+local VIEW_BOUNCE_DWELL_MS = 300
+
+-- Yield-poll until the current view is `target`. Returns (landed, waited_ms).
+--
+-- dt.control.sleep is the yield: it hands the main loop back to darktable so
+-- the switch it has queued can actually run. Without it this function would
+-- spin on a value that can never change.
+local function wait_for_view(target, budget_ms)
+  budget_ms = budget_ms or VIEW_SETTLE_BUDGET_MS
+  local waited = 0
+  while true do
+    if current_view_name() == target then return true, waited end
+    if waited >= budget_ms then return false, waited end
+    if not (dt.control and dt.control.sleep) then return false, waited end
+    dt.control.sleep(VIEW_SETTLE_POLL_MS)
+    waited = waited + VIEW_SETTLE_POLL_MS
+  end
+end
+
 -- Both ids must be present, coercible numbers, AND equal. A naive
 -- `tonumber(a) == tonumber(b)` is a trap: `tonumber(nil)` is nil, and Lua's
 -- `nil == nil` is true, so "neither side has an id" would read as a match.
@@ -778,19 +827,35 @@ end
 -- The image the darkroom currently has loaded, or nil, plus WHERE that
 -- answer came from.
 --
--- `dt.gui.views.darkroom.display_image()` (no args) is documented to return
--- the image currently displayed in the darkroom, and is the API darkroom.open
--- should prefer for LOADING one too (see loaded_darkroom_image below) -- but
--- it is documented, not yet host-verified (task 12 verifies against a real
--- darktable), so it is guarded and falls back to the `action_images` reading
--- this plugin already relied on. Callers that act on the result must know
--- which source answered, hence the second return value.
+-- NEVER call `dt.gui.views.darkroom.display_image()` with no arguments here.
+-- It is documented as the getter for the displayed image, and task 12 round 1
+-- adopted it on that basis. It DEADLOCKS.
+--
+-- Host-proven, with a heartbeat file written by the worker loop on every tick
+-- and around every step of this function (darktable 5.4.1, this Mac): the
+-- very first `darkroom.current` after `view.current` reports "darkroom"
+-- freezes with the heartbeat reading "display_image getter -- about to call"
+-- and never advances again -- not in 4s, not in 72s, not after the render has
+-- long finished. `pcall` does not help: this is a block, not an error. The
+-- worker coroutine runs on darktable's own main thread, so blocking in it
+-- blocks the thread that would have to unblock it, and the whole bridge is
+-- dead for the rest of the session. Every later request then times out, which
+-- is exactly the "no response at all in that window" that task 12 recorded
+-- as Finding 2 and mistook for the pixel pipeline being busy. It was not
+-- busy: the same window answers a real `dt.gui.action` on the first attempt
+-- (spike/scouter_view_switch_probe.lua).
+--
+-- So the reading here is `dt.gui.action_images`, the selection-based reading
+-- this plugin used before task 12 and which never blocked. It is less precise
+-- (it reports the SELECTION, which can in principle differ from what the
+-- darkroom shows), and callers are told so by the `source` return value --
+-- an honest, slightly weaker answer beats a deadlocked bridge.
+--
+-- The display_image SETTER (`display_image(image)`, one argument) is a
+-- different call and is safe: host-verified to return promptly and to swap
+-- the loaded image when called from inside the darkroom. switch_to_darkroom
+-- still uses it for exactly that.
 local function loaded_darkroom_image()
-  local view = dt.gui and dt.gui.views and dt.gui.views.darkroom
-  if view and type(view.display_image) == "function" then
-    local ok, img = pcall(view.display_image)
-    if ok and img then return img, "display_image" end
-  end
   if not (dt.gui and dt.gui.action_images) then return nil, "action_images" end
   local ok, images = pcall(function() return dt.gui.action_images end)
   if not ok or type(images) ~= "table" then return nil, "action_images" end
@@ -826,45 +891,81 @@ end
 
 -- Actually switch the darkroom onto `image`. Returns (ok, method_or_error).
 --
--- Prefers the documented `display_image(image)` call, which (unlike
--- dt.gui.current_view) is not a no-op when the darkroom is already open on a
--- DIFFERENT image -- that was the bug: dt.gui.current_view(dt.gui.views.
--- darkroom) while already IN the darkroom does nothing, so the requested
--- image never loaded even though the old code reported opened=true.
+-- The two mechanisms are NOT interchangeable -- see the host findings above
+-- wait_for_view. Each is used on the only side of the boundary where it
+-- works:
 --
--- Falls back to select + the proven lighttable<->darkroom bounce, bouncing
--- through the lighttable FIRST when already in the darkroom so the second
--- switch is a real transition rather than another no-op.
+--   * Already in the darkroom: `display_image(image)` swaps the loaded image.
+--     `dt.gui.current_view(darkroom)` is a no-op for the view you are already
+--     in, so it cannot do this (that was fix round 1's bug).
+--   * Outside the darkroom: `dt.gui.current_view(darkroom)` is the switch
+--     that lands. `display_image` from the lighttable is a silent no-op --
+--     pcall ok=true, view unchanged for 10s -- which is what made fix round
+--     1's "prefer display_image everywhere" turn a working bounce into a
+--     reliable failure.
+--
+-- Whichever path runs, the view is yield-polled afterwards rather than read
+-- immediately, because the switch is asynchronous.
 local function switch_to_darkroom(image)
   local view = dt.gui and dt.gui.views and dt.gui.views.darkroom
-
-  -- Select FIRST, unconditionally -- even when display_image is about to do
-  -- the actual switch. loaded_darkroom_image()'s action_images fallback must
-  -- never read a stale selection if display_image's own getter turns out to
-  -- be unreliable (display_image is documented but not yet host-verified;
-  -- see loaded_darkroom_image's comment).
-  if dt.gui.selection then pcall(dt.gui.selection, {image}) end
-
-  if view and type(view.display_image) == "function" then
-    local ok = pcall(view.display_image, image)
-    if ok then return true, "display_image" end
-    -- Fall through to the select+switch path below on failure.
-  end
-
   if not view then return false, "dt.gui.views.darkroom missing" end
 
+  -- Select FIRST, unconditionally. loaded_darkroom_image()'s action_images
+  -- fallback must never read a stale selection if display_image's own getter
+  -- turns out to be unreliable (its getter answering nil while its setter
+  -- works is a real observed quirk).
+  if dt.gui.selection and image then pcall(dt.gui.selection, {image}) end
+
   if current_view_name() == "darkroom" then
-    -- Already in the darkroom (on some other image): switching straight to
-    -- darkroom again is a no-op, so bounce out to the lighttable first.
+    if image and type(view.display_image) == "function" then
+      local ok = pcall(view.display_image, image)
+      if ok then return true, "display_image" end
+    end
+    -- No usable display_image: bounce out to the lighttable so the switch
+    -- back is a real transition rather than another no-op.
     if not (dt.gui.views and dt.gui.views.lighttable) then
       return false, "dt.gui.views.lighttable missing"
     end
-    local ok = pcall(dt.gui.current_view, dt.gui.views.lighttable)
-    if not ok then return false, "bounce to lighttable failed" end
+    if not pcall(dt.gui.current_view, dt.gui.views.lighttable) then
+      return false, "bounce to lighttable failed"
+    end
+    local left = wait_for_view("lighttable")
+    if not left then
+      return false, "still in the darkroom after the bounce out to the lighttable"
+    end
   end
 
   local ok, err = pcall(dt.gui.current_view, view)
   if not ok then return false, "view switch failed: " .. tostring(err) end
+  local landed, waited = wait_for_view("darkroom")
+  if not landed then
+    return false, string.format("view is still %s %dms after switching to darkroom",
+                                current_view_name(), waited)
+  end
+
+  -- In the darkroom now. If it came up on some other image, display_image is
+  -- the call that can swap it -- and this is the side it works from.
+  if image and type(view.display_image) == "function" then
+    local loaded = loaded_darkroom_image()
+    if not (loaded and ids_match(loaded.id, image.id)) then
+      pcall(view.display_image, image)
+    end
+  end
+  return true, "view_switch"
+end
+
+-- Return to the darkroom, with or without a specific image to load. Used by
+-- the commit bounce, whose return leg may have nothing to re-load (no image
+-- was resolvable) but must still get the view back.
+local function return_to_darkroom(image)
+  if image then return switch_to_darkroom(image) end
+  local ok, err = pcall(dt.gui.current_view, dt.gui.views.darkroom)
+  if not ok then return false, "view switch failed: " .. tostring(err) end
+  local landed, waited = wait_for_view("darkroom")
+  if not landed then
+    return false, string.format("view is still %s %dms after switching to darkroom",
+                                current_view_name(), waited)
+  end
   return true, "view_switch"
 end
 
@@ -913,6 +1014,10 @@ methods["darkroom.open"] = function(p)
   -- switching). Checking only the image, as before, let `opened=true` through
   -- for a caller that was never actually in the darkroom -- so the view is
   -- checked too now, not just the image.
+  -- switch_to_darkroom has already yield-polled the view, but wait once more
+  -- (a no-op when we are already there) so the `already` fast path is held to
+  -- the same standard as a real switch.
+  wait_for_view("darkroom")
   local final_image, final_source = loaded_darkroom_image()
   local matches = final_image ~= nil and ids_match(final_image.id, image.id)
   local final_view = current_view_name()
@@ -1036,42 +1141,119 @@ local function commit_view_bounce()
     return {ok = false, error = "dt.gui.views.lighttable/darkroom missing", view = starting_view}
   end
 
-  -- Remember which image was loaded BEFORE leaving the darkroom. Task 12's
-  -- host run found that the raw `dt.gui.current_view(dt.gui.views.darkroom)`
-  -- call below -- with no image argument -- can return with no Lua error
-  -- (pcall ok=true) yet leave the actual view stuck in lighttable: the same
-  -- silent no-op class switch_to_darkroom's own comments already document
-  -- and fix for `darkroom.open`, by preferring `display_image(image)` and
-  -- verifying the real post-call view instead of trusting the call not
-  -- raising. The return leg here gets the identical fix.
+  -- Remember which image was loaded BEFORE leaving the darkroom, so the
+  -- return leg can put the same one back.
   local image = darkroom_image()
 
+  -- Leg 1. The switch is asynchronous, so this is NOT verified by reading the
+  -- view straight afterwards (that returns the stale "darkroom"): yield until
+  -- the lighttable really is current. Leaving the darkroom is also what makes
+  -- darktable flush the pipe to the sidecar, so this wait is the commit.
   local ok1 = pcall(dt.gui.current_view, dt.gui.views.lighttable)
-  if dt.control and dt.control.sleep then dt.control.sleep(300) end
-
-  local ok2, detail2
-  if image then
-    ok2, detail2 = switch_to_darkroom(image)
-  else
-    ok2 = pcall(dt.gui.current_view, dt.gui.views.darkroom)
+  local left = ok1 and wait_for_view("lighttable")
+  if not left then
+    local stuck = current_view_name()
+    return {ok = false,
+            error = "could not leave the darkroom (view is " .. stuck .. ")",
+            view = stuck}
   end
+  -- Dwell in the lighttable so the sidecar write finishes before the pipe is
+  -- reloaded underneath it.
+  if dt.control and dt.control.sleep then dt.control.sleep(VIEW_BOUNCE_DWELL_MS) end
+
+  -- Leg 2. return_to_darkroom yield-polls the view itself, so ok2 is a real
+  -- answer about where the session ended up, not just "the call did not raise".
+  local ok2, detail2 = return_to_darkroom(image)
   if not ok2 then
-    -- One retry: a single flaky switch back into the darkroom should not
-    -- strand the session in the lighttable when the commit itself likely
-    -- still landed (the pipe already unloaded on the way out). Give it the
-    -- same settle time as the first bounce before trying again.
-    if dt.control and dt.control.sleep then dt.control.sleep(300) end
-    if image then
-      ok2, detail2 = switch_to_darkroom(image)
-    else
-      ok2 = pcall(dt.gui.current_view, dt.gui.views.darkroom)
-    end
+    -- One retry: a single flaky switch back should not strand the session in
+    -- the lighttable when the commit itself already landed (the pipe unloaded
+    -- on the way out). Same dwell before trying again.
+    if dt.control and dt.control.sleep then dt.control.sleep(VIEW_BOUNCE_DWELL_MS) end
+    ok2, detail2 = return_to_darkroom(image)
   end
   local final_view = current_view_name()
-  if not (ok1 and ok2) or final_view ~= "darkroom" then
+  if not ok2 or final_view ~= "darkroom" then
     return {ok = false, error = detail2 or "view switch failed", view = final_view}
   end
   return {ok = true, error = nil, view = final_view}
+end
+
+-- ---- Confirming a commit ---------------------------------------------------
+--
+-- Host-proven (task 12 fix round 1, darktable 5.4.1, this Mac):
+--
+--   * The lighttable<->darkroom bounce DOES make darktable write the sidecar,
+--     but only when the history has actually CHANGED. Setting a slider to the
+--     value it already holds adds no history item, so nothing is written --
+--     correctly. A commit that writes nothing is therefore not automatically a
+--     failure, and callers need to be able to tell the two apart.
+--   * There is no Lua API and no action path that writes a sidecar directly:
+--     every "write sidecar files" spelling returns nan from the lighttable
+--     (where that panel actually lives) as well as from the darkroom, there is
+--     no dt.database.write_*, and dt.gui.libs.image exposes no method. The
+--     full inventories are in spike/scouter_sidecar_probe2.lua's output.
+--   * `dt.preferences.write("darktable", "write_sidecar_files", ...)` does NOT
+--     reach darktable's core preference: it creates a SCRIPT-namespaced key
+--     (`lua/darktable/write_sidecar_files` appears in darktablerc) and leaves
+--     the core setting alone. An earlier round of this fix tried exactly that,
+--     believing the core preference gated the commit; it was inert, and the
+--     only thing it achieved was littering the user's darktablerc. The commits
+--     it "fixed" were in fact fixed by the view-switch repair above. Do not
+--     reintroduce it -- and note more generally that this plugin does not
+--     rewrite persistent user preferences (see import_batch's note).
+--
+-- So the commit reports what actually happened on disk, and the Python layer
+-- (scouter/core/darkroom.py) resolves "nothing was written" by reading the
+-- value back: if the sidecar already carries what was asked for, the request
+-- is satisfied.
+local SIDECAR_WRITE_POLL_MS = 100
+-- Host-measured: the sidecar appears within ~1.2s of the bounce when there is
+-- anything to write. 1500ms per attempt, twice, keeps the worst case (a commit
+-- with nothing to write) inside the Python layer's own 5s commit budget.
+local SIDECAR_WRITE_BUDGET_MS = 1500
+-- How many bounces one history.commit may spend. The FIRST commit of a
+-- session can land while darktable is still finishing its initial full-size
+-- render, and that bounce flushes nothing; the next one does. Bounded, and
+-- gated on a real confirmation (the sidecar changed), never on a fixed sleep.
+local COMMIT_BOUNCE_ATTEMPTS = 2
+
+-- The sidecar path darktable itself reports for this image, or nil.
+-- Indexing an unknown field on a dt image userdata RAISES, so this is
+-- pcall-guarded rather than compared against nil.
+local function image_sidecar_path(image)
+  if not image then return nil end
+  local ok, value = pcall(function() return image.sidecar end)
+  if ok and type(value) == "string" and value ~= "" then return value end
+  return nil
+end
+
+-- "<fractional mtime> <size>" for `path`, or nil when it does not exist.
+-- Lua has no stat(2), and whole-second os.time granularity cannot tell two
+-- writes in the same second apart -- which is exactly the resolution a commit
+-- needs. stat(1) can.
+local function sidecar_signature(path)
+  if type(path) ~= "string" or path == "" then return nil end
+  local p = io.popen("stat -f '%Fm %z' " .. shell_quote(path) .. " 2>/dev/null")
+  if not p then return nil end
+  local out = p:read("*a") or ""
+  p:close()
+  out = out:gsub("^%s+", ""):gsub("%s+$", "")
+  if out == "" then return nil end
+  return out
+end
+
+-- Yield-poll until `path`'s signature differs from `before` (nil `before`
+-- means "did not exist"). Returns (changed, waited_ms).
+local function wait_for_sidecar(path, before, budget_ms)
+  budget_ms = budget_ms or SIDECAR_WRITE_BUDGET_MS
+  local waited = 0
+  while true do
+    if sidecar_signature(path) ~= before then return true, waited end
+    if waited >= budget_ms then return false, waited end
+    if not (dt.control and dt.control.sleep) then return false, waited end
+    dt.control.sleep(SIDECAR_WRITE_POLL_MS)
+    waited = waited + SIDECAR_WRITE_POLL_MS
+  end
 end
 
 -- The only strategies history.commit understands. Anything else is a
@@ -1100,10 +1282,59 @@ methods["history.commit"] = function(p)
             detail = "every sidecar-write action returned nan on this build",
             view_after = current_view_name(), cpu_ms = (os.clock() - started) * 1000}
   end
-  -- strategy == "auto" or "view_bounce": the proven floor, C3.
-  local result = commit_view_bounce()
-  return {strategy_used = "view_bounce", ok = result.ok, detail = result.error,
-          view_after = result.view, cpu_ms = (os.clock() - started) * 1000}
+  -- strategy == "auto" or "view_bounce".
+  --
+  -- The bounce alone is NOT a commit: it only flushes the darkroom pipe, and
+  -- darktable only turns that flush into a sidecar write when
+  -- write_sidecar_files is "after edit". See the comment block above.
+  local image = darkroom_image()
+  local sidecar = image_sidecar_path(image)
+  local before = sidecar and sidecar_signature(sidecar) or nil
+
+  --
+  -- Up to COMMIT_BOUNCE_ATTEMPTS bounces: the FIRST commit of a session can
+  -- land while darktable is still finishing its initial full-size render, and
+  -- that bounce flushes nothing. A second bounce right after does. This is a
+  -- bounded retry over a real confirmation (did the sidecar change?), not a
+  -- longer blind wait.
+  local ok_call, result = true, nil
+  local written, write_ms = nil, 0
+  for attempt = 1, COMMIT_BOUNCE_ATTEMPTS do
+    ok_call, result = pcall(commit_view_bounce)
+    if not ok_call then break end
+    if not (result.ok and sidecar) then break end
+    local changed, waited = wait_for_sidecar(sidecar, before)
+    written = changed
+    write_ms = write_ms + waited
+    if changed then break end
+    if attempt < COMMIT_BOUNCE_ATTEMPTS and dt.control and dt.control.sleep then
+      dt.control.sleep(VIEW_BOUNCE_DWELL_MS)
+    end
+  end
+  if not ok_call then error(result) end
+
+  local detail = result.error
+  if detail == nil and written == false then
+    detail = "the view bounce completed " .. COMMIT_BOUNCE_ATTEMPTS
+      .. " time(s) but " .. tostring(sidecar) .. " did not change within "
+      .. write_ms .. "ms of waiting -- darktable writes a sidecar only when "
+      .. "the history actually changes, so this is expected when the requested "
+      .. "value is the one the image already had"
+  end
+
+  return {
+    strategy_used = "view_bounce",
+    -- ok means "this image's history is now on disk", not "the views moved".
+    ok = result.ok and written ~= false,
+    detail = detail,
+    view_after = result.view,
+    cpu_ms = (os.clock() - started) * 1000,
+    sidecar = sidecar,
+    -- nil when there was no sidecar path to watch (no image loaded), so a
+    -- caller can tell "not checked" from "checked and did not change".
+    sidecar_written = written,
+    sidecar_wait_ms = write_ms,
+  }
 end
 
 methods["snapshot.take"] = function()
@@ -1528,7 +1759,22 @@ return {
   darkroom_image = darkroom_image,
   loaded_darkroom_image = loaded_darkroom_image,
   switch_to_darkroom = switch_to_darkroom,
+  return_to_darkroom = return_to_darkroom,
+  wait_for_view = wait_for_view,
+  view_settle = {
+    poll_ms = VIEW_SETTLE_POLL_MS,
+    budget_ms = VIEW_SETTLE_BUDGET_MS,
+    bounce_dwell_ms = VIEW_BOUNCE_DWELL_MS,
+  },
   commit_view_bounce = commit_view_bounce,
+  image_sidecar_path = image_sidecar_path,
+  sidecar_signature = sidecar_signature,
+  wait_for_sidecar = wait_for_sidecar,
+  sidecar_commit = {
+    write_poll_ms = SIDECAR_WRITE_POLL_MS,
+    write_budget_ms = SIDECAR_WRITE_BUDGET_MS,
+    bounce_attempts = COMMIT_BOUNCE_ATTEMPTS,
+  },
   module_actions = MODULE_ACTIONS,
   sidecar_action_paths = SIDECAR_ACTION_PATHS,
 }

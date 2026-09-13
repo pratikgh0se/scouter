@@ -254,10 +254,36 @@ def set_param(module: str, param: str, value: float, *, instance: int = 0,
     applied = None
     warnings: list[str] = []
     if commit:
-        commit_result = _commit(job, resolved.image_id, strategy="auto")
-        committed = commit_result.committed
-        warnings.extend(commit_result.warnings)
+        # darktable writes a sidecar only when the history actually CHANGES
+        # (host-proven, task 12 fix round 1). Setting a slider to the value it
+        # already holds adds no history item, so nothing is written and the
+        # commit "times out" -- while the XMP on disk already says exactly what
+        # was asked for. That is a satisfied request, not a failure, and it is
+        # the difference between this test suite passing once and passing
+        # twice. So: on a commit timeout, read the XMP back before deciding.
+        # The timeout is still raised when the readback does NOT confirm the
+        # value -- a write that genuinely never landed must never be reported
+        # as committed.
+        commit_result = None
+        commit_error: CommitTimeout | None = None
+        try:
+            commit_result = _commit(job, resolved.image_id, strategy="auto")
+        except CommitTimeout as e:
+            commit_error = e
         applied = _read_value(resolved.path, module, param, instance)
+        if commit_result is not None:
+            committed = commit_result.committed
+            warnings.extend(commit_result.warnings)
+        elif _close(applied, value):
+            committed = True
+            warnings.append(
+                f"darktable wrote no new sidecar for {module}.{param}: the value requested "
+                f"({value:g}) is the one the XMP already carried, so there was no history "
+                "change to write. Confirmed by reading the value back from the sidecar."
+            )
+        else:
+            assert commit_error is not None
+            raise commit_error
         if applied is None:
             warnings.append(
                 f"{module}.{param} committed but could not be decoded from the XMP; "

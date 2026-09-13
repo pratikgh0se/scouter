@@ -55,7 +55,23 @@ local stub_dt = {
   print_log = function(msg) table.insert(dt_log, msg) end,
   control = {
     dispatch = function(_) end,
-    sleep = function(_) end,
+    -- Real darktable's view switch is ASYNCHRONOUS (host-proven: see the
+    -- wait_for_view comment block in darktable_mcp.lua). current_view(v)
+    -- returns before the view has changed and only a yield -- this sleep --
+    -- lets it land. `view_state.switch_lag_sleeps` scripts that lag so the
+    -- plugin's yield-polling is genuinely exercised instead of getting a
+    -- synchronous answer no real darktable would give. It defaults to 0, so
+    -- every pre-existing test keeps the old synchronous behaviour.
+    sleep = function(_)
+      view_state.sleeps = (view_state.sleeps or 0) + 1
+      if view_state.pending then
+        view_state.pending_sleeps = (view_state.pending_sleeps or 0) + 1
+        if view_state.pending_sleeps >= (view_state.switch_lag_sleeps or 0) then
+          view_state.current = view_state.pending
+          view_state.pending, view_state.pending_sleeps = nil, nil
+        end
+      end
+    end,
   },
 }
 
@@ -81,7 +97,12 @@ stub_dt.gui = {
       view_state.fail_switches_remaining = view_state.fail_switches_remaining - 1
       error("scripted darkroom switch failure")
     end
-    view_state.current = v.id
+    if (view_state.switch_lag_sleeps or 0) > 0 then
+      -- Asynchronous: queue it. control.sleep above is what applies it.
+      view_state.pending, view_state.pending_sleeps = v.id, 0
+    else
+      view_state.current = v.id
+    end
     return v
   end,
   views = views,
@@ -1514,6 +1535,72 @@ assertEq(c6.view_after, "lighttable",
   "an unrecovered bounce leaves (and honestly reports) the session in the lighttable")
 view_state.fail_switches_remaining = 0
 
+-- Commit confirmation: history.commit reports what actually reached disk.
+--
+-- Host-proven (task 12 fix round 1): the bounce writes the sidecar only when
+-- the history actually CHANGED, so "nothing was written" is a real and
+-- expected outcome, not automatically a failure -- the Python layer resolves
+-- it by reading the value back. What the plugin must never do is claim a
+-- write that did not happen.
+--
+-- An earlier round of this fix tried to force the write by setting
+-- darktable's write_sidecar_files preference. That was inert (the Lua
+-- preferences API writes a SCRIPT-namespaced key, not the core setting) and
+-- it littered the user's darktablerc. test_lua_dispatcher.py pins that it is
+-- gone; here we pin the observable behaviour.
+do
+  local tmp = os.tmpname()
+  local f = io.open(tmp, "w"); f:write("before"); f:close()
+  local img = images_by_id[101]
+  img.sidecar = tmp
+  stub_dt.gui.action_images = {img}
+  view_state.current = "darkroom"
+
+  -- Grow the file on the way out of the darkroom -- where the real darktable
+  -- queues the write.
+  local original_view = stub_dt.gui.current_view
+  stub_dt.gui.current_view = function(v)
+    local r = original_view(v)
+    if v ~= nil and v.id == "lighttable" then
+      local h = io.open(tmp, "w"); h:write("after the bounce"); h:close()
+    end
+    return r
+  end
+
+  local cp = plugin.methods["history.commit"]({strategy = "auto"})
+  stub_dt.gui.current_view = original_view
+
+  assertEq(cp.ok, true, "the commit confirms the sidecar actually changed")
+  assertEq(cp.sidecar, tmp, "the commit reports which sidecar it watched")
+  assertEq(cp.sidecar_written, true, "sidecar_written reports the real disk fact")
+  assertTrue(type(cp.sidecar_wait_ms) == "number", "and how long it waited for it")
+
+  -- A sidecar that never changes is reported honestly -- never ok=true just
+  -- because the views moved -- and the reason names the real mechanism.
+  view_state.current = "darkroom"
+  local cq = plugin.methods["history.commit"]({strategy = "auto"})
+  assertEq(cq.sidecar_written, false, "an unchanged sidecar is reported as not written")
+  assertEq(cq.ok, false, "and the commit as a whole does not claim success")
+  assertTrue(cq.detail ~= nil and cq.detail:find("did not change", 1, true) ~= nil,
+    "the failure says what did not happen: " .. tostring(cq.detail))
+  assertTrue(cq.detail:find("history actually changes", 1, true) ~= nil,
+    "and why that is expected for a repeated value")
+
+  -- No image loaded means there is no sidecar to watch: sidecar_written must
+  -- be absent (not false), so "not checked" is distinguishable from
+  -- "checked and unchanged".
+  img.sidecar = nil
+  view_state.current = "darkroom"
+  local cn = plugin.methods["history.commit"]({strategy = "auto"})
+  assertEq(cn.sidecar, nil, "no sidecar path to report when the image has none")
+  assertEq(cn.sidecar_written, nil, "sidecar_written is absent, not false, when unchecked")
+  assertEq(cn.ok, true, "and the bounce result stands on its own")
+
+  os.remove(tmp)
+  stub_dt.gui.action_images = {}
+  view_state.current = "darkroom"
+end
+
 -- style.create_from_current is honest about the missing module filter, and
 -- about where the "current image" reading came from.
 stub_dt.gui.action_images = {images_by_id[101]}
@@ -1639,6 +1726,11 @@ assertEq(cur2.path, nil, "darkroom.current: no path when nothing is loaded")
 -- darkroom.open tests above exercise the action_images fallback), so these
 -- are exercised directly against the exported internals with a scripted
 -- display_image getter/setter.
+--
+-- display_image is only reached from INSIDE the darkroom now: the task 12
+-- fix round proved on the real host that calling it from the lighttable is a
+-- silent no-op (pcall ok=true, view unchanged for 10s), so the plugin must
+-- never rely on it to change the view.
 do
   local display_state = {current = nil}
   views.darkroom.display_image = function(image)
@@ -1646,15 +1738,26 @@ do
     display_state.current = image
     return image
   end
+  view_state.current = "darkroom"
 
   local switched, method = plugin.switch_to_darkroom(images_by_id[103])
   assertTrue(switched, "switch_to_darkroom succeeds via display_image")
   assertEq(method, "display_image", "switch_to_darkroom reports display_image as the method used")
   assertEq(display_state.current.id, 103, "display_image actually stored the requested image")
 
+  -- loaded_darkroom_image must NOT consult the display_image GETTER, even
+  -- when one exists: on the real host that no-arg call deadlocks the worker
+  -- coroutine permanently (task 12 fix round 1; see the plugin comment).
+  -- Scripted here as an outright hang would hang the test suite, so the
+  -- getter is scripted to answer a DIFFERENT image than the selection --
+  -- reading it would be visible, and must not happen.
+  display_state.current = images_by_id[102]
+  stub_dt.gui.action_images = {images_by_id[103]}
   local image, source = plugin.loaded_darkroom_image()
-  assertEq(source, "display_image", "loaded_darkroom_image reports display_image as its source")
-  assertTrue(image ~= nil and image.id == 103, "loaded_darkroom_image reads back through display_image")
+  assertEq(source, "action_images",
+    "loaded_darkroom_image reads the selection, never the display_image getter")
+  assertTrue(image ~= nil and image.id == 103,
+    "and answers with the selection (103), not the getter's image (102)")
 
   views.darkroom.display_image = nil
 end
@@ -1670,6 +1773,7 @@ do
     return image                          -- setter reports success
   end
   stub_dt.gui.action_images = {}
+  view_state.current = "darkroom"
 
   local switched, method = plugin.switch_to_darkroom(images_by_id[101])
   assertTrue(switched, "switch_to_darkroom still succeeds via display_image's setter")
@@ -1682,6 +1786,85 @@ do
     "the action_images fallback is already correct -- selection ran before display_image")
 
   views.darkroom.display_image = nil
+end
+
+-- From the LIGHTTABLE, the view switch -- not display_image -- must be the
+-- call that does the work, even when display_image is available. This is the
+-- exact regression that made history.commit's return leg fail on the host:
+-- display_image reported success from the lighttable and the view never moved.
+do
+  local display_calls = {}
+  views.darkroom.display_image = function(image)
+    if image == nil then return nil end
+    table.insert(display_calls, image.id)
+    return image          -- reports success but (on the host) moves nothing
+  end
+  view_state.current = "lighttable"
+  stub_dt.gui.action_images = {}
+
+  local switched, method = plugin.switch_to_darkroom(images_by_id[102])
+  assertTrue(switched, "switch_to_darkroom succeeds from the lighttable")
+  assertEq(method, "view_switch",
+    "from the lighttable the real view switch does the work, not display_image")
+  assertEq(view_state.current, "darkroom", "the view actually ended up in the darkroom")
+
+  views.darkroom.display_image = nil
+end
+
+-- wait_for_view: the switch is ASYNCHRONOUS on the real host, so a view
+-- switch must be verified by yield-polling, never by an immediate read.
+do
+  view_state.current = "darkroom"
+  view_state.switch_lag_sleeps = 3        -- lands only after 3 yields
+  stub_dt.gui.current_view(views.lighttable)
+  assertEq(view_state.current, "darkroom",
+    "the stub mirrors the host: the view has NOT changed when the call returns")
+  local landed, waited = plugin.wait_for_view("lighttable")
+  assertTrue(landed, "wait_for_view yields until the switch actually lands")
+  assertEq(view_state.current, "lighttable", "and the view really did change")
+  assertEq(waited, 3 * plugin.view_settle.poll_ms,
+    "wait_for_view reports the wall clock it actually waited")
+  view_state.switch_lag_sleeps = 0
+  view_state.current = "darkroom"
+end
+
+-- wait_for_view gives up at its budget rather than spinning forever, and
+-- reports having done so.
+do
+  view_state.current = "lighttable"
+  local landed, waited = plugin.wait_for_view("darkroom", 200)
+  assertEq(landed, false, "wait_for_view gives up at its budget")
+  assertEq(waited, 200, "and reports the full budget it burned")
+  view_state.current = "darkroom"
+end
+
+-- The commit bounce over an asynchronous switch: both legs must land even
+-- though neither call has taken effect by the time it returns.
+do
+  view_state.current = "darkroom"
+  view_state.switch_lag_sleeps = 2
+  stub_dt.gui.action_images = {images_by_id[101]}
+  local bounce = plugin.commit_view_bounce()
+  assertEq(bounce.ok, true, "commit_view_bounce lands both legs of an async bounce")
+  assertEq(bounce.view, "darkroom", "and reports the view it really ended in")
+  assertEq(view_state.current, "darkroom", "the session is genuinely back in the darkroom")
+  view_state.switch_lag_sleeps = 0
+end
+
+-- A bounce that cannot LEAVE the darkroom fails honestly, naming the view it
+-- is stuck in -- it must never report ok with a fabricated "darkroom".
+do
+  view_state.current = "darkroom"
+  local original = stub_dt.gui.current_view
+  stub_dt.gui.current_view = function(v)
+    if v == nil then return views[view_state.current] end
+    return v                    -- accepts everything, changes nothing
+  end
+  local bounce = plugin.commit_view_bounce()
+  assertEq(bounce.ok, false, "a bounce that cannot leave the darkroom reports failure")
+  assertTrue(bounce.error:find("could not leave the darkroom") ~= nil,
+    "and says so: " .. tostring(bounce.error))
+  stub_dt.gui.current_view = original
 end
 
 -- image.lookup by absolute path.
