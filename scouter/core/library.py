@@ -15,6 +15,8 @@ import dataclasses
 import hashlib
 import json
 import os
+import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,6 +39,37 @@ SCAN_MAX_DEPTH = 8
 
 #: Streaming chunk size for both hash passes and the copy itself.
 CHUNK = 1 << 20
+
+#: `.part` leftovers older than this are swept at the start of an import (fix
+#: round 2, nit) -- anything younger might belong to a genuinely concurrent
+#: import of a DIFFERENT job and must not be deleted out from under it.
+STALE_PART_AGE_S = 3600
+
+
+class ManifestCorrupt(UsageError):
+    """`import.json` exists but is not valid JSON, or not shaped like a
+    manifest Scouter itself would write (an object with a `files` list of
+    complete entries). This must never be read as "no manifest yet, treat as
+    a first import" -- that would silently orphan whatever the real manifest
+    was protecting (fix round 2, item 1)."""
+
+    fix = (
+        "inspect (and fix or remove) the file named in `detail.path`; if it should be "
+        "trusted, restore it from a backup before re-running the import"
+    )
+
+
+class SourceStemCollision(UsageError):
+    """Fix round 2, item 4: a source file shares a stem with a frame this job
+    already imported (typically a camera filename counter that reset on a
+    second card), but the bytes differ. Identical content is an ordinary
+    resume-skip (the copy loop's own hash comparison handles that); this is
+    a genuine naming collision the plan cannot resolve on its own."""
+
+    fix = (
+        "rename the file on the card so its stem is unique for this job, or import "
+        "it as a separate job"
+    )
 
 
 def _scan(source: Path, extensions: tuple[str, ...]) -> list[Path]:
@@ -119,8 +152,14 @@ def _copy_verified(src: Path, dst: Path) -> tuple[str, int]:
 
 
 def _write_atomic(path: Path, content: str) -> None:
+    """Temp file + fsync + `os.replace` (fix round 2, item 2): fsync before
+    the rename so the bytes are durable before the name that points at them
+    is, not just before the next line of Python runs."""
     tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(content, encoding="utf-8")
+    with tmp.open("w", encoding="utf-8") as fh:
+        fh.write(content)
+        fh.flush()
+        os.fsync(fh.fileno())
     os.replace(tmp, path)
 
 
@@ -128,19 +167,163 @@ def _now_z() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
-def _load_existing_manifest(scouter_dir: Path) -> list[dict]:
-    """The `files[]` of an existing `.scouter/import.json`, or `[]` when the
-    job has never been imported before -- also `[]` (never a crash) if the
-    file is unreadable or not valid JSON, exactly like a first import."""
-    path = scouter_dir / "import.json"
+#: `_REQUIRED_FILE_KEYS` is the shape check for `import.json['files'][i]`:
+#: everything `_merge_manifest_files`, `_plan`'s stem/seq seeding and the
+#: checksums-line writer dereference without a `.get()` guard. A manifest
+#: entry missing one of these would otherwise surface as a bare `KeyError`
+#: deep in an unrelated function instead of one named, typed refusal here.
+_REQUIRED_FILE_KEYS = {"dest", "sha256", "seq", "source_name"}
+
+
+def _validated_manifest(data: object, path: Path) -> dict:
+    if not isinstance(data, dict) or not isinstance(data.get("files"), list):
+        raise ManifestCorrupt(
+            f"{path} is not shaped like a Scouter import manifest (expected an "
+            "object with a `files` list)",
+            detail={"path": str(path)},
+        )
+    for entry in data["files"]:
+        if not isinstance(entry, dict) or not _REQUIRED_FILE_KEYS <= set(entry):
+            raise ManifestCorrupt(
+                f"{path} has a `files[]` entry missing one of {sorted(_REQUIRED_FILE_KEYS)}",
+                detail={"path": str(path)},
+            )
+    return data
+
+
+def _read_manifest(path: Path) -> dict | None:
+    """The full parsed `import.json`, or `None` if it simply doesn't exist
+    yet (a first import). Raises `ManifestCorrupt` for a file that exists
+    but cannot be trusted -- never confused with "doesn't exist" (fix round
+    2, item 1)."""
     if not path.is_file():
-        return []
+        return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    files = data.get("files") if isinstance(data, dict) else None
-    return files if isinstance(files, list) else []
+    except (OSError, json.JSONDecodeError) as e:
+        raise ManifestCorrupt(f"{path} is not valid JSON: {e}", detail={"path": str(path)}) from e
+    return _validated_manifest(data, path)
+
+
+_DEST_SEQ_RE = re.compile(r"^[a-z0-9-]+_(\d+)\.[A-Za-z0-9]+$")
+
+
+def _seq_from_dest_name(name: str, date: str, job_slug: str) -> int | None:
+    """`seq` recovered from a `<date>_<job_slug>_<camera>_<seq>.<ext>` name
+    Scouter itself wrote. `paths.validate_slug` forbids `_` in both the
+    camera slug and the job slug, so the LAST `_<digits>` group before the
+    extension is unambiguous -- no need to already know the camera slug to
+    parse it out. `None` for anything that doesn't match this job's names."""
+    prefix = f"{date}_{job_slug}_"
+    if not name.startswith(prefix):
+        return None
+    match = _DEST_SEQ_RE.match(name[len(prefix) :])
+    return int(match.group(1)) if match else None
+
+
+def _synthesize_from_checksums(checksums_path: Path, date: str, job_slug: str) -> list[dict]:
+    """Fix round 2, item 1: `import.json` is missing (or is the stale half of
+    a torn write -- item 2), but `checksums.sha256` survives. Its dest names
+    carry `seq`, so entries rebuilt from it still keep `seq` from ever
+    restarting, even though the richer EXIF fields (`source_name`,
+    `captured_at`, ...) are gone for good -- `source_name` degrades to the
+    destination's own name, which is honestly what is still known.
+
+    Known limitation, stated plainly: because the ORIGINAL camera filename is
+    gone, a file still sitting on the SAME card at recovery time will not
+    stem-match its old entry (that mapping is genuinely unrecoverable), so it
+    gets a fresh `seq`/name rather than being recognised as already-imported.
+    `seq` still never restarts or collides -- the guarantee this fix makes --
+    but a rescanned card can duplicate content under a second name. A missing
+    manifest is already an abnormal state; this is the honest cost of it."""
+    out: list[dict] = []
+    if not checksums_path.is_file():
+        return out
+    for line in checksums_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        sha, _, relpath = line.partition("  ")
+        name = relpath[len("raw/") :] if relpath.startswith("raw/") else relpath
+        out.append(
+            {
+                "seq": _seq_from_dest_name(name, date, job_slug),
+                "dest": f"raw/{name}",
+                "source_name": name,
+                "bytes": None,
+                "sha256": sha,
+                "captured_at": None,
+                "subsec": 0,
+                "exposure_time": None,
+                "iso": None,
+                "f_number": None,
+                "status": "recovered_from_checksums",
+            }
+        )
+    return out
+
+
+def _synthesize_from_raw_dir(raw_dir: Path, date: str, job_slug: str) -> list[dict]:
+    """Fix round 2, item 1: the last resort -- both manifest files are gone,
+    but `raw/` itself still holds the copies. Re-hashes them (there is no
+    recorded sha256 left to trust instead), so `seq` still never restarts."""
+    out: list[dict] = []
+    if not raw_dir.is_dir():
+        return out
+    for entry in sorted(raw_dir.iterdir()):
+        if not entry.is_file() or entry.suffix.lower() == ".xmp":
+            continue
+        seq = _seq_from_dest_name(entry.name, date, job_slug)
+        if seq is None:
+            continue  # not one of this job's own names
+        out.append(
+            {
+                "seq": seq,
+                "dest": f"raw/{entry.name}",
+                "source_name": entry.name,
+                "bytes": entry.stat().st_size,
+                "sha256": _hash_file(entry),
+                "captured_at": None,
+                "subsec": 0,
+                "exposure_time": None,
+                "iso": None,
+                "f_number": None,
+                "status": "recovered_from_raw_dir",
+            }
+        )
+    return out
+
+
+def _recover_existing_files(
+    scouter_dir: Path, raw_dir: Path, date: str, job_slug: str
+) -> list[dict]:
+    """The seed for both never-shrinking merge (fix round 1, blocker 1) and
+    stable `seq` (fix round 1, blocker 2), recovered as far down this chain
+    as it has to go: `import.json` -> `checksums.sha256` -> `raw/`'s own
+    filenames (fix round 2, item 1) -- a lost or torn manifest degrades the
+    historical richness of the record, never its safety.
+    """
+    import_json = scouter_dir / "import.json"
+    checksums = scouter_dir / "checksums.sha256"
+
+    manifest = _read_manifest(import_json)  # raises ManifestCorrupt, never a bare KeyError
+    if manifest is not None:
+        files = manifest["files"]
+        if checksums.is_file() and checksums.stat().st_mtime > import_json.stat().st_mtime:
+            # Fix round 2, item 2: `_persist_manifest` replaces checksums.sha256
+            # FIRST, import.json second -- so a checksums.sha256 NEWER than
+            # import.json means a crash landed between the two replaces, and
+            # import.json is the stale half of the pair. It still parsed (this
+            # branch), so its entries are trustworthy for anything already in
+            # them; checksums.sha256 is the authority for which `seq` values
+            # are actually in use, so its dest-derived entries are folded in
+            # too (documented here, per the review).
+            recovered = _synthesize_from_checksums(checksums, date, job_slug)
+            return _merge_manifest_files(files, recovered)
+        return files
+
+    if checksums.is_file():
+        return _synthesize_from_checksums(checksums, date, job_slug)
+    return _synthesize_from_raw_dir(raw_dir, date, job_slug)
 
 
 def _merge_manifest_files(existing: list[dict], new: list[dict]) -> list[dict]:
@@ -191,16 +374,21 @@ def _plan(
     job_slug: str,
     date: str | None,
     camera: str | None,
-) -> tuple[str, str, str | None, str | None, list[dict], list[dict]]:
+) -> tuple[str, str, str | None, str | None, list[dict], list[dict], set[str]]:
     """Read EXIF for every candidate, derive `date`/`camera` when not given,
     sort by `capture_key`, and assign one `seq` per stem (so `P1.ORF` and
     `P1.JPG` share a number). Returns
-    `(date, camera, camera_model, camera_make, plan, existing_files)` --
-    `plan` entries carry `Path` objects, never serialised themselves (the
-    caller builds both the dry-run preview and `import.json`'s `files[]`
-    from them); `existing_files` is this job's prior `import.json['files']`
-    (`[]` on a first import), returned so the caller doesn't have to re-read
-    it a second time to merge the manifest (fix round 1, blocker 1).
+    `(date, camera, camera_model, camera_make, plan, existing_files,
+    pre_existing_stems)` -- `plan` entries carry `Path` objects, never
+    serialised themselves (the caller builds both the dry-run preview and
+    `import.json`'s `files[]` from them); `existing_files` is this job's
+    prior manifest, recovered as far down `_recover_existing_files`'s chain
+    as it had to go (`[]` on a genuine first import), returned so the caller
+    doesn't have to re-read it a second time to merge the manifest (fix
+    round 1, blocker 1); `pre_existing_stems` is the stems already in
+    `existing_files` BEFORE this run added any of its own, so the copy loop
+    can tell a stem reused across cards apart from a stem merely repeated
+    within this run's own plan (fix round 2, item 4).
 
     Fix round 1, blocker 2 (stable sequence): `seq` is seeded from the
     EXISTING manifest's `source_name -> seq` mapping, not restarted at 1 --
@@ -208,6 +396,22 @@ def _plan(
     renames or collides with a frame this job already assigned a number.
     """
     tagged = [(f, exif.read_tags(f)) for f in files]
+
+    if date is None:
+        # Fix round 2, item 5: a job's date is fixed at its FIRST import and
+        # never re-derived -- a card spanning midnight, or a re-run whose
+        # surviving frames' earliest capture time shifted, must not create a
+        # SECOND job directory for the same slug. The job directory's own
+        # name IS that fixed date (`<YYYY-MM-DD> <slug>`, design 4.4), so
+        # recovering it needs no manifest read at all.
+        try:
+            existing_job_path = config.find_job(cfg, job_slug)
+        except UsageError as e:
+            if "candidates" in e.detail:
+                raise  # genuinely ambiguous: more than one job shares the slug
+            existing_job_path = None
+        if existing_job_path is not None:
+            date = existing_job_path.name.rsplit(" ", 1)[0]
 
     if date is None:
         times = [t.captured_at for _, t in tagged if t.captured_at]
@@ -219,14 +423,22 @@ def _plan(
             )
         date = min(times)[:10]
 
-    # Needs `date` (just resolved above) and `job_slug`; a plain read, so
-    # this is safe to do even for a dry run (ruling 3 only forbids writes).
-    job_scouter_dir = config.scouter_dir(config.job_dir(cfg, date, job_slug))
-    existing_files = _load_existing_manifest(job_scouter_dir)
+    # Needs `date` (just resolved above) and `job_slug`; a plain read (even
+    # the raw-dir fallback tier only hashes files already on disk, not the
+    # card), so this is safe to do even for a dry run (ruling 3 only forbids
+    # writes and card-side hashing).
+    job_path = config.job_dir(cfg, date, job_slug)
+    existing_files = _recover_existing_files(
+        config.scouter_dir(job_path), config.raw_dir(job_path), date, job_slug
+    )
     stem_seq: dict[str, int] = {}
     for entry in existing_files:
-        stem_seq.setdefault(Path(entry["source_name"]).stem, entry["seq"])
-    next_seq = max(stem_seq.values(), default=0) + 1
+        seq = entry.get("seq")
+        if isinstance(seq, int):
+            stem_seq.setdefault(Path(entry["source_name"]).stem, seq)
+    pre_existing_stems = set(stem_seq)
+    all_seqs = [e["seq"] for e in existing_files if isinstance(e.get("seq"), int)]
+    next_seq = max([*stem_seq.values(), *all_seqs], default=0) + 1
 
     if camera is None:
         slugs = {exif.camera_slug(t, cfg) for _, t in tagged}
@@ -276,6 +488,7 @@ def _plan(
         plan.append(
             {
                 "seq": seq,
+                "stem": stem,
                 "source": path,
                 "source_name": path.name,
                 "dest_name": dest_name,
@@ -287,7 +500,7 @@ def _plan(
                 "f_number": tags.f_number,
             }
         )
-    return date, camera, camera_model, camera_make, plan, existing_files
+    return date, camera, camera_model, camera_make, plan, existing_files, pre_existing_stems
 
 
 @metrics.instrumented("library.import")
@@ -331,9 +544,15 @@ def import_card(
             },
         )
 
-    resolved_date, resolved_camera, camera_model, camera_make, planned, existing_files = _plan(
-        files, cfg, job_slug, date, camera
-    )
+    (
+        resolved_date,
+        resolved_camera,
+        camera_model,
+        camera_make,
+        planned,
+        existing_files,
+        pre_existing_stems,
+    ) = _plan(files, cfg, job_slug, date, camera)
 
     plan_view = [
         {
@@ -369,17 +588,27 @@ def import_card(
     scouter_d = config.scouter_dir(job_path)
     raw.mkdir(parents=True, exist_ok=True)
     scouter_d.mkdir(parents=True, exist_ok=True)
-    # Fix round 1, nit: sweep `.part` leftovers from a run that died mid-copy
-    # (a hard kill, a power loss) before starting -- `_copy_verified` always
-    # cleans up its own tmp file on a normal return or a checksum mismatch,
-    # so anything still here is from a run that never got that far.
+    # Fix round 1, nit (fix round 2: age-guarded): sweep `.part` leftovers
+    # from a run that died mid-copy (a hard kill, a power loss) before
+    # starting -- `_copy_verified` always cleans up its own tmp file on a
+    # normal return or a checksum mismatch, so anything still here is from a
+    # run that never got that far. Only files older than an hour: a fresher
+    # `.part` might belong to a genuinely concurrent import of this same job
+    # (rare, but `_copy_verified`'s own O_EXCL-equivalent already covers the
+    # final link -- this sweep must not race it by deleting live work).
+    part_cutoff = time.time() - STALE_PART_AGE_S
     for stale in raw.glob(".*.part"):
-        stale.unlink(missing_ok=True)
+        try:
+            if stale.stat().st_mtime < part_cutoff:
+                stale.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     meta = {
         "version": 1,
         "job_slug": job_slug,
         "date": resolved_date,
+        "job_date": resolved_date,
         "camera": resolved_camera,
         "camera_model": camera_model,
         "camera_make": camera_make,
@@ -410,6 +639,23 @@ def import_card(
                         "skipped_identical" if cfg.import_.skip_identical else "already_present"
                     )
                     skipped += 1
+                elif p["stem"] in pre_existing_stems:
+                    # Fix round 2, item 4: this stem was already imported in
+                    # an earlier run (usually a camera filename counter that
+                    # reset on a second card) -- identical content is the
+                    # ordinary resume-skip above; different content is a
+                    # naming collision the plan cannot resolve on its own,
+                    # distinct from a generic occupied destination.
+                    raise SourceStemCollision(
+                        f"{src} shares the stem {p['stem']!r} with {dest.name}, "
+                        "already imported by an earlier run of this job, but the "
+                        "bytes differ",
+                        detail={
+                            "stem": p["stem"],
+                            "new_source": str(src),
+                            "existing_dest": str(dest),
+                        },
+                    )
                 else:
                     raise DestinationCollision(
                         f"{dest} already exists with different content than {src}",
@@ -437,11 +683,13 @@ def import_card(
                     "status": status,
                 }
             )
-    except Exception as e:
-        # Fix round 1, should-fix 5: whatever landed THIS run before the
-        # failure is still real, and the manifest must not stay silent about
-        # it -- write the merged manifest now (never shrinking what a prior
-        # run already recorded), and name how far this run got in the
+    except BaseException as e:
+        # Fix round 1, should-fix 5 (fix round 2: BaseException, item 2 --
+        # so a Ctrl-C/KeyboardInterrupt mid-loop still persists what landed,
+        # not just a typed ScouterError): whatever landed THIS run before
+        # the failure is still real, and the manifest must not stay silent
+        # about it -- write the merged manifest now (never shrinking what a
+        # prior run already recorded), and name how far this run got in the
         # error's own detail, so the agent isn't left guessing.
         totals = {
             "planned": len(planned),
@@ -449,13 +697,27 @@ def import_card(
             "skipped_identical": skipped,
             "bytes": total_bytes,
         }
-        _persist_manifest(scouter_d, {**meta, "totals": totals}, existing_files, files_out)
+        manifest_written = False
+        persist_error: Exception | None = None
+        try:
+            _persist_manifest(scouter_d, {**meta, "totals": totals}, existing_files, files_out)
+            manifest_written = True
+        except Exception as persist_exc:
+            # Fix round 2, item 3: a failure HERE (e.g. the merge's own
+            # differing-hash check) must never replace or mask the ORIGINAL
+            # error as what the caller sees -- attach it to that error's own
+            # detail instead, and still raise the original.
+            persist_error = persist_exc
         if isinstance(e, ScouterError):
             e.detail = {
                 **e.detail,
                 "files_landed_this_run": len(files_out),
-                "manifest_written": True,
+                "manifest_written": manifest_written,
             }
+            if persist_error is not None:
+                e.detail["manifest_persist_error"] = (
+                    f"{type(persist_error).__name__}: {persist_error}"
+                )
         raise
 
     totals = {
@@ -543,14 +805,15 @@ def _verify_at(job_slug: str, job_path: Path) -> VerifyResult:
             detail={"job_slug": job_slug, "checksums_path": str(checksums_path)},
         )
 
+    # Fix round 2, nit: the guard above already proved this file exists --
+    # re-checking `.is_file()` here was dead, unreachable-false code.
     manifest: dict[str, str] = {}
-    if checksums_path.is_file():
-        for line in checksums_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            sha, _, relpath = line.partition("  ")
-            name = relpath[len("raw/") :] if relpath.startswith("raw/") else relpath
-            manifest[name] = sha
+    for line in checksums_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        sha, _, relpath = line.partition("  ")
+        name = relpath[len("raw/") :] if relpath.startswith("raw/") else relpath
+        manifest[name] = sha
 
     present = (
         {p.name: p for p in raw.iterdir() if p.is_file() and p.suffix.lower() != ".xmp"}

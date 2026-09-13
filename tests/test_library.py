@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -18,6 +19,7 @@ from unittest import mock
 from darktable_mcp.bridge.client import BridgeTimeoutError
 from scouter import config
 from scouter.core import dtbridge, exif, library
+from scouter.core.library import ManifestCorrupt, SourceStemCollision
 from scouter.errors import (
     BackupNotConfigured,
     BridgeTimeout,
@@ -212,9 +214,11 @@ class CopyTest(LibraryTestCase):
         self.assertEqual(chmod_spy2.call_count, 0)  # never re-chmod-ed
 
         # Now the source content changes under the same name: resume must
-        # refuse rather than silently overwrite.
+        # refuse rather than silently overwrite. This is a reused STEM (fix
+        # round 2, item 4), so the typed error is `SourceStemCollision`, not
+        # the generic `DestinationCollision`.
         files[0].write_bytes(files[0].read_bytes() + b"more-bytes-now")
-        with self.assertRaises(DestinationCollision):
+        with self.assertRaises(SourceStemCollision):
             library.import_card(str(source), "harbour-wedding", confirm=True)
 
 
@@ -445,6 +449,227 @@ class VerifyNoManifestTest(LibraryTestCase):
         (job_path / "raw").mkdir(parents=True)
         with self.assertRaises(UsageError):
             library.verify("harbour-wedding")
+
+
+class ManifestRecoveryTest(LibraryTestCase):
+    """Fix round 2, item 1: `import.json` missing/unparseable/malformed."""
+
+    def test_missing_import_json_recovers_seq_from_checksums(self) -> None:
+        source = self.tmp / "card"
+        files = _make_card(source, 3)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        job_path = Path(result1.path)
+        (job_path / ".scouter" / "import.json").unlink()
+
+        # A NEW card for the re-run (the old frames are not rescanned -- once
+        # `import.json` is gone, the original camera filename that would
+        # stem-match them is gone with it; see `_synthesize_from_checksums`'s
+        # documented limitation). This is also the realistic case: a lost
+        # manifest discovered when the NEXT card is imported.
+        for old in files:
+            old.unlink()
+        _write_one(source, "P6281003.ORF", "2026:06:28 15:49:31")
+        result2 = library.import_card(str(source), "harbour-wedding", confirm=True)
+
+        self.assertEqual(result2.totals["copied"], 1)  # only the new frame
+        new_entry = next(f for f in result2.files if f["source_name"] == "P6281003.ORF")
+        self.assertEqual(new_entry["seq"], 4)  # never restarts at 1
+        self.assertEqual(len(result2.files), 4)  # the recovered 3 + the new one
+        vr = library.verify("harbour-wedding")
+        self.assertTrue(vr.ok)
+
+    def test_missing_both_manifest_files_recovers_seq_from_raw_dir(self) -> None:
+        source = self.tmp / "card"
+        files = _make_card(source, 2)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        job_path = Path(result1.path)
+        (job_path / ".scouter" / "import.json").unlink()
+        (job_path / ".scouter" / "checksums.sha256").unlink()
+
+        for old in files:
+            old.unlink()
+        _write_one(source, "P6281002.ORF", "2026:06:28 15:49:30")
+        result2 = library.import_card(str(source), "harbour-wedding", confirm=True)
+
+        self.assertEqual(result2.totals["copied"], 1)
+        new_entry = next(f for f in result2.files if f["source_name"] == "P6281002.ORF")
+        self.assertEqual(new_entry["seq"], 3)
+        self.assertEqual(len(result2.files), 3)  # the 2 recovered from raw/ + the new one
+
+    def test_unparseable_import_json_is_manifest_corrupt(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        import_json = Path(result1.path) / ".scouter" / "import.json"
+        import_json.write_text("{not valid json", encoding="utf-8")
+
+        with self.assertRaises(ManifestCorrupt) as ctx:
+            library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertEqual(ctx.exception.detail["path"], str(import_json))
+        self.assertTrue(ctx.exception.fix)
+
+    def test_malformed_import_json_is_manifest_corrupt(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        import_json = Path(result1.path) / ".scouter" / "import.json"
+        # Valid JSON, wrong shape: a `files[]` entry missing required keys.
+        import_json.write_text(json.dumps({"files": [{"dest": "raw/x.orf"}]}), encoding="utf-8")
+
+        with self.assertRaises(ManifestCorrupt):
+            library.import_card(str(source), "harbour-wedding", confirm=True)
+
+
+class AtomicManifestPairTest(LibraryTestCase):
+    """Fix round 2, item 2: checksums.sha256 newer than import.json (a torn
+    write) is the authority for `seq` recovery."""
+
+    def test_checksums_newer_than_import_json_is_authoritative_for_seq(self) -> None:
+        source = self.tmp / "card"
+        files = _make_card(source, 2)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        job_path = Path(result1.path)
+        import_json = job_path / ".scouter" / "import.json"
+
+        # Simulate a crash between the two atomic replaces: roll import.json
+        # back to look like an EARLIER state (as if the checksums.sha256
+        # replace for the 2nd frame landed but import.json's never did), then
+        # make sure its mtime is older than checksums.sha256's.
+        manifest = json.loads(import_json.read_text())
+        stale_files = [f for f in manifest["files"] if f["seq"] != 2]
+        manifest["files"] = stale_files
+        import_json.write_text(json.dumps(manifest, indent=2))
+        os.utime(import_json, (time.time() - 10, time.time() - 10))
+
+        # A NEW card for the re-run: the frame recovered from checksums.sha256
+        # (seq 2) has a degraded `source_name` (see `_synthesize_from_checksums`),
+        # so it would not stem-match if rescanned -- keep the old files off
+        # the card, exactly like `test_missing_import_json_recovers_seq_from_checksums`.
+        for old in files:
+            old.unlink()
+        _write_one(source, "P6281002.ORF", "2026:06:28 15:49:31")
+        result2 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        new_entry = next(f for f in result2.files if f["source_name"] == "P6281002.ORF")
+        # Had seq recovery trusted the rolled-back import.json (max seq 1), the
+        # new frame would have collided with seq 2; checksums.sha256 (never
+        # rolled back) keeps it at 3.
+        self.assertEqual(new_entry["seq"], 3)
+
+
+class PartialManifestOnErrorTest(LibraryTestCase):
+    """Fix round 1, should-fix 5 + fix round 2, items 2-3."""
+
+    def test_keyboard_interrupt_mid_loop_still_persists_what_landed(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 3)
+        real_copy_verified = library._copy_verified
+        calls = {"n": 0}
+
+        def flaky_copy(src, dst):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise KeyboardInterrupt
+            return real_copy_verified(src, dst)
+
+        with mock.patch.object(library, "_copy_verified", side_effect=flaky_copy):
+            with self.assertRaises(KeyboardInterrupt):
+                library.import_card(str(source), "harbour-wedding", confirm=True)
+
+        job_path = self._job_path()
+        manifest = json.loads((job_path / ".scouter" / "import.json").read_text())
+        self.assertEqual(len(manifest["files"]), 1)  # the one file that landed
+        checksum_lines = (job_path / ".scouter" / "checksums.sha256").read_text().splitlines()
+        self.assertEqual(len(checksum_lines), 1)
+
+    def test_a_persist_failure_in_the_error_path_does_not_mask_the_original_error(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 3)
+        with mock.patch.object(library, "_persist_manifest", side_effect=RuntimeError("disk full")):
+            real_copy_verified = library._copy_verified
+            calls = {"n": 0}
+
+            def flaky_copy(src, dst):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    raise ChecksumMismatch("boom", detail={})
+                return real_copy_verified(src, dst)
+
+            with mock.patch.object(library, "_copy_verified", side_effect=flaky_copy):
+                with self.assertRaises(ChecksumMismatch) as ctx:
+                    library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertFalse(ctx.exception.detail["manifest_written"])
+        self.assertIn("disk full", ctx.exception.detail["manifest_persist_error"])
+
+
+class OverlappingStemTest(LibraryTestCase):
+    """Fix round 2, item 4: a second card reusing a source stem."""
+
+    def test_overlapping_stem_different_content_is_a_typed_error(self) -> None:
+        first = self.tmp / "card"
+        _write_one(first, "P0001.ORF", "2026:06:28 15:49:28")
+        library.import_card(str(first), "harbour-wedding", confirm=True)
+
+        second = self.tmp / "card2"
+        _write_one(second, "P0001.ORF", "2026:06:28 15:50:00")  # same stem, different bytes
+        with self.assertRaises(SourceStemCollision) as ctx:
+            library.import_card(str(second), "harbour-wedding", confirm=True)
+        self.assertEqual(ctx.exception.detail["stem"], "P0001")
+        self.assertTrue(ctx.exception.fix)
+
+    def test_overlapping_stem_identical_content_is_skipped(self) -> None:
+        first = self.tmp / "card"
+        tail = os.urandom(2048)
+        _write_one(first, "P0001.ORF", "2026:06:28 15:49:28", tail=tail)
+        result1 = library.import_card(str(first), "harbour-wedding", confirm=True)
+
+        second = self.tmp / "card2"
+        _write_one(second, "P0001.ORF", "2026:06:28 15:49:28", tail=tail)  # identical bytes
+        result2 = library.import_card(str(second), "harbour-wedding", confirm=True)
+        self.assertEqual(result2.totals["copied"], 0)
+        self.assertEqual(result2.totals["skipped_identical"], 1)
+        self.assertEqual(len(result2.files), 1)
+        self.assertEqual(result1.files[0]["dest"], result2.files[0]["dest"])
+
+    def test_a_foreign_file_occupying_a_brand_new_name_is_still_destination_collision(
+        self,
+    ) -> None:
+        """A genuinely NEW stem (never imported before) computing a name that
+        happens to be occupied by unrelated content is still the generic
+        `DestinationCollision` -- `SourceStemCollision` is specifically for a
+        REUSED stem, not any occupied name."""
+        source = self.tmp / "card"
+        _write_one(source, "P0001.ORF", "2026:06:28 15:49:28")
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        job_path = Path(result1.path)
+        foreign_name = result1.files[0]["dest"].replace("_0001.", "_0002.")
+        (job_path / foreign_name).write_bytes(b"not one of scouter's own copies")
+
+        _write_one(source, "P0002.ORF", "2026:06:28 15:49:30")  # a genuinely new stem
+        with self.assertRaises(DestinationCollision):
+            library.import_card(str(source), "harbour-wedding", confirm=True)
+
+
+class MidnightCardTest(LibraryTestCase):
+    """Fix round 2, item 5: the job date is fixed at first import."""
+
+    def test_job_date_is_fixed_and_reused_across_reruns(self) -> None:
+        source = self.tmp / "card"
+        early = _write_one(source, "P0001.ORF", "2026:06:28 23:58:00")
+        _write_one(source, "P0002.ORF", "2026:06:29 00:03:00")
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertEqual(result1.date, "2026-06-28")
+        manifest = json.loads((Path(result1.path) / ".scouter" / "import.json").read_text())
+        self.assertEqual(manifest["job_date"], "2026-06-28")
+
+        # Remove the earliest frame: if the date were re-derived instead of
+        # reused, this re-run would compute "2026-06-29" and create a SECOND
+        # job directory.
+        early.unlink()
+        result2 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertEqual(result2.date, "2026-06-28")
+        self.assertEqual(result2.path, result1.path)
+        drifted_path = self._job_path("2026-06-29").parent / "2026-06-29 harbour-wedding"
+        self.assertFalse(drifted_path.exists())
 
 
 class SingleEventTest(LibraryTestCase):
