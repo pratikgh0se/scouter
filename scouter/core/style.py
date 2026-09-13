@@ -1,16 +1,20 @@
-"""Styles: extract the hero's recipe, apply it back. One image in phase 1.
+"""Styles: extract the hero's recipe, apply it back.
 
-Two honest limits of Lua API 9.6.0, surfaced in the result rather than hidden:
-  * dt.styles.create has no module filter, so `modules` is recorded as
-    requested and `modules_honoured` is false. Filtering by writing a .dtstyle
-    from the XMP and importing it is phase 2.
-  * image:apply_style always APPENDS. `mode="overwrite"` is refused OUTRIGHT
-    -- in this module, with the typed code `unsupported_mode`, before any
-    bridge call -- because silently appending when the caller asked to
-    overwrite is exactly the phantom success the honesty pass removed. It is
-    not a confirmation gate: no `--yes` makes it work, so there is nothing to
-    confirm (final review, should-fix 7). The bridge refuses it too, but that
-    refusal arrives as a generic bridge failure after a round trip.
+`style.extract`'s module filter is real (task 7): the default path writes a
+`.dtstyle` from the image's own XMP (`scouter.core.dtstyle`) and imports it,
+so `modules_honoured` genuinely reports `true`. `dt.styles.create` (phase
+1's path, `no_filter=True`) still has no module filter of its own -- kept as
+an honest escape hatch, e.g. when a caller wants the whole history on
+purpose, surfaced as `modules_honoured=False` rather than hidden.
+
+One honest limit remains unconditional: `image:apply_style` always APPENDS.
+`mode="overwrite"` is refused OUTRIGHT -- in this module, with the typed code
+`unsupported_mode`, before any bridge call -- because silently appending when
+the caller asked to overwrite is exactly the phantom success the honesty
+pass removed. It is not a confirmation gate: no `--yes` makes it work, so
+there is nothing to confirm (final review, should-fix 7). The bridge refuses
+it too, but that refusal arrives as a generic bridge failure after a round
+trip.
 """
 
 from __future__ import annotations
