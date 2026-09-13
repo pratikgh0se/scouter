@@ -600,6 +600,30 @@ class PartialManifestOnErrorTest(LibraryTestCase):
         self.assertFalse(ctx.exception.detail["manifest_written"])
         self.assertIn("disk full", ctx.exception.detail["manifest_persist_error"])
 
+    def test_a_keyboard_interrupt_during_the_persist_itself_does_not_mask_the_original(
+        self,
+    ) -> None:
+        """Fix round 3, should-fix 3: the inner guard catches BaseException,
+        not just Exception -- a SECOND Ctrl-C landing during the recovery
+        write is recorded, not left to propagate in place of the original."""
+        source = self.tmp / "card"
+        _make_card(source, 3)
+        with mock.patch.object(library, "_persist_manifest", side_effect=KeyboardInterrupt):
+            real_copy_verified = library._copy_verified
+            calls = {"n": 0}
+
+            def flaky_copy(src, dst):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    raise ChecksumMismatch("boom", detail={})
+                return real_copy_verified(src, dst)
+
+            with mock.patch.object(library, "_copy_verified", side_effect=flaky_copy):
+                with self.assertRaises(ChecksumMismatch) as ctx:
+                    library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertFalse(ctx.exception.detail["manifest_written"])
+        self.assertIn("KeyboardInterrupt", ctx.exception.detail["manifest_persist_error"])
+
 
 class OverlappingStemTest(LibraryTestCase):
     """Fix round 2, item 4: a second card reusing a source stem."""
@@ -670,6 +694,138 @@ class MidnightCardTest(LibraryTestCase):
         self.assertEqual(result2.path, result1.path)
         drifted_path = self._job_path("2026-06-29").parent / "2026-06-29 harbour-wedding"
         self.assertFalse(drifted_path.exists())
+
+    def test_explicit_date_differing_from_existing_job_is_refused(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+
+        with self.assertRaises(UsageError) as ctx:
+            library.import_card(str(source), "harbour-wedding", date="2026-07-01", confirm=True)
+        self.assertEqual(ctx.exception.detail["existing_date"], "2026-06-28")
+        self.assertEqual(ctx.exception.detail["requested_date"], "2026-07-01")
+        self.assertIn(result1.path, ctx.exception.detail["existing_path"])
+        self.assertTrue(ctx.exception.fix)
+
+    def test_explicit_date_matching_existing_job_is_fine(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        result2 = library.import_card(
+            str(source), "harbour-wedding", date="2026-06-28", confirm=True
+        )
+        self.assertEqual(result2.path, result1.path)
+
+
+class ManifestWinsMergeTest(LibraryTestCase):
+    """Fix round 3 blocker: the reviewer's own falsifiable probe -- a re-run
+    after a torn write, with the card still inserted, must not duplicate it."""
+
+    def test_torn_write_with_card_present_does_not_duplicate_the_card(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        job_path = Path(result1.path)
+        import_json = job_path / ".scouter" / "import.json"
+
+        # Roll import.json back one entry (as if checksums.sha256's replace
+        # for the 2nd frame landed but import.json's own replace never did),
+        # with an OLDER mtime than checksums.sha256's -- the exact "torn
+        # write" shape `_recover_existing_files` is built to detect.
+        manifest = json.loads(import_json.read_text())
+        manifest["files"] = [f for f in manifest["files"] if f["seq"] != 2]
+        import_json.write_text(json.dumps(manifest, indent=2))
+        os.utime(import_json, (time.time() - 10, time.time() - 10))
+
+        # The card is UNCHANGED -- both original frames are still there.
+        result2 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertEqual(result2.totals["copied"], 0)
+        self.assertEqual(result2.totals["skipped_identical"], 2)
+        self.assertEqual(len(result2.files), 2)  # never duplicated
+        vr = library.verify("harbour-wedding")
+        self.assertTrue(vr.ok)
+        self.assertEqual(vr.checked, 2)
+
+    def test_recovered_entries_never_overwrite_good_parsed_entries(self) -> None:
+        """Narrower unit-level check of the same blocker: `_fill_manifest_gaps`
+        itself, independent of the full import path above."""
+        good = [{"dest": "raw/a.orf", "sha256": "aaaa", "seq": 1, "source_name": "P1.ORF"}]
+        degraded = [
+            {
+                "dest": "raw/a.orf",
+                "sha256": "aaaa",
+                "seq": 1,
+                "source_name": "raw/a.orf",  # what a recovered entry looks like
+            },
+            {"dest": "raw/b.orf", "sha256": "bbbb", "seq": 2, "source_name": "raw/b.orf"},
+        ]
+        merged = library._fill_manifest_gaps(good, degraded)
+        by_dest = {f["dest"]: f for f in merged}
+        self.assertEqual(by_dest["raw/a.orf"]["source_name"], "P1.ORF")  # good entry kept
+        self.assertEqual(by_dest["raw/b.orf"]["source_name"], "raw/b.orf")  # gap filled
+
+
+class MissingRawFileTest(LibraryTestCase):
+    """Fix round 3, should-fix 2."""
+
+    def test_missing_raw_file_with_matching_source_hash_is_recopied(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        job_path = Path(result1.path)
+        dest0 = job_path / result1.files[0]["dest"]
+        dest0.chmod(0o644)
+        dest0.unlink()
+
+        result2 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertEqual(result2.totals["copied"], 1)  # the re-copied one
+        self.assertEqual(result2.totals["skipped_identical"], 1)
+        self.assertTrue(dest0.is_file())
+        vr = library.verify("harbour-wedding")
+        self.assertTrue(vr.ok)
+
+    def test_missing_raw_file_with_differing_source_hash_is_a_typed_error_before_any_write(
+        self,
+    ) -> None:
+        source = self.tmp / "card"
+        files = _make_card(source, 2)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        job_path = Path(result1.path)
+        dest0 = job_path / result1.files[0]["dest"]
+        dest0.chmod(0o644)
+        dest0.unlink()
+
+        # The source file at that same name/position now has DIFFERENT bytes.
+        files[0].write_bytes(files[0].read_bytes() + b"changed-after-the-fact")
+        with self.assertRaises(ChecksumMismatch) as ctx:
+            library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertFalse(dest0.exists())  # refused before any write landed
+        self.assertIn("expected", ctx.exception.detail)
+        self.assertIn("actual", ctx.exception.detail)
+
+
+class SeqFromDestNameTest(LibraryTestCase):
+    """Fix round 3, should-fix 4: parses from the right; the invariant it
+    depends on (no `_` in a slug) is pinned with an assertion."""
+
+    def test_parses_seq_from_the_right(self) -> None:
+        seq = library._seq_from_dest_name(
+            "2026-06-28_harbour-wedding_em10iii_0007.orf", "2026-06-28", "harbour-wedding"
+        )
+        self.assertEqual(seq, 7)
+
+    def test_non_matching_name_returns_none(self) -> None:
+        self.assertIsNone(
+            library._seq_from_dest_name("unrelated.orf", "2026-06-28", "harbour-wedding")
+        )
+
+    def test_camera_slug_with_underscore_trips_the_invariant_assertion(self) -> None:
+        with self.assertRaises(AssertionError):
+            library._seq_from_dest_name(
+                "2026-06-28_harbour-wedding_em10_iii_0001.orf",
+                "2026-06-28",
+                "harbour-wedding",
+            )
 
 
 class SingleEventTest(LibraryTestCase):

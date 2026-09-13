@@ -205,19 +205,34 @@ def _read_manifest(path: Path) -> dict | None:
     return _validated_manifest(data, path)
 
 
-_DEST_SEQ_RE = re.compile(r"^[a-z0-9-]+_(\d+)\.[A-Za-z0-9]+$")
+_SEQ_EXT_RE = re.compile(r"^(\d+)\.[A-Za-z0-9]+$")
 
 
 def _seq_from_dest_name(name: str, date: str, job_slug: str) -> int | None:
     """`seq` recovered from a `<date>_<job_slug>_<camera>_<seq>.<ext>` name
-    Scouter itself wrote. `paths.validate_slug` forbids `_` in both the
-    camera slug and the job slug, so the LAST `_<digits>` group before the
-    extension is unambiguous -- no need to already know the camera slug to
-    parse it out. `None` for anything that doesn't match this job's names."""
+    Scouter itself wrote. Parses from the RIGHT (fix round 3, should-fix 4):
+    `paths.SLUG_RE` (`^[a-z0-9][a-z0-9-]{0,47}$`) forbids `_` in both the
+    camera slug and the job slug, so `seq` sits after the LAST underscore in
+    the name -- `rpartition("_")` on the part after the known
+    `<date>_<job_slug>_` prefix finds it directly, with no need to already
+    know the camera slug. `None` for anything that doesn't match this job's
+    own names."""
     prefix = f"{date}_{job_slug}_"
     if not name.startswith(prefix):
         return None
-    match = _DEST_SEQ_RE.match(name[len(prefix) :])
+    remainder = name[len(prefix) :]  # "<camera>_<seq>.<ext>"
+    camera_part, sep, seq_and_ext = remainder.rpartition("_")
+    if not sep:
+        return None
+    # Pin the invariant this parse depends on (should-fix 4): a camera slug
+    # can never itself contain `_` (`paths.SLUG_RE`'s character class has
+    # none), so splitting on the LAST `_` must land exactly on the
+    # seq/extension suffix. If `camera_part` still holds one, something
+    # upstream let a slug through that violates that invariant, and this
+    # parse is not trustworthy -- fail loudly here rather than silently
+    # mis-recovering a `seq`.
+    assert "_" not in camera_part, f"camera slug {camera_part!r} contains '_': invariant violated"
+    match = _SEQ_EXT_RE.match(seq_and_ext)
     return int(match.group(1)) if match else None
 
 
@@ -293,6 +308,29 @@ def _synthesize_from_raw_dir(raw_dir: Path, date: str, job_slug: str) -> list[di
     return out
 
 
+def _fill_manifest_gaps(existing: list[dict], extra: list[dict]) -> list[dict]:
+    """Union `existing` and `extra` by destination name, but `existing` WINS
+    for any destination present in both -- `extra` only fills in destinations
+    `existing` doesn't already have an entry for.
+
+    Fix round 3 blocker: `_recover_existing_files` used to call
+    `_merge_manifest_files(files, recovered)`, whose LAST-writer-wins order
+    let a degraded, `source_name`-less `recovered` entry (from
+    `_synthesize_from_checksums`) silently overwrite a perfectly good
+    `import.json` entry for the same destination. Combined with the stem
+    match then failing on the degraded entry (see that function's documented
+    limitation), a re-run after a torn write -- with the card still
+    inserted -- would treat every already-imported frame as new and
+    duplicate the whole card. `existing` (the parsed manifest) is always the
+    richer, more trustworthy source when both have an entry for the same
+    name, so it must never lose to a recovery fallback that only exists to
+    fill in what `existing` is missing.
+    """
+    merged: dict[str, dict] = {f["dest"]: f for f in extra}
+    merged.update({f["dest"]: f for f in existing})
+    return sorted(merged.values(), key=lambda f: f["dest"])
+
+
 def _recover_existing_files(
     scouter_dir: Path, raw_dir: Path, date: str, job_slug: str
 ) -> list[dict]:
@@ -314,11 +352,12 @@ def _recover_existing_files(
             # import.json means a crash landed between the two replaces, and
             # import.json is the stale half of the pair. It still parsed (this
             # branch), so its entries are trustworthy for anything already in
-            # them; checksums.sha256 is the authority for which `seq` values
-            # are actually in use, so its dest-derived entries are folded in
-            # too (documented here, per the review).
+            # them (and WIN over the recovered ones for the same destination --
+            # fix round 3 blocker, `_fill_manifest_gaps`); checksums.sha256 is
+            # the authority for which `seq` values are actually in use, so its
+            # dest-derived entries fill in whatever import.json is missing.
             recovered = _synthesize_from_checksums(checksums, date, job_slug)
-            return _merge_manifest_files(files, recovered)
+            return _fill_manifest_gaps(files, recovered)
         return files
 
     if checksums.is_file():
@@ -397,21 +436,42 @@ def _plan(
     """
     tagged = [(f, exif.read_tags(f)) for f in files]
 
-    if date is None:
-        # Fix round 2, item 5: a job's date is fixed at its FIRST import and
-        # never re-derived -- a card spanning midnight, or a re-run whose
-        # surviving frames' earliest capture time shifted, must not create a
-        # SECOND job directory for the same slug. The job directory's own
-        # name IS that fixed date (`<YYYY-MM-DD> <slug>`, design 4.4), so
-        # recovering it needs no manifest read at all.
-        try:
-            existing_job_path = config.find_job(cfg, job_slug)
-        except UsageError as e:
-            if "candidates" in e.detail:
-                raise  # genuinely ambiguous: more than one job shares the slug
-            existing_job_path = None
-        if existing_job_path is not None:
-            date = existing_job_path.name.rsplit(" ", 1)[0]
+    # Fix round 2, item 5 / fix round 3, should-fix 1: a job's date is fixed
+    # at its FIRST import and never re-derived -- a card spanning midnight,
+    # or a re-run whose surviving frames' earliest capture time shifted,
+    # must not create a SECOND job directory for the same slug. The job
+    # directory's own name IS that fixed date (`<YYYY-MM-DD> <slug>`, design
+    # 4.4), so finding it needs no manifest read at all. This check runs
+    # even when `--date` IS given: an explicit `--date` that disagrees with
+    # an already-existing job for this slug is refused by name, rather than
+    # silently creating a second directory. `config.find_job` without a date
+    # raises when more than one job already shares this slug -- in that
+    # (rare, already-unusual) case, an explicit `--date` is trusted outright
+    # rather than raising an ambiguity error the caller's own `--date` may
+    # already resolve; only a MISSING `--date` still needs find_job's own
+    # disambiguation to fail loudly.
+    try:
+        existing_job_path = config.find_job(cfg, job_slug)
+    except UsageError as e:
+        existing_job_path = None
+        if "candidates" in e.detail and date is None:
+            raise  # genuinely ambiguous, and no --date to disambiguate with
+    if existing_job_path is not None:
+        existing_date = existing_job_path.name.rsplit(" ", 1)[0]
+        if date is None:
+            date = existing_date
+        elif date != existing_date:
+            raise UsageError(
+                f"job {job_slug!r} already exists at {existing_job_path} "
+                f"(date {existing_date}); --date {date} would create a second "
+                "job directory for the same slug",
+                fix=f"omit --date to reuse {existing_date}, or pick a different --job-slug",
+                detail={
+                    "existing_path": str(existing_job_path),
+                    "existing_date": existing_date,
+                    "requested_date": date,
+                },
+            )
 
     if date is None:
         times = [t.captured_at for _, t in tagged if t.captured_at]
@@ -439,6 +499,17 @@ def _plan(
     pre_existing_stems = set(stem_seq)
     all_seqs = [e["seq"] for e in existing_files if isinstance(e.get("seq"), int)]
     next_seq = max([*stem_seq.values(), *all_seqs], default=0) + 1
+    # Fix round 3 blocker (2nd half): a source whose CONTENT already exists
+    # under any destination is a resume-skip, never a new seq -- stem
+    # matching alone is not enough, because a degraded recovery entry (see
+    # `_synthesize_from_checksums`) has a `source_name` that will never
+    # stem-match the real file again. This is the guard that actually stops
+    # a re-run after a torn write, with the card still inserted, from
+    # duplicating the whole card: every file gets hashed here, even during a
+    # dry run -- a deliberate exception to "dry runs hash nothing" (ruling
+    # 3), because the alternative is a plan that can silently double a
+    # card's frame count.
+    sha_index: dict[str, dict] = {e["sha256"]: e for e in existing_files if e.get("sha256")}
 
     if camera is None:
         slugs = {exif.camera_slug(t, cfg) for _, t in tagged}
@@ -463,12 +534,21 @@ def _plan(
     plan: list[dict] = []
     for path, tags in ordered:
         stem = path.stem
-        if stem not in stem_seq:
-            stem_seq[stem] = next_seq
-            next_seq += 1
-        seq = stem_seq[stem]
-        ext = path.suffix.lower()
-        dest_name = f"{date}_{job_slug}_{camera}_{seq:0{seq_digits}d}{ext}"
+        content_hash = _hash_file(path)
+        reused = sha_index.get(content_hash)
+        if reused is not None:
+            # Already imported under some destination -- reuse its `seq` and
+            # name outright, rather than minting a fresh one that would
+            # duplicate it.
+            seq = reused["seq"]
+            dest_name = Path(reused["dest"]).name
+        else:
+            if stem not in stem_seq:
+                stem_seq[stem] = next_seq
+                next_seq += 1
+            seq = stem_seq[stem]
+            ext = path.suffix.lower()
+            dest_name = f"{date}_{job_slug}_{camera}_{seq:0{seq_digits}d}{ext}"
         if dest_name in dest_sources:
             # Fix round 1, should-fix 3: two source files from different card
             # subdirectories sharing a stem+ext (the same camera filename
@@ -617,6 +697,12 @@ def import_card(
         "source_root": str(source_path),
     }
 
+    # Fix round 3, should-fix 2: keyed by dest, so a missing raw/ file whose
+    # destination the manifest already tracks (deleted by hand, or lost with
+    # the disk) can be told apart from a genuinely new destination before
+    # any bytes are written.
+    existing_by_dest = {e["dest"]: e for e in existing_files}
+
     files_out: list[dict] = []
     copied = 0
     skipped = 0
@@ -662,6 +748,30 @@ def import_card(
                         detail={"path": str(dest), "source": str(src)},
                     )
             else:
+                # Fix round 3, should-fix 2: the manifest may already have an
+                # entry for this exact destination (a raw/ file deleted by
+                # hand, or lost with a disk, while its record survived) --
+                # compare the SOURCE's hash against what the manifest already
+                # says BEFORE writing anything. A match means this is a
+                # legitimate re-copy of a known frame (never a fresh seq, per
+                # the sha-dedupe above); a mismatch is a typed error, raised
+                # before any byte lands, not a silent overwrite of what the
+                # manifest already promised.
+                tracked = existing_by_dest.get(f"raw/{p['dest_name']}")
+                if tracked is not None and tracked.get("sha256"):
+                    source_hash = _hash_file(src)
+                    if source_hash != tracked["sha256"]:
+                        raise ChecksumMismatch(
+                            f"{dest} is missing, and the manifest already records "
+                            f"{p['dest_name']} with a different sha256 than {src} "
+                            "has now",
+                            detail={
+                                "destination": str(dest),
+                                "source": str(src),
+                                "expected": tracked["sha256"],
+                                "actual": source_hash,
+                            },
+                        )
                 sha, size = _copy_verified(src, dest)
                 if cfg.import_.read_only_originals:
                     os.chmod(dest, 0o444)
@@ -698,15 +808,18 @@ def import_card(
             "bytes": total_bytes,
         }
         manifest_written = False
-        persist_error: Exception | None = None
+        persist_error: BaseException | None = None
         try:
             _persist_manifest(scouter_d, {**meta, "totals": totals}, existing_files, files_out)
             manifest_written = True
-        except Exception as persist_exc:
-            # Fix round 2, item 3: a failure HERE (e.g. the merge's own
-            # differing-hash check) must never replace or mask the ORIGINAL
-            # error as what the caller sees -- attach it to that error's own
-            # detail instead, and still raise the original.
+        except BaseException as persist_exc:
+            # Fix round 2, item 3 (fix round 3, should-fix 3: BaseException
+            # too, so a second Ctrl-C landing DURING this recovery write is
+            # also recorded rather than propagating in place of the original):
+            # a failure HERE (e.g. the merge's own differing-hash check) must
+            # never replace or mask the ORIGINAL error as what the caller
+            # sees -- attach it to that error's own detail instead, and
+            # still raise the original.
             persist_error = persist_exc
         if isinstance(e, ScouterError):
             e.detail = {
