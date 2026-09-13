@@ -169,6 +169,52 @@ class AppendMergeTest(VaultTestCase):
         self.assertEqual(merged_text.count("## Import "), 2)
 
 
+class AtomicWriteTest(VaultTestCase):
+    def test_crash_mid_write_leaves_previous_note_intact(self) -> None:
+        """`os.replace` failing mid-write (a simulated crash / full disk) must
+        never leave a half-written note in place of the old one -- the write
+        goes through a tmp file, and only a successful `os.replace` swaps it
+        in."""
+        with _vault_env(self.vault_dir):
+            first = vault.write_job_note(self.cfg, _manifest(frames=30, total_bytes=400))
+            note_path = Path(first["path"])
+            original_text = note_path.read_text(encoding="utf-8")
+
+            with mock.patch("os.replace", side_effect=OSError("simulated crash")):
+                with self.assertRaises(OSError):
+                    vault.write_job_note(self.cfg, _manifest(frames=12, total_bytes=100))
+
+        # The note is untouched: the crash happened after the tmp file was
+        # written but before it replaced the real note.
+        self.assertEqual(note_path.read_text(encoding="utf-8"), original_text)
+
+    def test_crash_mid_append_stage_leaves_previous_note_intact(self) -> None:
+        with _vault_env(self.vault_dir):
+            created = vault.write_job_note(self.cfg, _manifest())
+            note_path = Path(created["path"])
+            original_text = note_path.read_text(encoding="utf-8")
+
+            with mock.patch("os.replace", side_effect=OSError("simulated crash")):
+                with self.assertRaises(OSError):
+                    vault.append_stage(
+                        self.cfg, "harbour-wedding", "Cull", rows=[("proposed", "12")]
+                    )
+
+        self.assertEqual(note_path.read_text(encoding="utf-8"), original_text)
+
+
+class SlugValidationTest(VaultTestCase):
+    def test_write_job_note_refuses_a_bad_job_slug(self) -> None:
+        with _vault_env(self.vault_dir):
+            with self.assertRaises(UsageError):
+                vault.write_job_note(self.cfg, _manifest(job_slug="Not A Slug!"))
+
+    def test_append_stage_refuses_a_bad_job_slug(self) -> None:
+        with _vault_env(self.vault_dir):
+            with self.assertRaises(UsageError):
+                vault.append_stage(self.cfg, "Not A Slug!", "Cull", rows=[])
+
+
 class AppendStageTest(VaultTestCase):
     def test_append_stage_ticks_the_checklist(self) -> None:
         with _vault_env(self.vault_dir):

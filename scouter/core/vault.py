@@ -21,8 +21,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from scouter import __version__
+from scouter import __version__, paths
 from scouter.config import Config
+
+try:
+    # Reuse library's atomic-write helper rather than duplicate it: `library`
+    # only imports `vault` lazily, inside `import_card`'s function body, so a
+    # module-level import here does not cycle back into an unfinished
+    # `library` module.
+    from scouter.core.library import _write_atomic
+except ImportError:  # pragma: no cover - defensive; no cycle expected today
+
+    def _write_atomic(path: Path, content: str) -> None:
+        """tmp-file + `os.replace`: a crash mid-write leaves the previous
+        note on disk untouched, never a half-written file in its place."""
+        tmp = path.with_name(f".{path.name}.tmp")
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, path)
+
 
 #: The template's own vault knowledge-base links (design section 7). Static:
 #: every job note points at the same project note and the same two reference
@@ -324,6 +340,10 @@ def _render_rows_table(rows: list[tuple[str, str]]) -> str:
 
 
 def write_job_note(cfg: Config, manifest: dict) -> dict:
+    # A job slug becomes a filename below; validate it the same way every
+    # other door into a job (`config.job_dir`, `paths.validate_slug`) does,
+    # rather than trust whatever a caller's manifest happens to carry.
+    paths.validate_slug(manifest["job_slug"])
     root = vault_root()
     if root is None:
         return {"written": False, "reason": _VAULT_ABSENT_REASON}
@@ -331,7 +351,7 @@ def write_job_note(cfg: Config, manifest: dict) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
     note = directory / f"{manifest['date']} {manifest['job_slug']}.md"
     if not note.exists():
-        note.write_text(_render_new_note(cfg, manifest), encoding="utf-8")
+        _write_atomic(note, _render_new_note(cfg, manifest))
         return {"written": True, "path": str(note), "mode": "created"}
     # Never rewrite a body a human may have edited: append one section and
     # additively merge the frontmatter (sum frames/bytes, union lists, leave
@@ -339,7 +359,7 @@ def write_job_note(cfg: Config, manifest: dict) -> dict:
     text = note.read_text(encoding="utf-8")
     merged, notes = _merge_frontmatter(text, _frontmatter_for(cfg, manifest))
     merged += "\n" + _render_import_section(manifest, notes)
-    note.write_text(merged, encoding="utf-8")
+    _write_atomic(note, merged)
     return {"written": True, "path": str(note), "mode": "appended"}
 
 
@@ -354,6 +374,7 @@ def append_stage(
     job's note, and tick `- [ ] <checklist_key>` if it is there. One writer
     for `cull.apply`, `style.apply_set`, `outliers.list` and `export.release`,
     so the format cannot drift between verbs."""
+    paths.validate_slug(job_slug)
     root = vault_root()
     if root is None:
         return {"written": False, "reason": _VAULT_ABSENT_REASON}
@@ -379,7 +400,7 @@ def append_stage(
 
     section = f"\n## {stage} {_now_z()}\n" + _render_rows_table(rows) + "\n"
     text += section
-    note.write_text(text, encoding="utf-8")
+    _write_atomic(note, text)
 
     result: dict = {"written": True, "path": str(note), "ticked": ticked}
     if note_msg:
