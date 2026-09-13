@@ -22,6 +22,8 @@ MEASUREMENTS = REPO / "docs" / "measurements.md"
 LOOP_BUDGET_S = 3.0
 
 _MISSING = []
+if os.environ.get("SCOUTER_HOST_TESTS") != "1":
+    _MISSING.append("SCOUTER_HOST_TESTS=1 not set (this launches darktable and rewrites docs/measurements.md)")
 if not DARKTABLE.is_file():
     _MISSING.append(f"darktable app ({DARKTABLE} not present)")
 if not HERO.is_file():
@@ -57,7 +59,7 @@ def _quit_darktable(proc: subprocess.Popen[bytes]) -> None:
     proc.wait(timeout=10)
 
 
-@unittest.skipUnless(DARKTABLE.is_file() and HERO.is_file(), SKIP_REASON)
+@unittest.skipUnless(not _MISSING, SKIP_REASON)
 class CommitTriggerMeasurement(unittest.TestCase):
     maxDiff = None
 
