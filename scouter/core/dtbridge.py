@@ -90,9 +90,11 @@ def require_darkroom() -> str:
     No `expect_image_id` parameter: `view.current` cannot tell us which image
     is loaded, so a parameter here would be decorative, not honest (fix round
     1, blocker 1). A caller that must confirm it is acting on a specific image
-    does so by calling `darkroom.open {image_id: ...}` through `call()` first
-    -- the bridge itself raises `wrong image loaded` (-> `not_in_darkroom`) on
-    a mismatch, which is a real check, not a parameter nobody reads.
+    reads `darkroom.current` (no params, no side effects) through `call()`
+    first and compares the `image_id` itself -- fix round 2, blocker 1
+    replaced the earlier approach of calling `darkroom.open {image_id: ...}`
+    to force a mismatch to surface as an error, because that force-switches
+    the darkroom onto the expected image instead of just checking it.
     """
     view = current_view()
     if view != "darkroom":

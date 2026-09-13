@@ -17,7 +17,7 @@ SMOKE_ARGS: dict[str, dict] = {
     "metrics.summary": {"since": "1d"},
     "darkroom.open": {"image": "/tmp/scouter-smoke.ORF"},
     "darkroom.set": {"module": "exposure", "param": "exposure", "value": 1.0,
-                     "dry_run": True},
+                     "commit": False},   # real write path (not dry-run); no real XMP to commit
     "darkroom.nudge": {"module": "exposure", "param": "exposure", "steps": 1,
                        "dry_run": True},
     "darkroom.enable": {"module": "exposure", "dry_run": True},
@@ -51,6 +51,8 @@ def install_doubles(verb_id: str) -> Iterator[dict]:
     bridge = FakeBridge({
         "darkroom.open": {"image_id": 1, "path": raw, "view": "darkroom",
                           "opened": False, "already_open": True},
+        "darkroom.current": {"image_id": 1, "path": raw, "view": "darkroom",
+                             "source": "action_images"},
         "image.lookup": {"found": True, "image_id": 1, "path": raw},
         "darkroom.action": lambda p: {"nan": False, "status": p.get("value"),
                                       "view": "darkroom", **p},

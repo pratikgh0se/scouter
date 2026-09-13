@@ -1363,9 +1363,10 @@ end
 -- Python half parses the source text independently.
 do
   local expected_scouter_methods = {
-    "view.current", "image.lookup", "darkroom.open", "darkroom.action",
-    "darkroom.status", "module.enable", "module.disable", "module.reset",
-    "history.commit", "snapshot.take", "style.create_from_current", "style.apply",
+    "view.current", "image.lookup", "darkroom.open", "darkroom.current",
+    "darkroom.action", "darkroom.status", "module.enable", "module.disable",
+    "module.reset", "history.commit", "snapshot.take", "style.create_from_current",
+    "style.apply",
   }
   for _, name in ipairs(expected_scouter_methods) do
     assertTrue(type(plugin.methods[name]) == "function",
@@ -1603,6 +1604,35 @@ assertEq(op5.image_id, 104, "darkroom.open opens the newly imported image")
 stub_dt.database = original_db
 images_by_id[104] = nil
 table.remove(iter_list)
+
+-- darkroom.open with NO params has nothing to load and no "current image"
+-- fallback -- it is a clear JSON-RPC error, not a silent success (fix round
+-- 2, blocker 1: Python's undo_last / _current_image must never rely on it
+-- for "what's currently loaded"; darkroom.current exists for that).
+local op_empty = plugin.handle({id = "empty-open", method = "darkroom.open", params = {}})
+assertTrue(op_empty.error ~= nil, "darkroom.open {} is a JSON-RPC error")
+assertTrue(op_empty.result == nil, "darkroom.open {} carries no result")
+assertTrue(op_empty.error:find("no image", 1, true) ~= nil,
+  "darkroom.open {} names the actual problem (no image_id/path given)")
+
+-- darkroom.current: a read-only snapshot of loaded_darkroom_image(), with no
+-- params and no side effects (never selects, switches, or imports) -- the
+-- honest way for Python to learn what is loaded instead of forcing a switch
+-- through darkroom.open (fix round 2, blocker 1).
+view_state.current = "darkroom"
+stub_dt.gui.action_images = {images_by_id[101]}
+local cur1 = plugin.methods["darkroom.current"]()
+assertEq(cur1.view, "darkroom", "darkroom.current reports the current view")
+assertEq(cur1.image_id, 101, "darkroom.current reports the loaded image id")
+assertEq(cur1.path, "/photos/DSC_0001.NEF", "darkroom.current reports the loaded image path")
+assertEq(cur1.source, "action_images", "darkroom.current reports where the answer came from")
+
+view_state.current = "lighttable"
+stub_dt.gui.action_images = {}
+local cur2 = plugin.methods["darkroom.current"]()
+assertEq(cur2.view, "lighttable", "darkroom.current reports the lighttable view")
+assertEq(cur2.image_id, nil, "darkroom.current: no image loaded in the lighttable")
+assertEq(cur2.path, nil, "darkroom.current: no path when nothing is loaded")
 
 -- switch_to_darkroom / loaded_darkroom_image: the display_image branches.
 -- The stub's dt.gui.views.darkroom has no display_image by default (all the

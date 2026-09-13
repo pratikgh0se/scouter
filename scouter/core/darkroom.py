@@ -6,7 +6,7 @@ import time
 
 from scouter import metrics
 from scouter.core import dtbridge, journal, xmp
-from scouter.errors import CommitTimeout, ScouterError
+from scouter.errors import CommitTimeout, NotInDarkroom, ScouterError
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
 from scouter.types import (
@@ -127,7 +127,16 @@ def _read_state(path: str, module: str, param: str, instance: int) -> dict:
 
 def _last_journal_write(job: str, image_id: int, module: str, param: str,
                         instance: int) -> journal.Entry | None:
+    """The newest entry for this exact (image, module, param, instance) that
+    actually landed a value -- skipping anything undone or failed (fix round
+    2, blocker 2): an undone write is reverted, and a failed one never
+    happened, so neither is a source of truth for "what Scouter last set."
+    """
     for entry in reversed(journal.read_all(job)):
+        if entry.undone:
+            continue
+        if entry.outcome is not None and entry.outcome.startswith("error"):
+            continue
         if (entry.image_id == image_id and entry.module == module and entry.param == param
                 and entry.instance == instance and entry.after and "value" in entry.after):
             return entry
@@ -139,42 +148,44 @@ def _before_state(job: str, image_id: int, path: str, module: str, param: str,
     """The `before` state for a new write on this slider.
 
     Ordinarily this is whatever the XMP currently shows. But when the last
-    write to this exact (image, module, param, instance) used `commit=False`,
-    darktable has not written the sidecar for it yet -- the XMP still shows
-    whatever was true *before that write*, not Scouter's own true current
-    value. In that case (detected by the XMP still reading back as that
-    write's own `before`, i.e. it has not advanced) the journal's `after` is
-    used instead, so a second `commit=False` write journals the right
-    `before` and `undo_last` does not over-revert past it (fix round 1,
-    blocker 11).
+    (live, landed) write to this exact (image, module, param, instance) used
+    `commit=False`, darktable has not written the sidecar for it yet -- the
+    XMP still shows whatever was true before THAT write, not Scouter's own
+    true current value, so the journal's own `after` is used instead. This
+    fallback applies only when that last write's own `commit` flag was False
+    (fix round 2, blocker 2 -- not a "does the XMP look stale" guess, which
+    fix round 1 used and which a coincidental value match could fool): a
+    `commit=True` write's own `history.commit` call already waited for the
+    XMP to advance, so its value is trustworthy and no fallback is needed.
     """
     state = _read_state(path, module, param, instance)
     last = _last_journal_write(job, image_id, module, param, instance)
-    if last is not None and (
-        state["value"] is None or _close(state["value"], last.before.get("value"))
-    ):
+    if last is not None and last.commit is False:
         state = {**state, "value": last.after["value"]}
     return state
 
 
 def _current_image() -> dtbridge.ResolvedImage:
-    """The darkroom's currently loaded image, in one bridge round trip.
+    """The darkroom's currently loaded image, read-only, via `darkroom.current`.
 
-    Fix round 1, blocker 14: the old path resolved via
-    `dtbridge.resolve_image(_darkroom_image_hint())`, which called
-    `darkroom.open` twice (once to learn the image, once "again" inside
-    `resolve_image`). This calls it once and builds the `ResolvedImage`
-    directly from that single response.
+    Fix round 2, blocker 1: never `darkroom.open {}` -- that method actively
+    loads/switches the darkroom and now errors outright when given nothing to
+    load (there is no "current image" fallback in it any more). `darkroom.
+    current` has no side effects and reports `image_id`/`path` absent when
+    nothing is loaded, which is exactly the answer a read like this needs.
     """
-    result = dtbridge.call("darkroom.open", {})
-    path = str(result["path"])
+    result = dtbridge.call("darkroom.current", {})
+    image_id = result.get("image_id")
+    path = result.get("path")
+    if image_id is None or path is None:
+        raise NotInDarkroom(
+            f"no image is loaded in the darkroom (view is {result.get('view', 'unknown')})",
+            detail={"view": result.get("view")},
+        )
+    path = str(path)
     return dtbridge.ResolvedImage(
-        image_id=int(result["image_id"]), path=path, xmp_path=str(xmp.sidecar_path(path))
+        image_id=int(image_id), path=path, xmp_path=str(xmp.sidecar_path(path))
     )
-
-
-def _darkroom_image_hint() -> int:
-    return _current_image().image_id
 
 
 @metrics.instrumented("darkroom.open")
@@ -214,7 +225,7 @@ def set_param(module: str, param: str, value: float, *, instance: int = 0,
     before_state = _before_state(job, resolved.image_id, resolved.path, module, param, instance)
     entry = journal.begin(
         job, verb="darkroom.set", image_id=resolved.image_id, path=resolved.path,
-        module=module, param=param, instance=instance, before=before_state,
+        module=module, param=param, instance=instance, before=before_state, commit=commit,
     )
     try:
         dtbridge.action(
@@ -274,18 +285,31 @@ def nudge(module: str, param: str, steps: int = 1, *, instance: int = 0,
     before_state = _before_state(job, resolved.image_id, resolved.path, module, param, instance)
     entry = journal.begin(
         job, verb="darkroom.nudge", image_id=resolved.image_id, path=resolved.path,
-        module=module, param=param, instance=instance, before=before_state,
+        module=module, param=param, instance=instance, before=before_state, commit=commit,
     )
     landed = 0
+    last_status: float | None = None
     try:
         for _ in range(abs(steps)):
-            dtbridge.action(path_, instance=instance, element="value", effect=effect, value=1)
+            result = dtbridge.action(path_, instance=instance, element="value",
+                                     effect=effect, value=1)
             landed += 1
+            status_value = result.get("status")
+            if isinstance(status_value, (int, float)):
+                last_status = float(status_value)
     except Exception as e:
         code = e.code if isinstance(e, ScouterError) else "error"
         journal.fail(job, entry.seq, outcome=f"error:{code}")
         raise
-    journal.complete(job, entry.seq, after={"steps": steps, "steps_landed": landed})
+    # `dt.gui.action` returns the resulting absolute value for effect up/down
+    # (not just "set") -- phase 0 finding 1 applies here too, so this is a
+    # real bridge-reported number, not a guessed one. Recording it in `after`
+    # (fix round 2, blocker 6) is what lets `_last_journal_write` treat a
+    # nudge the same as a `set` for the commit=False fallback.
+    after: dict = {"steps": steps, "steps_landed": landed}
+    if last_status is not None:
+        after["value"] = last_status
+    journal.complete(job, entry.seq, after=after)
 
     committed, applied, warnings = False, None, []
     if commit:
@@ -361,14 +385,31 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
     job = job or current_job()
     entry = journal.latest_open(job)
     if entry is None:
+        # Fix round 2, should-fix 4: `latest_open` already skips a failed
+        # write (it never happened, so there is nothing to undo), but "the
+        # journal is empty" and "the newest write in it failed" are different
+        # facts -- name the failed one when that is why there is nothing here.
+        failed = journal.latest_failed(job)
+        if failed is not None:
+            return UndoResult(
+                outcome="dry_run", seq=failed.seq,
+                reason=(
+                    f"nothing to undo: seq {failed.seq} ({failed.verb} on "
+                    f"{failed.module}.{failed.param or ''}) failed ({failed.outcome}) "
+                    "and never took effect"
+                ),
+            )
         return UndoResult(
             outcome="dry_run", reason=f"nothing to undo: journal for {job} is empty",
         )
 
     # Blocker 6: the reset refusal is checked before the dry-run branch, so
     # `undo_last(dry_run=True)` on a reset entry says honestly that it cannot
-    # be undone rather than pretending a plan exists.
+    # be undone rather than pretending a plan exists. Should-fix 5: mark the
+    # entry undone (with a note, not a real undo) so this refusal happens once
+    # per reset and the write underneath it stays reachable on the next call.
     if entry.verb == "module.reset":
+        journal.mark_undone(job, entry.seq, note="skipped: reset is not undoable")
         raise _UnsupportedUndo(
             f"cannot undo the reset of {entry.module}: its parameters were discarded. "
             "darktable's own Ctrl-Z is the only way back",
@@ -383,11 +424,24 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
                           seq=entry.seq, plan=plan,
                           reason="dry run: no action was sent to darktable")
 
-    # Blocker 1: verify Scouter is about to act on the image it journaled.
-    # `darkroom.open` with an explicit `image_id` raises (dtbridge classifies
-    # the bridge's "wrong image loaded" error to `NotInDarkroom`) if some
-    # other image is loaded now.
-    dtbridge.call("darkroom.open", {"image_id": entry.image_id})
+    # Blocker 1: verify Scouter is about to act on the image it journaled --
+    # by READING, never by force-switching. `darkroom.current` has no side
+    # effects; if it reports a different (or no) image loaded, undo_last
+    # refuses rather than silently switching the darkroom out from under
+    # whatever Pratik is looking at.
+    current = dtbridge.call("darkroom.current", {})
+    current_id = current.get("image_id")
+    if current_id is None:
+        raise NotInDarkroom(
+            f"no image is loaded in the darkroom (expected image {entry.image_id})",
+            detail={"expected_image_id": entry.image_id, "view": current.get("view")},
+        )
+    if int(current_id) != entry.image_id:
+        raise NotInDarkroom(
+            f"another image is loaded: {int(current_id)}",
+            detail={"expected_image_id": entry.image_id, "loaded_image_id": int(current_id),
+                    "view": current.get("view")},
+        )
     dtbridge.require_darkroom()
 
     if entry.verb == "module.enable":
@@ -406,6 +460,10 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             committed = commit_result.committed
             warnings = list(commit_result.warnings)
             verified = _module_enabled(entry.path, entry.module, entry.instance) is False
+            if not verified:
+                warnings.append(
+                    f"could not verify {entry.module} was disabled after undo (seq {entry.seq})"
+                )
         undone = {"verb": entry.verb, "module": entry.module, "param": entry.param,
                   "restored_to": None, "verified": verified}
     else:
@@ -428,6 +486,11 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
         # what was actually read back, not the value that was requested.
         actual = _read_value(entry.path, entry.module, entry.param, entry.instance)
         verified = _close(actual, previous)
+        if not verified:
+            warnings.append(
+                f"could not verify the restore for seq {entry.seq}: read back {actual!r}, "
+                f"expected {previous!r}"
+            )
         undone = {"verb": entry.verb, "module": entry.module, "param": entry.param,
                   "restored_to": actual, "verified": verified}
 
@@ -477,7 +540,7 @@ def describe_history(image: str | int | None = None, *,
     from scouter.core import history
 
     read_fn = getattr(history.read, "__wrapped__", history.read)
-    target = image if image is not None else _darkroom_image_hint()
+    target = image if image is not None else _current_image().image_id
     return read_fn(target, job=job)
 
 

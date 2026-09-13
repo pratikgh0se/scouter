@@ -52,6 +52,15 @@ class Entry:
     after: dict | None = None
     undone: bool = False
     outcome: str | None = None
+    #: Whether the write itself used `commit=True` (fix round 2, blocker 2):
+    #: only a `commit=False` write's `after` is trustworthy as a stand-in for
+    #: a not-yet-advanced XMP -- a `commit=True` write already waited for the
+    #: XMP to catch up, so the disk is the truth for it, not the journal.
+    commit: bool = True
+    #: A short explanation for an entry darktable-mcp altered on its own
+    #: behalf, e.g. marking an unsupported-undo entry `undone` so an older
+    #: write stays reachable (fix round 2, should-fix 5). `None` normally.
+    note: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -82,19 +91,45 @@ def read_all(job: str) -> list[Entry]:
     return out
 
 
+def _fsync_dir(dir_path) -> None:
+    """Best-effort: fsync a directory so a rename into it is durable.
+
+    Some platforms (notably Windows) cannot open a directory for fsync; that
+    is not a reason to fail the write that already landed, so this swallows
+    OSError rather than propagating it.
+    """
+    try:
+        fd = os.open(str(dir_path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def _write_all(job: str, entries: list[Entry]) -> None:
     """Rewrite the whole journal via temp file + `os.replace` (blocker 3).
 
     A bare `write_text` can leave a torn file behind if the process dies
     mid-write; the journal is exactly the thing `undo_last` trusts, so it
-    cannot itself be the thing left half-written.
+    cannot itself be the thing left half-written. fsync the temp file's
+    content before the rename, and the directory after it (fix round 2,
+    should-fix 3): a rename is only as durable as the directory entry that
+    records it, and an unsynced directory can still lose the rename across a
+    crash even though the file's own bytes are safely on disk.
     """
     path = paths.ensure(paths.journal_path(job))
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".journal-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write("".join(json.dumps(e.to_dict(), sort_keys=True) + "\n" for e in entries))
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp_name, path)
+        _fsync_dir(path.parent)
     except BaseException:
         try:
             os.unlink(tmp_name)
@@ -104,8 +139,11 @@ def _write_all(job: str, entries: list[Entry]) -> None:
 
 
 def append(job: str, entry: Entry) -> Entry:
-    with paths.ensure(paths.journal_path(job)).open("a", encoding="utf-8") as fh:
+    path = paths.ensure(paths.journal_path(job))
+    with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry.to_dict(), sort_keys=True) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
     return entry
 
 
@@ -115,11 +153,13 @@ def next_seq(job: str) -> int:
 
 
 def begin(job: str, *, verb: str, image_id: int, path: str, module: str, param: str,
-         instance: int, before: dict) -> Entry:
+         instance: int, before: dict, commit: bool = True) -> Entry:
     """Append the journal line for a write *before* the bridge action runs.
 
     `after` starts `None`: the entry says "Scouter is about to do this" and
     only becomes a record of what happened once `complete()` or `fail()` runs.
+    `commit` records whether the write itself will call `history.commit`
+    (fix round 2, blocker 2) -- it is not about this journal call.
     """
     return append(
         job,
@@ -134,6 +174,7 @@ def begin(job: str, *, verb: str, image_id: int, path: str, module: str, param: 
             instance=instance,
             before=before,
             after=None,
+            commit=commit,
         ),
     )
 
@@ -186,21 +227,47 @@ def record(job: str, *, verb: str, image_id: int, path: str, module: str, param:
 
 
 def latest_open(job: str) -> Entry | None:
-    """The newest entry not yet undone."""
+    """The newest entry not yet undone and not itself a failed write.
+
+    A failed write's action never landed (fix round 2, should-fix 4): there
+    is nothing there for `undo_last` to revert, so it is not a candidate --
+    `latest_failed` exists for a caller that wants to name it in a refusal.
+    """
     for entry in reversed(read_all(job)):
-        if not entry.undone:
+        if entry.undone:
+            continue
+        if entry.outcome is not None and entry.outcome.startswith("error"):
+            continue
+        return entry
+    return None
+
+
+def latest_failed(job: str) -> Entry | None:
+    """The newest not-yet-undone entry whose action failed, if any.
+
+    Used to explain an otherwise-silent "nothing to undo": the journal is not
+    empty, its newest entry just never took effect.
+    """
+    for entry in reversed(read_all(job)):
+        if entry.undone:
+            continue
+        if entry.outcome is not None and entry.outcome.startswith("error"):
             return entry
     return None
 
 
-def mark_undone(job: str, seq: int) -> None:
+def mark_undone(job: str, seq: int, *, note: str | None = None) -> None:
     """Rewrite the journal with `seq` marked undone.
 
     The journal is small (one line per agent write in one job) and is Scouter's
-    own file, so a full rewrite is cheaper than an index.
+    own file, so a full rewrite is cheaper than an index. `note` records why,
+    when it was Scouter itself (not a real undo) that closed the entry -- e.g.
+    a `module.reset` skipped past on refusal (fix round 2, should-fix 5).
     """
     entries = read_all(job)
     for entry in entries:
         if entry.seq == seq:
             entry.undone = True
+            if note is not None:
+                entry.note = note
     _write_all(job, entries)

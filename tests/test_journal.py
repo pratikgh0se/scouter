@@ -91,6 +91,54 @@ class JournalTest(unittest.TestCase):
         self.assertEqual(len(entries), 1)
         self.assertTrue(entries[0].undone)
 
+    def test_fail_on_an_unknown_seq_raises_journal_corrupt(self) -> None:
+        with self.assertRaises(journal.JournalCorrupt):
+            journal.fail("job-test", 99, outcome="error:wrong_view")
+
+    def test_begin_records_the_commit_flag(self) -> None:
+        journal.begin(
+            "job-test", verb="darkroom.set", image_id=12, path="/a/x.ORF",
+            module="exposure", param="exposure", instance=0,
+            before={"source": "xmp", "value": 0.7}, commit=False,
+        )
+        self.assertFalse(journal.read_all("job-test")[0].commit)
+        # `begin` without `commit` defaults to True.
+        journal.begin(
+            "job-test", verb="darkroom.set", image_id=12, path="/a/x.ORF",
+            module="exposure", param="exposure", instance=0,
+            before={"source": "xmp", "value": 1.0},
+        )
+        self.assertTrue(journal.read_all("job-test")[1].commit)
+
+    def test_latest_open_skips_a_failed_entry(self) -> None:
+        self._record(0.7, None)
+        entry = journal.begin(
+            "job-test", verb="darkroom.set", image_id=12, path="/a/x.ORF",
+            module="exposure", param="exposure", instance=0,
+            before={"source": "xmp", "value": 1.5},
+        )
+        journal.fail("job-test", entry.seq, outcome="error:not_in_darkroom")
+        latest = journal.latest_open("job-test")
+        assert latest is not None
+        self.assertEqual(latest.seq, 1)
+
+    def test_latest_failed_finds_the_failed_entry_the_open_one_skips(self) -> None:
+        entry = journal.begin(
+            "job-test", verb="darkroom.set", image_id=12, path="/a/x.ORF",
+            module="exposure", param="exposure", instance=0,
+            before={"source": "xmp", "value": 0.7},
+        )
+        journal.fail("job-test", entry.seq, outcome="error:not_in_darkroom")
+        self.assertIsNone(journal.latest_open("job-test"))
+        failed = journal.latest_failed("job-test")
+        assert failed is not None
+        self.assertEqual(failed.seq, entry.seq)
+
+    def test_mark_undone_records_an_optional_note(self) -> None:
+        self._record(0.7, None)
+        journal.mark_undone("job-test", 1, note="skipped: reset is not undoable")
+        self.assertEqual(journal.read_all("job-test")[0].note, "skipped: reset is not undoable")
+
 
 if __name__ == "__main__":
     unittest.main()

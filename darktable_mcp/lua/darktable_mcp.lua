@@ -804,6 +804,26 @@ local function darkroom_image()
   return image
 end
 
+-- A read-only snapshot of "what is loaded right now", with NO side effects --
+-- never selects, never switches views, never imports. This is the honest way
+-- for a caller to learn which image (if any) the darkroom has loaded: unlike
+-- `darkroom.open`, which actively loads a requested image and errors when
+-- nothing was given to load, `darkroom.current` just reports. `image_id` and
+-- `path` are absent (not merely null) when nothing is loaded -- see
+-- encode_value's `nil` handling.
+methods["darkroom.current"] = function()
+  local image, source = loaded_darkroom_image()
+  if not image then
+    return {view = current_view_name(), source = source}
+  end
+  return {
+    view = current_view_name(),
+    image_id = tonumber(image.id),
+    path = _image_full_path(image),
+    source = source,
+  }
+end
+
 -- Actually switch the darkroom onto `image`. Returns (ok, method_or_error).
 --
 -- Prefers the documented `display_image(image)` call, which (unlike
