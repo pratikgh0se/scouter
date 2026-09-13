@@ -8,6 +8,7 @@ in place via `exif.datetime_offsets` (never a real file under ~/Pictures).
 
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from datetime import datetime, timedelta
@@ -229,6 +230,54 @@ class FilmRollTest(LibraryTestCase):
         self.assertFalse(result.film_roll_registered)
         self.assertIn(BridgeTimeout.fix, result.warnings)
 
+    def test_import_qualifies_film_roll_registered_when_imported_is_zero(self) -> None:
+        """Fix round 1, should-fix 7: a bridge call that returns cleanly but
+        reports 0 images imported did not actually register anything."""
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        self.bridge.responses["import_batch"] = {
+            "imported": 0,
+            "source_path": "",
+            "recursive": False,
+            "recursive_honoured": True,
+            "note": None,
+            "directories_imported": 1,
+            "scan_incomplete": False,
+        }
+        result = library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertFalse(result.film_roll_registered)
+        self.assertTrue(any("0 images imported" in w for w in result.warnings))
+
+    def test_register_success_reports_imported_and_scan_incomplete(self) -> None:
+        """Fix round 1, should-fix 7: the success path, not just the
+        darktable-down path -- imported>0 and scan_incomplete=True both
+        travel through to `RegisterResult` untouched."""
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        library.import_card(str(source), "harbour-wedding", confirm=True)
+
+        self.bridge.responses["import_batch"] = {
+            "imported": 2,
+            "source_path": "",
+            "recursive": False,
+            "recursive_honoured": True,
+            "note": None,
+            "directories_imported": 1,
+            "scan_incomplete": True,
+        }
+        result = library.register("harbour-wedding", confirm=True)
+        self.assertTrue(result.film_roll_registered)
+        self.assertEqual(result.imported, 2)
+        self.assertTrue(result.scan_incomplete)
+
+    def test_register_qualifies_film_roll_registered_when_imported_is_zero(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        library.import_card(str(source), "harbour-wedding", confirm=True)
+
+        result = library.register("harbour-wedding", confirm=True)  # FakeBridge default: imported=0
+        self.assertFalse(result.film_roll_registered)
+
 
 class ChecksumsFileTest(LibraryTestCase):
     def test_checksums_file_is_coreutils_format(self) -> None:
@@ -283,6 +332,119 @@ class VerifyTest(LibraryTestCase):
         self.assertTrue(vr.ok)
         self.assertEqual(vr.extra, [])
         self.assertEqual(vr.checked, 1)
+
+
+class ManifestMergeTest(LibraryTestCase):
+    """Fix round 1, blocker 1: the reviewer's own probe."""
+
+    def test_manifest_merges_across_reruns_after_source_files_are_removed(self) -> None:
+        source = self.tmp / "card"
+        files = _make_card(source, 4)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertEqual(len(result1.files), 4)
+
+        # Remove 2 of the 4 from the card -- never touches the copies already
+        # sitting in raw/.
+        files[2].unlink()
+        files[3].unlink()
+
+        result2 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertEqual(len(result2.files), 4)  # never shrinks
+
+        job_path = Path(result2.path)
+        checksum_lines = (job_path / ".scouter" / "checksums.sha256").read_text().splitlines()
+        self.assertEqual(len(checksum_lines), 4)
+        manifest = json.loads((job_path / ".scouter" / "import.json").read_text())
+        self.assertEqual(len(manifest["files"]), 4)
+
+        vr = library.verify("harbour-wedding")
+        self.assertTrue(vr.ok)
+        self.assertEqual(vr.checked, 4)
+
+    def test_manifest_merge_refuses_a_differing_hash_for_an_existing_name(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        job_path = Path(result1.path)
+        checksums_path = job_path / ".scouter" / "checksums.sha256"
+        import_json_path = job_path / ".scouter" / "import.json"
+
+        # Hand-corrupt the manifest so it disagrees with the real file on
+        # disk for an existing destination name: this must be a typed error,
+        # never a silent overwrite.
+        manifest = json.loads(import_json_path.read_text())
+        manifest["files"][0]["sha256"] = "0" * 64
+        import_json_path.write_text(json.dumps(manifest, indent=2))
+
+        with self.assertRaises(ChecksumMismatch):
+            library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertTrue(checksums_path.is_file())  # unaffected: raised in _plan-derived merge
+
+
+class StableSequenceTest(LibraryTestCase):
+    """Fix round 1, blocker 2: the reviewer's own probe."""
+
+    def test_removing_a_frame_does_not_rename_or_collide_on_rerun(self) -> None:
+        source = self.tmp / "card"
+        files = _make_card(source, 3)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        dest_by_source = {f["source_name"]: f["dest"] for f in result1.files}
+
+        files[0].unlink()  # remove the earliest-captured frame from the card
+
+        result2 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertEqual(result2.totals["copied"], 0)  # 0 new files
+        self.assertEqual(result2.totals["skipped_identical"], 2)
+        for entry in result2.files:
+            if entry["source_name"] in dest_by_source:
+                self.assertEqual(entry["dest"], dest_by_source[entry["source_name"]])
+        self.assertEqual(len(result2.files), 3)  # the removed frame's entry persists
+
+    def test_a_second_card_never_collides_with_the_first(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        seqs1 = sorted(f["seq"] for f in result1.files)
+        self.assertEqual(seqs1, [1, 2])
+
+        second = self.tmp / "card2"
+        base = datetime(2026, 6, 28, 15, 50, 0)
+        _write_one(second, "Q0001.ORF", base.strftime("%Y:%m:%d %H:%M:%S"))
+        result2 = library.import_card(str(second), "harbour-wedding", confirm=True)
+        self.assertEqual(result2.totals["copied"], 1)
+        new_entry = next(f for f in result2.files if f["source_name"] == "Q0001.ORF")
+        self.assertEqual(new_entry["seq"], 3)  # continues past the first card's max
+        self.assertEqual(len(result2.files), 3)
+
+
+class DuplicateStemTest(LibraryTestCase):
+    def test_duplicate_stem_ext_across_subdirectories_is_a_typed_usage_error(self) -> None:
+        source = self.tmp / "card"
+        _write_one(source / "100OLYMP", "P6281348.ORF", "2026:06:28 15:49:28")
+        _write_one(source / "101OLYMP", "P6281348.ORF", "2026:06:28 15:49:30")
+
+        with self.assertRaises(UsageError) as ctx:
+            library.import_card(str(source), "harbour-wedding", confirm=True)
+        sources = ctx.exception.detail.get("sources", [])
+        self.assertEqual(len(sources), 2)
+        self.assertIn("100OLYMP", sources[0] + sources[1])
+        self.assertIn("101OLYMP", sources[0] + sources[1])
+
+
+class MissingSourceTest(LibraryTestCase):
+    def test_missing_source_is_a_usage_error_before_scanning(self) -> None:
+        with self.assertRaises(UsageError) as ctx:
+            library.import_card(str(self.tmp / "no-such-mount"), "harbour-wedding", confirm=True)
+        self.assertIn("source", ctx.exception.detail)
+        self.assertTrue(ctx.exception.fix)
+
+
+class VerifyNoManifestTest(LibraryTestCase):
+    def test_verify_refuses_when_there_is_no_manifest(self) -> None:
+        job_path = self._job_path()
+        (job_path / "raw").mkdir(parents=True)
+        with self.assertRaises(UsageError):
+            library.verify("harbour-wedding")
 
 
 class SingleEventTest(LibraryTestCase):
