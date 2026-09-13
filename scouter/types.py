@@ -203,6 +203,45 @@ class ExportResult(Payload):
 
 
 @dataclass
+class ImportResult(Payload):
+    """`library.import`'s result. `files`/`totals` mirror `.scouter/import.json`
+    (relative `raw/<name>` destinations, per design section 6) so the two never
+    drift; a dry run leaves both empty and reports the same shape via `plan`."""
+
+    job_slug: str = ""
+    date: str = ""
+    camera: str = ""
+    camera_model: str | None = None
+    camera_make: str | None = None
+    source_root: str = ""
+    files: list[dict] = field(default_factory=list)
+    totals: dict[str, int] = field(default_factory=dict)
+    film_roll_registered: bool = False
+    imported: int = 0
+    scan_incomplete: bool | None = None
+    recursive_honoured: bool | None = None
+
+
+@dataclass
+class VerifyResult(Payload):
+    job_slug: str = ""
+    checked: int = 0
+    ok: bool = True
+    mismatched: list[dict] = field(default_factory=list)
+    missing: list[str] = field(default_factory=list)
+    extra: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RegisterResult(Payload):
+    job_slug: str = ""
+    film_roll_registered: bool = False
+    imported: int = 0
+    scan_incomplete: bool | None = None
+    recursive_honoured: bool | None = None
+
+
+@dataclass
 class ConfigResult(Payload):
     config_path: str = ""
     config_exists: bool = False

@@ -21,6 +21,7 @@ from collections.abc import Iterator
 SMOKE_RAW = "<smoke-raw>"
 SMOKE_OUT_DIR = "<smoke-out-dir>"
 SMOKE_CONFIG_PATH = "<smoke-config-path>"
+SMOKE_SOURCE_DIR = "<smoke-source-dir>"
 
 SMOKE_ARGS: dict[str, dict] = {
     "metrics.summary": {"since": "1d"},
@@ -50,6 +51,17 @@ SMOKE_ARGS: dict[str, dict] = {
     "style.extract": {"image": SMOKE_RAW, "name": "smoke", "modules": []},
     "style.apply": {"image": SMOKE_RAW, "name": "smoke"},
     "export.run": {"images": [SMOKE_RAW], "preset": "preview", "out_dir": SMOKE_OUT_DIR},
+    # library.* calls `scouter.config.load()` with no override, exactly like
+    # production -- there is no `--config` flag for these verbs (design
+    # section 6). `SMOKE_SOURCE_DIR` resolves to this test's own (empty) cache
+    # dir, so `_scan` finds nothing and the call fails fast one way or another
+    # (the backup gate first, if a real config happens to exist on the host;
+    # an empty scan otherwise) -- this coverage test only asserts one event,
+    # not success, and `confirm` is deliberately omitted so nothing is ever
+    # written even if the gate does pass.
+    "library.import": {"source": SMOKE_SOURCE_DIR, "job_slug": "smoke-job"},
+    "library.verify": {"job_slug": "smoke-job"},
+    "library.register": {"job_slug": "smoke-job"},
 }
 
 
@@ -117,6 +129,8 @@ def install_doubles(verb_id: str) -> Iterator[dict]:
                 "errors": [],
             },
             "list_styles": {"styles": [], "count": 0},
+            # "import_batch" needs no override here: FakeBridge's own default
+            # (tests/scouter_fakes.py) covers library.import/library.register.
         }
     )
     dtbridge.set_bridge(bridge)
@@ -129,6 +143,8 @@ def install_doubles(verb_id: str) -> Iterator[dict]:
             return str(paths.cache_root() / "smoke-export")
         if value == SMOKE_CONFIG_PATH:
             return str(paths.cache_root() / "smoke-config.json")
+        if value == SMOKE_SOURCE_DIR:
+            return str(raw_dir)
         if isinstance(value, list):
             return [_real(item) for item in value]
         return value

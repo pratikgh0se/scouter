@@ -96,6 +96,20 @@ class FakeBridge:
     ) -> None:
         self.responses: dict[str, Any] = {
             "view.current": {"view": "darkroom"},
+            # A sane default for `library.import`/`library.register`'s
+            # `import_batch` call, so a test that isn't specifically exercising
+            # the film-roll-registration path doesn't have to restate the
+            # plugin's whole result shape (task 3; see the Lua handler's real
+            # return value in darktable_mcp.lua).
+            "import_batch": {
+                "imported": 0,
+                "source_path": "",
+                "recursive": False,
+                "recursive_honoured": True,
+                "note": None,
+                "directories_imported": 1,
+                "scan_incomplete": False,
+            },
             **(responses or {}),
         }
         self.raises = raises or {}
