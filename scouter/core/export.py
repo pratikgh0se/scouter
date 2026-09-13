@@ -18,7 +18,7 @@ from pathlib import Path
 
 from scouter import __version__, config, metrics
 from scouter.core import dtbridge, scout, xmp
-from scouter.errors import ChecksumMismatch, UsageError
+from scouter.errors import ChecksumMismatch, ExportAllFailed, ManifestUnauthenticated, UsageError
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
 from scouter.types import ExportedFile, ExportResult, ReleaseResult, VerifyResult
@@ -53,6 +53,12 @@ PRESETS: dict[str, dict] = {
 #: proofs go by rating, finals go by the colour label Pratik set on his picks.
 FINAL_PRESETS = frozenset({"client-final", "print-tiff"})
 
+#: darktable's own colour-label vocabulary (fix round 1, should-fix 6): the
+#: five booleans `image.color_labels` reads off `dt.database[id]`. A typo in
+#: `export.final_label` (e.g. "gren") is refused here, not silently treated
+#: as "matches nothing".
+COLOR_LABEL_VOCAB = frozenset({"red", "yellow", "green", "blue", "purple"})
+
 #: Streaming chunk size for output-file hashing (matches library.py's `CHUNK`).
 _CHUNK = 1 << 20
 
@@ -62,8 +68,13 @@ def preset_args(
 ) -> list[str]:
     """Every darktable-cli flag a preset needs, built in ONE place.
 
-    --core must come last: everything after it is darktable's own argument
-    list, so --conf entries follow it and nothing of ours may.
+    Never emits `--core` (fix round 1, blocker 1): `CLIWrapper.export_image`
+    owns the single `--core --configdir` block and splits this list at its
+    first literal `"--conf"` to decide what precedes it (icc-type/style,
+    darktable-cli's own pre-`--core` options) and what follows it (the
+    `--conf key=value` pairs, always built last, below) -- a second `--core`
+    token on the same command line would restart darktable-cli's own "rest
+    is core args" parsing and strand whatever this preset put after it.
     """
     args: list[str] = []
     if spec.get("icc"):
@@ -72,17 +83,16 @@ def preset_args(
         args += ["--style", style]
         if overwrite_style:
             args += ["--style-overwrite"]
-    conf: list[str] = []
     if "quality" in spec:
-        conf += ["--conf", f"plugins/imageio/format/jpeg/quality={spec['quality']}"]
+        args += ["--conf", f"plugins/imageio/format/jpeg/quality={spec['quality']}"]
     if "bpp" in spec:
-        conf += [
+        args += [
             "--conf",
             f"plugins/imageio/format/tiff/bpp={spec['bpp']}",
             "--conf",
             "plugins/imageio/format/tiff/compress=5",
         ]
-    return args + (["--core", *conf] if conf else [])
+    return args
 
 
 def _sha256_file(path: Path) -> str:
@@ -99,9 +109,13 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _write_atomic(path: Path, content: str) -> None:
+def _write_atomic(path: Path, content: str, *, fsync: bool = False) -> None:
     tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(content, encoding="utf-8")
+    with tmp.open("w", encoding="utf-8") as fh:
+        fh.write(content)
+        if fsync:
+            fh.flush()
+            os.fsync(fh.fileno())
     os.replace(tmp, path)
 
 
@@ -109,23 +123,86 @@ def _now_z() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
-def _select_by_label(candidates: list[dict], label: str, warnings: list[str]) -> list[dict]:
-    """Candidates carrying `label` as a colour label, per one batched bridge call.
+def _planned_outputs(selected: list[dict], out_dir: Path, ext: str) -> list[tuple[dict, Path]]:
+    """One output path per candidate, deterministic and collision-free.
+
+    A raw and a same-stem JPEG that share a `seq` (a card holding both
+    RAW+JPEG for a frame) would otherwise both plan `<stem>.<ext>`, and the
+    second render would silently clobber the first (fix round 1, blocker
+    2). Any stem shared by more than one selected candidate gets the
+    source's own suffix folded in -- `<stem>-orf.jpg` / `<stem>-jpg.jpg` --
+    deterministic (same input suffix always yields the same output name,
+    unlike a `-2`/`-3` counter that depends on selection order). A
+    collision that survives even that (two selected candidates with the
+    same stem AND the same source suffix) is refused rather than silently
+    overwritten.
+    """
+    stem_counts: dict[str, int] = {}
+    for c in selected:
+        stem = Path(c["path"]).stem
+        stem_counts[stem] = stem_counts.get(stem, 0) + 1
+
+    planned: list[tuple[dict, Path]] = []
+    seen: dict[Path, dict] = {}
+    for c in selected:
+        source = Path(c["path"])
+        if stem_counts[source.stem] > 1:
+            suffix = source.suffix.lstrip(".").lower() or "src"
+            name = f"{source.stem}-{suffix}.{ext}"
+        else:
+            name = f"{source.stem}.{ext}"
+        out = out_dir / name
+        if out in seen:
+            raise UsageError(
+                f"two selected frames would both export to {out.name}: "
+                f"{seen[out]['path']} and {c['path']}",
+                detail={"output": str(out), "inputs": [seen[out]["path"], c["path"]]},
+            )
+        seen[out] = c
+        planned.append((c, out))
+    return planned
+
+
+def _select_by_label(
+    candidates: list[dict], label: str, warnings: list[str]
+) -> tuple[list[dict], dict[str, int]]:
+    """Candidates carrying `label`, per one batched bridge call, plus the
+    label histogram every candidate the bridge DID resolve actually carries.
 
     Read-only, like `image.lookup` (controller ruling R6: "both read through
     the bridge"; ruling R12, fix round 0: `image.color_labels` now exists in
     the Lua plugin, reading darktable's own `red`/`yellow`/`green`/`blue`/
     `purple` boolean fields off `dt.database[id]`). Every candidate is
     resolved to an image id first (`dtbridge.resolve_image`, itself
-    read-only) and looked up in ONE call, not one per frame. An id the
-    bridge did not know about (`missing`) is a warning naming it, not a
-    silent drop and not a refusal -- everything else that DOES resolve is
-    still trusted.
+    read-only) and looked up in ONE call, not one per frame.
+
+    Two distinct kinds of "the bridge doesn't know this frame" (fix round 1,
+    should-fix 5), neither of which aborts the release:
+    - `ImageNotFound` (the frame was never opened/imported into darktable's
+      library, so it has no image id to look up at all) -- one warning
+      naming every such path, the frame is simply excluded from the label
+      lookup.
+    - the bridge's own `missing` list (an id it looked up but does not
+      recognise) -- a separate warning naming the ids.
     """
-    by_image_id = {}
+    by_image_id: dict[int, dict] = {}
+    unregistered: list[str] = []
     for c in candidates:
-        resolved = dtbridge.resolve_image(c["path"])
+        try:
+            resolved = dtbridge.resolve_image(c["path"])
+        except dtbridge.ImageNotFound:
+            unregistered.append(c["path"])
+            continue
         by_image_id[resolved.image_id] = c
+    if unregistered:
+        warnings.append(
+            f"{len(unregistered)} frame(s) are not registered in darktable's library "
+            f"(never opened/imported), so their colour label could not be read and "
+            f"they were not label-selected: {unregistered}"
+        )
+    if not by_image_id:
+        return [], {}
+
     result = dtbridge.call("image.color_labels", {"image_ids": list(by_image_id)})
     missing = result.get("missing") or []
     if missing:
@@ -133,12 +210,18 @@ def _select_by_label(candidates: list[dict], label: str, warnings: list[str]) ->
             f"colour label lookup missed {len(missing)} image id(s) not in darktable's "
             f"library: {missing}"
         )
-    selected = []
+    selected: list[dict] = []
+    histogram: dict[str, int] = {}
     for entry in result.get("per_image") or []:
         c = by_image_id.get(int(entry["image_id"]))
-        if c is not None and label in (entry.get("labels") or []):
+        if c is None:
+            continue
+        labels = entry.get("labels") or []
+        for lb in labels or ["none"]:
+            histogram[lb] = histogram.get(lb, 0) + 1
+        if label in labels:
             selected.append(c)
-    return selected
+    return selected, histogram
 
 
 @metrics.instrumented("export.run")
@@ -301,14 +384,40 @@ def release(
                 }
             selected.append(c)
         rule = "images"
+        label_histogram: dict[str, int] = {}
     elif preset in FINAL_PRESETS:
-        selected = _select_by_label(candidates, label, warnings) if candidates else []
+        if label not in COLOR_LABEL_VOCAB:
+            raise UsageError(
+                f"export.final_label {label!r} is not one of darktable's colour labels "
+                f"({', '.join(sorted(COLOR_LABEL_VOCAB))})",
+                detail={"final_label": label, "vocabulary": sorted(COLOR_LABEL_VOCAB)},
+            )
+        if candidates:
+            selected, label_histogram = _select_by_label(candidates, label, warnings)
+        else:
+            selected, label_histogram = [], {}
         rule = f"color_label={label}"
+        warnings.append(
+            "colour-label selection reads a real, but still HOST-unverified, "
+            "darktable Lua field (image.color_labels); task 14 confirms it live"
+        )
     else:
         selected = [c for c in candidates if c["rating"] >= resolved_min_rating]
         rule = f"rating>={resolved_min_rating}"
+        label_histogram = {}
 
     if not selected:
+        if rule.startswith("color_label="):
+            raise UsageError(
+                f"no frames matched {rule} (0 of {len(candidates)}); label histogram "
+                f"(label -> count of frames): {label_histogram}",
+                detail={
+                    "rule": rule,
+                    "final_label": label,
+                    "histogram": label_histogram,
+                    "of": len(candidates),
+                },
+            )
         histogram: dict[str, int] = {}
         for c in candidates:
             key = str(c["rating"])
@@ -325,7 +434,7 @@ def release(
         )
 
     out_dir = config.exports_dir(job_path, preset)
-    planned = [(c, out_dir / f"{Path(c['path']).stem}.{spec['ext']}") for c in selected]
+    planned = _planned_outputs(selected, out_dir, spec["ext"])
     existing = [str(out) for _, out in planned if out.exists()]
 
     plan = [
@@ -338,7 +447,17 @@ def release(
         }
         for c, out in planned
     ]
-    if dry_run or (existing and not confirm):
+    # Fresh (no existing output) is still gated at n>1, exactly like
+    # export.run (fix round 1, should-fix 4): a release always touches more
+    # than one file's worth of judgment call (the selection rule), so the
+    # FIRST one of more than one frame is a dry run too, not just a repeat.
+    needs_confirm = len(planned) > 1 or bool(existing)
+    if dry_run or (needs_confirm and not confirm):
+        reasons = []
+        if len(planned) > 1:
+            reasons.append(f"{len(planned)} frames selected")
+        if existing:
+            reasons.append(f"{len(existing)} output file(s) already exist")
         return ReleaseResult(
             outcome="dry_run",
             job_slug=job_slug,
@@ -349,8 +468,8 @@ def release(
             of=len(candidates),
             plan=plan,
             reason=(
-                f"{len(existing)} output file(s) already exist; re-run with --yes / confirm=true"
-                if existing and not confirm
+                "; ".join(reasons) + "; re-run with --yes / confirm=true"
+                if needs_confirm and not confirm
                 else "dry run: nothing was exported"
             ),
             warnings=warnings,
@@ -399,6 +518,18 @@ def release(
     exported = sum(1 for f in files_result if f.ok)
     failed = len(files_result) - exported
 
+    if exported == 0 and files_result:
+        # Fix round 1, should-fix 7: every render failed -- a typed refusal,
+        # never a success with exported=0. Raised BEFORE the manifest is
+        # written: a manifest describing zero exported files is not a
+        # release.
+        raise ExportAllFailed(
+            f"all {len(files_result)} render(s) failed for preset {preset!r}",
+            detail={
+                "files": [{"input": f.input, "error": f.error} for f in files_result if not f.ok]
+            },
+        )
+
     scouter_d = config.scouter_dir(job_path)
     scouter_d.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -416,12 +547,17 @@ def release(
         "files": manifest_files,
         "totals": {"exported": exported, "failed": failed, "bytes": total_bytes},
     }
+    # `manifest-<preset>-<ts>.sha256` (fix round 1, nit 8: design 10.2's own
+    # naming -- not `.json.sha256`). Both files fsync'd before the atomic
+    # rename, manifest first then its sidecar, so a crash between the two
+    # writes never leaves a sidecar authenticating a manifest that isn't
+    # durably on disk yet.
     manifest_path = scouter_d / f"manifest-{preset}-{ts}.json"
     manifest_text = json.dumps(manifest_doc, indent=2)
-    _write_atomic(manifest_path, manifest_text)
+    _write_atomic(manifest_path, manifest_text, fsync=True)
     manifest_sha = hashlib.sha256(manifest_text.encode("utf-8")).hexdigest()
-    sha_path = manifest_path.with_name(f"{manifest_path.name}.sha256")
-    _write_atomic(sha_path, f"{manifest_sha}  {manifest_path.name}\n")
+    sha_path = manifest_path.with_suffix(".sha256")
+    _write_atomic(sha_path, f"{manifest_sha}  {manifest_path.name}\n", fsync=True)
 
     if failed:
         warnings.append(f"{failed} file(s) failed; see `files[].error`")
@@ -459,13 +595,26 @@ def release(
 
 
 @metrics.instrumented("export.verify")
-def verify(manifest: str, *, job: str | None = None) -> VerifyResult:
+def verify(manifest: str, *, root: str | None = None, job: str | None = None) -> VerifyResult:
     """Re-hash every output in a release manifest against it.
 
-    First checks the manifest itself against its own `manifest-*.sha256`
-    sidecar (`export.release` writes one alongside every manifest) -- a
-    tampered or truncated manifest must not be trusted to check the outputs
-    it claims to describe. Returns `library.verify`'s shape.
+    First checks the manifest against its own `manifest-<preset>-<ts>.sha256`
+    sidecar (`export.release` writes one alongside every manifest, fsync'd)
+    -- a MISSING sidecar is a typed refusal (`manifest_unauthenticated`,
+    fix round 1, blocker 3), never an optional check silently skipped: a
+    manifest with no way to authenticate it must not be trusted to check the
+    outputs it claims to describe. A sidecar that IS present but does not
+    match is `checksum_mismatch`, same as `library.verify`'s own tampering
+    story. Returns `library.verify`'s result shape (`checked`, `ok`,
+    `mismatched`, `missing`) either way.
+
+    `root` (fix round 1, nit 8) is the directory `files[].output`'s relative
+    paths resolve against; default is the manifest's own `<job>/.scouter/`
+    parent (`manifest_path.parent.parent`), which is right when the manifest
+    is still where `export.release` wrote it. Pass `root` explicitly to
+    verify a manifest that shipped BESIDE its `exports/` folder instead
+    (e.g. copied onto a USB stick handed to a client) rather than nested
+    under `.scouter/`.
     """
     manifest_path = Path(manifest)
     if not manifest_path.is_file():
@@ -473,22 +622,26 @@ def verify(manifest: str, *, job: str | None = None) -> VerifyResult:
     manifest_text = manifest_path.read_text(encoding="utf-8")
     actual_manifest_sha = hashlib.sha256(manifest_text.encode("utf-8")).hexdigest()
 
-    sha_path = manifest_path.with_name(f"{manifest_path.name}.sha256")
-    if sha_path.is_file():
-        recorded_line = sha_path.read_text(encoding="utf-8").strip()
-        recorded_sha = recorded_line.split()[0] if recorded_line else ""
-        if recorded_sha != actual_manifest_sha:
-            raise ChecksumMismatch(
-                f"{manifest_path} does not match {sha_path}",
-                detail={
-                    "expected": recorded_sha,
-                    "actual": actual_manifest_sha,
-                    "manifest": str(manifest_path),
-                },
-            )
+    sha_path = manifest_path.with_suffix(".sha256")
+    if not sha_path.is_file():
+        raise ManifestUnauthenticated(
+            f"no {sha_path} next to {manifest_path}: cannot verify an unauthenticated manifest",
+            detail={"manifest": str(manifest_path), "sha256_sidecar": str(sha_path)},
+        )
+    recorded_line = sha_path.read_text(encoding="utf-8").strip()
+    recorded_sha = recorded_line.split()[0] if recorded_line else ""
+    if recorded_sha != actual_manifest_sha:
+        raise ChecksumMismatch(
+            f"{manifest_path} does not match {sha_path}",
+            detail={
+                "expected": recorded_sha,
+                "actual": actual_manifest_sha,
+                "manifest": str(manifest_path),
+            },
+        )
 
     doc = json.loads(manifest_text)
-    base = manifest_path.parent.parent  # <job>/.scouter/manifest-*.json -> <job>
+    base = Path(root) if root else manifest_path.parent.parent
     checked = 0
     mismatched: list[dict] = []
     missing: list[str] = []
@@ -533,7 +686,11 @@ register(
                 "str",
                 required=True,
                 choices=tuple(PRESETS),
-                help="client-final (full-size JPEG) or preview (1024 px PNG)",
+                help=(
+                    "preview (1024px PNG), client-proof (2048px sRGB JPEG), "
+                    "client-final (full-size sRGB JPEG) or print-tiff (full-size "
+                    "16-bit AdobeRGB TIFF)"
+                ),
             ),
             ArgSpec("out_dir", "str", required=True, help="destination directory"),
             ArgSpec("dry_run", "bool", default=False, help="plan only"),
@@ -562,7 +719,12 @@ register(
                 "str",
                 required=True,
                 choices=tuple(PRESETS),
-                help="client-proof (2048px), client-final, print-tiff, or preview",
+                help=(
+                    "preview (1024px PNG, by rating), client-proof (2048px sRGB "
+                    "JPEG, by rating), client-final (full-size sRGB JPEG, by "
+                    "colour label) or print-tiff (full-size 16-bit AdobeRGB TIFF, "
+                    "by colour label)"
+                ),
             ),
             ArgSpec("date", "str", help="disambiguate when the slug matches more than one job"),
             ArgSpec(
@@ -613,9 +775,21 @@ register(
                 positional=True,
                 help="path to a manifest-<preset>-<ts>.json written by export.release",
             ),
+            ArgSpec(
+                "root",
+                "str",
+                help=(
+                    "directory files[].output resolves against; default is the "
+                    "manifest's own <job>/.scouter/ parent. Pass this to verify a "
+                    "manifest shipped beside its exports/ folder instead"
+                ),
+            ),
         ),
         writes=False,
         gated=False,
-        summary="Re-hash a release manifest's outputs against it, and check its own .sha256.",
+        summary=(
+            "Re-hash a release manifest's outputs against it (manifest_unauthenticated "
+            "if its .sha256 sidecar is missing)."
+        ),
     )
 )

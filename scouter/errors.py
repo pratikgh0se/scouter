@@ -145,6 +145,35 @@ class EncryptionUnavailable(ScouterError):
     )
 
 
+class ManifestUnauthenticated(ScouterError):
+    """`export.verify`'s manifest has no `.sha256` sidecar next to it.
+
+    `export.release` always writes one alongside the manifest -- a missing
+    sidecar means the manifest cannot be trusted before its own contents are
+    used to check anything else, so this is a hard refusal (fix round 1,
+    blocker 3), never a silently-skipped check.
+    """
+
+    code = "manifest_unauthenticated"
+    fix = (
+        "no <manifest>.sha256 next to the manifest: export.release always writes one. "
+        "Restore it, or re-run export.release to produce a fresh, authenticated manifest"
+    )
+
+
+class ExportAllFailed(ScouterError):
+    """Every frame `export.release` tried to render failed.
+
+    A `ReleaseResult` with `exported=0` and `outcome="ok"` would read as
+    success; this is the typed refusal instead (fix round 1, should-fix 7),
+    raised before the manifest is written -- a manifest describing zero
+    exported files is not a release.
+    """
+
+    code = "export_all_failed"
+    fix = "every render failed; see detail.files for the per-image reasons"
+
+
 #: Process exit codes. 0/1/2 follow shell convention; the rest are one per error
 #: class, so a shell script can branch on the failure without parsing JSON.
 EXIT_CODES: dict[str, int] = {
@@ -169,6 +198,8 @@ EXIT_CODES: dict[str, int] = {
     "exif_unreadable": 14,
     "style_write_failed": 15,
     "encryption_unavailable": 16,
+    "manifest_unauthenticated": 17,
+    "export_all_failed": 18,
 }
 
 ERROR_CLASSES: tuple[type[ScouterError], ...] = (
@@ -185,6 +216,8 @@ ERROR_CLASSES: tuple[type[ScouterError], ...] = (
     ExifUnreadable,
     StyleWriteFailed,
     EncryptionUnavailable,
+    ManifestUnauthenticated,
+    ExportAllFailed,
 )
 
 

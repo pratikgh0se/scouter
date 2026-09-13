@@ -371,14 +371,21 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "export_verify",
-        "description": "Re-hash a release manifest's outputs against it, and the manifest "
-        "against its own .sha256. Read-only.",
+        "description": "Re-hash a release manifest's outputs against it. The manifest's own "
+        ".sha256 sidecar is required, not optional -- a missing sidecar is "
+        "manifest_unauthenticated. Read-only.",
         "inputSchema": _schema(
             {
                 "manifest": {
                     "type": "string",
                     "description": "path to a manifest-<preset>-<ts>.json written by "
                     "export.release",
+                },
+                "root": {
+                    "type": "string",
+                    "description": "directory files[].output resolves against; default is "
+                    "the manifest's own <job>/.scouter/ parent. Pass this to verify a "
+                    "manifest shipped beside its exports/ folder instead",
                 },
             },
             ["manifest"],

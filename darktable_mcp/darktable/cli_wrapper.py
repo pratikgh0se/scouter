@@ -37,6 +37,38 @@ def _output_extension(format_type: str) -> str:
     return FORMAT_EXTENSIONS.get(fmt, fmt)
 
 
+def _split_extra_args(extra_args: list[str] | None) -> tuple[list[str], list[str]]:
+    """Split preset flags at the first literal `"--conf"`.
+
+    `core/export.py::preset_args` builds its list in a fixed order -- any
+    pre-`--core` options (`--icc-type`, `--style`, `--style-overwrite`)
+    first, then `--conf key=value` pairs -- and never emits the string
+    `"--core"` itself, so this position-based split needs no marker of its
+    own. Everything before the boundary belongs alongside `--width`/
+    `--height`, ahead of this wrapper's own `--core --configdir` block;
+    everything from the boundary on is a `--core`-region conf pair.
+    """
+    if not extra_args:
+        return [], []
+    if "--conf" in extra_args:
+        idx = extra_args.index("--conf")
+        return list(extra_args[:idx]), list(extra_args[idx:])
+    return list(extra_args), []
+
+
+def _conf_keys(conf_args: list[str]) -> set[str]:
+    """The `plugins/imageio/format/...` keys already set by `--conf key=value`
+    pairs, so `export_image` skips only the matching default, not every one."""
+    keys: set[str] = set()
+    it = iter(conf_args)
+    for token in it:
+        if token == "--conf":
+            kv = next(it, None)
+            if kv is not None:
+                keys.add(kv.split("=", 1)[0])
+    return keys
+
+
 def _normalized_output_path(output_path: Path, format_type: str) -> Path:
     """Rewrite an output path to the extension darktable-cli will really use.
 
@@ -249,15 +281,22 @@ class CLIWrapper:
             max_height: Maximum height in pixels, or None for unconstrained.
                 Passed to darktable-cli's `--height` flag.
             timeout: subprocess timeout in seconds (default 120 s).
-            extra_args: Preset flags (`--icc-type`, `--style`,
-                `--style-overwrite`, `--core --conf ...`) inserted before this
-                wrapper's own `--core --configdir` block, so a caller can shape
-                the export without this wrapper learning about presets. When
-                given, this wrapper's own default per-format `--conf` (quality/
-                bit depth) is skipped -- the preset already owns it, and
-                appending both would leave two conflicting values for
-                darktable-cli to arbitrate. Additive: every existing call site
-                (which passes no `extra_args`) is unaffected.
+            extra_args: Preset flags from `core/export.py::preset_args` --
+                darktable-cli's own PRE-`--core` options (`--icc-type`,
+                `--style`, `--style-overwrite`) followed by any `--core`-
+                region `--conf key=value` pairs, as ONE flat list with no
+                `--core` token of its own (`preset_args` never emits one).
+                This wrapper splits the list at its first literal `"--conf"`
+                -- everything before that boundary joins `--width`/`--height`
+                ahead of this wrapper's own single `--core --configdir`
+                block; everything from `"--conf"` onward is appended AFTER
+                it. Only the specific default `--conf` KEY a preset already
+                sets (by `format_type`: jpeg quality, png/tiff bit depth) is
+                skipped -- not every default, so a preset that only supplies
+                `--style` (no `--conf` of its own, e.g. `preview --style X`)
+                still gets its normal per-format default. Additive: every
+                existing call site (which passes no `extra_args`) is
+                unaffected.
 
         Returns:
             Path: The file darktable-cli actually wrote
@@ -282,20 +321,30 @@ class CLIWrapper:
                 cmd.extend(["--width", str(max_width or 0)])
                 cmd.extend(["--height", str(max_height or 0)])
 
-            if extra_args:
-                cmd.extend(extra_args)
+            pre_core_args, conf_args = _split_extra_args(extra_args)
+            cmd.extend(pre_core_args)
 
-            # Everything after `--core` is handed to the darktable core.
+            # Everything after `--core` is handed to the darktable core. Only
+            # ONE `--core` may ever appear: a second one would restart "the
+            # rest is core args" parsing and strand whatever came after the
+            # first as an unrecognised core token.
             cmd.extend(["--core", "--configdir", str(self._worker_configdir())])
+            cmd.extend(conf_args)
 
-            if not extra_args:
-                fmt = format_type.lower()
-                if fmt == "jpeg":
-                    cmd.extend(["--conf", f"plugins/imageio/format/jpeg/quality={quality}"])
-                elif fmt == "png":
-                    cmd.extend(["--conf", "plugins/imageio/format/png/bpp=8"])
-                elif fmt == "tiff":
-                    cmd.extend(["--conf", "plugins/imageio/format/tiff/bpp=8"])
+            already_set = _conf_keys(conf_args)
+            fmt_norm = FORMAT_EXTENSIONS.get(format_type.lower(), format_type.lower())
+            if fmt_norm == "jpg":
+                key = "plugins/imageio/format/jpeg/quality"
+                if key not in already_set:
+                    cmd.extend(["--conf", f"{key}={quality}"])
+            elif fmt_norm == "png":
+                key = "plugins/imageio/format/png/bpp"
+                if key not in already_set:
+                    cmd.extend(["--conf", f"{key}=8"])
+            elif fmt_norm == "tif":
+                key = "plugins/imageio/format/tiff/bpp"
+                if key not in already_set:
+                    cmd.extend(["--conf", f"{key}=8"])
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 

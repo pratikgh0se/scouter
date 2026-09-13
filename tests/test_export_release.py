@@ -8,21 +8,31 @@ shelling out to darktable-cli at all.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
+import shutil
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from scouter import config
 from scouter.core import dtbridge, export
-from scouter.errors import ChecksumMismatch, UsageError
+from scouter.errors import (
+    ChecksumMismatch,
+    ExportAllFailed,
+    ManifestUnauthenticated,
+    UsageError,
+)
 from tests.scouter_fakes import FakeBridge, FakeCLIWrapper, TempCache, config_fixture
 
 
 class PresetArgsTest(unittest.TestCase):
-    """`preset_args` is pure and preset-only: no job, no bridge, no CLI."""
+    """`preset_args` is pure and preset-only: no job, no bridge, no CLI, and
+    (fix round 1, blocker 1) never emits `--core` itself -- `CLIWrapper`
+    owns the one `--core --configdir` block and splits this list at its
+    first `"--conf"` to decide what precedes/follows it."""
 
     def test_preset_flags(self) -> None:
         cases = {
@@ -30,21 +40,18 @@ class PresetArgsTest(unittest.TestCase):
             "client-proof": [
                 "--icc-type",
                 "SRGB",
-                "--core",
                 "--conf",
                 "plugins/imageio/format/jpeg/quality=90",
             ],
             "client-final": [
                 "--icc-type",
                 "SRGB",
-                "--core",
                 "--conf",
                 "plugins/imageio/format/jpeg/quality=95",
             ],
             "print-tiff": [
                 "--icc-type",
                 "ADOBERGB",
-                "--core",
                 "--conf",
                 "plugins/imageio/format/tiff/bpp=16",
                 "--conf",
@@ -55,15 +62,9 @@ class PresetArgsTest(unittest.TestCase):
             with self.subTest(preset=preset):
                 args = export.preset_args(export.PRESETS[preset])
                 self.assertEqual(args, expected)
-                if "--core" in args:
-                    # --core is last before any --conf: everything after it
-                    # is a "--conf", "key=value" pair, nothing else of ours.
-                    core_i = args.index("--core")
-                    tail = args[core_i + 1 :]
-                    self.assertTrue(tail, "conf-bearing preset produced no --conf entries")
-                    self.assertTrue(all(tail[i] == "--conf" for i in range(0, len(tail), 2)))
+                self.assertNotIn("--core", args)
 
-    def test_style_and_overwrite_precede_core(self) -> None:
+    def test_style_and_overwrite_precede_conf(self) -> None:
         args = export.preset_args(
             export.PRESETS["client-proof"], style="hero-harbour", overwrite_style=True
         )
@@ -75,7 +76,6 @@ class PresetArgsTest(unittest.TestCase):
                 "--style",
                 "hero-harbour",
                 "--style-overwrite",
-                "--core",
                 "--conf",
                 "plugins/imageio/format/jpeg/quality=90",
             ],
@@ -215,7 +215,7 @@ class ExportReleaseTest(ExportReleaseTestBase):
                 self.assertIn(key, f)
             self.assertTrue(f["input_sha256"])
 
-        sha_path = manifest_path.with_name(f"{manifest_path.name}.sha256")
+        sha_path = manifest_path.with_suffix(".sha256")
         self.assertTrue(sha_path.is_file())
         recorded = sha_path.read_text(encoding="utf-8").split()[0]
         actual = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
@@ -320,6 +320,89 @@ class ExportReleaseTest(ExportReleaseTestBase):
         self.assertEqual(result.exported, 2)
         self.assertTrue(any("missed" in w or "missing" in w.lower() for w in result.warnings))
 
+    def test_raw_and_jpeg_pair_get_disambiguated_output_names(self) -> None:
+        """Fix round 1, blocker 2: a raw and a same-stem JPEG (a card holding
+        both for one frame) must not silently clobber each other's output."""
+        entries = []
+        for name in ("f1.orf", "f1.jpg"):
+            raw, sha = self._write_frame(name, 3)
+            entries.append({"dest": f"raw/{name}", "sha256": sha})
+        self._write_import_json(entries)
+
+        result = export.release(self.JOB_SLUG, "client-proof", confirm=True)
+        self.assertEqual(result.exported, 2)
+        outputs = {Path(f.output).name for f in result.files}
+        self.assertEqual(outputs, {"f1-orf.jpg", "f1-jpg.jpg"})
+
+    def test_all_renders_failing_is_a_typed_error_not_a_success(self) -> None:
+        """Fix round 1, should-fix 7: never a success with exported=0."""
+        self._standard_job()
+        for name in ("f1.orf", "f2.orf"):
+            FakeCLIWrapper.raises[str(self.job_path / "raw" / name)] = RuntimeError("boom")
+        with self.assertRaises(ExportAllFailed) as ctx:
+            export.release(self.JOB_SLUG, "client-proof", confirm=True)
+        self.assertEqual(len(ctx.exception.detail["files"]), 2)
+        # No manifest was written for an all-failed release.
+        self.assertEqual(list((self.job_path / ".scouter").glob("manifest-*.json")), [])
+
+    def test_unregistered_frame_becomes_a_warning_not_an_abort(self) -> None:
+        """Fix round 1, should-fix 5: ImageNotFound during label resolution
+        excludes just that frame, with a warning -- never aborts the release."""
+        self._standard_job()
+        unregistered_path = str(self.job_path / "raw" / "f1.orf")
+        green_path = str(self.job_path / "raw" / "f2.orf")
+        base_lookup = self.bridge.responses["image.lookup"]
+
+        def lookup(p: dict) -> dict:
+            if p["path"] == unregistered_path:
+                return {"found": False, "image_id": None, "path": p["path"]}
+            return base_lookup(p)
+
+        self.bridge.responses["image.lookup"] = lookup
+
+        def color_labels(p: dict) -> dict:
+            green_id = self._image_ids[green_path]
+            per_image = [
+                {"image_id": image_id, "labels": ["green"] if image_id == green_id else []}
+                for image_id in p["image_ids"]
+            ]
+            return {"missing": [], "per_image": per_image}
+
+        self.bridge.responses["image.color_labels"] = color_labels
+
+        result = export.release(self.JOB_SLUG, "client-final", confirm=True)
+        self.assertEqual(result.exported, 1)
+        self.assertEqual(result.files[0].input, green_path)
+        self.assertTrue(any("not registered" in w for w in result.warnings))
+
+    def test_unknown_final_label_is_a_typed_refusal(self) -> None:
+        """Fix round 1, should-fix 6: a typo in export.final_label is refused
+        against the real vocabulary, not silently treated as "matches nothing"."""
+        self._standard_job()
+        bad_cfg = dataclasses.replace(
+            self.cfg, export=dataclasses.replace(self.cfg.export, final_label="gren")
+        )
+        with mock.patch.object(export.config, "load", return_value=bad_cfg):
+            with self.assertRaises(UsageError) as ctx:
+                export.release(self.JOB_SLUG, "client-final", confirm=True)
+        self.assertIn("gren", str(ctx.exception))
+
+    def test_finals_empty_selection_reports_the_label_histogram(self) -> None:
+        self._standard_job()
+
+        def color_labels(p: dict) -> dict:
+            return {
+                "missing": [],
+                "per_image": [{"image_id": i, "labels": ["red"]} for i in p["image_ids"]],
+            }
+
+        self.bridge.responses["image.color_labels"] = color_labels
+        with self.assertRaises(UsageError) as ctx:
+            export.release(self.JOB_SLUG, "client-final", confirm=True)
+        message = str(ctx.exception)
+        self.assertIn("color_label=green", message)
+        self.assertIn("'red': 3", message)
+
 
 class ExportVerifyTest(ExportReleaseTestBase):
     def test_export_verify_detects_a_flipped_byte(self) -> None:
@@ -352,6 +435,37 @@ class ExportVerifyTest(ExportReleaseTestBase):
 
         with self.assertRaises(ChecksumMismatch):
             export.verify(str(manifest_path))
+
+    def test_verify_refuses_a_manifest_with_no_sha256_sidecar(self) -> None:
+        """Fix round 1, blocker 3: a missing sidecar is a typed refusal, not
+        an optional check that gets silently skipped."""
+        self._standard_job()
+        result = export.release(self.JOB_SLUG, "client-proof", confirm=True)
+        sha_path = Path(result.manifest_path).with_suffix(".sha256")
+        sha_path.unlink()
+
+        with self.assertRaises(ManifestUnauthenticated):
+            export.verify(result.manifest_path)
+
+    def test_verify_root_resolves_a_manifest_shipped_beside_its_exports_folder(self) -> None:
+        """Fix round 1, nit 8: `--root` for a manifest+exports pair copied
+        somewhere else entirely (e.g. handed to a client on a USB stick),
+        where the manifest no longer sits at `<job>/.scouter/`."""
+        self._standard_job()
+        result = export.release(self.JOB_SLUG, "client-proof", confirm=True)
+        manifest_path = Path(result.manifest_path)
+        sha_path = manifest_path.with_suffix(".sha256")
+
+        shipped = self.tmp / "shipped"
+        shipped.mkdir()
+        shutil.copy(manifest_path, shipped / manifest_path.name)
+        shutil.copy(sha_path, shipped / sha_path.name)
+        shutil.copytree(Path(result.out_dir), shipped / "exports" / "client-proof")
+
+        verified = export.verify(str(shipped / manifest_path.name), root=str(shipped))
+        self.assertTrue(verified.ok)
+        self.assertEqual(verified.checked, 2)
+        self.assertEqual(verified.missing, [])
 
 
 if __name__ == "__main__":
