@@ -126,6 +126,9 @@ stub_dt.gui = {
 local styles_exported = {}
 local styles_imported = {}
 local styles_deleted = {}
+-- Scripts a darktable that silently no-ops an export (pcall ok=true, but no
+-- file written / unchanged) -- fix round 1, should-fix 9's mtime-advance test.
+local force_noop_export = false
 
 stub_dt.styles = setmetatable({}, {
   __index = function(t, k)
@@ -137,30 +140,36 @@ stub_dt.styles = setmetatable({}, {
     end
     if k == "export" then
       -- Real dt.styles.export(style, dir) writes `<dir>/<style.name>.dtstyle`.
-      -- The stub does the same (a small marker file) so `file_size` sees a
-      -- real file and style.export_file's `bytes` field is exercised too.
+      -- The stub writes real `<info><name>...</name></info>` content (the
+      -- same shape `dtstyle_file_name` parses in the real plugin) so
+      -- style.export_file's `bytes` field AND style.import_file's
+      -- file-name-based collision check are both exercised against
+      -- something realistic, not an arbitrary marker.
       return function(style, dir)
         table.insert(styles_exported, {name = style.name, dir = dir})
+        if force_noop_export then return end
         local path = dir .. "/" .. style.name .. ".dtstyle"
         local f = io.open(path, "w")
         if not f then error("stub export: could not open " .. path) end
-        f:write("STUB-DTSTYLE:" .. style.name .. "\n")
+        f:write("<darktable_style><info><name>" .. style.name
+                 .. "</name></info></darktable_style>\n")
         f:close()
       end
     end
     if k == "import" then
       -- Real dt.styles.import(path) derives the new style's name from the
-      -- file's own <name>. The stub reads the marker line export() wrote
-      -- (or, for a caller-supplied fixture, a `STUB-DTSTYLE:<name>` first
-      -- line) so import-after-export round-trips under the same name.
+      -- file's own <info><name>. The stub does the same, from whatever
+      -- content is actually on disk (export()'s own write, or a
+      -- caller-supplied fixture) -- never a marker line disconnected from
+      -- what a real .dtstyle looks like.
       return function(path)
         table.insert(styles_imported, path)
         local f = io.open(path, "r")
         local name = "imported-style"
         if f then
-          local first = f:read("*l") or ""
+          local content = f:read("*a") or ""
           f:close()
-          local found = first:match("^STUB%-DTSTYLE:(.+)$")
+          local found = content:match("<info>.-<name>(.-)</name>")
           if found then name = found end
         end
         table.insert(t, {name = name, description = ""})
@@ -1454,6 +1463,7 @@ do
     "darkroom.action", "darkroom.status", "module.enable", "module.disable",
     "module.reset", "history.commit", "snapshot.take", "style.create_from_current",
     "style.apply", "image.rate", "style.export_file", "style.import_file",
+    "style.delete",
   }
   for _, name in ipairs(expected_scouter_methods) do
     assertTrue(type(plugin.methods[name]) == "function",
@@ -1700,10 +1710,18 @@ assertTrue(tostring(err_missing):find("not found") ~= nil,
 local export_dir = os.getenv("TMPDIR") or "/tmp"
 local exp = plugin.methods["style.export_file"]({name = "hero", dir = export_dir})
 assertEq(exp.name, "hero", "export_file echoes the style name")
-assertEq(exp.exported, true, "export_file reports exported")
+assertEq(exp.exported, true, "export_file reports exported when the file's signature advanced")
 assertTrue(exp.path:find("hero.dtstyle", 1, true) ~= nil,
   "export_file returns the .dtstyle path")
 assertTrue(exp.bytes > 0, "export_file reports a real, non-zero file size")
+
+-- fix round 1, should-fix 9: a darktable that silently no-ops (pcall ok=true,
+-- nothing written or changed) must NOT be reported as exported=true.
+force_noop_export = true
+local exp_noop = plugin.methods["style.export_file"]({name = "hero", dir = export_dir})
+assertEq(exp_noop.exported, false,
+  "export_file must not claim success when the file's signature did not advance")
+force_noop_export = false
 
 -- style.import_file: existing name without overwrite is refused BEFORE any
 -- delete or import call.
@@ -1717,21 +1735,102 @@ assertTrue(tostring(err_exists):find("already exists") ~= nil,
   "import_file's refusal names the collision")
 assertEq(#styles_deleted, 0, "the refusal deletes nothing")
 
+-- fix round 1, should-fix 9: the collision check is against the FILE's own
+-- <info><name> (here "hero", already existing), never the caller's `name`
+-- hint -- a mismatched hint ("hero-2", which does NOT exist) must not let a
+-- real collision slip through.
+local ok_hint_mismatch, err_hint_mismatch = pcall(function()
+  return plugin.methods["style.import_file"]({path = exp.path, name = "hero-2"})
+end)
+assertEq(ok_hint_mismatch, false,
+  "a non-colliding NAME HINT must not bypass a real collision on the file's own name")
+assertTrue(tostring(err_hint_mismatch):find("\"hero\"", 1, true) ~= nil,
+  "the refusal names the FILE's own style name (hero), not the hint (hero-2)")
+
 -- overwrite=true deletes the old style first, then imports -- replaced=true,
 -- and styles_after accounts for delete-then-import (net unchanged count).
+-- The destructive window is real: an import failure here would leave "hero"
+-- gone with no style re-created (covered by the import-failure test below).
 local imp = plugin.methods["style.import_file"]({path = exp.path, name = "hero", overwrite = true})
 assertEq(imp.imported, true, "import_file reports imported")
+assertEq(imp.name, "hero", "import_file's returned name is the FILE's own name")
 assertEq(imp.replaced, true, "import_file reports the delete-then-import replace")
 assertEq(imp.styles_before, styles_before_refusal, "styles_before matches the pre-import count")
 assertEq(imp.styles_after, styles_before_refusal, "styles_after: one deleted, one imported back")
 assertEq(styles_deleted[#styles_deleted], "hero", "the existing style was deleted before re-import")
 assertEq(styles_imported[#styles_imported], exp.path, "the exported path was the one imported")
 
--- A fresh name (no collision) imports without touching delete at all.
+-- A style whose FILE name genuinely never existed imports cleanly, without
+-- touching delete at all. Written by hand (not via create_from_current +
+-- export, which would already have inserted the name into dt.styles) so
+-- this really is a name dt.styles has never seen.
+local fresh_path = export_dir .. "/hero-fresh-manual.dtstyle"
+do
+  local f = io.open(fresh_path, "w")
+  f:write("<darktable_style><info><name>hero-fresh</name></info></darktable_style>\n")
+  f:close()
+end
 local deletes_before = #styles_deleted
-local imp2 = plugin.methods["style.import_file"]({path = exp.path, name = "hero-2"})
+local imp2 = plugin.methods["style.import_file"]({path = fresh_path, name = "hero-fresh"})
+assertEq(imp2.imported, true, "a genuinely fresh name imports")
 assertEq(imp2.replaced, false, "a fresh name is not reported as replaced")
 assertEq(#styles_deleted, deletes_before, "importing a fresh name deletes nothing")
+
+-- fix round 1, should-fix 9: an import failure AFTER the destructive delete
+-- names that window explicitly, rather than a bare pcall error. "hero-fresh"
+-- now exists (imp2 above), so overwrite=true deletes it before the forced
+-- import failure.
+do
+  -- Setting a real field on stub_dt.styles shadows the metatable's __index
+  -- for "import" specifically (the plugin's own `dt` local IS stub_dt, via
+  -- package.loaded.darktable); setting it back to nil restores the normal
+  -- dynamic dispatch.
+  stub_dt.styles.import = function(path) error("stub-forced import failure") end
+  local ok_destructive, err_destructive = pcall(function()
+    return plugin.methods["style.import_file"]({path = fresh_path, name = "hero-fresh", overwrite = true})
+  end)
+  assertEq(ok_destructive, false, "a forced import failure still raises")
+  assertTrue(tostring(err_destructive):find("destructive window", 1, true) ~= nil,
+    "the error names the destructive window when the delete already happened")
+  stub_dt.styles.import = nil
+end
+
+-- style.delete: tolerant of "already gone" (hero-fresh was just deleted by
+-- the destructive-window test above), real otherwise (against "hero",
+-- which still exists from the overwrite=true re-import earlier).
+local del_missing = plugin.methods["style.delete"]({name = "hero-fresh"})
+assertEq(del_missing.existed, false, "hero-fresh is already gone (deleted above)")
+assertEq(del_missing.deleted, false, "nothing was deleted")
+local before_delete = 0
+for _ in ipairs(stub_dt.styles) do before_delete = before_delete + 1 end
+local del_real = plugin.methods["style.delete"]({name = "hero"})
+assertEq(del_real.existed, true, "hero existed")
+assertEq(del_real.deleted, true, "hero was deleted")
+local after_delete = 0
+for _ in ipairs(stub_dt.styles) do after_delete = after_delete + 1 end
+assertEq(after_delete, before_delete - 1, "style.delete actually removed one style")
+
+-- <info><name> containing an XML entity (as scouter/core/dtstyle.py's
+-- ElementTree writer would escape a literal "&") is read as PLAIN TEXT --
+-- Lua has no XML parser here, just a string match -- so the collision check
+-- must not crash or mis-extract on it, and must compare byte-for-byte
+-- (the same convention the writer and this plain match share end to end).
+local escaped_path = export_dir .. "/escaped-name.dtstyle"
+do
+  local f = io.open(escaped_path, "w")
+  f:write("<darktable_style><info><name>Tom &amp; Jerry</name></info></darktable_style>\n")
+  f:close()
+end
+local imp_escaped = plugin.methods["style.import_file"]({path = escaped_path, name = "ignored-hint"})
+assertEq(imp_escaped.name, "Tom &amp; Jerry",
+  "the collision-check name is read verbatim (no XML unescaping) from <info><name>")
+assertEq(imp_escaped.imported, true, "importing an escaped-name style still succeeds")
+-- A second import of the exact same (still-escaped) name is a real collision,
+-- proving the name round-trips consistently rather than drifting on a second read.
+local ok_escaped_collision = pcall(function()
+  return plugin.methods["style.import_file"]({path = escaped_path, name = "ignored-hint"})
+end)
+assertEq(ok_escaped_collision, false, "the escaped name is still recognised on a second import")
 
 -- darkroom.open selects then switches, and detects an already-open image.
 view_state.current = "lighttable"

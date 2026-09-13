@@ -82,7 +82,13 @@ class ConfirmGateTest(unittest.TestCase):
     GATED_ARGS = {
         "config.init": {"path": None},
         "darkroom.reset": {"module": "exposure"},
-        "style.extract": {"image": None, "name": "hero", "modules": []},
+        # no_filter=True: this generic test only exercises the "would
+        # replace an existing style" confirm gate, common to every gated
+        # verb -- not style.extract's own module-filter refusals (fix round
+        # 1, should-fix 8, tested directly in tests/test_style_dtstyle.py),
+        # which would otherwise fire first against this fake's empty modules
+        # / absent sidecar and mask the thing this test actually checks.
+        "style.extract": {"image": None, "name": "hero", "modules": [], "no_filter": True},
         "export.run": {"images": [None, None], "preset": "preview", "out_dir": None},
     }
     # `style.apply` is deliberately NOT here (final review, should-fix 7): its

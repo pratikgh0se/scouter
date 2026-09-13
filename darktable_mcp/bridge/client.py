@@ -43,6 +43,7 @@ DEFAULT_TIMEOUTS = {
     "image.rate": 60.0,  # 50 ids per call, each a library write
     "style.export_file": 30.0,
     "style.import_file": 60.0,
+    "style.delete": 15.0,
 }
 
 

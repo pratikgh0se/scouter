@@ -137,6 +137,21 @@ class StyleWriteFailed(ScouterError):
     )
 
 
+class NoSidecar(ScouterError):
+    """`style.extract`'s filtered path needs a real sidecar to read the history
+    from -- a typed refusal (fix round 1, blocker 2), never the raw
+    `FileNotFoundError` `xmp.read_sidecar` raises.
+
+    Deliberately NOT in `ERROR_CLASSES` (spec section 9's darktable failure
+    classes, pinned by `tests/test_paths_errors.py`), same reasoning as
+    `UsageError`: this is Scouter refusing to build a style from a history it
+    cannot read, not one of darktable's own failure modes.
+    """
+
+    code = "no_sidecar"
+    fix = "commit history first (`scouter history commit <image>`), then retry"
+
+
 class EncryptionUnavailable(ScouterError):
     code = "encryption_unavailable"
     fix = (
@@ -169,6 +184,7 @@ EXIT_CODES: dict[str, int] = {
     "exif_unreadable": 14,
     "style_write_failed": 15,
     "encryption_unavailable": 16,
+    "no_sidecar": 17,
 }
 
 ERROR_CLASSES: tuple[type[ScouterError], ...] = (

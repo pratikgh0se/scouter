@@ -28,6 +28,24 @@ def validate_job(job: str) -> str:
     return job
 
 
+#: A style name becomes `<cache>/styles/<name>.dtstyle` (fix round 1, blocker
+#: 1): reuses JOB_RE (same "it becomes a file name" property as a job id) so
+#: `../../x` or `/etc/x` can never escape `styles_dir()`.
+STYLE_NAME_RE = JOB_RE
+
+
+def validate_style_name(name: str) -> str:
+    """Return `name` unchanged, or raise `usage` if it is not a safe file name."""
+    if not isinstance(name, str) or not STYLE_NAME_RE.match(name):
+        raise UsageError(
+            f"invalid style name {name!r}: a style name is 1-64 characters of "
+            "[A-Za-z0-9._-] starting with a letter or a digit (it becomes a "
+            "file name under the styles cache)",
+            detail={"name": name, "pattern": STYLE_NAME_RE.pattern},
+        )
+    return name
+
+
 #: A job slug becomes a DIRECTORY NAME inside the library and a vault note name,
 #: so it is validated like a job id: lowercase, no separators, no leading dot.
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")

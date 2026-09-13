@@ -194,7 +194,7 @@ class ReadsNeverOpenTheDarkroomTest(unittest.TestCase):
     def test_style_and_export_dry_runs_do_not_open(self) -> None:
         from scouter.core import export, style
 
-        style.extract(image=str(self.raw), name="hero", modules=[], dry_run=True)
+        style.extract(image=str(self.raw), name="hero", modules=[], dry_run=True, no_filter=True)
         style.apply(image=str(self.raw), name="hero", dry_run=True)
         export.run(
             images=[str(self.raw)], preset="preview", out_dir=str(self.root / "out"), dry_run=True

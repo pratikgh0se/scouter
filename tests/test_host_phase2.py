@@ -18,12 +18,21 @@ by hand, once this run is reviewed -- and `scouter/core/dtstyle.py`'s writer
 is asserted against ITS element names and nesting (`tests/test_style_dtstyle.py`),
 never against section 9.2's prose.
 
-Only the EditingTrial ORF's `.xmp` sidecar and throwaway temp/cache
-directories are written. No file under `tests/fixtures/` is touched by this
-test while it runs -- the capture goes to a temp path, and updating the
-committed fixture is a deliberate, reviewed, separate step (the same
-discipline `test_host_integration.py`'s colorbalancergb probe uses, final
-review should-fix 4).
+What this run writes, honestly (fix round 1, should-fix 10 -- an earlier
+draft of this docstring claimed `tests/fixtures/` was untouched, which was
+not true): the EditingTrial ORF's `.xmp` sidecar, throwaway temp/cache
+directories, AND `tests/fixtures/hero.dtstyle` itself -- this test stages
+the real capture straight to that committed path (the same discipline
+`test_host_integration.py`'s colorbalancergb probe used before final
+review's should-fix 4 moved IT to a throwaway file; this one still writes
+the fixture path directly because, unlike that probe, there is no separate
+unit assertion this file could silently stop catching -- the stage is
+reviewed via this test's own printed capture and `git diff` before it is
+ever committed). Every style this test creates in darktable's own library
+(`scouter-probe-*`, `scouter-probe-filtered-*`) is deleted again via the new
+`style.delete` bridge verb before the run ends, in a `finally`, so a host
+run never leaves throwaway styles behind in the user's real darktable
+library.
 """
 
 from __future__ import annotations
@@ -232,7 +241,27 @@ class PinDtstyleFormatTest(unittest.TestCase):
         self.assertTrue(exposure.ok, exposure.to_dict())
         self.assertTrue(exposure.data["committed"])
 
+        # Both names are fixed BEFORE either style is created (not returned
+        # from the helpers that create them), so an assertion failure
+        # partway through either helper still leaves the `finally` below
+        # able to find and delete whatever was actually created.
         style_name = f"scouter-probe-{os.getpid()}-{int(time.time())}"
+        filtered_name = f"scouter-probe-filtered-{os.getpid()}-{int(time.time())}"
+        try:
+            self._probe_body(raw, style_name)
+            self._probe_filtered_body(raw, filtered_name)
+        finally:
+            # Fix round 1, should-fix 10: never leave throwaway styles behind
+            # in the user's real darktable library, success or failure.
+            for name in (style_name, filtered_name):
+                try:
+                    dtbridge.call("style.delete", {"name": name})
+                except Exception as e:
+                    print(f"WARNING: cleanup could not delete style {name!r}: {e}")
+
+    def _probe_body(self, raw: str, style_name: str) -> None:
+        from scouter.core import dtbridge
+
         created = dtbridge.call(
             "style.create_from_current",
             {"name": style_name, "modules": [], "description": "phase 2 host probe"},
@@ -278,16 +307,22 @@ class PinDtstyleFormatTest(unittest.TestCase):
             staged.write_text(text, encoding="utf-8")
             print(f"staged fixture at {staged} -- review the printed capture above, then commit it")
 
-        # Phase 2: the writer this probe pins (scouter/core/dtstyle.py) built
-        # AFTER seeing the capture above -- exercised live, against the real
-        # `dt.styles.import`, in the SAME darktable session (one launch for
-        # the whole task, per the host-test discipline). This is the thing
-        # design section 9.2 actually asked for: "if darktable imports the
-        # style ... the omission [of <iop_order>/a real <iop_list>] is fine".
+    def _probe_filtered_body(self, raw: str, filtered_name: str) -> None:
+        """Phase 2: the writer this probe pins (scouter/core/dtstyle.py) built
+        AFTER seeing the capture above -- exercised live, against the real
+        `dt.styles.import`, in the SAME darktable session (one launch for
+        the whole task, per the host-test discipline). This is the thing
+        design section 9.2 actually asked for: "if darktable imports the
+        style ... the omission [of <iop_order>/a real <iop_list>] is fine".
+
+        `filtered_name` is chosen by the caller BEFORE this runs (not
+        generated and returned here), so its `finally` can delete it even if
+        an assertion below fails partway through.
+        """
         from scouter import registry
+        from scouter.core import dtbridge
         from scouter.core import dtstyle as dtstyle_module
 
-        filtered_name = f"scouter-probe-filtered-{os.getpid()}-{int(time.time())}"
         filtered = registry.call(
             "style.extract",
             "cli",

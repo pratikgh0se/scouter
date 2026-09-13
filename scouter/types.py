@@ -197,6 +197,10 @@ class StyleResult(Payload):
     dtstyle_path: str | None = None
     operations_included: list[str] = field(default_factory=list)
     modules_missing: list[str] = field(default_factory=list)
+    # Fix round 1, should-fix 5: a requested module whose newest active entry
+    # is disabled is still written (honouring the request literally), but
+    # named here so the caller is never left thinking it is live.
+    modules_disabled: list[str] = field(default_factory=list)
 
 
 @dataclass

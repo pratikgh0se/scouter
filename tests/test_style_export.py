@@ -107,7 +107,7 @@ class StyleTest(unittest.TestCase):
         self.assertIn("style.create_from_current", self.bridge.methods_called())
 
     def test_extract_dry_run_does_not_call_darkroom_current(self) -> None:
-        result = style.extract(image=str(self.raw), name="old-look", modules=[])
+        result = style.extract(image=str(self.raw), name="old-look", modules=[], no_filter=True)
         self.assertEqual(result.outcome, "dry_run")
         self.assertNotIn("darkroom.current", self.bridge.methods_called())
 

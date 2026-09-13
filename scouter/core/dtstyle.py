@@ -95,9 +95,13 @@ def build(parsed: ParsedXmp, name: str, description: str, operations: list[str])
     ET.SubElement(info, "iop_list").text = ""
 
     style_el = ET.SubElement(root, "style")
-    for entry in entries:
+    # Fix round 1, should-fix 6: the pinned fixture numbers <num> 0..N-1 in
+    # pipeline order (a whole-history export never skips a slot); a filtered
+    # style with holes in the original XMP `num` sequence must renumber the
+    # same way, not carry the source history's own gappy numbering.
+    for idx, entry in enumerate(entries):
         plugin = ET.SubElement(style_el, "plugin")
-        ET.SubElement(plugin, "num").text = str(entry.num)
+        ET.SubElement(plugin, "num").text = str(idx)
         ET.SubElement(plugin, "module").text = str(entry.modversion)
         ET.SubElement(plugin, "operation").text = entry.operation
         ET.SubElement(plugin, "op_params").text = entry.params_hex
