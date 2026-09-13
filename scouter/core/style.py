@@ -27,6 +27,20 @@ either view identically. Ruling 30's job-image guard (a darkroom WRITE
 refusing when `darkroom.current` differs from the job's last opened image)
 does not apply either -- a style application is not a darkroom write, it
 is a library-level history append.
+
+Fix round 1 (Opus quality review): `image:apply_style` always APPENDS, for
+a set the same as for one image -- re-running `apply_set` on a set that
+already carries the style stacks a SECOND copy of every operation the
+style contains, it does not replace or dedupe the first. `apply_set` now
+reads each target's sidecar locally before applying (`_already_has_style`,
+cheap -- one `image.lookup` per target plus a local file read, no render
+or write) and skips a target that already looks like it carries the
+style, `force=True` overrides. See `apply_set`'s own docstring for the
+error-handling and idempotency changes in full; `StyleSetResult`'s fixed
+fields (`scouter/types.py`, out of this fix round's file scope) have no
+room for new top-level lists, so `status` per image (`"applied"`,
+`"failed"`, `"unknown"`, `"already_has_style"`) lives in `per_image` rows,
+with the aggregate counts and id lists also named in `warnings`.
 """
 
 from __future__ import annotations
@@ -383,17 +397,55 @@ def _images_from_job_slug(job_slug: str) -> list[str]:
 
 def _resolve_set(
     job_slug: str | None, images: list[str | int] | None, exclude: list[str | int] | None
-) -> list[ResolvedImage]:
+) -> tuple[list[ResolvedImage], list[dict]]:
     """`--images`, else every file in the job's `import.json`, minus `--exclude`.
 
-    Every candidate -- and every `--exclude` entry -- is resolved through
-    `image.lookup` (`dtbridge.resolve_image`, a pure read), same as a single
-    `style.apply`; `--exclude` is matched by resolved `image_id` rather than
-    by raw string/path equality, so a path and the id it resolves to exclude
-    the same frame either way.
+    Returns `(resolved, unresolved)`. `unresolved` is one `per_image`-shaped
+    failure row (`status="failed"`, `image_id=None`) per candidate
+    `image.lookup` could not find -- fix round 1: a stale or renamed raw
+    inside a 300-file `import.json` must not kill the whole set, or the dry
+    run that previews it. `dtbridge.resolve_image` raises a `ScouterError`
+    (`ImageNotFound`, a `usage`-coded one) for that case; it is caught here,
+    not left to propagate, and every OTHER candidate is still resolved.
+
+    Every resolvable candidate -- and every `--exclude` entry -- goes
+    through `image.lookup` (`dtbridge.resolve_image`, a pure read), same as
+    a single `style.apply`; `--exclude` matches by resolved `image_id`, so a
+    path and the id it resolves to exclude the same frame either way. An
+    `--exclude` entry that does not itself resolve excludes nothing -- a
+    typo there costs a no-op, not a crash.
+
+    `images=[]` (an EXPLICIT empty list, not simply omitted) is refused as a
+    caller mistake rather than silently falling back to `--job-slug`'s
+    import.json (fix round 1 nit): only `images is None` means "not given".
+    When both `--images` and `--job-slug` are given, every path-form entry
+    in `--images` must already be one of the job's own raws (fix round 1
+    nit) -- an id-form entry is not checked against the manifest, since
+    doing so would mean resolving every one of the job's own raws just to
+    compare ids, defeating the point of staying bridge-call-free until the
+    real resolution pass below.
     """
-    if images:
+    if images is not None:
         raw = list(images)
+        if not raw:
+            raise UsageError(
+                "--images was empty: pass at least one image, or omit --images "
+                "to use every file in --job-slug's import.json",
+                detail={"job_slug": job_slug, "images": images},
+            )
+        if job_slug:
+            job_files = set(_images_from_job_slug(job_slug))
+            outside = [
+                item
+                for item in raw
+                if isinstance(item, str) and not item.isdigit() and item not in job_files
+            ]
+            if outside:
+                raise UsageError(
+                    f"{len(outside)} of --images are not in job {job_slug!r}'s "
+                    f"import.json: {outside[:5]}{' ...' if len(outside) > 5 else ''}",
+                    detail={"job_slug": job_slug, "outside": outside},
+                )
     elif job_slug:
         raw = _images_from_job_slug(job_slug)
     else:
@@ -404,16 +456,66 @@ def _resolve_set(
             "naming a job whose import.json lists files",
             detail={"job_slug": job_slug, "images": images},
         )
-    resolved = [dtbridge.resolve_image(item) for item in raw]
+
+    resolved: list[ResolvedImage] = []
+    unresolved: list[dict] = []
+    for item in raw:
+        try:
+            resolved.append(dtbridge.resolve_image(item))
+        except ScouterError as e:
+            unresolved.append(
+                {"image_id": None, "path": str(item), "status": "failed", "error": str(e)}
+            )
+
     if exclude:
-        excluded_ids = {dtbridge.resolve_image(item).image_id for item in exclude}
+        excluded_ids: set[int] = set()
+        for item in exclude:
+            try:
+                excluded_ids.add(dtbridge.resolve_image(item).image_id)
+            except ScouterError:
+                continue
         resolved = [r for r in resolved if r.image_id not in excluded_ids]
-        if not resolved:
+        if not resolved and not unresolved:
             raise UsageError(
                 "every candidate image was excluded: nothing to apply the style to",
                 detail={"job_slug": job_slug, "excluded": sorted(excluded_ids)},
             )
-    return resolved
+
+    return resolved, unresolved
+
+
+def _already_has_style(resolved: ResolvedImage, name: str, job: str) -> bool:
+    """Cheap, local-mostly check: does this image's sidecar already carry
+    an instance darktable tagged with this style's name?
+
+    Heuristic, not a guarantee -- fix round 1's idempotency guard.
+    `image:apply_style` always APPENDS (module docstring), so re-running
+    `apply_set` on a set that already has the style stacks a SECOND copy of
+    every operation the style contains, it does not replace or dedupe the
+    first. darktable tags a NEW instance a style application CREATES with
+    `multi_name` set to the style's own name (observed on real history
+    stacks, not a documented Lua API guarantee), so a case-insensitive
+    `multi_name` match against any of the image's history entries is a
+    real, if imperfect, signal: it can miss a style whose instances
+    darktable did not name after it, and it cannot distinguish an earlier
+    application from a deliberate repeat with different values. `force=True`
+    bypasses this entirely, for exactly that reason.
+
+    Reads `history.read.__wrapped__` directly (ruling 21/23: lazy import so
+    this module stays importable regardless of load order, and the
+    unwrapped call so one `apply_set` invocation still emits exactly one
+    metrics event). `history.read` still re-resolves the image (one cheap
+    `image.lookup` -- `dt.database`'s own dict lookup by id, not a render or
+    a write) before its actual work, which is the sidecar read: a local
+    file read, no bridge round trip for the part that matters at 300-image
+    scale.
+    """
+    from scouter.core import history
+
+    read_fn = getattr(history.read, "__wrapped__", history.read)
+    result = read_fn(resolved.image_id, job=job)
+    target = name.strip().lower()
+    return any((entry.multi_name or "").strip().lower() == target for entry in result.entries)
 
 
 @metrics.instrumented("style.apply_set")
@@ -427,6 +529,7 @@ def apply_set(
     batch: int = DEFAULT_BATCH_SIZE,
     confirm: bool = False,
     dry_run: bool = False,
+    force: bool = False,
     job: str | None = None,
 ) -> StyleSetResult:
     """Apply one style to a whole set, in batches, keeping per-image results.
@@ -434,18 +537,68 @@ def apply_set(
     A partial set is a RESULT, not an exception: 280 of 300 applied is
     information the caller needs, and phase 1's single-image `apply` raises
     StylePartial, which would discard the payload. So `outcome="partial"` when
-    applied > 0 and failed > 0 (exit 9, the same code as style_partial, so one
-    shell branch covers "some of it worked"), and StylePartial only when
-    NOTHING applied.
+    applied > 0 and (failed > 0 or a batch came back "unknown") -- exit 9,
+    the same code as style_partial, so one shell branch covers "some of it
+    worked" -- and StylePartial only when NOTHING applied (and something did
+    go wrong; see the idempotency note below for the one case that is not
+    a failure at all).
 
     Always gated: a set apply is inherently a bulk write (there is no
     "safe by default" single-image case here, unlike `style.apply`), so
     `confirm` is required regardless of how many images the set resolves to
     -- the same reasoning `library.import` uses ("an import is always > 1
-    file, so it is always gated", design 3.1). Dry run, and a real call
-    without confirm, both resolve the full set and check `name` against
-    `list_styles` before returning the plan -- a typo costs no round trips
-    -- but make no `style.apply` call and touch nothing.
+    file, so it is always gated", design 3.1).
+
+    Fix round 1 (Opus quality review), five changes:
+
+    1. The `name` typo check (`list_styles`) now runs FIRST, before
+       resolving a single image -- a typo costs zero round trips, dry run or
+       real, instead of only being caught on the no-confirm/dry-run path.
+    2. Resolution never aborts the whole set for one bad candidate: a raw
+       `image.lookup` cannot find (a stale or renamed entry in a 300-file
+       `import.json`, most likely) becomes a `per_image` failure row
+       (`status="failed"`) via `_resolve_set`, and every other candidate is
+       still attempted. This applies to the dry run too -- it still returns
+       `outcome="dry_run"`, listing the failures rather than raising.
+    3. The batch loop catches every `ScouterError` `dtbridge.call` can raise
+       for `style.apply` (`DbLocked`, `NotInDarkroom`, `BridgeTimeout`,
+       whatever else), not only `BridgeTimeout` -- and NEVER lets one
+       propagate out of this function discarding batches that already
+       succeeded. `BridgeTimeout` specifically means the client gave up
+       without a response, so the bridge genuinely does not know whether
+       darktable finished the write -- those ids get `status="unknown"`,
+       excluded from both `applied` and `failed`, with a warning pointing at
+       `history.read`. Any OTHER `ScouterError` means the bridge answered
+       with a definite refusal, so those ids get `status="failed"`. Both
+       count toward the existing two-consecutive-batch-failures stop rule.
+    4. Idempotency: before the real batch loop, every resolved target's
+       sidecar is read locally (`_already_has_style`, cheap -- see its own
+       docstring) and a
+       target that already looks like it carries this style is skipped by
+       default (`status="already_has_style"` in `per_image`) --
+       `image:apply_style` always APPENDS, so re-running this verb on an
+       already-styled set would otherwise stack a second copy of every
+       operation the style contains. `force=True` applies anyway. This does
+       not run during a dry run, matching `extract`'s own dry-run path
+       (which also defers its local reads past the gate).
+    5. `batch` is bounds-checked to 1..100 (`usage` if not), `images=[]`
+       (an explicit empty list) is a caller mistake rather than a silent
+       fallback to `--job-slug`, and `--images` entries outside
+       `--job-slug`'s own `import.json` are refused when both are given.
+       See `_resolve_set`'s own docstring for the exact rules.
+
+    `StyleSetResult` (`scouter/types.py`) is out of this fix round's file
+    scope, so there is no new top-level field for "unknown" ids or
+    "already carries this style" ids -- every `per_image` row carries a
+    `status` (`"applied"` | `"failed"` | `"unknown"` | `"already_has_style"`)
+    and an `error` (`None` when not applicable); `warnings` also names the
+    aggregate counts and ids for whichever of those categories is non-empty,
+    so nothing is buried in a list a caller has to filter for by hand.
+
+    `--exclude-hero` (a shortcut to exclude a caller's own extract source
+    automatically) is NOT implemented -- there is no such flag; `--exclude`
+    only takes an explicit list. Left for task 14 to decide whether it is
+    worth adding.
 
     Never touches the darkroom view (see the module docstring): the Lua
     `style.apply` handler applies from `dt.database` directly, so there is
@@ -453,9 +606,10 @@ def apply_set(
     than pretended.
     """
     job = job or current_job()
-    if batch <= 0:
+    if not (1 <= batch <= 100):
         raise UsageError(
-            f"batch must be a positive integer, got {batch!r}", detail={"batch": batch}
+            f"batch must be between 1 and 100, got {batch!r}",
+            detail={"batch": batch, "min": 1, "max": 100},
         )
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
@@ -468,10 +622,18 @@ def apply_set(
             detail={"name": name, "mode": mode, "modes_available": ["append"]},
         )
 
+    # Fix round 1, item 4: the typo check runs before ANY image is resolved,
+    # dry run or real -- zero round trips wasted either way.
+    existing = _existing_styles()
+    if name not in existing:
+        raise UsageError(
+            f"no style named {name!r} exists", detail={"name": name, "existing": existing}
+        )
+
     from scouter import config as config_module
 
     cfg = config_module.load()
-    resolved = _resolve_set(job_slug, images, exclude)
+    resolved, unresolved = _resolve_set(job_slug, images, exclude)
     plan = [
         {
             "action": "style.apply_set",
@@ -484,17 +646,21 @@ def apply_set(
     ]
 
     if dry_run or not confirm:
-        existing = _existing_styles()
-        if name not in existing:
-            raise UsageError(
-                f"no style named {name!r} exists", detail={"name": name, "existing": existing}
+        dry_warnings: list[str] = []
+        if unresolved:
+            preview = ", ".join(u["path"] for u in unresolved[:5])
+            dry_warnings.append(
+                f"{len(unresolved)} of {len(resolved) + len(unresolved)} candidates did "
+                f"not resolve and would fail: {preview}" + (" ..." if len(unresolved) > 5 else "")
             )
         return StyleSetResult(
             outcome="dry_run",
             name=name,
             mode=mode,
-            requested=len(resolved),
+            requested=len(resolved) + len(unresolved),
             plan=plan,
+            per_image=list(unresolved),
+            warnings=dry_warnings,
             reason=(
                 "dry run: nothing was applied"
                 if dry_run
@@ -502,13 +668,32 @@ def apply_set(
             ),
         )
 
-    id_to_path = {r.image_id: r.path for r in resolved}
-    ids = [r.image_id for r in resolved]
+    # Fix round 1, item 3 (idempotency): cheap local sidecar reads.
+    already_rows: list[dict] = []
+    to_apply: list[ResolvedImage] = resolved
+    if not force:
+        to_apply = []
+        for r in resolved:
+            if _already_has_style(r, name, job):
+                already_rows.append(
+                    {
+                        "image_id": r.image_id,
+                        "path": r.path,
+                        "status": "already_has_style",
+                        "error": None,
+                    }
+                )
+            else:
+                to_apply.append(r)
+
+    id_to_path = {r.image_id: r.path for r in to_apply}
+    ids = [r.image_id for r in to_apply]
     batches = [ids[i : i + batch] for i in range(0, len(ids), batch)]
 
     applied_ids: list[int] = []
-    per_image: list[dict] = []
+    batch_rows: list[dict] = []
     missed_ids: list[int] = []
+    unknown_ids: list[int] = []
     consecutive_failures = 0
     batches_run = 0
     warnings: list[str] = []
@@ -519,24 +704,52 @@ def apply_set(
             result = dtbridge.call(
                 "style.apply", {"image_ids": batch_ids, "name": name, "mode": mode}
             )
-        except BridgeTimeout as e:
-            # The whole batch failed as one call -- every id in it is a miss,
-            # and a stalled worker on frame 140 must not lose frames 1-139:
-            # earlier batches' successes are already recorded in per_image.
+        except BridgeTimeout:
+            # Fix round 1, item 2: a real client-side timeout -- the bridge
+            # genuinely does not know whether darktable finished the write,
+            # so this is "unknown", not "failed". Every id in the batch is
+            # affected, and earlier batches' successes are already recorded
+            # in batch_rows -- a stalled worker on frame 140 must not lose
+            # frames 1-139.
             consecutive_failures += 1
             for iid in batch_ids:
-                missed_ids.append(iid)
-                per_image.append(
+                unknown_ids.append(iid)
+                batch_rows.append(
                     {
                         "image_id": iid,
                         "path": id_to_path.get(iid),
-                        "applied": False,
+                        "status": "unknown",
+                        "error": "timed out; may or may not have applied -- check "
+                        "history.read before retrying",
+                    }
+                )
+            if consecutive_failures >= MAX_CONSECUTIVE_BATCH_FAILURES:
+                warnings.append(
+                    f"stopped after {consecutive_failures} consecutive batch failures "
+                    f"({batches_run} of {len(batches)} batches attempted)"
+                )
+                break
+            continue
+        except ScouterError as e:
+            # Fix round 1, item 1: any OTHER typed bridge failure (DbLocked,
+            # NotInDarkroom, ...) -- the bridge DID answer, with a definite
+            # refusal, so this is a real per-image failure, not an unknown.
+            # Never propagates: recorded and the loop continues exactly like
+            # the BridgeTimeout branch above.
+            consecutive_failures += 1
+            for iid in batch_ids:
+                missed_ids.append(iid)
+                batch_rows.append(
+                    {
+                        "image_id": iid,
+                        "path": id_to_path.get(iid),
+                        "status": "failed",
                         "error": str(e),
                     }
                 )
             if consecutive_failures >= MAX_CONSECUTIVE_BATCH_FAILURES:
                 warnings.append(
-                    f"stopped after {consecutive_failures} consecutive batch timeouts "
+                    f"stopped after {consecutive_failures} consecutive batch failures "
                     f"({batches_run} of {len(batches)} batches attempted)"
                 )
                 break
@@ -548,45 +761,62 @@ def apply_set(
         for iid in batch_ids:
             if iid in batch_missed:
                 missed_ids.append(iid)
-                per_image.append(
+                batch_rows.append(
                     {
                         "image_id": iid,
                         "path": id_to_path.get(iid),
-                        "applied": False,
+                        "status": "failed",
                         "error": "not found in darktable's library",
                     }
                 )
             elif iid in error_ids:
                 err = next(e for e in errors if int(e["image_id"]) == iid)
                 missed_ids.append(iid)
-                per_image.append(
+                batch_rows.append(
                     {
                         "image_id": iid,
                         "path": id_to_path.get(iid),
-                        "applied": False,
+                        "status": "failed",
                         "error": err.get("error"),
                     }
                 )
             else:
                 applied_ids.append(iid)
-                per_image.append({"image_id": iid, "path": id_to_path.get(iid), "applied": True})
+                batch_rows.append(
+                    {
+                        "image_id": iid,
+                        "path": id_to_path.get(iid),
+                        "status": "applied",
+                        "error": None,
+                    }
+                )
 
-    requested = len(resolved)
+    per_image = list(unresolved) + already_rows + batch_rows
+    requested = len(resolved) + len(unresolved)
     applied = len(applied_ids)
-    failed = len(missed_ids)
-    never_attempted = requested - applied - failed
+    failed = len(unresolved) + len(missed_ids)
+    unknown = len(unknown_ids)
+    skipped = len(already_rows)
+    never_attempted = requested - applied - failed - unknown - skipped
     if never_attempted > 0:
         warnings.append(f"{never_attempted} images were never attempted")
+    if unknown_ids:
+        warnings.append(
+            f"{unknown} images have unknown status (bridge timeout, may or may not "
+            f"have applied): {sorted(unknown_ids)}; check history.read before retrying"
+        )
+    if already_rows:
+        warnings.append(
+            f"{skipped} images already carried this style and were skipped "
+            f"(force=True to apply again): {sorted(r['image_id'] for r in already_rows)}"
+        )
 
     if job_slug:
         try:
             from scouter.core import vault as vault_module
 
             rows = [
-                {
-                    "image": pi["path"] or str(pi["image_id"]),
-                    "result": "applied" if pi["applied"] else "failed",
-                }
+                {"image": pi["path"] or str(pi["image_id"]), "result": pi["status"]}
                 for pi in per_image
             ]
             vault_module.append_stage(
@@ -600,12 +830,29 @@ def apply_set(
             warnings.append(f"vault stage not recorded: {e}")
 
     if applied == 0:
+        if failed == 0 and unknown == 0 and skipped > 0:
+            # Every candidate already carried this style: nothing failed,
+            # nothing is ambiguous, there was simply nothing left to do --
+            # NOT the "nothing applied" failure StylePartial exists for.
+            return StyleSetResult(
+                outcome="ok",
+                name=name,
+                mode=mode,
+                requested=requested,
+                applied=0,
+                failed=0,
+                batches=batches_run,
+                missed=[],
+                per_image=per_image,
+                warnings=warnings,
+                reason="every image already carried this style; nothing applied",
+            )
         raise StylePartial(
             f"style {name!r} applied to 0 of {requested} images",
             detail={"per_image": per_image, "missed": missed_ids, "name": name},
         )
 
-    outcome = "partial" if failed > 0 else "ok"
+    outcome = "partial" if (failed > 0 or unknown > 0) else "ok"
     return StyleSetResult(
         outcome=outcome,
         name=name,
@@ -718,7 +965,7 @@ for verb in (
                 "batch",
                 "int",
                 default=DEFAULT_BATCH_SIZE,
-                help="how many image ids per bridge call",
+                help="how many image ids per bridge call, 1..100",
             ),
             ArgSpec(
                 "confirm",
@@ -727,6 +974,14 @@ for verb in (
                 help="required: applying to a set is always gated",
             ),
             ArgSpec("dry_run", "bool", default=False, help="plan only"),
+            ArgSpec(
+                "force",
+                "bool",
+                default=False,
+                help="apply even to images that already look like they carry this "
+                "style (fix round 1's idempotency guard; a local sidecar-only "
+                "heuristic, see apply_set's own docstring)",
+            ),
         ),
         writes=True,
         gated=True,
