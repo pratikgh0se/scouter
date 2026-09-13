@@ -70,6 +70,10 @@ class ScouterServer:
         try:
             envelope = registry.call(verb_id, "mcp", **arguments)
         except ScouterError as e:
+            # Defensive: registry.call already catches ScouterError raised by
+            # the verb itself and turns it into an Envelope with ok=False, so
+            # this branch only guards a ScouterError raised outside that
+            # (e.g. from registry.call's own setup code).
             return json.dumps(
                 {
                     "verb": verb_id,
@@ -92,6 +96,25 @@ class ScouterServer:
                         "code": "usage",
                         "message": str(e),
                         "fix": "check the tool's inputSchema",
+                    },
+                },
+                sort_keys=True,
+            )
+        except Exception as e:
+            # Catch-all so an unexpected crash reaches the agent as readable
+            # tool content (which it can act on) rather than a JSON-RPC
+            # internal-error transport failure it can't see into.
+            logger.exception("tool %s crashed", tool_name)
+            return json.dumps(
+                {
+                    "verb": verb_id,
+                    "layer": "mcp",
+                    "ok": False,
+                    "outcome": "error",
+                    "error": {
+                        "code": "error",
+                        "message": str(e),
+                        "fix": "check the server logs",
                     },
                 },
                 sort_keys=True,

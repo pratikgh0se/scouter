@@ -6,6 +6,8 @@ so it must be a deliberate edit to GOLDEN below, not a silent drift.
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import difflib
 import json
 import unittest
@@ -52,6 +54,27 @@ class GoldenContractTest(unittest.TestCase):
                 f"{golden_file} in the same commit and say why.\n{diff}"
             )
 
+    def test_the_live_tools_list_handler_matches_the_golden_file(self) -> None:
+        """The served contract, not just TOOL_SPECS, must be what's pinned."""
+        from pathlib import Path
+
+        golden_file = Path(__file__).resolve().parent / "fixtures" / "scouter_mcp_golden.json"
+        server = ScouterServer()
+        result = asyncio.run(server._on_list_tools(None, None))
+        served_specs = [
+            {"name": tool.name, "description": tool.description, "inputSchema": tool.input_schema}
+            for tool in result.tools
+        ]
+        actual = _render(served_specs)
+        expected = golden_file.read_text()
+        if expected != actual:
+            diff = "\n".join(
+                difflib.unified_diff(
+                    expected.splitlines(), actual.splitlines(), "golden", "served", lineterm=""
+                )
+            )
+            self.fail("the live tools/list handler no longer matches the golden file.\n" + diff)
+
     def test_golden_covers_every_registered_verb(self) -> None:
         self.assertEqual(
             {spec["name"] for spec in schemas.TOOL_SPECS},
@@ -90,3 +113,23 @@ class GoldenContractTest(unittest.TestCase):
         payload = json.loads(ScouterServer().call("nope", {}))
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["outcome"], "error:unknown_tool")
+
+    def test_an_unexpected_crash_is_readable_tool_content_not_a_transport_error(self) -> None:
+        """A bug in a verb's own fn must not surface as a JSON-RPC internal error."""
+        verb_id = "darkroom.undo_last"
+        verbs = registry.load_verbs()
+        original = verbs[verb_id]
+
+        def boom(**kwargs: object) -> object:
+            raise AttributeError("boom")
+
+        registry.VERB_REGISTRY[verb_id] = dataclasses.replace(original, fn=boom)
+        try:
+            payload = json.loads(ScouterServer().call(original.mcp_name, {}))
+        finally:
+            registry.VERB_REGISTRY[verb_id] = original
+
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["outcome"], "error")
+        self.assertEqual(payload["error"]["code"], "error")
+        self.assertIn("boom", payload["error"]["message"])
