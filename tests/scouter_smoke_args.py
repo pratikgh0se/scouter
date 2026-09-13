@@ -25,14 +25,23 @@ SMOKE_ARGS: dict[str, dict] = {
     "darkroom.undo_last": {"dry_run": True},
     "darkroom.status": {"module": "exposure", "param": "exposure"},
     "darkroom.describe_history": {"image": "/tmp/scouter-smoke.ORF"},
+    "history.read": {"image": "/tmp/scouter-smoke.ORF"},
+    "history.commit": {"image": "/tmp/scouter-smoke.ORF", "timeout_s": 0.05},
+    "scout.stats": {"image": "/tmp/scouter-smoke.ORF", "px": 64},
+    "scout.preview": {"image": "/tmp/scouter-smoke.ORF", "px": 64, "fmt": "ppm"},
+    "scout.compare": {"a": "/tmp/scouter-smoke.ORF", "b": "/tmp/scouter-smoke.ORF",
+                      "px": 64},
 }
 
 
 @contextlib.contextmanager
 def install_doubles(verb_id: str) -> Iterator[dict]:
     """Install a FakeBridge (and a fake darktable-cli where needed) for one verb."""
+    import os
+
+    from scouter import paths
     from scouter.core import dtbridge
-    from tests.scouter_fakes import FakeBridge
+    from tests.scouter_fakes import FAKE_CLI_WRITES_PPM, FakeBridge, fake_cli_script
 
     raw = "/tmp/scouter-smoke.ORF"
     bridge = FakeBridge({
@@ -55,7 +64,22 @@ def install_doubles(verb_id: str) -> Iterator[dict]:
                         "missed": [], "errors": []},
     })
     dtbridge.set_bridge(bridge)
+    saved_cli = os.environ.get("SCOUTER_DARKTABLE_CLI")
+    if verb_id.startswith("scout."):
+        # scout.* verbs shell out to darktable-cli (via CLIWrapper); point it
+        # at a fake script that writes a valid P6 for any *.ppm/*.png output,
+        # inside this test's own cache root, so nothing touches a real
+        # darktable install.
+        cli_dir = paths.cache_root() / "smoke-cli"
+        cli_dir.mkdir(parents=True, exist_ok=True)
+        script = fake_cli_script(cli_dir, FAKE_CLI_WRITES_PPM)
+        os.environ["SCOUTER_DARKTABLE_CLI"] = str(script)
     try:
         yield {}
     finally:
         dtbridge.set_bridge(None)
+        if verb_id.startswith("scout."):
+            if saved_cli is None:
+                os.environ.pop("SCOUTER_DARKTABLE_CLI", None)
+            else:
+                os.environ["SCOUTER_DARKTABLE_CLI"] = saved_cli
