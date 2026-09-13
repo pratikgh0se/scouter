@@ -21,9 +21,16 @@ HERO = Path("/Users/pratik/Pictures/EditingTrial/P6281348.ORF")
 MEASUREMENTS = REPO / "docs" / "measurements.md"
 LOOP_BUDGET_S = 3.0
 
+_MISSING = []
+if not DARKTABLE.is_file():
+    _MISSING.append(f"darktable app ({DARKTABLE} not present)")
+if not HERO.is_file():
+    _MISSING.append(f"sample ORF ({HERO} not present)")
 SKIP_REASON = (
-    f"host-only: {DARKTABLE} not present (darktable is not installed on this "
-    "machine, so the commit trigger and the Scouter loop cannot be measured)"
+    "host-only: missing " + ", ".join(_MISSING) + " — commit trigger and "
+    "Scouter loop cannot be measured"
+    if _MISSING
+    else ""
 )
 
 
@@ -56,11 +63,19 @@ class CommitTriggerMeasurement(unittest.TestCase):
 
     def test_probe_records_a_commit_strategy_and_a_loop_time(self) -> None:
         tmp = Path(os.environ.get("TMPDIR", "/tmp")) / f"scouter-probe-{os.getpid()}"
+        try:
+            self._run(tmp)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def _run(self, tmp: Path) -> None:
         configdir = tmp / "config"
         (configdir / "lua").mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO / "spike" / "scouter_commit_probe.lua", configdir / "lua")
         (configdir / "luarc").write_text('require "scouter_commit_probe"\n')
         out = tmp / "probe.jsonl"
+        bounce_before = Path(str(out) + ".bounce_before")
+        bounce_after = Path(str(out) + ".bounce_after")
 
         xmp = Path(str(HERO) + ".xmp")
         mtime_before = xmp.stat().st_mtime_ns if xmp.exists() else 0
@@ -98,11 +113,22 @@ class CommitTriggerMeasurement(unittest.TestCase):
         ]
         strategy = "sidecar_action" if accepted else "view_bounce"
 
+        # Wall-clock cost of the C3 view bounce: Lua's os.clock() is CPU time,
+        # not wall time, so the probe only drops marker files immediately
+        # before/after the bounce and Python computes the real delta.
+        bounce_wall_ms = None
+        if bounce_before.exists() and bounce_after.exists():
+            bounce_wall_ms = (
+                bounce_after.stat().st_mtime_ns - bounce_before.stat().st_mtime_ns
+            ) / 1e6
+
         # The loop measurement: warm configdir, PPM at 1024 px, then stats.
+        # Render (subprocess + read) and the stats pass are timed separately
+        # so task 8 gets honest numbers instead of one blended figure.
         cli_cfg = tmp / "cli-config"
         cli_cfg.mkdir(parents=True, exist_ok=True)
         ppm = tmp / "loop.ppm"
-        timings = []
+        timings = []  # (render_s, stats_s)
         for _ in range(3):
             t0 = time.monotonic()
             subprocess.run(
@@ -117,6 +143,9 @@ class CommitTriggerMeasurement(unittest.TestCase):
             )
             self.assertTrue(ppm.exists() and ppm.stat().st_size > 0, "darktable-cli wrote nothing")
             data = ppm.read_bytes()
+            render_s = time.monotonic() - t0
+
+            t1 = time.monotonic()
             head = data.split(b"\n", 3)
             payload = data[len(head[0]) + len(head[1]) + len(head[2]) + 3:]
             hi = payload[0::2] if b"65535" in head[2] else payload
@@ -124,10 +153,13 @@ class CommitTriggerMeasurement(unittest.TestCase):
 
             for offset in range(3):
                 Counter(hi[offset::3])
-            timings.append(time.monotonic() - t0)
+            stats_s = time.monotonic() - t1
+
+            timings.append((render_s, stats_s))
             ppm.unlink()
 
-        best = min(timings)
+        render_s, stats_s = min(timings, key=lambda t: t[0] + t[1])
+        best_total = render_s + stats_s
         MEASUREMENTS.parent.mkdir(parents=True, exist_ok=True)
         MEASUREMENTS.write_text(
             "# Scouter measurements\n\n"
@@ -137,21 +169,26 @@ class CommitTriggerMeasurement(unittest.TestCase):
             f"- accepted candidates: {accepted or 'none'}\n"
             f"- **strategy adopted for `history.commit(strategy=\"auto\")`: `{strategy}`**\n"
             f"- view after C1: {by_name.get('view_after_c1', {}).get('value')}\n"
-            f"- view bounce (C3) cost: {by_name.get('c3_view_bounce', {}).get('ms')} ms\n"
+            f"- view bounce (C3) cost, wall clock: "
+            f"{round(bounce_wall_ms) if bounce_wall_ms is not None else 'unknown'} ms\n"
+            f"- view bounce (C3) cost, CPU time (os.clock, not wall clock): "
+            f"{by_name.get('c3_view_bounce_cpu', {}).get('ms')} ms\n"
             f"- global undo action probe: {by_name.get('undo_global', {}).get('value')} "
             f"/ darkroom undo: {by_name.get('undo_darkroom', {}).get('value')} "
             "(phase-2 note only; phase 1 uses the journal, design 8.2)\n"
             f"- XMP mtime advanced during the run: {xmp.stat().st_mtime_ns > mtime_before}\n\n"
             "## Scouter loop, 20 MP ORF at 1024 px (design 6.1)\n\n"
-            f"- runs (s): {[round(t, 3) for t in timings]}\n"
-            f"- **best: {best:.3f} s** (budget {LOOP_BUDGET_S} s)\n\n"
+            f"- runs, (render+read s, stats s): "
+            f"{[(round(r, 3), round(s, 3)) for r, s in timings]}\n"
+            f"- best run: render+read: {render_s:.3f} s, stats pass: {stats_s:.3f} s\n"
+            f"- **loop total: {best_total:.3f} s** (budget {LOOP_BUDGET_S} s)\n\n"
             # Indented block, not a fenced one: a fence inside a Python string
             # inside this plan's own code fence would close the fence.
             "## Raw probe records\n\n"
             + "\n".join("    " + json.dumps(r) for r in records)
             + "\n"
         )
-        self.assertLess(best, LOOP_BUDGET_S, f"Scouter loop {best:.3f}s over the 3s budget")
+        self.assertLess(best_total, LOOP_BUDGET_S, f"Scouter loop {best_total:.3f}s over the 3s budget")
 
 
 if __name__ == "__main__":

@@ -3,14 +3,25 @@
 --
 -- Loaded from a throwaway configdir's luarc. Writes one JSON line per probe to
 -- $SCOUTER_PROBE_OUT, then exits darktable via dt.control.dispatch.
+--
+-- Lua has no millisecond wall clock (os.clock() is CPU time, not wall time),
+-- so the view-bounce duration is measured by Python from two marker files'
+-- mtimes: this probe only touches them immediately before/after the bounce.
 local dt = require("darktable")
 
 local OUT = os.getenv("SCOUTER_PROBE_OUT") or "/tmp/scouter-probe.jsonl"
+local BOUNCE_BEFORE = OUT .. ".bounce_before"
+local BOUNCE_AFTER = OUT .. ".bounce_after"
 
 local function log_line(s)
   local f = io.open(OUT, "a")
   if f then f:write(s .. "\n"); f:close() end
   if dt.print_log then dt.print_log("scouter-probe: " .. s) end
+end
+
+local function touch(path)
+  local f = io.open(path, "w")
+  if f then f:write("x"); f:close() end
 end
 
 local function jstr(s) return '"' .. tostring(s):gsub('\\', '\\\\'):gsub('"', '\\"') .. '"' end
@@ -62,12 +73,17 @@ local function probe()
   try_action("undo_global", "global/undo", "button", "activate", 1)
   try_action("undo_darkroom", "views/darkroom/undo", "button", "activate", 1)
 
-  -- C3: the proven view bounce, timed.
+  -- C3: the proven view bounce. now_ms()/os.clock() only gives CPU time, so
+  -- that figure is recorded for reference and Python recomputes the real
+  -- wall-clock cost from the two marker files' mtimes.
   local t0 = now_ms()
+  touch(BOUNCE_BEFORE)
   pcall(dt.gui.current_view, dt.gui.views.lighttable)
   dt.control.sleep(500)
   pcall(dt.gui.current_view, dt.gui.views.darkroom)
-  record("c3_view_bounce", 1, now_ms() - t0, "lighttable then darkroom")
+  touch(BOUNCE_AFTER)
+  record("c3_view_bounce_cpu", 1, now_ms() - t0,
+         "lighttable then darkroom (CPU time via os.clock, not wall clock)")
   dt.control.sleep(2000)
   record("view_after_c3", view_name())
 
