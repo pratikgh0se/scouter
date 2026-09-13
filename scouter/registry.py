@@ -70,10 +70,12 @@ _CORE_MODULES: tuple[str, ...] = (
 def load_verbs() -> dict[str, Verb]:
     """Import every core module so its `register(...)` calls run. Idempotent.
 
-    Tolerates modules that don't exist yet: an `ImportError` for one module is
-    swallowed so the others still load, and the registry returns whatever
-    verbs exist. This lets the registry work before the core modules of
-    tasks 7-9 land.
+    Tolerates modules that don't exist yet: an `ImportError` naming the module
+    itself (or a parent package of it) is swallowed so the others still load,
+    and the registry returns whatever verbs exist. This lets the registry work
+    before the core modules of tasks 7-9 land. Any other `ImportError` — e.g. a
+    typo inside a core module that *does* exist, which fails on some other
+    name — is re-raised, so it isn't mistaken for an absent module.
     """
     if not VERB_REGISTRY:
         import importlib
@@ -81,8 +83,13 @@ def load_verbs() -> dict[str, Verb]:
         for module_name in _CORE_MODULES:
             try:
                 importlib.import_module(module_name)
-            except ImportError:
-                continue
+            except ImportError as e:
+                missing = e.name
+                if missing is not None and (
+                    missing == module_name or module_name.startswith(missing + ".")
+                ):
+                    continue
+                raise
     return VERB_REGISTRY
 
 
@@ -113,7 +120,10 @@ def call(verb_id: str, layer: str, **kwargs: Any) -> "Envelope":
 
     data = result.to_dict()
     outcome = data.get("outcome", "ok")
+    # A verb's own result can carry outcome "dry_run" (ConfirmationRequired) as
+    # well as "ok"; only those two count as success, everything else — an
+    # "error:<code>" string a core function returned instead of raising — does not.
     return Envelope(
-        verb=verb_id, layer=layer, job=job, ok=outcome != "error",
+        verb=verb_id, layer=layer, job=job, ok=outcome in ("ok", "dry_run"),
         outcome=outcome, ms=metrics.last_ms(), data=data,
     )

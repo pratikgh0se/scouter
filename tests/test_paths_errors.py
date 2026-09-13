@@ -1,8 +1,11 @@
+import json
 import os
+import tempfile
 import unittest
 from pathlib import Path
 
 from scouter import errors, paths
+from scouter.types import Envelope
 
 
 class PathsTest(unittest.TestCase):
@@ -30,6 +33,22 @@ class PathsTest(unittest.TestCase):
         self.assertEqual(paths.current_job(), "job-fixed")
         os.environ.pop("SCOUTER_JOB")
         self.assertRegex(paths.current_job(), r"^job-\d{8}-\d{6}-\d+$")
+
+    def test_ensure_creates_parent_dir_and_returns_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "nested" / "deeper" / "file.jsonl"
+            self.assertFalse(target.parent.exists())
+            result = paths.ensure(target)
+            self.assertEqual(result, target)
+            self.assertTrue(target.parent.is_dir())
+            self.assertFalse(target.exists())  # ensure() makes the dir, not the file
+
+    def test_ensure_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "a" / "b.jsonl"
+            paths.ensure(target)
+            paths.ensure(target)  # must not raise on an already-existing dir
+            self.assertTrue(target.parent.is_dir())
 
 
 class ErrorsTest(unittest.TestCase):
@@ -59,3 +78,40 @@ class ErrorsTest(unittest.TestCase):
         self.assertEqual(d["outcome"], "error")
         self.assertEqual(d["detail"], {"view": "lighttable"})
         self.assertIn("darkroom open", d["fix"])
+
+
+class EnvelopeTest(unittest.TestCase):
+    def test_to_dict_omits_error_key_when_none(self) -> None:
+        env = Envelope(
+            verb="darkroom.open", layer="cli", job="job-1", ok=True,
+            outcome="ok", ms=12, data={"opened": True},
+        )
+        d = env.to_dict()
+        self.assertNotIn("error", d)
+        self.assertEqual(d["verb"], "darkroom.open")
+        self.assertEqual(d["ok"], True)
+        # round-trips through JSON (what the CLI actually prints / the MCP
+        # adapter actually returns)
+        self.assertEqual(json.loads(json.dumps(d)), d)
+
+    def test_to_dict_includes_error_key_when_set(self) -> None:
+        err = errors.WrongView("not in darkroom").to_dict()
+        env = Envelope(
+            verb="darkroom.set", layer="mcp", job="job-2", ok=False,
+            outcome="error:wrong_view", ms=3, data={}, error=err,
+        )
+        d = env.to_dict()
+        self.assertIn("error", d)
+        self.assertEqual(d["error"]["code"], "wrong_view")
+        self.assertEqual(json.loads(json.dumps(d)), d)
+
+    def test_to_dict_cleans_nan_and_inf_in_data(self) -> None:
+        env = Envelope(
+            verb="darkroom.status", layer="python", job="job-3", ok=True,
+            outcome="ok", ms=1, data={"positions": {"x": float("nan"), "y": float("inf")}},
+        )
+        d = env.to_dict()
+        self.assertIsNone(d["data"]["positions"]["x"])
+        self.assertIsNone(d["data"]["positions"]["y"])
+        # a plain json.dumps would raise ValueError on nan/inf by default if not cleaned
+        json.dumps(d)
