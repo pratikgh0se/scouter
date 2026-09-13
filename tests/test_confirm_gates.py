@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -94,6 +95,33 @@ class ConfirmGateTest(unittest.TestCase):
         job_path = config.job_dir(self.cfg, "2026-06-28", self.job_slug)
         (job_path / "raw").mkdir(parents=True)
 
+        # `cull.apply` reads its proposal from a real file (`--proposal`, not
+        # an image argument), so this harness's usual "None -> self.raw"
+        # substitution does not apply to it -- a one-frame proposal that
+        # actually changes a rating is written here instead, so the dry run
+        # has a non-empty plan to report.
+        self.cull_proposal = root / "cull-gate.json"
+        self.cull_proposal.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "job_slug": self.job_slug,
+                    "frames": [
+                        {
+                            "path": self.raw,
+                            "image_id": 1,
+                            "seq": 1,
+                            "rating_now": 0,
+                            "rating_proposed": 2,
+                        }
+                    ],
+                    "groups": [],
+                    "xmp_mtimes": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
     def tearDown(self) -> None:
         self._lib_cfg_patch.stop()
         dtbridge.set_bridge(None)
@@ -107,6 +135,11 @@ class ConfirmGateTest(unittest.TestCase):
         "export.run": {"images": [None, None], "preset": "preview", "out_dir": None},
         "library.import": {"source": None, "job_slug": "gate-hero"},
         "library.register": {"job_slug": "gate-hero"},
+        # `--proposal` is a JSON file path, not an image -- the generic
+        # `None -> self.raw` substitution below is for image-shaped args, so
+        # this placeholder is swapped for `self.cull_proposal` explicitly in
+        # `test_every_gated_verb_dry_runs_without_confirm` instead.
+        "cull.apply": {"proposal": "<cull-proposal>"},
     }
     # `style.apply` is deliberately NOT here (final review, should-fix 7): its
     # only would-be gate was mode=overwrite, which darktable cannot do at all,
@@ -140,6 +173,8 @@ class ConfirmGateTest(unittest.TestCase):
                     )
                     for k, v in args.items()
                 }
+                if verb_id == "cull.apply":
+                    filled["proposal"] = str(self.cull_proposal)
                 envelope = registry.call(verb_id, "core", **filled)
                 self.assertEqual(
                     envelope.outcome,

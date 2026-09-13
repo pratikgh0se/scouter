@@ -260,6 +260,39 @@ class SummaryResult(Payload):
 
 
 @dataclass
+class CullResult(Payload):
+    """`cull.propose`'s result. `proposals` carries one entry per frame, each
+    with a `reasons` list that names its numbers (never a bare verdict); the
+    same list is persisted verbatim to `proposal_path` so `cull.apply`
+    consumes exactly the table Pratik read."""
+
+    proposal_path: str = ""
+    job_slug: str = ""
+    groups: list[dict] = field(default_factory=list)
+    proposals: list[dict] = field(default_factory=list)
+    counts: dict[str, int] = field(default_factory=dict)
+    stats: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class CullApplyResult(Payload):
+    """`cull.apply`'s result. `verified`/`unverified` are reported separately
+    (design 8.3) rather than folded into `applied`: darktable owns when it
+    flushes a rating to the sidecar, so an unverified write is real, just not
+    yet visible -- never claimed as a failure."""
+
+    job_slug: str = ""
+    proposal_path: str = ""
+    applied: int = 0
+    unchanged: int = 0
+    would_change: int = 0
+    missed: list[int] = field(default_factory=list)
+    verified: int = 0
+    unverified: int = 0
+    per_image: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class Envelope:
     """What the CLI prints and the MCP adapter returns. One shape, all layers."""
 

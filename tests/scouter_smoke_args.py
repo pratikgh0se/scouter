@@ -62,6 +62,16 @@ SMOKE_ARGS: dict[str, dict] = {
     "library.import": {"source": SMOKE_SOURCE_DIR, "job_slug": "smoke-job"},
     "library.verify": {"job_slug": "smoke-job"},
     "library.register": {"job_slug": "smoke-job"},
+    # No real job on disk, so `cull.propose` resolving `--images` (the one
+    # frame `install_doubles` sets up) is enough to exercise it: EXIF comes
+    # from a re-read (no import.json to draw on), and nothing is persisted
+    # since no --job-slug is given -- this coverage test only asserts one
+    # event, not that the proposal was written anywhere.
+    "cull.propose": {"images": [SMOKE_RAW], "px": 64, "workers": 1},
+    # No job named "smoke-job" exists on disk here, so this fails fast
+    # (usage: no such job) -- still exactly one event, which is all this
+    # coverage test asserts.
+    "cull.apply": {"job_slug": "smoke-job"},
 }
 
 

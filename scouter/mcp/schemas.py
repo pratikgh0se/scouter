@@ -398,6 +398,67 @@ TOOL_SPECS: list[dict] = [
         ),
     },
     {
+        "name": "cull_propose",
+        "description": "Propose a rating for every frame in a job (or an explicit image "
+        "list), grouped into bursts by capture time and camera. Never "
+        "proposes rating 0 or reject -- stats cannot see eyes, "
+        "expression or a deliberate motion blur, so a flagged frame "
+        "gets rating 1 with its numbers and the human decides. Every "
+        "reason names the numbers behind it. Read-only: writes no "
+        "rating and calls the bridge only for the read-only "
+        "image.lookup behind image resolution.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {
+                    "type": "string",
+                    "description": "job slug; frames come from its import.json",
+                },
+                "images": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "description": "explicit image list, instead of (or alongside) " "--job-slug",
+                },
+                "px": {
+                    "type": "integer",
+                    "description": "stats render size (default: stats.set_px)",
+                },
+                "workers": {
+                    "type": "integer",
+                    "description": "thread pool size (default: stats.workers)",
+                },
+            },
+            [],
+        ),
+    },
+    {
+        "name": "cull_apply",
+        "description": "Apply a cull.propose proposal's ratings via the image.rate bridge "
+        "verb, in batches of 50, verified by polling each changed "
+        "frame's XMP sidecar. Refuses (usage) if any frame's sidecar "
+        "changed since the proposal was written. Requires confirm=true: "
+        "a cull touches many images.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {
+                    "type": "string",
+                    "description": "job slug; loads the newest cull-*.json unless "
+                    "proposal is given",
+                },
+                "proposal": {
+                    "type": "string",
+                    "description": "path to a specific cull-<ts>.json",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: writes ratings via image.rate",
+                },
+            },
+            [],
+        ),
+    },
+    {
         "name": "config_init",
         "description": "Write the starter Scouter config file (~/.config/scouter/config.json "
         "by default). backup.enabled is false in the starter file, so the "
