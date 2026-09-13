@@ -52,6 +52,49 @@ def _build_header(endian_bytes: bytes, endian: str, magic: int, make: str, model
     return header
 
 
+def _build_exif_ifd_count_zero_header() -> bytes:
+    """A 40-byte little-endian TIFF whose sole IFD0 entry is EXIF_IFD with
+    count=0 -- the value blob `_read_ifd` hands back for it is empty, so
+    naively unpacking a 4-byte sub-IFD pointer out of it raises
+    `struct.error`. Reproduces the reviewer's blocker at exif.py:154/:247."""
+    endian = "<"
+    ifd0_offset = 8
+    header = b"II"
+    header += struct.pack(endian + "H", 42)
+    header += struct.pack(endian + "I", ifd0_offset)
+    header += struct.pack(endian + "H", 1)  # IFD0: one entry
+    header += struct.pack(endian + "HHI", exif.EXIF_IFD, 4, 0)  # type=LONG, count=0
+    header += struct.pack(endian + "I", 0)  # inline value: empty, but 4 bytes reserved
+    header += struct.pack(endian + "I", 0)  # next-IFD offset
+    header += b"\x00" * (40 - len(header))
+    assert len(header) == 40
+    return header
+
+
+def test_exif_ifd_pointer_count_zero_does_not_crash():
+    """read_tags on the reviewer's crafted header must degrade, never raise
+    struct.error/IndexError."""
+    tmp = FIXTURE.parent / "_tmp_exififd_count_zero.bin"
+    tmp.write_bytes(_build_exif_ifd_count_zero_header())
+    try:
+        tags = exif.read_tags(tmp)
+        assert tags.model is None
+        assert tags.source == "none"
+    finally:
+        tmp.unlink()
+
+
+def test_datetime_offsets_exif_ifd_pointer_count_zero_does_not_crash():
+    """Same crafted header through `datetime_offsets`: no struct.error, and no
+    Exif-IFD offset is reported since the pointer could not be read."""
+    tmp = FIXTURE.parent / "_tmp_exififd_count_zero_offsets.bin"
+    tmp.write_bytes(_build_exif_ifd_count_zero_header())
+    try:
+        assert exif.datetime_offsets(tmp) == []
+    finally:
+        tmp.unlink()
+
+
 def test_real_orf_header():
     tags = exif.read_tags(FIXTURE)
     assert tags.byte_order == "II"

@@ -108,6 +108,17 @@ def _normalise_datetime(raw: str | None) -> str | None:
     return normalised
 
 
+def _pointer(endian: str, blob: bytes) -> int | None:
+    """Read a 4-byte sub-IFD offset out of a tag's value blob. `None` (not a
+    crash) when the blob is too short to hold one -- a zero-count EXIF_IFD
+    entry stores an empty value blob, and `struct.unpack_from` on that raises
+    `struct.error` rather than degrading gracefully."""
+    if len(blob) < 4:
+        return None
+    (offset,) = struct.unpack_from(endian + "I", blob, 0)
+    return offset
+
+
 def _subsec(blob: bytes | None) -> int:
     text = _ascii(blob)
     if not text:
@@ -142,17 +153,19 @@ def read_tags(path: str | Path, *, limit: int = 1 << 16) -> ExifTags:
             f"{p} has an unrecognised TIFF magic {magic}",
             detail={"magic": magic, "byte_order": byte_order},
         )
-    (ifd0_offset,) = struct.unpack_from(endian + "I", data, 4)
-
-    ifd0 = _read_ifd(data, endian, ifd0_offset)
+    ifd0: dict[int, tuple[int, int, bytes, int]] = {}
+    if len(data) >= 8:
+        (ifd0_offset,) = struct.unpack_from(endian + "I", data, 4)
+        ifd0 = _read_ifd(data, endian, ifd0_offset)
     make = _ascii(ifd0[MAKE][2]) if MAKE in ifd0 else None
     model = _ascii(ifd0[MODEL][2]) if MODEL in ifd0 else None
     ifd0_datetime = _ascii(ifd0[DATETIME][2]) if DATETIME in ifd0 else None
 
     exif_ifd: dict[int, tuple[int, int, bytes, int]] = {}
     if EXIF_IFD in ifd0:
-        (exif_offset,) = struct.unpack_from(endian + "I", ifd0[EXIF_IFD][2], 0)
-        exif_ifd = _read_ifd(data, endian, exif_offset)
+        exif_offset = _pointer(endian, ifd0[EXIF_IFD][2])
+        if exif_offset is not None:
+            exif_ifd = _read_ifd(data, endian, exif_offset)
 
     exif_datetime = (
         _ascii(exif_ifd[DATETIME_ORIGINAL][2]) if DATETIME_ORIGINAL in exif_ifd else None
@@ -198,6 +211,10 @@ def read_tags(path: str | Path, *, limit: int = 1 << 16) -> ExifTags:
 
 
 def camera_slug(tags: ExifTags, cfg) -> str:
+    """Stripping non-alphanumerics for the fallback slug means two distinct
+    models that differ only in punctuation ("E-M10 Mark III" vs "E M10 Mark
+    III") collide on the same slug; add an explicit `cameras` entry in the
+    config, or pass `--camera`, to pin the one you mean."""
     mapped = cfg.camera_map().get(tags.model or "")
     if mapped:
         return mapped
@@ -235,6 +252,8 @@ def datetime_offsets(path: str | Path, *, limit: int = 1 << 20) -> list[tuple[in
     (magic,) = struct.unpack_from(endian + "H", data, 2)
     if magic not in ACCEPTED_MAGIC:
         return []
+    if len(data) < 8:
+        return []
     (ifd0_offset,) = struct.unpack_from(endian + "I", data, 4)
 
     ifd0 = _read_ifd(data, endian, ifd0_offset)
@@ -244,10 +263,11 @@ def datetime_offsets(path: str | Path, *, limit: int = 1 << 20) -> list[tuple[in
         offsets.append((value_at, len(blob)))
 
     if EXIF_IFD in ifd0:
-        (exif_offset,) = struct.unpack_from(endian + "I", ifd0[EXIF_IFD][2], 0)
-        exif_ifd = _read_ifd(data, endian, exif_offset)
-        if DATETIME_ORIGINAL in exif_ifd:
-            _, _, blob, value_at = exif_ifd[DATETIME_ORIGINAL]
-            offsets.append((value_at, len(blob)))
+        exif_offset = _pointer(endian, ifd0[EXIF_IFD][2])
+        if exif_offset is not None:
+            exif_ifd = _read_ifd(data, endian, exif_offset)
+            if DATETIME_ORIGINAL in exif_ifd:
+                _, _, blob, value_at = exif_ifd[DATETIME_ORIGINAL]
+                offsets.append((value_at, len(blob)))
 
     return offsets
