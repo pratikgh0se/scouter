@@ -115,8 +115,6 @@ class SidecarPathTest(unittest.TestCase):
 class ColorbalancergbTest(unittest.TestCase):
     FIXTURE = FIXTURES / "colorbalancergb.xmp"
 
-    @unittest.skipUnless(FIXTURE.exists(),
-                         "colorbalancergb fixture not yet generated (task 5 step 5)")
     def test_contrast_slot_is_pinned_by_the_fixture(self) -> None:
         parsed = xmp.parse(self.FIXTURE.read_text())
         entry = next(e for e in parsed.entries if e.operation == "colorbalancergb")

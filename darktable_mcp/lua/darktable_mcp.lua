@@ -905,16 +905,29 @@ methods["darkroom.open"] = function(p)
   -- is a genuine failure of the request, not a normal result shape, so it is
   -- a JSON-RPC error like the method's other failures -- not a
   -- {opened=false, error=...} result a careless caller could ignore.
+  --
+  -- Task 12's host run found a SECOND way the switch can lie: `image` can
+  -- match while the VIEW never actually left the lighttable (loaded_
+  -- darkroom_image's action_images fallback reads the current *selection*,
+  -- which display_image/dt.gui.selection can set without the view itself
+  -- switching). Checking only the image, as before, let `opened=true` through
+  -- for a caller that was never actually in the darkroom -- so the view is
+  -- checked too now, not just the image.
   local final_image, final_source = loaded_darkroom_image()
   local matches = final_image ~= nil and ids_match(final_image.id, image.id)
+  local final_view = current_view_name()
   if not matches then
     error("wrong image loaded: " .. tostring(image.id))
+  end
+  if final_view ~= "darkroom" then
+    error("wrong image loaded: " .. tostring(image.id) .. " (view is "
+          .. tostring(final_view) .. ", not darkroom)")
   end
 
   return {
     image_id = tonumber(image.id),
     path = _image_full_path(image),
-    view = current_view_name(),
+    view = final_view,
     opened = not already,
     already_open = already,
     imported = imported,
@@ -1022,20 +1035,41 @@ local function commit_view_bounce()
   if not (dt.gui.views and dt.gui.views.lighttable and dt.gui.views.darkroom) then
     return {ok = false, error = "dt.gui.views.lighttable/darkroom missing", view = starting_view}
   end
+
+  -- Remember which image was loaded BEFORE leaving the darkroom. Task 12's
+  -- host run found that the raw `dt.gui.current_view(dt.gui.views.darkroom)`
+  -- call below -- with no image argument -- can return with no Lua error
+  -- (pcall ok=true) yet leave the actual view stuck in lighttable: the same
+  -- silent no-op class switch_to_darkroom's own comments already document
+  -- and fix for `darkroom.open`, by preferring `display_image(image)` and
+  -- verifying the real post-call view instead of trusting the call not
+  -- raising. The return leg here gets the identical fix.
+  local image = darkroom_image()
+
   local ok1 = pcall(dt.gui.current_view, dt.gui.views.lighttable)
   if dt.control and dt.control.sleep then dt.control.sleep(300) end
-  local ok2 = pcall(dt.gui.current_view, dt.gui.views.darkroom)
+
+  local ok2, detail2
+  if image then
+    ok2, detail2 = switch_to_darkroom(image)
+  else
+    ok2 = pcall(dt.gui.current_view, dt.gui.views.darkroom)
+  end
   if not ok2 then
     -- One retry: a single flaky switch back into the darkroom should not
     -- strand the session in the lighttable when the commit itself likely
     -- still landed (the pipe already unloaded on the way out). Give it the
     -- same settle time as the first bounce before trying again.
     if dt.control and dt.control.sleep then dt.control.sleep(300) end
-    ok2 = pcall(dt.gui.current_view, dt.gui.views.darkroom)
+    if image then
+      ok2, detail2 = switch_to_darkroom(image)
+    else
+      ok2 = pcall(dt.gui.current_view, dt.gui.views.darkroom)
+    end
   end
   local final_view = current_view_name()
-  if not (ok1 and ok2) then
-    return {ok = false, error = "view switch failed", view = final_view}
+  if not (ok1 and ok2) or final_view ~= "darkroom" then
+    return {ok = false, error = detail2 or "view switch failed", view = final_view}
   end
   return {ok = true, error = nil, view = final_view}
 end

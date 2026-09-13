@@ -129,6 +129,138 @@ The MCP SDK is pinned to `mcp>=2,<3`. Tools are registered through the mcp 2.x l
 
 The low-level API is deliberate. The high-level `MCPServer` derives each `inputSchema` from the handler signature, which cannot express `additionalProperties: {type: integer, minimum: -1, maximum: 5}` — the rating bounds on `apply_ratings_batch` silently disappear — and it injects a `title` into every property. The tool schemas here are handwritten and pinned by a golden-snapshot test, because their descriptions are what the calling model reads to decide behaviour.
 
+## Scouter (live darktable editing core)
+
+Scouter is the fork's own product: a live editing core for the **running**
+darktable, driven by conversation or by script. It sits on top of this repo's
+bridge (the Lua plugin and the file-spool JSON-RPC client), which is unchanged
+and still serves the original `darktable-mcp` tools.
+
+Three layers over one core, with the same verb names, arguments and result shape
+in all three:
+
+| Layer | How you use it |
+|---|---|
+| Python | `from scouter.core import darkroom; darkroom.set_param(module="exposure", param="exposure", value=1.2)` |
+| CLI | `scouter darkroom set exposure exposure 1.2` — one JSON object on stdout, one exit code per error class |
+| MCP | the `scouter-mcp` server, tools `darkroom_set`, `scout_stats`, … (handwritten schemas, golden-snapshot tested) |
+
+Add the MCP server to your client's config alongside (or instead of) `darktable`:
+
+```json
+{
+  "mcpServers": {
+    "scouter": {
+      "command": "scouter-mcp"
+    }
+  }
+}
+```
+
+### Setup
+
+```sh
+pip install -e '.[dev]'
+darktable-mcp install-plugin        # copies the Lua plugin, then RESTART darktable
+scouter doctor                      # darktable, plugin, current view, cache paths
+```
+
+darktable must be **running**, with the image open in the **darkroom**: slider
+actions exist only there, and `scouter` says so (`wrong_view`, exit code 4)
+instead of failing quietly. Turn on darktable's *write sidecar file for each
+image* preference — the XMP sidecar is how Scouter reads values back.
+
+The plugin loads through `~/.config/darktable/luarc` (`require "darktable_mcp"`),
+same as the original `darktable-mcp` tools — `darktable-mcp install-plugin`
+writes both the plugin file and that `luarc` line for you.
+
+### A hero edit
+
+```sh
+scouter darkroom open ~/Pictures/EditingTrial/P6281348.ORF
+scouter darkroom set exposure exposure 1.2
+scouter darkroom set sigmoid contrast 1.35
+scouter scout stats ~/Pictures/EditingTrial/P6281348.ORF --px 1024 --pretty
+scouter darkroom undo-last
+scouter history read ~/Pictures/EditingTrial/P6281348.ORF --pretty
+```
+
+Every write is one darktable history item you can see and undo yourself.
+`undo-last` sets the parameter back to its previous value, which adds a history
+item rather than rewriting history — so your own Ctrl-Z still works.
+
+### Safety
+
+- Writers take `--dry-run`; gated verbs (`darkroom reset`, `style extract` over
+  an existing name, `style apply --mode overwrite`, `export run` over existing
+  files or more than one image) print the plan and do nothing until `--yes`.
+  `style apply` always **appends** to history; `mode=overwrite` is refused
+  outright with the reason, never silently downgraded to append.
+- Scouter never renders its own pixels, and never touches `library.db`.
+  Pixels come from `darktable-cli` in an isolated config dir; edits go through
+  `dt.gui.action`; history is read from the XMP sidecar.
+
+### Honest limits
+
+These are load-bearing, not incidental — read them before scripting against Scouter:
+
+- **The commit trigger is a view bounce.** darktable only writes the XMP
+  sidecar when the darkroom is left, not per slider move (phase 0 finding 3),
+  so every write's commit briefly bounces the view out to the lighttable and
+  back (design 8.1's `view_bounce`, the only strategy phase 0/1 proved
+  actually commits). Measured at ~500ms wall clock on this Mac against a
+  small library (`docs/measurements.md`); task 12's host run found it can cost
+  much more under load or a heavier `~/.config/darktable`, and that the return
+  leg back into the darkroom is not always reliable — `scouter` reports this
+  honestly (a `commit_timeout`, or a `darkroom.open` that fails outright
+  rather than silently reporting a view it never reached) instead of assuming
+  the bounce landed.
+- **`darkroom status` reports slider *positions*, not values.** `dt.gui.action`'s
+  read-back is a normalised 0..1 position in the slider's visible range, and
+  phase 1 has no verified position→value table for every slider — use
+  `history read` (the XMP) for actual values; `status` is a liveness/reachability
+  check and the `wrong_view` signal, nothing more.
+- **`style apply --modules` can honestly fail to filter.** When darktable's
+  build doesn't expose per-module style filtering, applying a style with a
+  `modules` list still applies the *whole* style and reports
+  `modules_honoured: false` — never a silent partial application dressed up
+  as a filtered one.
+- **`style apply --mode overwrite` is refused, not downgraded.** Overwrite
+  requires `--yes`; without it Scouter prints the plan and makes no history
+  change, rather than falling back to append.
+
+### Observability
+
+Every call in every layer writes one event to `~/.cache/scouter/events.jsonl`
+and one row to `~/.cache/scouter/metrics.db`, plus a full-fidelity audit line to
+`~/.cache/scouter/audit/<job>.jsonl`.
+
+```sh
+scouter metrics summary --since 7d --pretty
+```
+
+### Exit codes
+
+`0` ok · `1` error · `2` usage · `3` bridge_timeout · `4` wrong_view ·
+`5` confirmation required (a dry run was printed) · `6` not_in_darkroom ·
+`7` cli_wrote_nothing · `8` db_locked · `9` style_partial · `10` commit_timeout
+
+### Tests
+
+```sh
+python3 -m pytest tests -q          # no darktable needed; host-only tests skip
+SCOUTER_HOST_TESTS=1 python3 -m pytest tests/test_host_integration.py -q -s   # needs darktable + the ORFs, and this env var
+```
+
+The host-only suite (`tests/test_host_integration.py`,
+`tests/test_commit_trigger_host.py`) launches the **real** darktable against
+`/Users/pratik/Pictures/EditingTrial/P6281348.ORF` and always quits it when
+done — it is gated on `SCOUTER_HOST_TESTS=1` so it never runs by accident in
+CI or a plain `pytest tests`.
+
+Design: `docs/superpowers/specs/2026-09-13-scouter-phase1-design.md`.
+Measurements: `docs/measurements.md`.
+
 ## Contributing
 
 Contributions welcome. Any change that reads or writes `library.db` directly will be rejected.
