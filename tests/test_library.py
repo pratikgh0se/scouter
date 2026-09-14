@@ -1087,5 +1087,101 @@ class ManifestWinsMergeOrderTest(LibraryTestCase):
         self.assertEqual(len(result2.files), 3)  # 2 known + the new card's frame
 
 
+class RecoveredDuplicateClaimTest(LibraryTestCase):
+    """Carried finding 3: two byte-identical frames must claim two DISTINCT
+    recovered entries.
+
+    Setup is the R17b case -- `import.json` gone, so every surviving entry is
+    `recovered_from_checksums` with the destination's own basename as its
+    `source_name` and the bytes as its only identity -- with the card still
+    inserted and carrying two frames whose sha256 is the same.
+
+    The old index was `dict[sha, entry]`, so both frames matched whichever of
+    the two entries came last, both reused its `seq`, and the re-run died in
+    `_plan`'s collision check. Verified by mutation: restoring the single-entry
+    dict (or swapping the `pop` back to a `get`) fails this test.
+    """
+
+    def _identical_pair_card(self) -> Path:
+        source = self.tmp / "card"
+        tail = os.urandom(2048)
+        _write_one(source, "P0001.ORF", "2026:06:28 15:49:28", tail=tail)
+        _write_one(source, "P0002.ORF", "2026:06:28 15:49:28", tail=tail)
+        return source
+
+    def test_two_identical_frames_resume_into_their_two_recovered_entries(self) -> None:
+        source = self._identical_pair_card()
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertEqual(result1.totals["copied"], 2)
+        (Path(result1.path) / ".scouter" / "import.json").unlink()
+
+        result2 = library.import_card(str(source), "harbour-wedding", confirm=True)
+
+        self.assertEqual(result2.outcome, "ok")
+        # Nothing re-copied and nothing invented: the two candidates claimed
+        # the two recovered entries, not one entry twice.
+        self.assertEqual(result2.totals["copied"], 0)
+        self.assertEqual(result2.totals["skipped_identical"], 2)
+        self.assertEqual(len(result2.files), 2)
+        self.assertEqual({f["dest"] for f in result2.files}, {f["dest"] for f in result1.files})
+        self.assertEqual(sorted(f["seq"] for f in result2.files), [1, 2])
+        # No third file appeared under a freshly minted seq.
+        raw = Path(result2.path) / "raw"
+        self.assertEqual(len([p for p in raw.iterdir() if p.suffix == ".orf"]), 2)
+        vr = library.verify("harbour-wedding")
+        self.assertTrue(vr.ok)
+        self.assertEqual(vr.checked, 2)
+
+    def test_a_third_identical_frame_gets_a_fresh_seq(self) -> None:
+        """The queue is claimed, then exhausted -- it is not a licence to
+        reuse a destination for a frame the job has never seen."""
+        source = self._identical_pair_card()
+        result1 = library.import_card(str(source), "harbour-wedding", confirm=True)
+        (Path(result1.path) / ".scouter" / "import.json").unlink()
+        tail = (source / "P0001.ORF").read_bytes()[-2048:]
+        _write_one(source, "P0003.ORF", "2026:06:28 15:49:28", tail=tail)
+
+        result2 = library.import_card(str(source), "harbour-wedding", confirm=True)
+
+        self.assertEqual(result2.totals["copied"], 1)
+        self.assertEqual(result2.totals["skipped_identical"], 2)
+        self.assertEqual(sorted(f["seq"] for f in result2.files), [1, 2, 3])
+
+
+class CullProposalFlagTest(LibraryTestCase):
+    """The stale comment carried from task 3 hid a real bug: `library.jobs`
+    matched the substring `cull-proposal`, which `cull.propose` has never
+    written (it writes `.scouter/cull-<ts>.json`), so `has_cull_proposal` was
+    always False."""
+
+    def test_has_cull_proposal_tracks_the_real_proposal_filename(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        result = library.import_card(str(source), "harbour-wedding", confirm=True)
+        scouter_d = Path(result.path) / ".scouter"
+
+        self.assertFalse(library.jobs().jobs[0]["has_cull_proposal"])
+
+        (scouter_d / "cull-20260914T101500Z.json").write_text("{}", encoding="utf-8")
+        self.assertTrue(library.jobs().jobs[0]["has_cull_proposal"])
+
+    def test_the_name_cull_propose_actually_writes_is_recognised(self) -> None:
+        """Pinned against `cull.propose`'s own writer rather than a literal
+        this test made up -- so a rename there fails here."""
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        result = library.import_card(str(source), "harbour-wedding", confirm=True)
+        scouter_d = Path(result.path) / ".scouter"
+
+        import inspect
+
+        from scouter.core import cull
+
+        writer = inspect.getsource(cull)
+        self.assertIn('f"cull-{ts}.json"', writer)
+        (scouter_d / "cull-20260914T101500Z.json").write_text("{}", encoding="utf-8")
+        self.assertTrue(library.jobs().jobs[0]["has_cull_proposal"])
+
+
 if __name__ == "__main__":
     unittest.main()

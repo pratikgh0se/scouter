@@ -603,13 +603,22 @@ def _plan(
     # (the fix round 3 blocker). Narrow by construction, and the ONLY
     # sha-only match in this module: just entries Scouter itself marked
     # `recovered_*` whose `source_name` is exactly their own dest.
-    by_sha_unknown_source: dict[str, dict] = {
-        e["sha256"]: e
-        for e in existing_files
-        if e.get("sha256")
-        and str(e.get("status", "")).startswith("recovered_")
-        and e["source_name"] == Path(e["dest"]).name
-    }
+    #
+    # Carried finding 3: a QUEUE per sha, not one entry per sha. Two
+    # byte-identical frames are two real files on disk and therefore two
+    # recovered entries, and each must be claimed by a different candidate.
+    # The old `dict[str, dict]` collapsed them to whichever entry came last
+    # and handed it to BOTH candidates, which minted the same destination
+    # twice and turned the re-run into the `UsageError` below. Sorted by
+    # `dest` so the claim order is deterministic across runs.
+    by_sha_unknown_source: dict[str, list[dict]] = {}
+    for e in sorted(existing_files, key=lambda e: e["dest"]):
+        if (
+            e.get("sha256")
+            and str(e.get("status", "")).startswith("recovered_")
+            and e["source_name"] == Path(e["dest"]).name
+        ):
+            by_sha_unknown_source.setdefault(e["sha256"], []).append(e)
     known_source_names = {e["source_name"] for e in existing_files}
 
     if camera is None:
@@ -649,13 +658,21 @@ def _plan(
         # cost is counted and reported (`hashed_files`/`hashed_bytes`), never
         # silently spent.
         reused = None
-        if path.name in known_source_names or by_sha_unknown_source:
+        if path.name in known_source_names or any(by_sha_unknown_source.values()):
             content_hash = _hash_file(path)
             hashed_files += 1
             hashed_bytes += size
-            reused = by_identity.get((path.name, content_hash)) or by_sha_unknown_source.get(
-                content_hash
-            )
+            # Claimed, not merely looked up (carried finding 3): each
+            # recovered entry stands for one file on disk, so it is popped
+            # off its sha's queue and cannot be handed to a second
+            # candidate. A card with two byte-identical frames therefore
+            # resumes into its two recovered destinations instead of minting
+            # one destination twice.
+            reused = by_identity.get((path.name, content_hash))
+            if reused is None:
+                queue = by_sha_unknown_source.get(content_hash)
+                if queue:
+                    reused = queue.pop(0)
         if reused is not None:
             # Same name AND same bytes (or the same bytes under an entry with
             # no recorded name at all) -- this frame is already imported.
@@ -916,8 +933,12 @@ def import_card(
                 # hand, or lost with a disk, while its record survived) --
                 # compare the SOURCE's hash against what the manifest already
                 # says BEFORE writing anything. A match means this is a
-                # legitimate re-copy of a known frame (never a fresh seq, per
-                # the sha-dedupe above); a mismatch is a typed error, raised
+                # legitimate re-copy of a known frame, re-using the `seq`
+                # `_plan` already resolved for it through `(source_name,
+                # sha256)` -- the "sha-dedupe above" this comment used to
+                # point at was removed by fix round 4 (ruling R17: identical
+                # bytes under a different name are a new frame, reported in
+                # `duplicates`, not deduplicated); a mismatch is a typed error, raised
                 # before any byte lands, not a silent overwrite of what the
                 # manifest already promised.
                 tracked = existing_by_dest.get(f"raw/{p['dest_name']}")
@@ -1238,10 +1259,17 @@ def _list_jobs(root: Path) -> list[dict]:
                     "bytes": sum(f.stat().st_size for f in files),
                     "ratings": ratings,
                     "manifests": manifests,
-                    # `cull.propose` (task 6) writes its proposal under
-                    # `.scouter/`; not landed yet, so this is always False for
-                    # now -- honest, not a guess (honesty rule).
-                    "has_cull_proposal": any("cull-proposal" in m for m in manifests),
+                    # `cull.propose` writes `.scouter/cull-<ts>.json`
+                    # (`scouter/core/cull.py`, design 4.4). The stale comment
+                    # this replaces said cull had "not landed yet", and the
+                    # substring it matched (`cull-proposal`) is not a name cull
+                    # has ever written -- so this field read False even for a
+                    # job with a proposal sitting right there. Matched against
+                    # the real prefix now, and `tests/test_library.py` pins it
+                    # against a file `cull.propose` itself produced.
+                    "has_cull_proposal": any(
+                        m.startswith("cull-") and m.endswith(".json") for m in manifests
+                    ),
                     # No verb records a verify timestamp anywhere yet, so this
                     # stays None rather than inventing one.
                     "verified_at": None,
