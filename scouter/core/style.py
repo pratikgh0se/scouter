@@ -167,7 +167,14 @@ LEDGER_FILENAME = "styles-applied.json"
 
 #: Fix round 3b: the ledger file's own schema version, so a future change to
 #: its shape has somewhere to say so instead of guessing from field presence.
-LEDGER_SCHEMA = 1
+#:
+#: Schema 2 (carried finding 5, task 8): every entry also carries the `path`
+#: it was recorded for. darktable REUSES image ids, so an id match alone
+#: never proved the record was about the same file. A schema-1 entry (no
+#: `path`) is not rejected -- it resolves to `"unknown"` rather than
+#: `"already_styled"`, which is the safe direction: an extra confirmation,
+#: never a silently skipped application.
+LEDGER_SCHEMA = 2
 
 
 class UnsupportedMode(ScouterError):
@@ -1082,23 +1089,26 @@ def _resolve_set(
             detail={"job_slug": job_slug, "images": images},
         )
 
+    # Ruling R15: ONE `image.lookup` for the whole set, not one per frame.
+    # The Lua handler's path match walks all of `dt.database`, so the old
+    # loop cost a full library scan and a bridge round trip per candidate --
+    # 300 of each for a 300-frame job, before a single style was applied.
     resolved: list[ResolvedImage] = []
     unresolved: list[dict] = []
-    for item in raw:
-        try:
-            resolved.append(dtbridge.resolve_image(item))
-        except ScouterError as e:
+    for item, outcome in zip(raw, dtbridge.resolve_images(list(raw))):
+        if isinstance(outcome, ScouterError):
             unresolved.append(
-                {"image_id": None, "path": str(item), "status": "failed", "error": str(e)}
+                {"image_id": None, "path": str(item), "status": "failed", "error": str(outcome)}
             )
+        else:
+            resolved.append(outcome)
 
     if exclude:
-        excluded_ids: set[int] = set()
-        for item in exclude:
-            try:
-                excluded_ids.add(dtbridge.resolve_image(item).image_id)
-            except ScouterError:
-                continue
+        excluded_ids: set[int] = {
+            outcome.image_id
+            for outcome in dtbridge.resolve_images(list(exclude))
+            if not isinstance(outcome, ScouterError)
+        }
         resolved = [r for r in resolved if r.image_id not in excluded_ids]
         if not resolved and not unresolved:
             raise UsageError(
@@ -1206,22 +1216,35 @@ def _current_history_end(path: str) -> tuple[int | None, bool]:
     directly instead, the same two calls `history.read`'s own body makes
     after its resolve step.
 
-    Returns `(history_end, confirmed)`. `confirmed=False` (with
-    `history_end=None`) covers exactly `history.read`'s own two "not
-    confirmed" cases: no sidecar yet (`FileNotFoundError`), or one caught
-    mid-write (`not parsed.well_formed`, the torn-read fallback). Fix round
-    2, item 2: a caller MUST treat `confirmed=False` as "cannot verify",
-    never as "not styled" or "still styled" -- guessing either way risks a
-    duplicate append or a wrongly-skipped real application.
+    Returns `(history_end, reason)`. `reason` is `None` when the number is
+    real; otherwise `history_end` is `None` and `reason` NAMES which
+    unverifiable state this is. Fix round 2, item 2: a caller MUST treat a
+    non-`None` reason as "cannot verify", never as "not styled" or "still
+    styled" -- guessing either way risks a duplicate append or a
+    wrongly-skipped real application.
+
+    Carried finding 5 (task 8) split three states this used to conflate
+    into one bare `False`:
+
+    - no sidecar on disk yet;
+    - a sidecar caught mid-write (`not parsed.well_formed`);
+    - a well-formed sidecar carrying NO `history_end` attribute at all.
+      `xmp.parse` defaults that field to `0`, so it used to come back as a
+      confirmed `0` -- which then compared as *less* than any recorded
+      `history_end_before` and made the guard report "history has been
+      rewound", a rewind that never happened. An absent attribute is not
+      the number zero.
     """
     try:
         text, _mtime = xmp_module.read_sidecar(path)
     except FileNotFoundError:
-        return None, False
+        return None, f"no sidecar on disk yet at {xmp_module.sidecar_path(path)}"
     parsed = xmp_module.parse(text)
     if not parsed.well_formed:
-        return None, False
-    return parsed.history_end, True
+        return None, "the sidecar was caught mid-write (not well-formed)"
+    if "history_end" not in text:
+        return None, "the sidecar parses but carries no history_end attribute at all"
+    return parsed.history_end, None
 
 
 def _idempotency_verdict(
@@ -1243,11 +1266,15 @@ def _idempotency_verdict(
     apart from a bridge-side check alone: `history_end_before` itself was
     `None` (sidecar unreadable when the ledger entry was written -- there
     is nothing to compare against); the CURRENT sidecar cannot be
-    confirmed (missing, or mid-write); or the current `history_end`
-    EQUALS `history_end_before` (nothing has been committed since the
-    apply -- this cannot be distinguished from "the apply never really
-    landed", so it is never silently treated as "still styled" the way
-    round 2 did).
+    confirmed (`_current_history_end` names which of its three states
+    that is); the record carries no `path`, so it cannot be proved to be
+    about this file at all (carried finding 5: darktable reuses image
+    ids); or the current `history_end` EQUALS `history_end_before`
+    (nothing has been committed since the apply -- this cannot be
+    distinguished from "the apply never really landed", so it is never
+    silently treated as "still styled" the way round 2 did). A record
+    whose `path` names a DIFFERENT file is `("apply", note)`: the id was
+    reused, and the record says nothing about the frame in hand.
 
     Never raises: the one thing that could (`xmp.read_sidecar` /
     `xmp.parse`, both plain stdlib calls with no bridge round trip) is
@@ -1258,6 +1285,29 @@ def _idempotency_verdict(
     """
     if ledger_entry is None:
         return "apply", None
+
+    # Carried finding 5 (task 8): the ledger is keyed on an image_id, and
+    # darktable REUSES ids -- remove an image from the library and the next
+    # import can be handed the same number. An id match alone therefore does
+    # not prove the record is about this file, and the whole point of the
+    # guard is not to skip a real application. So the recorded `path` is
+    # checked too.
+    recorded_path = ledger_entry.get("path")
+    if recorded_path is None:
+        return (
+            "unknown",
+            "ledger record predates path-keying, so it cannot be confirmed to be "
+            "about this file: darktable reuses image ids, and an id match alone is "
+            "not proof. Re-run with --force to apply anyway",
+        )
+    if str(recorded_path) != resolved.path:
+        return (
+            "apply",
+            f"ledger record for image id {resolved.image_id} is about "
+            f"{recorded_path}, not {resolved.path}: darktable has reused the id, "
+            "so the record says nothing about this file",
+        )
+
     before = ledger_entry.get("history_end_before")
     if before is None:
         return (
@@ -1265,15 +1315,18 @@ def _idempotency_verdict(
             "ledger record has no history_end_before on file (the sidecar was "
             "unreadable when it was written); nothing to compare against",
         )
-    history_end, confirmed = _current_history_end(resolved.path)
-    if not confirmed:
+    history_end, unverifiable = _current_history_end(resolved.path)
+    if unverifiable is not None:
+        # Carried finding 5 (task 8): the reason is named rather than folded
+        # into one "missing or mid-write" sentence that may be neither.
         return (
             "unknown",
-            "commit history first: the current sidecar is missing or mid-write, so "
-            "Scouter's ledger record cannot be confirmed against it",
+            f"Scouter's ledger record cannot be confirmed against the current "
+            f"sidecar: {unverifiable}",
         )
+    assert history_end is not None  # guaranteed by `unverifiable is None`
     before = int(before)
-    current = int(history_end) if history_end is not None else before
+    current = int(history_end)
     if current > before:
         return "already_styled", None
     if current == before:
@@ -1463,40 +1516,6 @@ def apply_set(
 
     cfg = config_module.load()
     resolved, unresolved = _resolve_set(job_slug, images, exclude)
-    plan = [
-        {
-            "action": "style.apply_set",
-            "image_id": r.image_id,
-            "path": r.path,
-            "name": name,
-            "mode": mode,
-        }
-        for r in resolved
-    ]
-
-    if dry_run or not confirm:
-        dry_warnings: list[str] = []
-        if unresolved:
-            preview = ", ".join(u["path"] for u in unresolved[:5])
-            dry_warnings.append(
-                f"{len(unresolved)} of {len(resolved) + len(unresolved)} candidates did "
-                f"not resolve and would fail: {preview}" + (" ..." if len(unresolved) > 5 else "")
-            )
-        return StyleSetResult(
-            outcome="dry_run",
-            name=name,
-            mode=mode,
-            requested=len(resolved) + len(unresolved),
-            plan=plan,
-            per_image=list(unresolved),
-            warnings=dry_warnings,
-            reason=(
-                "dry run: nothing was applied"
-                if dry_run
-                else f"applying a style to {len(resolved)} images requires --yes / confirm=true"
-            ),
-        )
-
     warnings: list[str] = []
 
     # Fix round 2 (Ruling R16): idempotency from Scouter's OWN ledger, never
@@ -1577,6 +1596,63 @@ def apply_set(
                     warnings.append(f"image {r.image_id}: {note}")
                 to_apply.append(r)
 
+    # Carried finding 5 (task 8): the plan is what WOULD BE APPLIED, so the
+    # idempotency guard runs BEFORE it -- dry run included. The dry-run plan
+    # used to list every resolved id, including the ones the real run would
+    # skip as `already_styled` or hold back as `unknown`, so the preview
+    # promised work the apply would not do. The guard costs no bridge call
+    # at all (one local sidecar read per target, `_current_history_end`), so
+    # running it on the dry-run path buys accuracy for nothing and breaks no
+    # rule: ruling 3 forbids a dry run from writing, opening or importing,
+    # not from reading a sidecar that is already on disk.
+    plan = [
+        {
+            "action": "style.apply_set",
+            "image_id": r.image_id,
+            "path": r.path,
+            "name": name,
+            "mode": mode,
+        }
+        for r in to_apply
+    ]
+
+    skipped_rows = already_rows + guard_unknown_rows
+
+    if dry_run or not confirm:
+        dry_warnings = list(warnings)
+        if unresolved:
+            preview = ", ".join(u["path"] for u in unresolved[:5])
+            dry_warnings.append(
+                f"{len(unresolved)} of {len(resolved) + len(unresolved)} candidates did "
+                f"not resolve and would fail: {preview}" + (" ..." if len(unresolved) > 5 else "")
+            )
+        if already_rows:
+            dry_warnings.append(
+                f"{len(already_rows)} of {len(resolved)} resolved images already carry "
+                f"{name!r} per the job ledger and would be skipped: "
+                f"{[r['image_id'] for r in already_rows[:10]]}"
+            )
+        if guard_unknown_rows:
+            dry_warnings.append(
+                f"{len(guard_unknown_rows)} of {len(resolved)} resolved images cannot be "
+                "confirmed either way and would be held back as unknown, not applied: "
+                f"{[r['image_id'] for r in guard_unknown_rows[:10]]}"
+            )
+        return StyleSetResult(
+            outcome="dry_run",
+            name=name,
+            mode=mode,
+            requested=len(resolved) + len(unresolved),
+            plan=plan,
+            per_image=list(unresolved) + skipped_rows,
+            warnings=dry_warnings,
+            reason=(
+                "dry run: nothing was applied"
+                if dry_run
+                else f"applying a style to {len(to_apply)} images requires --yes / confirm=true"
+            ),
+        )
+
     id_to_path = {r.image_id: r.path for r in to_apply}
     ids = [r.image_id for r in to_apply]
     batches = [ids[i : i + batch] for i in range(0, len(ids), batch)]
@@ -1631,6 +1707,7 @@ def apply_set(
                 batch_ledger_updates.append(
                     {
                         "image_id": iid,
+                        "path": id_to_path.get(iid),
                         "style": name,
                         "applied_at": _now_z(),
                         "history_end_before": pre_history_end.get(iid),
@@ -1705,6 +1782,7 @@ def apply_set(
                 batch_ledger_updates.append(
                     {
                         "image_id": iid,
+                        "path": id_to_path.get(iid),
                         "style": name,
                         "applied_at": _now_z(),
                         "history_end_before": pre_history_end.get(iid),

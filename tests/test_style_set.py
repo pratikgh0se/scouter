@@ -92,13 +92,23 @@ def _bridge(images: dict[int, str], *, style_name: str = "hero", apply=None) -> 
     call would resolve to the same one id), which apply_set's batch tests need."""
     path_to_id = {p: i for i, p in images.items()}
 
-    def lookup(params: dict) -> dict:
+    def one(params: dict) -> dict:
         if params.get("image_id") is not None:
             iid = int(params["image_id"])
             return {"found": iid in images, "image_id": iid, "path": images.get(iid, "")}
         path = params.get("path")
         iid = path_to_id.get(path)
         return {"found": iid is not None, "image_id": iid or 0, "path": path}
+
+    def lookup(params: dict) -> dict:
+        # Mirrors the real Lua handler's two forms (ruling R15): a bare
+        # record for the single form, `{results: [...]}` in request order
+        # for the list form. Without the list form here the fake would push
+        # `resolve_images` onto its legacy fallback and these tests would
+        # silently stop covering the batched path.
+        if params.get("items") is not None:
+            return {"results": [one(item) for item in params["items"]]}
+        return one(params)
 
     responses: dict = {
         "image.lookup": lookup,
@@ -190,9 +200,9 @@ class StyleSetTest(unittest.TestCase):
         return self.job_path / ".scouter" / "styles-applied.json"
 
     def _seed_ledger(self, entries: list[dict]) -> None:
-        """Fix round 3b: the ledger file is `{"schema": 1, "entries": [...]}`,
+        """Fix round 3b: the ledger file is `{"schema": <n>, "entries": [...]}`,
         not a bare array."""
-        self._ledger_path().write_text(json.dumps({"schema": 1, "entries": entries}))
+        self._ledger_path().write_text(json.dumps({"schema": 2, "entries": entries}))
 
     def _ledger_entries(self) -> list[dict]:
         return json.loads(self._ledger_path().read_text())["entries"]
@@ -409,11 +419,18 @@ class StyleSetTest(unittest.TestCase):
     # -- fix round 2 (Ruling R16) / fix round 3 (Ruling R18): ledger-based
     # idempotency guard, comparing history_end_before -----------------------
 
-    def _seed_one(self, styled_id: int, history_end_before) -> None:
+    def _job_image_path(self, image_id: int) -> str:
+        """The path `_setup_job` gave image `image_id` -- the ledger records
+        it alongside the id (schema 2), because darktable reuses ids."""
+        assert self.job_path is not None
+        return str(self.job_path / f"raw/img{image_id:04d}.orf")
+
+    def _seed_one(self, styled_id: int, history_end_before, path: str | None = None) -> None:
         self._seed_ledger(
             [
                 {
                     "image_id": styled_id,
+                    "path": path if path is not None else self._job_image_path(styled_id),
                     "style": "hero",
                     "applied_at": "2026-01-01T00:00:00Z",
                     "history_end_before": history_end_before,
@@ -533,6 +550,7 @@ class StyleSetTest(unittest.TestCase):
             [
                 {
                     "image_id": iid,
+                    "path": self._job_image_path(iid),
                     "style": "hero",
                     "applied_at": "2026-01-01T00:00:00Z",
                     "history_end_before": 3,
@@ -562,7 +580,7 @@ class StyleSetTest(unittest.TestCase):
         statuses = _statuses(result.per_image)
         self.assertEqual(statuses[styled_id], "unknown")
         unknown_row = next(p for p in result.per_image if p["image_id"] == styled_id)
-        self.assertIn("commit history first", unknown_row["error"])
+        self.assertIn("no sidecar on disk yet", unknown_row["error"])
         self.assertEqual(result.applied, 1)  # the other image still applies normally
         apply_calls = [p for m, p in bridge.calls if m == "style.apply"]
         applied_ids = {iid for call in apply_calls for iid in call["image_ids"]}
@@ -601,6 +619,7 @@ class StyleSetTest(unittest.TestCase):
             [
                 {
                     "image_id": iid,
+                    "path": self._job_image_path(iid),
                     "style": "hero",
                     "applied_at": "2026-01-01T00:00:00Z",
                     "history_end_before": 3,
@@ -749,7 +768,7 @@ class StyleSetTest(unittest.TestCase):
         images = self._setup_job(1)
         self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
         payload = json.loads(self._ledger_path().read_text())
-        self.assertEqual(payload["schema"], 1)
+        self.assertEqual(payload["schema"], 2)
         self.assertIsInstance(payload["entries"], list)
 
     # -- fix round 1: registry integration ---------------------------------
@@ -771,6 +790,154 @@ class StyleSetTest(unittest.TestCase):
         self.assertEqual(exit_code_for(envelope.outcome), 9)
         self.assertEqual(envelope.data["applied"], 9)
         self.assertEqual(envelope.data["failed"], 1)
+
+
+class DryRunHonoursTheGuardTest(StyleSetTest):
+    """Carried finding 5 (task 8): the dry-run plan must list what the real
+    run WOULD APPLY. It used to list every resolved id, including the ones
+    the idempotency guard skips, so the preview promised work the apply
+    would never do."""
+
+    def test_the_dry_run_plan_excludes_ids_the_guard_would_skip(self) -> None:
+        images = self._setup_job(3)
+        styled_id = min(images)
+        self._seed_one(styled_id, history_end_before=3)
+        Path(images[styled_id] + ".xmp").write_text(_sidecar_xml(history_end=5))
+
+        bridge, result = self._apply_set(
+            images, apply=_apply_all_ok, job_slug="hero-job", dry_run=True, confirm=True
+        )
+
+        self.assertEqual(result.outcome, "dry_run")
+        planned_ids = {step["image_id"] for step in result.plan}
+        self.assertNotIn(styled_id, planned_ids)
+        self.assertEqual(planned_ids, set(images) - {styled_id})
+        # And it SAYS so rather than just quietly shortening the plan.
+        self.assertTrue(any("already carry" in w for w in result.warnings), result.warnings)
+        skipped = next(r for r in result.per_image if r["image_id"] == styled_id)
+        self.assertEqual(skipped["status"], "already_styled")
+        # Still a dry run: nothing was applied and the ledger was not written.
+        self.assertEqual(bridge.count("style.apply"), 0)
+
+    def test_the_dry_run_holds_back_unknowns_and_names_them(self) -> None:
+        images = self._setup_job(2)
+        styled_id = min(images)
+        self._seed_one(styled_id, history_end_before=3)  # no sidecar on disk
+
+        _bridge_, result = self._apply_set(
+            images, apply=_apply_all_ok, job_slug="hero-job", dry_run=True, confirm=True
+        )
+
+        self.assertNotIn(styled_id, {step["image_id"] for step in result.plan})
+        self.assertTrue(any("held back as unknown" in w for w in result.warnings), result.warnings)
+        row = next(r for r in result.per_image if r["image_id"] == styled_id)
+        self.assertEqual(row["status"], "unknown")
+
+    def test_the_dry_run_plan_matches_what_the_real_run_applies(self) -> None:
+        """The property behind the fix, asserted directly."""
+        images = self._setup_job(4)
+        styled_id = min(images)
+        self._seed_one(styled_id, history_end_before=3)
+        Path(images[styled_id] + ".xmp").write_text(_sidecar_xml(history_end=5))
+
+        _b1, preview = self._apply_set(
+            images, apply=_apply_all_ok, job_slug="hero-job", dry_run=True, confirm=True
+        )
+        bridge, real = self._apply_set(
+            images, apply=_apply_all_ok, job_slug="hero-job", confirm=True
+        )
+        applied = {iid for m, p in bridge.calls if m == "style.apply" for iid in p["image_ids"]}
+        self.assertEqual({step["image_id"] for step in preview.plan}, applied)
+        self.assertEqual(real.applied, len(applied))
+
+    def test_force_previews_every_resolved_image(self) -> None:
+        """`--force` skips the SKIP decision, so its preview is the full set."""
+        images = self._setup_job(3)
+        styled_id = min(images)
+        self._seed_one(styled_id, history_end_before=3)
+        Path(images[styled_id] + ".xmp").write_text(_sidecar_xml(history_end=5))
+
+        _b, result = self._apply_set(
+            images,
+            apply=_apply_all_ok,
+            job_slug="hero-job",
+            dry_run=True,
+            confirm=True,
+            force=True,
+        )
+        self.assertEqual({step["image_id"] for step in result.plan}, set(images))
+
+
+class LedgerIdReuseTest(StyleSetTest):
+    """Carried finding 5 (task 8): darktable reuses image ids, so the ledger
+    records the `path` alongside the id (schema 2) and the guard checks it.
+    Without that, an id freed by removing one image and handed to another
+    would make the guard skip a style the new file has never carried."""
+
+    def test_a_reused_id_is_applied_not_skipped(self) -> None:
+        images = self._setup_job(2)
+        styled_id = min(images)
+        # The ledger's record is about a file that no longer holds this id.
+        self._seed_one(styled_id, history_end_before=3, path="/gone/old-frame.orf")
+        Path(images[styled_id] + ".xmp").write_text(_sidecar_xml(history_end=5))
+
+        bridge, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+
+        applied = {iid for m, p in bridge.calls if m == "style.apply" for iid in p["image_ids"]}
+        self.assertIn(styled_id, applied, "a reused id must not inherit the old file's record")
+        self.assertEqual(_statuses(result.per_image)[styled_id], "applied")
+        self.assertTrue(any("reused the id" in w for w in result.warnings), result.warnings)
+
+    def test_a_schema_1_record_without_a_path_is_unknown_never_skipped(self) -> None:
+        images = self._setup_job(2)
+        styled_id = min(images)
+        self._seed_ledger(
+            [
+                {
+                    "image_id": styled_id,
+                    "style": "hero",
+                    "applied_at": "2026-01-01T00:00:00Z",
+                    "history_end_before": 3,
+                }
+            ]
+        )
+        Path(images[styled_id] + ".xmp").write_text(_sidecar_xml(history_end=5))
+
+        _b, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+
+        row = next(r for r in result.per_image if r["image_id"] == styled_id)
+        self.assertEqual(row["status"], "unknown")
+        self.assertIn("predates path-keying", row["error"])
+
+    def test_every_written_ledger_entry_carries_its_path(self) -> None:
+        images = self._setup_job(3)
+        self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+        entries = self._ledger_entries()
+        self.assertEqual(len(entries), 3)
+        for entry in entries:
+            self.assertEqual(entry["path"], images[entry["image_id"]])
+
+
+class HistoryEndMissingIsItsOwnStateTest(StyleSetTest):
+    """Carried finding 5 (task 8): a well-formed sidecar with NO `history_end`
+    attribute used to be folded into `current == before`, which reported
+    "sidecar not rewritten since the apply; commit history" -- advice that
+    cannot help, because there is no history_end to move. It is still
+    "unknown"; it now says what is true."""
+
+    def test_a_sidecar_with_no_history_end_says_so(self) -> None:
+        images = self._setup_job(2)
+        styled_id = min(images)
+        self._seed_one(styled_id, history_end_before=3)
+        no_end = _sidecar_xml(history_end=5).replace('darktable:history_end="5"', "")
+        Path(images[styled_id] + ".xmp").write_text(no_end)
+
+        _b, result = self._apply_set(images, apply=_apply_all_ok, job_slug="hero-job")
+
+        row = next(r for r in result.per_image if r["image_id"] == styled_id)
+        self.assertEqual(row["status"], "unknown")
+        self.assertIn("carries no history_end attribute at all", row["error"])
+        self.assertNotIn("rewound", row["error"])
 
 
 if __name__ == "__main__":

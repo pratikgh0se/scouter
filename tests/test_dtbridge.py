@@ -258,5 +258,87 @@ class ReadsNeverOpenTheDarkroomTest(unittest.TestCase):
         self.assertEqual(self.bridge.calls, [])
 
 
+class ResolveImagesBatchTest(unittest.TestCase):
+    """Ruling R15: `image.lookup` takes a list, so a set resolves in ONE
+    bridge call instead of one per frame (the Lua handler's path match walks
+    all of `dt.database`, so it was also one full library scan per frame)."""
+
+    def tearDown(self) -> None:
+        dtbridge.set_bridge(None)
+
+    def _listy_bridge(self, table: dict[str, int]) -> FakeBridge:
+        def one(params: dict) -> dict:
+            if params.get("image_id") is not None:
+                iid = int(params["image_id"])
+                path = next((p for p, i in table.items() if i == iid), None)
+                return {"found": path is not None, "image_id": iid, "path": path}
+            path = params.get("path")
+            iid = table.get(path)
+            return {"found": iid is not None, "image_id": iid, "path": path}
+
+        def lookup(params: dict) -> dict:
+            if params.get("items") is not None:
+                return {"results": [one(item) for item in params["items"]]}
+            return one(params)
+
+        bridge = FakeBridge({"image.lookup": lookup})
+        dtbridge.set_bridge(bridge)
+        return bridge
+
+    def test_a_whole_set_costs_one_call_and_keeps_request_order(self) -> None:
+        bridge = self._listy_bridge({"/a/1.orf": 11, "/a/2.orf": 12, "/a/3.orf": 13})
+        out = dtbridge.resolve_images(["/a/3.orf", 12, "/a/1.orf"])
+        self.assertEqual(bridge.count("image.lookup"), 1)
+        self.assertEqual([r.image_id for r in out], [13, 12, 11])
+        self.assertEqual(out[0].xmp_path, "/a/3.orf.xmp")
+
+    def test_a_miss_is_returned_not_raised_so_one_bad_frame_never_kills_the_set(self) -> None:
+        self._listy_bridge({"/a/1.orf": 11})
+        out = dtbridge.resolve_images(["/a/1.orf", "/a/gone.orf", 99])
+        self.assertEqual(out[0].image_id, 11)
+        self.assertIsInstance(out[1], dtbridge.ImageNotFound)
+        self.assertIn("/a/gone.orf", str(out[1]))
+        self.assertEqual(out[1].detail["path"], "/a/gone.orf")
+        self.assertIsInstance(out[2], dtbridge.ImageNotFound)
+        self.assertEqual(out[2].detail["image_id"], 99)
+
+    def test_an_empty_set_makes_no_bridge_call_at_all(self) -> None:
+        bridge = self._listy_bridge({})
+        self.assertEqual(dtbridge.resolve_images([]), [])
+        self.assertEqual(bridge.calls, [])
+
+    def test_a_plugin_too_old_for_the_list_form_degrades_to_one_call_each(self) -> None:
+        """A stale installed plugin answers without `results`. That must cost
+        speed, never correctness -- so the fallback is one single-form call
+        per image, exactly what `resolve_image` has always done."""
+        table = {"/a/1.orf": 11, "/a/2.orf": 12}
+
+        def legacy(params: dict) -> dict:
+            path = params.get("path")
+            iid = table.get(path)
+            return {"found": iid is not None, "image_id": iid, "path": path}
+
+        bridge = FakeBridge({"image.lookup": legacy})
+        dtbridge.set_bridge(bridge)
+        out = dtbridge.resolve_images(["/a/1.orf", "/a/2.orf"])
+        self.assertEqual([r.image_id for r in out], [11, 12])
+        # 1 rejected batch attempt + 2 single-form calls.
+        self.assertEqual(bridge.count("image.lookup"), 3)
+
+    def test_the_style_set_resolver_uses_the_list_form(self) -> None:
+        """The consumer ruling R15 was raised for: `style.apply_set`'s
+        `_resolve_set` must resolve its candidates in one call."""
+        from scouter.core import style
+
+        bridge = self._listy_bridge({"/a/1.orf": 11, "/a/2.orf": 12, "/a/3.orf": 13})
+        resolved, unresolved = style._resolve_set(
+            None, ["/a/1.orf", "/a/2.orf", "/a/3.orf"], ["/a/3.orf"]
+        )
+        self.assertEqual([r.image_id for r in resolved], [11, 12])
+        self.assertEqual(unresolved, [])
+        # One call for the candidates, one for the --exclude list.
+        self.assertEqual(bridge.count("image.lookup"), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

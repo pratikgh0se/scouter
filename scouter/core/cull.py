@@ -29,7 +29,7 @@ from pathlib import Path
 
 from scouter import config, metrics
 from scouter.core import dtbridge, exif, scout, xmp
-from scouter.errors import UsageError
+from scouter.errors import ScouterError, UsageError
 from scouter.registry import ArgSpec, Verb, register
 from scouter.types import CullApplyResult, CullResult
 
@@ -317,8 +317,16 @@ def propose(
     job_path: Path | None = None
     raw_frames: list[dict] = []
     if images:
-        for idx, image in enumerate(images, start=1):
-            resolved = dtbridge.resolve_image(image)
+        # Ruling R15: one `image.lookup` for the whole set. A miss still
+        # raises (a cull over a set with a dead reference in it would be
+        # culling something other than what was asked for), but it now
+        # costs one round trip for the set instead of one per frame.
+        for idx, (image, outcome) in enumerate(
+            zip(images, dtbridge.resolve_images(list(images))), start=1
+        ):
+            if isinstance(outcome, ScouterError):
+                raise outcome
+            resolved = outcome
             tags = exif.read_tags(resolved.path)
             raw_frames.append(
                 {
@@ -341,9 +349,14 @@ def propose(
                 detail={"job_slug": job_slug, "import_json": str(import_path)},
             )
         manifest = json.loads(import_path.read_text(encoding="utf-8"))
-        for f in manifest.get("files", []):
-            path = str(job_path / f["dest"])
-            resolved = dtbridge.resolve_image(path)
+        manifest_files = list(manifest.get("files", []))
+        manifest_paths = [str(job_path / f["dest"]) for f in manifest_files]
+        for f, path, outcome in zip(
+            manifest_files, manifest_paths, dtbridge.resolve_images(list(manifest_paths))
+        ):
+            if isinstance(outcome, ScouterError):
+                raise outcome
+            resolved = outcome
             raw_frames.append(
                 {
                     "seq": f["seq"],

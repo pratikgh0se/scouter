@@ -205,6 +205,69 @@ def resolve_image(image: str | int, *, may_import: bool = False) -> ResolvedImag
     )
 
 
+def _lookup_key(image: str | int) -> dict:
+    """The single `image.lookup` argument for one caller-supplied image."""
+    if isinstance(image, int):
+        return {"image_id": int(image)}
+    if isinstance(image, str) and image.isdigit():
+        return {"image_id": int(image)}
+    return {"path": str(image)}
+
+
+def resolve_images(images: list[str | int]) -> list[ResolvedImage | ScouterError]:
+    """Resolve a whole set in ONE `image.lookup` call (ruling R15).
+
+    Returns one entry per input, in order: a `ResolvedImage`, or the
+    `ImageNotFound` that `resolve_image` would have raised for it. A set
+    resolution must never abort on one bad candidate (a stale entry in a
+    300-file `import.json`), so the miss is returned rather than raised and
+    the caller decides.
+
+    Why the list form exists: the Lua handler's path match walks all of
+    `dt.database`, so resolving 300 frames one call at a time was 300 full
+    library scans plus 300 bridge round trips. The list form walks the
+    database once. There is no `may_import` here -- importing is
+    `darkroom.open`'s job, it moves the darkroom, and doing it implicitly
+    for a whole set is exactly the side effect ruling 4 keeps explicit.
+
+    A plugin too old to know the list form answers without `results`; that
+    is detected and falls back to one call per image, so a stale installed
+    plugin degrades in speed, never in correctness.
+    """
+    if not images:
+        return []
+    reply = call("image.lookup", {"items": [_lookup_key(i) for i in images]})
+    records = reply.get("results") if isinstance(reply, dict) else None
+    if not isinstance(records, list) or len(records) != len(images):
+        return [_resolve_one_safely(i) for i in images]
+    out: list[ResolvedImage | ScouterError] = []
+    for image, record in zip(images, records):
+        out.append(_from_lookup_record(image, record))
+    return out
+
+
+def _resolve_one_safely(image: str | int) -> ResolvedImage | ScouterError:
+    try:
+        return resolve_image(image)
+    except ScouterError as e:
+        return e
+
+
+def _from_lookup_record(image: str | int, record: dict) -> ResolvedImage | ScouterError:
+    if not record.get("found"):
+        key = _lookup_key(image)
+        if "image_id" in key:
+            return ImageNotFound(
+                f"no image with id {key['image_id']} in darktable's library",
+                detail={"image_id": key["image_id"]},
+            )
+        return ImageNotFound(f"{image} is not in darktable's library", detail={"path": str(image)})
+    path = str(record["path"])
+    return ResolvedImage(
+        image_id=int(record["image_id"]), path=path, xmp_path=str(xmp.sidecar_path(path))
+    )
+
+
 def action(
     path: str, *, instance: int = 0, element: str = "value", effect: str = "set", value: float = 0.0
 ) -> dict:

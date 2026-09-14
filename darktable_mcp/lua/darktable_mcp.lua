@@ -895,14 +895,27 @@ end
 -- An id is looked up with dt.database[id], which is documented to return the
 -- image or nil -- it does not raise for an unknown id, but it is pcall-guarded
 -- anyway so a future stricter build cannot turn a miss into a bridge error.
-methods["image.lookup"] = function(p)
-  p = p or {}
+--
+-- Ruling R15 (scouter phase 2, task 8's carried follow-up): the LIST form.
+-- `{items = {{path = ...}, {image_id = ...}, ...}}` answers every entry in
+-- ONE call, returning `{results = {<same shape as the single form>, ...}}`
+-- in request order. The single form (`path` / `image_id` at the top level)
+-- is unchanged and still returns the bare record, so every existing caller
+-- and every existing test keeps working.
+--
+-- Why it matters: `find_image_by_path` walks all of dt.database, so
+-- resolving a 300-frame set one call at a time was 300 full library scans
+-- plus 300 bridge round trips. The list form walks the database ONCE,
+-- builds a path -> image map, and answers all 300 out of it.
+local function lookup_record(p, by_path)
   local image = nil
   if p.image_id ~= nil then
     local ok, found = pcall(function() return dt.database[tonumber(p.image_id)] end)
     if ok then image = found end
   end
-  if not image and p.path then image = find_image_by_path(p.path) end
+  if not image and p.path then
+    if by_path then image = by_path[p.path] else image = find_image_by_path(p.path) end
+  end
   if not image then
     return {found = false, image_id = tonumber(p.image_id), path = p.path,
             filename = nil, film = nil, rating = nil}
@@ -915,6 +928,33 @@ methods["image.lookup"] = function(p)
     film = image_film_path(image),
     rating = image.rating or 0,
   }
+end
+
+methods["image.lookup"] = function(p)
+  p = p or {}
+  if p.items == nil then return lookup_record(p, nil) end
+  if type(p.items) ~= "table" then error("image.lookup: items must be a list") end
+  -- One database walk for the whole batch, and only when at least one
+  -- entry actually needs a path match (an all-ids batch needs no map).
+  local by_path = nil
+  for _, item in ipairs(p.items) do
+    if type(item) == "table" and item.path then
+      by_path = {}
+      for _, image in ipairs(dt.database) do
+        local full = _image_full_path(image)
+        if full and by_path[full] == nil then by_path[full] = image end
+      end
+      break
+    end
+  end
+  local results = {}
+  for i, item in ipairs(p.items) do
+    if type(item) ~= "table" then
+      error("image.lookup: items[" .. i .. "] must be a table with path and/or image_id")
+    end
+    table.insert(results, lookup_record(item, by_path))
+  end
+  return {results = results}
 end
 
 -- The image the darkroom currently has loaded, or nil, plus WHERE that

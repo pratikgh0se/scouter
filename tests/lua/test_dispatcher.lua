@@ -2241,6 +2241,53 @@ do
   assertEq(view_state.current, view_before, "image.lookup never switches the view")
 end
 
+-- image.lookup LIST form (ruling R15, scouter phase 2 task 14). One call
+-- answers a whole set, in request order, mixing paths and ids, and it must
+-- touch no GUI state either.
+do
+  local actions_before = #action_log
+  local selections_before = #selection_log
+  local view_before = view_state.current
+  local batch = plugin.methods["image.lookup"]({items = {
+    {path = "/photos/DSC_0001.NEF"},
+    {image_id = 102},
+    {path = "/photos/nope.NEF"},
+    {image_id = 9999},
+    {path = "/photos/OTHER.NEF"},
+  }})
+  assertTrue(type(batch.results) == "table", "the list form answers with a results list")
+  assertEq(#batch.results, 5, "one result per requested item")
+  assertEq(batch.results[1].found, true, "list form resolves by path")
+  assertEq(batch.results[1].image_id, 101, "list form returns the resolved id")
+  assertEq(batch.results[2].found, true, "list form resolves by id")
+  assertEq(batch.results[2].path, "/photos/DSC_0002.NEF", "list form returns the full path")
+  assertEq(batch.results[3].found, false, "an unknown path is found=false, not an error")
+  assertEq(batch.results[3].path, "/photos/nope.NEF", "and echoes the path asked for")
+  assertEq(batch.results[4].found, false, "an unknown id is found=false, not an error")
+  assertEq(batch.results[4].image_id, 9999, "and echoes the id asked for")
+  assertEq(batch.results[5].image_id, 103, "results stay in request order")
+  assertEq(#action_log, actions_before, "the list form issues no dt.gui.action")
+  assertEq(#selection_log, selections_before, "the list form never selects an image")
+  assertEq(view_state.current, view_before, "the list form never switches the view")
+
+  -- The single form is untouched: no `results` wrapper, bare record.
+  local single = plugin.methods["image.lookup"]({path = "/photos/DSC_0001.NEF"})
+  assertEq(single.results, nil, "the single form still returns a bare record")
+  assertEq(single.image_id, 101, "the single form still resolves")
+
+  -- An empty list is an empty answer, not an error and not a full-database dump.
+  local empty = plugin.methods["image.lookup"]({items = {}})
+  assertEq(#empty.results, 0, "an empty items list answers with zero results")
+
+  -- Malformed items are refused by name rather than silently skipped.
+  local ok_items = pcall(function() return plugin.methods["image.lookup"]({items = "nope"}) end)
+  assertEq(ok_items, false, "items must be a list")
+  local ok_entry = pcall(function()
+    return plugin.methods["image.lookup"]({items = {"/photos/DSC_0001.NEF"}})
+  end)
+  assertEq(ok_entry, false, "a bare string item is refused, not guessed at")
+end
+
 -- snapshot.take prefers the documented lib API.
 local sn = plugin.methods["snapshot.take"]()
 assertEq(sn.taken, true, "snapshot taken")
