@@ -55,11 +55,45 @@ def _render_cull_propose(payload: dict) -> str:
     return f"{table}\n\n{footer}"
 
 
-#: Renderers land here as the verbs they cover are built. Only `cull.propose`
-#: exists yet (task 6); `outliers.list` and `library.jobs` add their own
-#: entries in their own tasks.
+def _render_outliers_list(payload: dict) -> str:
+    """One row per flagged frame -- `outliers`, already sorted worst-first by
+    the verb itself (re-sorted here so a hand-built test payload need not
+    pre-sort it)."""
+    outliers = sorted(
+        payload.get("outliers", []), key=lambda r: (-r.get("severity", 0.0), r.get("seq", 0))
+    )
+    headers = ["seq", "file", "ev_proxy", "ΔK", "Δrg", "Δbg", "clip %", "reasons"]
+    rows = []
+    for r in outliers:
+        path = r.get("path") or ""
+        file_name = path.rsplit("/", 1)[-1] if path else ""
+        k_delta = r.get("temperature_k_delta")
+        rows.append(
+            [
+                str(r.get("seq", "")),
+                file_name,
+                f"{r.get('ev_proxy_delta', 0.0):+.2f}",
+                f"{k_delta:+.0f}" if isinstance(k_delta, (int, float)) else "-",
+                f"{r.get('wb_ratio_rg_delta', 0.0):+.3f}",
+                f"{r.get('wb_ratio_bg_delta', 0.0):+.3f}",
+                f"{r.get('clipped_high_pct', 0.0):.2f}",
+                "; ".join(r.get("reasons", [])),
+            ]
+        )
+    table = _align(headers, rows)
+    footer = (
+        f"{len(outliers)} outlier(s) of {payload.get('checked', 0)} checked "
+        f"({payload.get('within_tolerance', 0)} within tolerance, "
+        f"{len(payload.get('failed', []))} failed), wb_test={payload.get('wb_test', 'ratio')}"
+    )
+    return f"{table}\n\n{footer}"
+
+
+#: Renderers land here as the verbs they cover are built. `library.jobs` adds
+#: its own entry in its own task.
 RENDERERS: dict[str, Callable[[dict], str]] = {
     "cull.propose": _render_cull_propose,
+    "outliers.list": _render_outliers_list,
 }
 
 

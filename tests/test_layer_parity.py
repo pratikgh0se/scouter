@@ -40,6 +40,7 @@ EXPECTED_VERBS = {
     "cull.apply",
     "backup.run",
     "backup.verify",
+    "outliers.list",
 }
 
 
