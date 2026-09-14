@@ -400,6 +400,77 @@ class CalibrateOverwriteTest(_CalibrateFixture):
         self.assertTrue(result.overwritten)
 
 
+class CalibrateDarktableVersionProvenanceTest(_CalibrateFixture):
+    """Fix round 2, IMPORTANT 1/2: `calibrate`'s `darktable` provenance
+    field never shells out to a real `darktable-cli` when a `FakeBridge` is
+    installed (`subprocess.run` must never be called from a non-host unit
+    test), and when a version resolver IS used, only the parsed `X.Y.Z`
+    token is stored -- never the raw multi-line `--version` blob."""
+
+    def test_calibrate_never_calls_subprocess_run_with_a_fake_bridge(self) -> None:
+        self.coeffs_by_k = {3000.0: (1.2, 1.0, 2.4), 3100.0: (1.3, 1.0, 2.2)}
+        with mock.patch("subprocess.run") as run:
+            result = wb.calibrate(str(self.raw), 3000, 3100, 100, confirm=True, job="job-test")
+        run.assert_not_called()
+        self.assertEqual(result.outcome, "ok")
+
+    def test_calibrate_records_unknown_with_no_resolver_and_a_fake_bridge(self) -> None:
+        self.coeffs_by_k = {3000.0: (1.2, 1.0, 2.4), 3100.0: (1.3, 1.0, 2.2)}
+        wb.calibrate(str(self.raw), 3000, 3100, 100, confirm=True, job="job-test")
+        table_path = next((self.tmp / "wb").glob("*.json"))
+        doc = json.loads(table_path.read_text(encoding="utf-8"))
+        self.assertEqual(doc["darktable"], "unknown")
+
+    def test_calibrate_stores_only_the_parsed_version_token(self) -> None:
+        # Fix round 2, IMPORTANT 2: a realistic multi-line, URL-bearing
+        # `--version` blob -- only "5.4.1" (the first line's token) may
+        # ever reach the table.
+        multiline_stdout = (
+            "this is darktable 5.4.1\n"
+            "Copyright (C) 2026 darktable developers.\n"
+            "\n"
+            "This program is free software.\n"
+            "See https://www.darktable.org/ for more detail.\n"
+        )
+        self.coeffs_by_k = {3000.0: (1.2, 1.0, 2.4), 3100.0: (1.3, 1.0, 2.2)}
+        # `_resolve_darktable_version` is the test seam (not a `calibrate(...,
+        # darktable_version_resolver=...)` parameter -- that would give the
+        # registered verb a Python parameter with no CLI/MCP-representable
+        # type, breaking the registry/core-function signature pin).
+        with mock.patch(
+            "scouter.core.wb._resolve_darktable_version",
+            return_value=wb._parse_darktable_version(multiline_stdout),
+        ):
+            wb.calibrate(str(self.raw), 3000, 3100, 100, confirm=True, job="job-test")
+        table_path = next((self.tmp / "wb").glob("*.json"))
+        doc = json.loads(table_path.read_text(encoding="utf-8"))
+        self.assertEqual(doc["darktable"], "5.4.1")
+        self.assertNotIn("Copyright", doc["darktable"])
+        self.assertNotIn("\n", doc["darktable"])
+
+
+class ParseDarktableVersionTest(unittest.TestCase):
+    """`wb._parse_darktable_version` directly: the first line's `X.Y.Z`
+    token, or `"unknown"` -- never `None`, never the raw blob."""
+
+    def test_parses_the_first_lines_version_token(self) -> None:
+        stdout = (
+            "this is darktable 5.4.1\n"
+            "Copyright (C) 2026 darktable developers.\n"
+            "See https://www.darktable.org/ for more detail.\n"
+        )
+        self.assertEqual(wb._parse_darktable_version(stdout), "5.4.1")
+
+    def test_unparseable_output_is_unknown(self) -> None:
+        self.assertEqual(wb._parse_darktable_version("not a version string at all"), "unknown")
+
+    def test_none_is_unknown(self) -> None:
+        self.assertEqual(wb._parse_darktable_version(None), "unknown")
+
+    def test_empty_string_is_unknown(self) -> None:
+        self.assertEqual(wb._parse_darktable_version(""), "unknown")
+
+
 class UndoRestoresEveryCoefficientTest(unittest.TestCase):
     """Tier 2 (design 11.3): with all four coefficient sliders pinned, undo
     sends one `set` per component, ONE commit, and verifies the whole vector
@@ -664,6 +735,10 @@ class UndoViaKelvinInversionTest(unittest.TestCase):
         self.assertAlmostEqual(detail["measured_ratio"], self._landed_ratio, places=4)
         self.assertAlmostEqual(detail["target_ratio"], self._target_ratio, places=4)
         self.assertEqual(detail["tolerance"], wb._EXACT_TOLERANCE)
+        # Fix round 2, minor (a): `_commit_with_readback`'s own warnings must
+        # not be silently dropped on the unverified path.
+        self.assertIn("warnings", detail)
+        self.assertIsInstance(detail["warnings"], list)
         entry = journal.latest_open("job-test")
         self.assertIsNotNone(entry)
         assert entry is not None

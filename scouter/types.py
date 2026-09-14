@@ -93,8 +93,11 @@ class KelvinResult(Payload):
 class CalibrateResult(Payload):
     """`wb.calibrate`'s result (task 11). `points` is one `{k, coeff_r,
     coeff_g, coeff_b}` row per swept Kelvin value -- the same rows written to
-    `table_path`'s JSON (as `{kelvin, coeffs}`), so what Pratik reads back
-    here and what landed on disk never drift."""
+    `table_path`'s JSON (design 11.4's object shape, under its own
+    `samples` key, each `{k, coeff_r, coeff_g, coeff_b}` -- fix round 2:
+    this used to say `{kelvin, coeffs}`, task 9's bare-array shape, which
+    `wb.calibrate` has not written since fix round 1), so what Pratik reads
+    back here and what landed on disk never drift."""
 
     camera: str = ""
     table_path: str = ""

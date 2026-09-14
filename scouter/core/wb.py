@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -394,6 +395,55 @@ def _unwrapped(fn):
     return getattr(fn, "__wrapped__", fn)
 
 
+#: Matches darktable-cli's own `--version` first line, e.g. "this is
+#: darktable 5.4.1". Fix round 2, IMPORTANT 2: only the X.Y.Z token is ever
+#: stored -- never the whole multi-line/URL-bearing stdout blob.
+_DARKTABLE_VERSION_RE = re.compile(r"darktable\s+(\d+\.\d+\.\d+)")
+
+
+def _parse_darktable_version(raw: str | None) -> str:
+    """The `X.Y.Z` token from darktable-cli's `--version` output's FIRST
+    line, or `"unknown"` -- never `None` (the table's `darktable` field is
+    always a string) and never the raw blob."""
+    first_line = (raw or "").splitlines()[0] if raw else ""
+    match = _DARKTABLE_VERSION_RE.search(first_line)
+    return match.group(1) if match else "unknown"
+
+
+def _resolve_darktable_version() -> str:
+    """Best-effort darktable version for the table's provenance.
+
+    Fix round 2, IMPORTANT 1: a non-host unit test must NEVER shell out to
+    a real `darktable-cli` -- `scout.cli_binary()` falls back to the real
+    Mac install path, which exists on a dev host regardless of whether a
+    `FakeBridge` is installed. So this refuses to even try
+    `CLIWrapper.get_version()` (which calls `subprocess.run`) unless the
+    CURRENTLY installed bridge is the real one (`dtbridge.set_bridge` is
+    documented as a test-only seam production code never calls) --
+    `dtbridge.get_bridge()` under a `FakeBridge` returns `"unknown"`
+    immediately, no subprocess anywhere near it. NOT a `calibrate(...,
+    darktable_version_resolver=...)` parameter (fix round 2): the registry
+    pins every registered verb's Python signature against its `ArgSpec`s
+    1:1 (`tests/test_layer_parity.py::test_argument_names_agree_between_
+    the_registry_and_the_core_functions`), and a resolver callable has no
+    CLI/MCP-representable type -- `mock.patch("scouter.core.wb.
+    _resolve_darktable_version", ...)` is the test seam instead, same
+    discipline `_commit`/`darkroom._commit` already use elsewhere in this
+    codebase.
+    """
+    from darktable_mcp.bridge.client import Bridge as _RealBridge
+
+    if not isinstance(dtbridge.get_bridge(), _RealBridge):
+        return "unknown"
+    try:
+        from scouter.core import scout
+
+        raw = scout.CLIWrapper(darktable_cli_path=scout.cli_binary()).get_version()
+    except Exception:  # doctor-shaped info only, never a reason to refuse the write
+        return "unknown"
+    return _parse_darktable_version(raw)
+
+
 @metrics.instrumented("wb.calibrate")
 def calibrate(
     image: str | int,
@@ -429,6 +479,12 @@ def calibrate(
     write a non-monotone table -- `wb.kelvin`'s bisection assumes r/b is
     strictly increasing in K, and a table that violates that would silently
     produce wrong answers.
+
+    The table's `darktable` provenance field comes from
+    `_resolve_darktable_version` (fix round 2), which never shells out to a
+    real `darktable-cli` unless the currently installed bridge is the real
+    one -- a test with a `FakeBridge` installed gets `"unknown"` with no
+    subprocess call at all.
     """
     job = job or current_job()
     if step <= 0:
@@ -549,12 +605,7 @@ def calibrate(
     # task 9's bare array -- provenance (camera model, when, which darktable,
     # which source image) travels WITH the numbers from here on.
     measured_at = datetime.now(timezone.utc).isoformat()
-    try:
-        from scouter.core import scout
-
-        darktable_version = scout.CLIWrapper(darktable_cli_path=scout.cli_binary()).get_version()
-    except Exception:  # doctor-shaped info only, never a reason to refuse the write
-        darktable_version = None
+    darktable_version = _resolve_darktable_version()
 
     table_doc = {
         "version": 1,

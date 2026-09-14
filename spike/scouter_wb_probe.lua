@@ -18,7 +18,7 @@
 -- 7.2): `temperature` modversion 4 stores `coeff_r, coeff_g, coeff_b,
 -- coeff_g2, preset` -- camera-relative multipliers, not Kelvin. If any of
 -- these paths answers a real (non-nan) `dt.gui.action(path, "get")`, an
--- absolute `set` on it is an EXACT temperature undo (design 11.3, tier 1).
+-- absolute `set` on it is an EXACT temperature undo (design 11.3, tier 2).
 -- If none do, that is not a probe failure -- it is the evidence for tier 4's
 -- honest refusal, and this probe's whole job is to produce that evidence
 -- honestly, never to guess a path that merely sounds right.

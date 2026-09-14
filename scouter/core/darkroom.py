@@ -906,9 +906,21 @@ def _undo_temperature_via_kelvin(
     committed, warnings = _commit_with_readback(
         job, entry.image_id, confirm=_confirm, what="temperature (undo via Kelvin inversion)"
     )
-    after_ratio = _after_ratio()
-    verified = _confirm()
+    # Fix round 2, minor (d): ONE read here for both the verification ratio
+    # and `restored_to`, instead of three separate `_temperature_extra`
+    # calls (`_after_ratio()`, `_confirm()` again, and a bare
+    # `_temperature_extra` for `after_params`) round 1 had. `_confirm`'s own
+    # read, used during a commit-TIMEOUT retry inside
+    # `_commit_with_readback`, is a genuinely different moment (before this
+    # function knows the commit settled) and is left alone.
     after_params = _temperature_extra(entry.path, entry.instance).get("params") or {}
+    after_r, after_b = after_params.get("coeff_r"), after_params.get("coeff_b")
+    after_ratio = after_r / after_b if after_r is not None and after_b else None
+    verified = (
+        after_ratio is not None
+        and target_ratio is not None
+        and abs(after_ratio - target_ratio) / abs(target_ratio) <= wb._EXACT_TOLERANCE
+    )
     if not verified:
         raise _UndoUnverified(
             f"seq {entry.seq}: Kelvin-inversion undo committed ({target_k:.0f} K from "
@@ -921,6 +933,11 @@ def _undo_temperature_via_kelvin(
                 "target_ratio": target_ratio,
                 "tolerance": wb._EXACT_TOLERANCE,
                 "coefficients": before_params,
+                # Fix round 2, minor (a): `_commit_with_readback`'s own
+                # warnings (e.g. a commit-timeout resolved by readback) were
+                # silently dropped on this path -- real information about
+                # what happened, not just the verified path's to keep.
+                "warnings": warnings,
             },
         )
     warnings.append(
