@@ -198,9 +198,32 @@ TOOL_SPECS: list[dict] = [
                     "description": "commit trigger; auto picks the cheapest "
                     "that works on this build",
                 },
+                "attempts": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3,
+                    "default": 2,
+                    "description": "view-bounce attempts, clamped to 1..3; a caller "
+                    "sure this is a no-op should pass 1",
+                },
+                "expect_change": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "False forces attempts=1 and reports a confirmed "
+                    "no-op as ok/changed=false instead of raising commit_timeout",
+                },
             },
             [],
         ),
+    },
+    {
+        "name": "history_changed",
+        "description": "Whether an image's XMP sidecar is still the one Scouter last "
+        "committed (a watermark comparison, not a bounce). A pure read: "
+        "no darkroom action, no history.commit. Call this before a "
+        "repeat set to skip a bounce it already knows will find nothing "
+        "to write.",
+        "inputSchema": _schema({"image": IMAGE}, ["image"]),
     },
     {
         "name": "scout_stats",
@@ -339,6 +362,68 @@ TOOL_SPECS: list[dict] = [
                 },
             },
             ["reference"],
+        ),
+    },
+    {
+        "name": "style_apply_set",
+        "description": "Apply one style to a whole set, batched through the bridge, "
+        "keeping per-image results. Always requires confirm=true (a set apply is "
+        "always a bulk write). outcome=partial (exit 9) when some images applied "
+        "and some did not, or any id came back unknown (a bridge timeout, or an "
+        "unconfirmed sidecar the idempotency guard could not verify) -- the "
+        "successes are kept, never discarded. A target Scouter's own ledger "
+        "(job/.scouter/styles-applied.json) says already carries this style is "
+        "skipped by default (image:apply_style always appends, so re-applying "
+        "would stack a second copy); force=true applies anyway. mode=overwrite "
+        "is refused with unsupported_mode; the only place overwrite exists at "
+        "all is the render-only `export.release --overwrite-style`.",
+        "inputSchema": _schema(
+            {
+                "name": {"type": "string", "description": "style name"},
+                "job_slug": {
+                    "type": "string",
+                    "description": "job whose import.json lists the set "
+                    "(used when images is not given)",
+                },
+                "images": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "description": "paths or image ids; defaults to every file "
+                    "in job_slug's import.json",
+                },
+                "exclude": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "description": "paths or image ids to leave out of the set",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["append", "overwrite"],
+                    "default": "append",
+                    "description": "append adds to history; overwrite is refused "
+                    "(unsupported_mode)",
+                },
+                "batch": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 25,
+                    "description": "how many image ids per bridge call",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: applying to a set is always gated",
+                },
+                "dry_run": DRY_RUN,
+                "force": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "apply even to images Scouter's own ledger says "
+                    "already carry this style (job/.scouter/styles-applied.json)",
+                },
+            },
+            ["name"],
         ),
     },
     {

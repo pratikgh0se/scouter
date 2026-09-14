@@ -45,11 +45,17 @@ SMOKE_ARGS: dict[str, dict] = {
     "darkroom.describe_history": {"image": SMOKE_RAW},
     "history.read": {"image": SMOKE_RAW},
     "history.commit": {"image": SMOKE_RAW, "timeout_s": 0.05},
+    "history.changed": {"image": SMOKE_RAW},
     "scout.stats": {"image": SMOKE_RAW, "px": 64},
     "scout.preview": {"image": SMOKE_RAW, "px": 64, "fmt": "ppm"},
     "scout.compare": {"a": SMOKE_RAW, "b": SMOKE_RAW, "px": 64},
     "style.extract": {"image": SMOKE_RAW, "name": "smoke", "modules": []},
     "style.apply": {"image": SMOKE_RAW, "name": "smoke"},
+    # No confirm: always gated (task 8), so this is a dry run -- it still
+    # calls list_styles (the smoke fixture's own empty answer makes this an
+    # expected `usage` error, which the coverage test tolerates; the point
+    # here is the one-event count, not a successful apply).
+    "style.apply_set": {"images": [SMOKE_RAW], "name": "smoke"},
     "export.run": {"images": [SMOKE_RAW], "preset": "preview", "out_dir": SMOKE_OUT_DIR},
     # No job named "smoke-job" exists on disk here, so this fails fast (usage:
     # no such job) -- still exactly one event, which is all this coverage

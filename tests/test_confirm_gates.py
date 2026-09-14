@@ -207,6 +207,7 @@ class ConfirmGateTest(unittest.TestCase):
         # which would otherwise fire first against this fake's empty modules
         # / absent sidecar and mask the thing this test actually checks.
         "style.extract": {"image": None, "name": "hero", "modules": [], "no_filter": True},
+        "style.apply_set": {"images": [None, None], "name": "hero"},
         "export.run": {"images": [None, None], "preset": "preview", "out_dir": None},
         "library.import": {"source": None, "job_slug": "gate-hero"},
         "library.register": {"job_slug": "gate-hero"},

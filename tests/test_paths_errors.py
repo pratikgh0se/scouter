@@ -51,6 +51,72 @@ class PathsTest(unittest.TestCase):
             self.assertTrue(target.parent.is_dir())
 
 
+class JobStateTest(unittest.TestCase):
+    """Task 12 fix round 1, should-fix 5: `job_state_read`/`job_state_update`
+    is the ONE locked, merge-on-write seam both `darkroom.py`
+    (`opened_image_id`/`opened_path`) and `history.py` (`watermarks`) go
+    through, replacing each module's own private unlocked pair."""
+
+    def setUp(self) -> None:
+        self._env = dict(os.environ)
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ["SCOUTER_CACHE"] = self._tmp.name
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._env)
+        self._tmp.cleanup()
+
+    def test_read_of_a_missing_file_is_an_empty_dict(self) -> None:
+        self.assertEqual(paths.job_state_read("job-x"), {})
+
+    def test_update_merges_rather_than_overwrites(self) -> None:
+        paths.job_state_update("job-x", lambda s: s.update({"opened_image_id": 12}))
+        paths.job_state_update("job-x", lambda s: s.update({"watermarks": {"12": {"size": 1}}}))
+        state = paths.job_state_read("job-x")
+        self.assertEqual(state["opened_image_id"], 12)
+        self.assertEqual(state["watermarks"], {"12": {"size": 1}})
+
+    def test_update_returns_the_merged_state(self) -> None:
+        result = paths.job_state_update("job-x", lambda s: s.update({"a": 1}))
+        self.assertEqual(result, {"a": 1})
+
+    def test_concurrent_writers_never_lose_an_update(self) -> None:
+        """Losing `opened_image_id` to a race would silently disable ruling
+        30's guard -- this races many threads, each incrementing their own
+        counter key, and asserts every single increment from every thread
+        survived (the lock spans the whole read+merge+write, not just the
+        write)."""
+        import threading
+
+        job = "job-concurrent"
+        n_threads = 8
+        n_writes_each = 25
+
+        def worker(thread_id: int) -> None:
+            key = f"t{thread_id}"
+            for _ in range(n_writes_each):
+
+                def _mutate(state: dict, key: str = key) -> None:
+                    counters = state.setdefault("counters", {})
+                    counters[key] = counters.get(key, 0) + 1
+
+                paths.job_state_update(job, _mutate)
+
+        threads = [threading.Thread(target=worker, args=(t,)) for t in range(n_threads)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+
+        counters = paths.job_state_read(job).get("counters", {})
+        self.assertEqual(len(counters), n_threads, "every thread's key must survive")
+        for t in range(n_threads):
+            self.assertEqual(
+                counters.get(f"t{t}"), n_writes_each, f"thread {t} lost at least one update"
+            )
+
+
 class JobValidationTest(unittest.TestCase):
     """B3: a job id becomes a file name, so traversal must be impossible."""
 

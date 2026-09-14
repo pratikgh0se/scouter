@@ -275,9 +275,9 @@ class _CalibrateFixture(_ConfigDirFixture):
 
         self.commit_calls: list[tuple] = []
 
-        def fake_commit(job, image, *, strategy="auto"):
-            self.commit_calls.append((job, image, strategy))
-            return CommitResult(committed=True, warnings=[])
+        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True):
+            self.commit_calls.append((job, image, strategy, attempts, expect_change))
+            return CommitResult(committed=True, changed=expect_change, warnings=[])
 
         self._commit_patcher = mock.patch("scouter.core.darkroom._commit", side_effect=fake_commit)
         self._commit_patcher.start()
@@ -513,9 +513,9 @@ class UndoRestoresEveryCoefficientTest(unittest.TestCase):
 
         self.commit_calls: list[tuple] = []
 
-        def fake_commit(job, image, *, strategy="auto"):
-            self.commit_calls.append((job, image, strategy))
-            return CommitResult(committed=True, warnings=[])
+        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True):
+            self.commit_calls.append((job, image, strategy, attempts, expect_change))
+            return CommitResult(committed=True, changed=expect_change, warnings=[])
 
         self._commit_patcher = mock.patch("scouter.core.darkroom._commit", side_effect=fake_commit)
         self._commit_patcher.start()
@@ -663,9 +663,9 @@ class UndoViaKelvinInversionTest(unittest.TestCase):
 
         self.commit_calls: list[tuple] = []
 
-        def fake_commit(job, image, *, strategy="auto"):
-            self.commit_calls.append((job, image, strategy))
-            return CommitResult(committed=True, warnings=[])
+        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True):
+            self.commit_calls.append((job, image, strategy, attempts, expect_change))
+            return CommitResult(committed=True, changed=expect_change, warnings=[])
 
         self._commit_patcher = mock.patch("scouter.core.darkroom._commit", side_effect=fake_commit)
         self._commit_patcher.start()

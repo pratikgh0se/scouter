@@ -39,7 +39,9 @@ DEFAULT_TIMEOUTS = {
     "history.commit": 60.0,  # view_bounce reloads the whole pipe
     "snapshot.take": 15.0,
     "style.create_from_current": 30.0,
-    "style.apply": 60.0,
+    # 300s: apply_set (task 8) batches up to 25 ids per call, each a history
+    # write inside the worker's single-threaded loop.
+    "style.apply": 300.0,
     "image.rate": 60.0,  # 50 ids per call, each a library write
     "style.export_file": 30.0,
     "style.import_file": 60.0,

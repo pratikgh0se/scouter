@@ -56,6 +56,9 @@ class SetResult(Payload):
     previous: float | None = None
     committed: bool = False
     source: str = "xmp"
+    # Task 12: True only on the zero-bounce, zero-bridge-write shortcut --
+    # the requested value already matches a FRESH-watermarked sidecar.
+    noop: bool = False
 
 
 @dataclass
@@ -77,8 +80,12 @@ class UndoResult(Payload):
 @dataclass
 class KelvinResult(Payload):
     """`wb.kelvin`'s result (task 11). No table -> `kelvin: None`, `reason`
-    naming `scouter wb calibrate`; outside the calibrated range -> `kelvin:
-    None`, `reason` naming the range -- never an extrapolated guess."""
+    naming `scouter wb calibrate`, `table: None`; outside the calibrated
+    range -> `kelvin: None`, `reason` naming the range -- never an
+    extrapolated guess. `table`, when a table was found, is `{"path": str,
+    "synthetic": bool}` (merged in from task 9's fix round, `phase-2`) -- a
+    synthetic (placeholder or legacy) table is perfectly usable for testing
+    the plumbing, but a caller can tell it apart from a real measured one."""
 
     kelvin: float | None = None
     interpolated: bool = False
@@ -86,7 +93,7 @@ class KelvinResult(Payload):
     residual_ratio: float | None = None
     exact: bool = False
     camera: str = ""
-    table: str | None = None
+    table: dict | None = None
 
 
 @dataclass
@@ -155,6 +162,36 @@ class CommitResult(Payload):
     view_after: str = "unknown"
     ms: int = 0
     xmp_mtime: float | None = None
+    # Task 12: True when this commit's own poll actually saw the sidecar
+    # change; False only reachable with `expect_change=False`, when the
+    # bridge reported nothing changed.
+    changed: bool = True
+    # Task 12 fix round 1, blocker 2: True when `changed`'s value is backed
+    # by an actual observation (the poll saw the mtime/size move, or the
+    # caller independently confirmed via readback) -- False ONLY on the
+    # `expect_change=False` early-return path, where the bridge's own
+    # `sidecar_written=False` proves nothing beyond "this one bounce found
+    # nothing to flush". A caller must never stamp a watermark, or otherwise
+    # treat the sidecar as known-fresh, from a `confirmed=False` result.
+    confirmed: bool = True
+
+
+@dataclass
+class ChangedResult(Payload):
+    """`history.changed`'s result -- a pure read, no bounce (task 12).
+
+    Fix round 1 nit: the design spec's section 13.2 also lists a
+    `history_end` field on this result. Deliberately not in this signature --
+    `watermark`/`sidecar` are file-signature dicts from a `stat()` alone, and
+    reporting `history_end` honestly would mean parsing the whole XMP (the
+    cost `history.changed` exists to avoid). `history.read`'s own
+    `HistoryResult.history_end` is the source for that number when a caller
+    actually wants it.
+    """
+
+    fresh: bool = False
+    watermark: dict | None = None
+    sidecar: dict | None = None
 
 
 @dataclass
@@ -235,6 +272,28 @@ class StyleResult(Payload):
     # is disabled is still written (honouring the request literally), but
     # named here so the caller is never left thinking it is live.
     modules_disabled: list[str] = field(default_factory=list)
+
+
+@dataclass
+class StyleSetResult(Payload):
+    """Task 8: `style.apply_set` -- a partial set is a RESULT, not an exception.
+
+    `missed` carries every image id that did not apply (batch timeout, not
+    found, or `apply_style` itself failing); `per_image` has one row per
+    image actually attempted (never one per `requested` -- an id the run
+    never got to, because two consecutive batches timed out, appears in
+    neither list, and is only visible as `requested - applied - failed`
+    plus a `warnings` line naming the count).
+    """
+
+    name: str = ""
+    mode: str = "append"
+    requested: int = 0
+    applied: int = 0
+    failed: int = 0
+    batches: int = 0
+    missed: list[int] = field(default_factory=list)
+    per_image: list[dict] = field(default_factory=list)
 
 
 @dataclass

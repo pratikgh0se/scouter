@@ -78,9 +78,9 @@ class _DarkroomFixture(unittest.TestCase):
         # (fix round 2, should-fix 8).
         self.commit_calls: list[tuple] = []
 
-        def fake_commit(job, image, *, strategy="auto"):
-            self.commit_calls.append((job, image, strategy))
-            return CommitResult(committed=True, warnings=[])
+        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True):
+            self.commit_calls.append((job, image, strategy, attempts, expect_change))
+            return CommitResult(committed=True, changed=expect_change, warnings=[])
 
         self._commit_patcher = mock.patch("scouter.core.darkroom._commit", side_effect=fake_commit)
         self._commit_patcher.start()
@@ -114,8 +114,9 @@ class DarkroomCoreTest(_DarkroomFixture):
     def test_set_with_commit_routes_through_the_commit_seam(self) -> None:
         darkroom.set_param(module="exposure", param="exposure", value=2.0)
         self.assertEqual(len(self.commit_calls), 1)
-        job, image, strategy = self.commit_calls[0]
+        job, image, strategy, _attempts, expect_change = self.commit_calls[0]
         self.assertEqual((job, image, strategy), ("job-test", 12, "auto"))
+        self.assertTrue(expect_change, "a real change (2.0 != fixture's 1.55) expects a change")
         entry = journal.latest_open("job-test")
         assert entry is not None
         self.assertTrue(entry.commit)
@@ -187,6 +188,28 @@ class DarkroomCoreTest(_DarkroomFixture):
         # write's `after` (2.0) instead -- because the first write's own
         # `commit` flag was False (fix round 2, blocker 2).
         self.assertAlmostEqual(entries[-1].before["value"], 2.0, places=5)
+
+    def test_repeat_set_after_an_uncommitted_write_still_bounces_and_commits(self) -> None:
+        """Task 12 fix round 1, blocker 1 -- the reviewer's repro: set 4.25
+        with `commit=False` (a real, unflushed edit darktable now holds, that
+        the sidecar does not reflect yet), then set 4.25 again. The second
+        call's raw XMP read still shows the OLD (1.5500002) value -- not 4.25
+        -- so even the raw-XMP-only comparison alone would catch this. But
+        the deeper point (`pending_uncommitted`) is what stops a value that
+        happens to coincidentally match the sidecar from being treated as a
+        no-op while a real uncommitted edit is pending: this must always
+        bounce and commit for real, never take the zero-bounce shortcut.
+        """
+        darkroom.set_param(module="exposure", param="exposure", value=4.25, commit=False)
+        before_actions = self.bridge.count("darkroom.action")
+        result = darkroom.set_param(module="exposure", param="exposure", value=4.25)
+        self.assertFalse(result.noop, "a pending uncommitted write must never be a no-op")
+        self.assertEqual(
+            self.bridge.count("darkroom.action"),
+            before_actions + 1,
+            "the second set must still bounce (send the action)",
+        )
+        self.assertEqual(len(self.commit_calls), 1, "the second set must still commit")
 
     def test_before_state_ignores_an_undone_entry_set_undo_set(self) -> None:
         """The review's own probe: set 2.0, undo it, set 3.0 -- the third
