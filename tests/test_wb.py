@@ -894,6 +894,32 @@ class RatioHelpersTest(unittest.TestCase):
         self.assertIsNone(
             darkroom._rb_ratio({"coeff_r": 2.0, "coeff_b": 0.0}), "zero blue is not a ratio of 0"
         )
+        # Fix round 1, minor b: the docstring promised None for a non-finite
+        # blue and the code returned `2.0 / inf == 0.0` -- a finite-looking
+        # ratio that the tolerance test would then compare. `coeff_g2 = inf`
+        # is a real value on this camera, so a stray inf is not hypothetical.
+        self.assertIsNone(
+            darkroom._rb_ratio({"coeff_r": 2.0, "coeff_b": float("inf")}),
+            "r / inf is 0.0, which is not a ratio -- it must be None",
+        )
+        self.assertIsNone(
+            darkroom._rb_ratio({"coeff_r": float("inf"), "coeff_b": 2.0}),
+            "a non-finite red has no ratio either",
+        )
+        self.assertIsNone(darkroom._rb_ratio({"coeff_r": 2.0, "coeff_b": float("nan")}))
+        self.assertIsNone(darkroom._rb_ratio({"coeff_r": float("nan"), "coeff_b": 2.0}))
+
+    def test_a_non_finite_coefficient_never_reads_as_verified(self) -> None:
+        """The consequence, not just the helper: an inf that used to become
+        0.0 went on to be COMPARED, and `0.0` against a target of `0.0`
+        would have reported a verified undo."""
+        from scouter.core import darkroom
+
+        self.assertFalse(
+            darkroom._ratio_within_tolerance(
+                darkroom._rb_ratio({"coeff_r": 2.0, "coeff_b": float("inf")}), 0.0
+            )
+        )
 
     def test_ratio_within_tolerance(self) -> None:
         from scouter.core import darkroom, wb

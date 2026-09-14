@@ -94,7 +94,19 @@ def _cache_dir() -> Path:
     return Path(base) / "darktable-mcp"
 
 
+#: Env override for the installed plugin's location, honoured the same way
+#: `_cache_dir` honours `XDG_CACHE_HOME`. Two reasons it exists: a user whose
+#: darktable config lives somewhere other than `~/.config/darktable` can point
+#: at it, and the test suite can pin it under a throwaway directory so no
+#: non-host test can see -- or be misled by -- a real installed plugin
+#: (scouter phase 2 task 14 fix round 1, blocker 4).
+PLUGIN_PATH_ENV = "DARKTABLE_MCP_PLUGIN_PATH"
+
+
 def _plugin_path() -> Path:
+    override = os.environ.get(PLUGIN_PATH_ENV)
+    if override:
+        return Path(override)
     return Path.home() / ".config" / "darktable" / "lua" / "darktable_mcp.lua"
 
 

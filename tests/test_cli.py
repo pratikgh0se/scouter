@@ -199,7 +199,19 @@ class SubprocessTest(unittest.TestCase):
         self.addCleanup(self._tmpdir.cleanup)
 
     def test_stdout_is_exactly_one_json_object(self) -> None:
-        env = dict(os.environ, SCOUTER_CACHE=str(self.tmp / "doctor-cache"))
+        # A SUBPROCESS, so a FakeBridge cannot be installed into it (fix
+        # round 1, blocker 4). The isolation is by environment instead: the
+        # bridge spool (`$XDG_CACHE_HOME/darktable-mcp`) and the installed
+        # plugin are pinned under this test's own temp dir, so `doctor`'s
+        # `view.current` call cannot reach the real spool or a live
+        # darktable -- it fails fast with `bridge_timeout`, which is exactly
+        # what `doctor` is supposed to report when darktable is absent.
+        env = dict(
+            os.environ,
+            SCOUTER_CACHE=str(self.tmp / "doctor-cache"),
+            XDG_CACHE_HOME=str(self.tmp / "xdg"),
+            DARKTABLE_MCP_PLUGIN_PATH=str(self.tmp / "no-plugin" / "darktable_mcp.lua"),
+        )
         proc = subprocess.run(
             [sys.executable, "-m", "scouter", "doctor"],
             cwd=REPO,
@@ -251,6 +263,20 @@ class DoctorPhase2LinesTest(unittest.TestCase):
 
     def _report(self, config) -> dict:
         from scouter.cli import main as cli_main
+
+        # A FakeBridge, always (fix round 1, blocker 4): `_doctor` calls
+        # `dtbridge.current_view()`, and without one that reaches the REAL
+        # `Bridge` -- writing a request file into the user's own spool and, if
+        # a darktable with the plugin happened to be running, getting a real
+        # answer out of their live session. `tests/conftest.py` now pins the
+        # spool and the plugin path too, so the blast radius is contained
+        # either way, but a unit test should not be firing bridge calls at
+        # all: the fake makes the intent explicit and the test fast.
+        from scouter.core import dtbridge
+        from tests.scouter_fakes import FakeBridge
+
+        dtbridge.set_bridge(FakeBridge({"view.current": {"view": "lighttable"}}))
+        self.addCleanup(dtbridge.set_bridge, None)
 
         if config is None:
             os.environ["SCOUTER_CONFIG"] = str(self.tmp / "absent.json")
@@ -331,3 +357,63 @@ class DoctorPhase2LinesTest(unittest.TestCase):
         good = self._report({"version": 1, "library_root": str(self.tmp / "l")})
         self.assertEqual(missing["ok"], missing["bridge"] == "ok")
         self.assertEqual(good["ok"], good["bridge"] == "ok")
+
+
+class DoctorUsesBackupsOwnResolverTest(unittest.TestCase):
+    """Fix round 1, minor a: `doctor`'s `encryption_tool` line must report the
+    binary `backup.run` would actually run, not a second copy of the same
+    preference order that can drift away from it."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="scouter-doctor-tool-")
+        self.tmp = Path(self._tmpdir.name)
+        self.addCleanup(self._tmpdir.cleanup)
+        self._env = dict(os.environ)
+        config = self.tmp / "config.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "library_root": str(self.tmp / "library"),
+                    "backup": {"encryption": "openssl"},
+                }
+            )
+        )
+        os.environ["SCOUTER_CONFIG"] = str(config)
+
+        from scouter.core import dtbridge
+        from tests.scouter_fakes import FakeBridge
+
+        dtbridge.set_bridge(FakeBridge({"view.current": {"view": "lighttable"}}))
+        self.addCleanup(dtbridge.set_bridge, None)
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._env)
+
+    def test_it_calls_backup_openssl(self) -> None:
+        from unittest import mock
+
+        from scouter.cli import main as cli_main
+
+        with mock.patch(
+            "scouter.core.backup._openssl", return_value="/sentinel/openssl"
+        ) as resolver:
+            report = cli_main._doctor()
+        self.assertEqual(report["encryption_tool"], "/sentinel/openssl")
+        resolver.assert_called_once()
+
+    def test_a_missing_binary_is_a_report_value_not_a_raise(self) -> None:
+        from unittest import mock
+
+        from scouter.cli import main as cli_main
+        from scouter.errors import EncryptionUnavailable
+
+        with mock.patch(
+            "scouter.core.backup._openssl",
+            side_effect=EncryptionUnavailable("no openssl anywhere"),
+        ):
+            report = cli_main._doctor()
+        self.assertIsNone(report["encryption_tool"])
+        self.assertEqual(report["encryption"], "openssl")
+        self.assertEqual(report["verb"], "doctor", "doctor still produced a report")

@@ -360,6 +360,56 @@ class ConftestAllowTreeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="scouter-allow-") as d:
             self.assertEqual(allow_tree(d), d)
 
+    def test_allowed_tree_releases_the_entry_on_exit(self) -> None:
+        """Fix round 1, minor d: a permanently registered prefix keeps
+        widening the isolation guard for every test that runs afterwards, so
+        a class-scoped registration needs a class-scoped lifetime."""
+        from tests import conftest
+
+        with tempfile.TemporaryDirectory(prefix="scouter-allow-ctx-") as d:
+            before = list(conftest._ALLOWED_TREES)
+            with conftest.allowed_tree(d) as prefix:
+                self.assertEqual(prefix, d)
+                self.assertTrue(conftest._is_allowed(os.path.join(d, "nested", "x.json")))
+            self.assertEqual(conftest._ALLOWED_TREES, before, "the entry must be released")
+            self.assertFalse(conftest._is_allowed(os.path.join(d, "nested", "x.json")))
+
+    def test_allowed_tree_releases_even_when_the_body_raises(self) -> None:
+        from tests import conftest
+
+        with tempfile.TemporaryDirectory(prefix="scouter-allow-raise-") as d:
+            before = list(conftest._ALLOWED_TREES)
+            with self.assertRaises(RuntimeError):
+                with conftest.allowed_tree(d):
+                    raise RuntimeError("boom")
+            self.assertEqual(conftest._ALLOWED_TREES, before)
+
+    def test_it_refuses_the_bridge_spool_and_the_installed_plugin(self) -> None:
+        """Blocker 4's paths are forbidden too: `allow_tree` must not be
+        usable to point a test at the real spool or the real plugin."""
+        from tests import conftest
+
+        for candidate in (
+            conftest.REAL_BRIDGE_SPOOL,
+            conftest.REAL_PLUGIN_PATH,
+            os.path.dirname(os.path.dirname(conftest.REAL_PLUGIN_PATH)),
+        ):
+            with self.subTest(path=candidate):
+                with self.assertRaises(ValueError):
+                    conftest.allow_tree(candidate)
+
+    def test_the_forbidden_list_uses_the_vault_from_the_environment(self) -> None:
+        """Derived from `$OBSIDIAN_VAULT_PATH` as it was BEFORE the pin, not
+        hard-coded `~/second-brain` (fix round 1, minor d): a user whose vault
+        lived elsewhere would have had the one path that caused the original
+        incident left unguarded."""
+        from tests import conftest
+
+        forbidden = conftest._real_forbidden()
+        self.assertIn(os.path.realpath(os.path.expanduser("~/.config/scouter")), forbidden)
+        if conftest._REAL_VAULT_FROM_ENV:
+            self.assertIn(os.path.realpath(conftest._REAL_VAULT_FROM_ENV), forbidden)
+
     def test_it_refuses_the_real_vault_config_cache_and_home(self) -> None:
         from tests.conftest import allow_tree
 

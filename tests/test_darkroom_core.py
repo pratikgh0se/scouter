@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from scouter.core import darkroom, dtbridge, journal
-from scouter.errors import CommitTimeout, NotInDarkroom, ScouterError, WrongView
+from scouter.errors import CommitTimeout, NotInDarkroom, ScouterError, UsageError, WrongView
 from scouter.types import CommitResult
 from tests.scouter_fakes import FakeBridge, TempCache
 
@@ -826,3 +826,56 @@ class DarkroomCommitSeamTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StatusUnpinnedModuleTest(unittest.TestCase):
+    """Fix round 1, minor f: `darkroom.status` on an unpinned module refuses
+    the same way an unpinned `(module, param)` pair does.
+
+    Before this it returned empty `positions`/`nan` dicts and the generic
+    "positions are normalised" warning -- indistinguishable from a module that
+    exists and happens to have nothing readable, and the exact opposite of
+    what the SAME module gets when a `param` is supplied. One unpinned module,
+    one answer.
+    """
+
+    def setUp(self) -> None:
+        self.bridge = FakeBridge({"view.current": {"view": "darkroom"}})
+        dtbridge.set_bridge(self.bridge)
+
+    def tearDown(self) -> None:
+        dtbridge.set_bridge(None)
+
+    def test_an_unpinned_module_with_no_param_is_a_usage_refusal(self) -> None:
+        with self.assertRaises(UsageError) as ctx:
+            darkroom.status(module="nosuchmodule")
+        self.assertEqual(ctx.exception.code, "usage")
+        self.assertIn("nosuchmodule", ctx.exception.message)
+        self.assertIn("no parameter of `nosuchmodule` is pinned", ctx.exception.fix)
+        self.assertIn("exposure", ctx.exception.fix, "it names what IS pinned")
+        # And it costs no `darkroom.status` bridge call: the refusal is local.
+        self.assertNotIn("darkroom.status", self.bridge.methods_called())
+
+    def test_the_refusal_matches_the_one_a_pair_gets(self) -> None:
+        """Same module, with and without a param -> the same code and the
+        same fix. That equality is the point of the fix."""
+        with self.assertRaises(UsageError) as without_param:
+            darkroom.status(module="nosuchmodule")
+        with self.assertRaises(UsageError) as with_param:
+            darkroom.status(module="nosuchmodule", param="whatever")
+        self.assertEqual(without_param.exception.code, with_param.exception.code)
+        self.assertEqual(without_param.exception.fix, with_param.exception.fix)
+
+    def test_a_pinned_module_still_reports_every_pinned_param(self) -> None:
+        self.bridge.responses["darkroom.status"] = {"position": 0.5, "nan": False}
+        result = darkroom.status(module="exposure")
+        self.assertEqual(sorted(result.positions), ["exposure.black", "exposure.exposure"])
+        self.assertEqual(result.nan, {"exposure.exposure": False, "exposure.black": False})
+
+    def test_no_module_at_all_still_just_reports_the_view(self) -> None:
+        """The `module is None` path is unchanged: a caller asking for
+        nothing in particular gets the view and a warning, not a refusal."""
+        result = darkroom.status()
+        self.assertEqual(result.view, "darkroom")
+        self.assertEqual(result.positions, {})
+        self.assertTrue(any("only the view" in w for w in result.warnings))

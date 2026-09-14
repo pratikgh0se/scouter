@@ -209,14 +209,23 @@ def _doctor_config(report: dict) -> None:
     # The resolved PATH of the tool this config would actually use, not just
     # its name -- "encryption: openssl" is not the same fact as "the openssl
     # this will run is /opt/homebrew/bin/openssl".
+    # `backup._openssl` is the resolver `backup.run` ACTUALLY uses, so
+    # `doctor` calls it rather than re-deriving the same preference order
+    # inline (fix round 1, minor a). A second copy of "prefer
+    # /opt/homebrew/bin/openssl, else $PATH" is a doctor line that can drift
+    # away from the thing it is reporting on -- which is the one way a doctor
+    # line is worse than no doctor line. `EncryptionUnavailable` means no
+    # binary was found, which is a report value (`None`), not a raise.
+    from scouter.core import backup as backup_module
+
     encryption = cfg.backup.encryption
     if encryption == "age":
         report["encryption_tool"] = shutil.which("age")
     elif encryption == "openssl":
-        preferred = Path("/opt/homebrew/bin/openssl")
-        report["encryption_tool"] = (
-            str(preferred) if preferred.exists() else shutil.which("openssl")
-        )
+        try:
+            report["encryption_tool"] = backup_module._openssl()
+        except ScouterError:
+            report["encryption_tool"] = None
     else:
         report["encryption_tool"] = None
     report["encryption"] = encryption

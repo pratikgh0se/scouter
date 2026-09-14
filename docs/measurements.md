@@ -162,7 +162,7 @@ and `... -k PinWbCoefficientSlidersHostTest`, copied here by hand from
 `docs/measurements-generated.md` after review. Every run confirmed darktable
 gone (`pgrep`) before and after.
 
-**Coefficient-slider probe (step 3): tier 1 is NOT available on this
+**Coefficient-slider probe (step 3): tier 2 is NOT available on this
 host/darktable build.** Two independent runs, each starting from a
 DIFFERENT first candidate, both reproduced the same failure: the first
 `dt.gui.action` call on an unrecognised path under the `temperature` module
@@ -175,9 +175,12 @@ brief's ten candidate paths were confirmed non-`nan`, and none could be,
 without accepting that risk per candidate (each wedge costs a full
 darktable relaunch to recover from). `dtbridge.ACTION_PATHS` gets no new
 `("temperature", "coeff_*")` entries from this task. `darkroom.undo_last`'s
-tier 1 (restore through the coefficient sliders) therefore never fires on
-this host; tier 2 (Kelvin inversion, now backed by a real measured table)
-and tier 4 (the improved honest refusal) are what actually run.
+tier 2 (restore through the coefficient sliders, `darkroom.py`'s
+`coefficient_sliders`) therefore never fires on this host; tier 3 (Kelvin
+inversion, now backed by a real measured table) and tier 4 (the improved
+honest refusal) are what actually run. (Numbered to match
+`scouter/core/darkroom.py` -- an earlier draft of this section was one tier
+out, which made it disagree with the code it describes.)
 
 **Calibration (step 7): real table measured, twice, both runs monotone.**
 `wb.calibrate` on a scratch copy of the EditingTrial ORF
@@ -212,7 +215,7 @@ tie-break.
 | | |
 |---|---|
 | `library.import`, 30 frames / 526,387,934 bytes | **1.35 s** (run 2: 1.53 s) |
-| effective | ~372 MB/s, ~22 frames/s |
+| effective | **390 MB/s** (372 MiB/s), ~22 frames/s |
 | staging the card (30 file copies, not part of the verb) | 0.40 s |
 
 Two sha256 passes per file plus the copy, on the internal SSD with the OS page

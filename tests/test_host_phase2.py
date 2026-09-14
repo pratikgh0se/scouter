@@ -32,11 +32,31 @@ ever committed). Every style this test creates in darktable's own library
 (`scouter-probe-*`, `scouter-probe-filtered-*`) is deleted again via the new
 `style.delete` bridge verb before the run ends, in a `finally`, so a host
 run never leaves throwaway styles behind in the user's real darktable
-library.
+library. `Phase2EndToEndTest`'s own `scouter-e2e-hero-<ts>` style is deleted
+the same way (fix round 1, blocker 2 -- it was not, and two green runs left
+two styles behind in `data.db`; its name also had to gain the `scouter-`
+prefix that `style.delete`'s own safety check requires).
+
+**What a host run in this file MUTATES and does NOT restore: darktable's
+`library.db`.** `Phase2EndToEndTest` imports a 30-frame film roll into it
+and `cull.apply` writes ratings; the WB and dtstyle probes add the scratch
+ORF. Scouter may not write `library.db` (the phase-1 invariant), so there is
+nothing here that could put it back, and pretending otherwise would be worse
+than saying so. Two consequences worth knowing: darktable remembers a path's
+rating across a delete and re-import (which is why the E2E job slug carries
+the pid), and the film rolls these runs create stay in the user's library
+until they remove them in the GUI.
+
+What IS restored: the Lua plugin and `luarc` (via `_PluginInstall`, from an
+on-disk backup under `~/Pictures/ScouterScratch/dtconfig-backup-<ts>/` taken
+before the first write, so a crash between install and teardown is
+recoverable by hand), every environment variable each class sets, and every
+style each class creates.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -73,6 +93,115 @@ SKIP_REASON = (
 )
 
 
+class _PluginInstall:
+    """Install this repo's Lua plugin over the user's, restorably.
+
+    Fix round 1, minor g: every host class here had its own copy of this,
+    each keeping the user's plugin bytes in a CLASS ATTRIBUTE -- so a hard
+    kill, a power loss or a pytest crash between install and teardown left
+    Scouter's development plugin installed in the user's real
+    `~/.config/darktable` with no way to get theirs back. That is exactly
+    what the backup existed to prevent.
+
+    The copy now goes to `~/Pictures/ScouterScratch/dtconfig-backup-<ts>/`
+    BEFORE anything is overwritten, `restore()` reads from that file rather
+    than from memory, and the directory survives a crash (it is deleted only
+    after a successful restore) so a human can undo it by hand from a path
+    its own MANIFEST.txt names.
+
+    **What is NOT backed up, and NOT restored: darktable's `library.db`.**
+    A host run imports a film roll into it and writes ratings, and Scouter
+    may not write `library.db` itself, so there is nothing here that could
+    put it back. Stated rather than hidden.
+    """
+
+    def __init__(self) -> None:
+        self.backup_dir: Path | None = None
+        self.plugin_existed_before = False
+        self.luarc_existed_before = False
+        self.luarc_line_added = False
+        self.luarc_path: Path | None = None
+
+    def install(self) -> None:
+        try:
+            INSTALLED_PLUGIN.parent.mkdir(parents=True, exist_ok=True)
+            SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+            self.backup_dir = SCRATCH_DIR / f"dtconfig-backup-{time.strftime('%Y%m%dT%H%M%SZ')}"
+            self.backup_dir.mkdir(parents=True, exist_ok=True)
+
+            luarc = INSTALLED_PLUGIN.parent.parent / "luarc"
+            self.luarc_path = luarc
+            self.plugin_existed_before = INSTALLED_PLUGIN.exists()
+            self.luarc_existed_before = luarc.exists()
+
+            # Everything needed to undo this, on disk, before the first write.
+            if self.plugin_existed_before:
+                (self.backup_dir / "darktable_mcp.lua").write_bytes(INSTALLED_PLUGIN.read_bytes())
+            if self.luarc_existed_before:
+                (self.backup_dir / "luarc").write_bytes(luarc.read_bytes())
+            (self.backup_dir / "MANIFEST.txt").write_text(
+                "Scouter host test backup of the user's darktable Lua config.\n"
+                f"taken_at: {time.strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
+                f"plugin_path: {INSTALLED_PLUGIN}\n"
+                f"plugin_existed_before: {self.plugin_existed_before}\n"
+                f"luarc_path: {luarc}\n"
+                f"luarc_existed_before: {self.luarc_existed_before}\n"
+                "\n"
+                "If this directory still exists, a test did not finish its\n"
+                "restore. To undo by hand: copy darktable_mcp.lua and luarc\n"
+                "back to the paths above, deleting them instead if the\n"
+                "matching *_existed_before line says false.\n"
+                "\n"
+                "NOT backed up and NOT restored: darktable's library.db. A\n"
+                "host run imports a film roll into it and writes ratings.\n",
+                encoding="utf-8",
+            )
+
+            shutil.copy(PLUGIN_SRC, INSTALLED_PLUGIN)
+
+            line = 'require "darktable_mcp"\n'
+            if not luarc.exists() or line not in luarc.read_text():
+                self.luarc_line_added = True
+                with luarc.open("a") as fh:
+                    fh.write(line)
+        except BaseException:
+            self.restore()
+            raise
+
+    def restore(self) -> None:
+        backup = self.backup_dir
+        try:
+            if self.luarc_path is not None:
+                saved_luarc = (backup / "luarc") if backup is not None else None
+                if self.luarc_existed_before:
+                    if saved_luarc is not None and saved_luarc.is_file():
+                        self.luarc_path.write_bytes(saved_luarc.read_bytes())
+                    elif self.luarc_line_added:
+                        # No backup file to fall back on: strip just the line
+                        # this install appended, which is all it changed.
+                        line = 'require "darktable_mcp"\n'
+                        text = self.luarc_path.read_text()
+                        self.luarc_path.write_text(text.replace(line, "", 1))
+                elif self.luarc_line_added:
+                    self.luarc_path.unlink(missing_ok=True)
+
+            saved_plugin = (backup / "darktable_mcp.lua") if backup is not None else None
+            if self.plugin_existed_before:
+                if saved_plugin is not None and saved_plugin.is_file():
+                    INSTALLED_PLUGIN.write_bytes(saved_plugin.read_bytes())
+            else:
+                INSTALLED_PLUGIN.unlink(missing_ok=True)
+        except OSError as e:
+            print(
+                "WARNING: could not restore the darktable Lua config; the backup is at "
+                f"{backup} and its MANIFEST.txt says how to undo this by hand: {e}"
+            )
+            return
+        if backup is not None:
+            shutil.rmtree(backup, ignore_errors=True)
+        self.backup_dir = None
+
+
 def _quit(proc: subprocess.Popen[bytes]) -> None:
     try:
         subprocess.run(
@@ -100,11 +229,8 @@ class PinDtstyleFormatTest(unittest.TestCase):
     maxDiff = None
     proc: subprocess.Popen[bytes] | None = None
 
-    _plugin_existed_before: bool = False
-    _plugin_backup: bytes | None = None
-    _luarc_existed_before: bool = False
-    _luarc_line_added: bool = False
-    _luarc_path: Path | None = None
+    #: The on-disk-backed plugin install (see `_PluginInstall`).
+    _install: _PluginInstall | None = None
     _job_before: str | None = None
 
     @classmethod
@@ -121,24 +247,8 @@ class PinDtstyleFormatTest(unittest.TestCase):
 
     @classmethod
     def _install_plugin(cls) -> None:
-        try:
-            INSTALLED_PLUGIN.parent.mkdir(parents=True, exist_ok=True)
-            cls._plugin_existed_before = INSTALLED_PLUGIN.exists()
-            if cls._plugin_existed_before:
-                cls._plugin_backup = INSTALLED_PLUGIN.read_bytes()
-            shutil.copy(PLUGIN_SRC, INSTALLED_PLUGIN)
-
-            luarc = INSTALLED_PLUGIN.parent.parent / "luarc"
-            cls._luarc_path = luarc
-            line = 'require "darktable_mcp"\n'
-            cls._luarc_existed_before = luarc.exists()
-            if not luarc.exists() or line not in luarc.read_text():
-                cls._luarc_line_added = True
-                with luarc.open("a") as fh:
-                    fh.write(line)
-        except BaseException:
-            cls._cleanup_plugin_install()
-            raise
+        cls._install = _PluginInstall()
+        cls._install.install()
 
     @classmethod
     def _launch_and_wait(cls) -> None:
@@ -198,17 +308,9 @@ class PinDtstyleFormatTest(unittest.TestCase):
 
     @classmethod
     def _cleanup_plugin_install(cls) -> None:
-        if cls._luarc_line_added and cls._luarc_path is not None:
-            line = 'require "darktable_mcp"\n'
-            if cls._luarc_existed_before:
-                text = cls._luarc_path.read_text()
-                cls._luarc_path.write_text(text.replace(line, "", 1))
-            else:
-                cls._luarc_path.unlink(missing_ok=True)
-        if cls._plugin_existed_before and cls._plugin_backup is not None:
-            INSTALLED_PLUGIN.write_bytes(cls._plugin_backup)
-        elif not cls._plugin_existed_before:
-            INSTALLED_PLUGIN.unlink(missing_ok=True)
+        if cls._install is not None:
+            cls._install.restore()
+            cls._install = None
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -222,10 +324,17 @@ class PinDtstyleFormatTest(unittest.TestCase):
                     pass
             if cls.proc is not None:
                 _quit(cls.proc)
-            assert (
-                subprocess.run(["pgrep", "-f", "MacOS/darktable"], capture_output=True).returncode
-                != 0
-            ), "darktable is still running after _quit's full escalation"
+                # By PID, not `pgrep -f MacOS/darktable` (fix round 1, minor
+                # c): that pattern also matches a darktable the USER has open
+                # in another window, so it failed runs that had cleaned up
+                # perfectly -- and it would have passed while OUR instance
+                # survived under a different match. Ruling 14 wants a real
+                # assertion about the instance this class launched, and
+                # `poll()` is exactly that question.
+                assert cls.proc.poll() is not None, (
+                    f"the darktable this test launched (pid {cls.proc.pid}) is still "
+                    "running after _quit's full escalation"
+                )
         finally:
             cls._cleanup_plugin_install()
             cls._restore_job_env()
@@ -239,8 +348,11 @@ class PinDtstyleFormatTest(unittest.TestCase):
         opened = registry.call("darkroom.open", "cli", image=raw)
         self.assertTrue(opened.ok, opened.to_dict())
 
+        # `call(verb_id, layer, **kwargs)` -- ONE verb id. This read
+        # `registry.call("darkroom.open", "darkroom.set", "cli", ...)`, three
+        # positionals, which is a TypeError: the class could never run.
         exposure = registry.call(
-            "darkroom.open", "darkroom.set", "cli", module="exposure", param="exposure", value=0.5
+            "darkroom.set", "cli", module="exposure", param="exposure", value=0.5
         )
         self.assertTrue(exposure.ok, exposure.to_dict())
         self.assertTrue(exposure.data["committed"])
@@ -447,11 +559,8 @@ class WhiteBalanceCalibrationHostTest(unittest.TestCase):
     maxDiff = None
     proc: subprocess.Popen[bytes] | None = None
 
-    _plugin_existed_before: bool = False
-    _plugin_backup: bytes | None = None
-    _luarc_existed_before: bool = False
-    _luarc_line_added: bool = False
-    _luarc_path: Path | None = None
+    #: The on-disk-backed plugin install (see `_PluginInstall`).
+    _install: _PluginInstall | None = None
     _job_before: str | None = None
     _config_before: str | None = None
     _config_tmp: tempfile.TemporaryDirectory | None = None
@@ -488,24 +597,8 @@ class WhiteBalanceCalibrationHostTest(unittest.TestCase):
 
     @classmethod
     def _install_plugin(cls) -> None:
-        try:
-            INSTALLED_PLUGIN.parent.mkdir(parents=True, exist_ok=True)
-            cls._plugin_existed_before = INSTALLED_PLUGIN.exists()
-            if cls._plugin_existed_before:
-                cls._plugin_backup = INSTALLED_PLUGIN.read_bytes()
-            shutil.copy(PLUGIN_SRC, INSTALLED_PLUGIN)
-
-            luarc = INSTALLED_PLUGIN.parent.parent / "luarc"
-            cls._luarc_path = luarc
-            line = 'require "darktable_mcp"\n'
-            cls._luarc_existed_before = luarc.exists()
-            if not luarc.exists() or line not in luarc.read_text():
-                cls._luarc_line_added = True
-                with luarc.open("a") as fh:
-                    fh.write(line)
-        except BaseException:
-            cls._cleanup_plugin_install()
-            raise
+        cls._install = _PluginInstall()
+        cls._install.install()
 
     @classmethod
     def _launch_and_wait(cls) -> None:
@@ -568,17 +661,9 @@ class WhiteBalanceCalibrationHostTest(unittest.TestCase):
 
     @classmethod
     def _cleanup_plugin_install(cls) -> None:
-        if cls._luarc_line_added and cls._luarc_path is not None:
-            line = 'require "darktable_mcp"\n'
-            if cls._luarc_existed_before:
-                text = cls._luarc_path.read_text()
-                cls._luarc_path.write_text(text.replace(line, "", 1))
-            else:
-                cls._luarc_path.unlink(missing_ok=True)
-        if cls._plugin_existed_before and cls._plugin_backup is not None:
-            INSTALLED_PLUGIN.write_bytes(cls._plugin_backup)
-        elif not cls._plugin_existed_before:
-            INSTALLED_PLUGIN.unlink(missing_ok=True)
+        if cls._install is not None:
+            cls._install.restore()
+            cls._install = None
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -592,10 +677,17 @@ class WhiteBalanceCalibrationHostTest(unittest.TestCase):
                     pass
             if cls.proc is not None:
                 _quit(cls.proc)
-            assert (
-                subprocess.run(["pgrep", "-f", "MacOS/darktable"], capture_output=True).returncode
-                != 0
-            ), "darktable is still running after _quit's full escalation"
+                # By PID, not `pgrep -f MacOS/darktable` (fix round 1, minor
+                # c): that pattern also matches a darktable the USER has open
+                # in another window, so it failed runs that had cleaned up
+                # perfectly -- and it would have passed while OUR instance
+                # survived under a different match. Ruling 14 wants a real
+                # assertion about the instance this class launched, and
+                # `poll()` is exactly that question.
+                assert cls.proc.poll() is not None, (
+                    f"the darktable this test launched (pid {cls.proc.pid}) is still "
+                    "running after _quit's full escalation"
+                )
         finally:
             cls._cleanup_plugin_install()
             cls._restore_job_env()
@@ -658,11 +750,8 @@ class PinWbCoefficientSlidersHostTest(unittest.TestCase):
     maxDiff = None
     proc: subprocess.Popen[bytes] | None = None
 
-    _plugin_existed_before: bool = False
-    _plugin_backup: bytes | None = None
-    _luarc_existed_before: bool = False
-    _luarc_line_added: bool = False
-    _luarc_path: Path | None = None
+    #: The on-disk-backed plugin install (see `_PluginInstall`).
+    _install: _PluginInstall | None = None
     _job_before: str | None = None
 
     @classmethod
@@ -683,24 +772,8 @@ class PinWbCoefficientSlidersHostTest(unittest.TestCase):
 
     @classmethod
     def _install_plugin(cls) -> None:
-        try:
-            INSTALLED_PLUGIN.parent.mkdir(parents=True, exist_ok=True)
-            cls._plugin_existed_before = INSTALLED_PLUGIN.exists()
-            if cls._plugin_existed_before:
-                cls._plugin_backup = INSTALLED_PLUGIN.read_bytes()
-            shutil.copy(PLUGIN_SRC, INSTALLED_PLUGIN)
-
-            luarc = INSTALLED_PLUGIN.parent.parent / "luarc"
-            cls._luarc_path = luarc
-            line = 'require "darktable_mcp"\n'
-            cls._luarc_existed_before = luarc.exists()
-            if not luarc.exists() or line not in luarc.read_text():
-                cls._luarc_line_added = True
-                with luarc.open("a") as fh:
-                    fh.write(line)
-        except BaseException:
-            cls._cleanup_plugin_install()
-            raise
+        cls._install = _PluginInstall()
+        cls._install.install()
 
     @classmethod
     def _launch_and_wait(cls) -> None:
@@ -757,27 +830,26 @@ class PinWbCoefficientSlidersHostTest(unittest.TestCase):
 
     @classmethod
     def _cleanup_plugin_install(cls) -> None:
-        if cls._luarc_line_added and cls._luarc_path is not None:
-            line = 'require "darktable_mcp"\n'
-            if cls._luarc_existed_before:
-                text = cls._luarc_path.read_text()
-                cls._luarc_path.write_text(text.replace(line, "", 1))
-            else:
-                cls._luarc_path.unlink(missing_ok=True)
-        if cls._plugin_existed_before and cls._plugin_backup is not None:
-            INSTALLED_PLUGIN.write_bytes(cls._plugin_backup)
-        elif not cls._plugin_existed_before:
-            INSTALLED_PLUGIN.unlink(missing_ok=True)
+        if cls._install is not None:
+            cls._install.restore()
+            cls._install = None
 
     @classmethod
     def tearDownClass(cls) -> None:
         try:
             if cls.proc is not None:
                 _quit(cls.proc)
-            assert (
-                subprocess.run(["pgrep", "-f", "MacOS/darktable"], capture_output=True).returncode
-                != 0
-            ), "darktable is still running after _quit's full escalation"
+                # By PID, not `pgrep -f MacOS/darktable` (fix round 1, minor
+                # c): that pattern also matches a darktable the USER has open
+                # in another window, so it failed runs that had cleaned up
+                # perfectly -- and it would have passed while OUR instance
+                # survived under a different match. Ruling 14 wants a real
+                # assertion about the instance this class launched, and
+                # `poll()` is exactly that question.
+                assert cls.proc.poll() is not None, (
+                    f"the darktable this test launched (pid {cls.proc.pid}) is still "
+                    "running after _quit's full escalation"
+                )
         finally:
             cls._cleanup_plugin_install()
             cls._restore_job_env()
@@ -890,14 +962,18 @@ class PinWbCoefficientSlidersHostTest(unittest.TestCase):
 E2E_JOB = f"phase2-e2e-{os.getpid()}"
 E2E_SLUG = E2E_JOB
 
-#: The end-to-end run uses REAL frames from one real shoot, not the synthetic
-#: card. `tests/make_synthetic_job.py` stays the unit-level fixture (and is
-#: still asserted deterministic below): copies of four ORFs have identical
-#: pixels, so every sharpness inside a burst ties and the cull stage can only
-#: ever assert the tie-break. 30 consecutive frames of Pratik's 2026-05-24
-#: shoot have real capture gaps AND real pixel differences, so `cull.propose`
-#: is judged against bursts this test derives from the files' own EXIF rather
+#: The end-to-end run uses **30 REAL ORFs** from one real shoot, not a
+#: synthetic card: copies of four ORFs have identical pixels, so every
+#: sharpness inside a burst would tie and the cull stage could only ever
+#: assert the tie-break. 30 consecutive frames of Pratik's 2026-05-24 shoot
+#: have real capture gaps AND real pixel differences, so `cull.propose` is
+#: judged against bursts this test derives from the files' own EXIF rather
 #: than against a number baked into a fixture.
+#:
+#: `tests/make_synthetic_job.py` is the unit-level fixture and is exercised
+#: (including brief step 1's build-twice-identical-bytes determinism
+#: assertion) by `tests/test_make_synthetic_job.py`, which needs no
+#: darktable -- NOT by anything in this file.
 E2E_SOURCE_FIRST = "P5240141.ORF"
 E2E_SOURCE_LAST = "P5240170.ORF"
 E2E_FRAMES = 30
@@ -966,12 +1042,11 @@ class Phase2EndToEndTest(unittest.TestCase):
     maxDiff = None
     proc: subprocess.Popen[bytes] | None = None
 
-    _plugin_existed_before: bool = False
-    _plugin_backup: bytes | None = None
-    _luarc_existed_before: bool = False
-    _luarc_line_added: bool = False
-    _luarc_path: Path | None = None
+    #: The on-disk-backed plugin install (see `_PluginInstall`).
+    _install: _PluginInstall | None = None
     _env_before: dict[str, str | None] = {}
+    #: Holds this class's `allowed_tree` registrations for its lifetime.
+    _trees: contextlib.ExitStack | None = None
     _tmp: str | None = None
     #: Per-stage wall times, written to `docs/measurements-generated.md` in
     #: `tearDownClass` and copied into `docs/measurements.md` BY HAND
@@ -998,12 +1073,19 @@ class Phase2EndToEndTest(unittest.TestCase):
         # session's own pinned config. `allow_tree` is the explicit opt-in
         # that tells the fixture this tree is a legitimate throwaway, and it
         # refuses the real vault/config/cache/home outright.
-        from tests.conftest import allow_tree
+        # `allowed_tree` (the context manager), not `allow_tree`: the entry
+        # is released in `tearDownClass`, so this class stops widening the
+        # isolation guard for every test that runs after it (fix round 1,
+        # minor d). `contextlib.ExitStack` holds both for the class's life.
+        from tests.conftest import allowed_tree
 
-        cls._tmp = allow_tree(os.path.realpath(tempfile.mkdtemp(prefix="scouter-e2e-")))
+        cls._trees = contextlib.ExitStack()
+        cls._tmp = cls._trees.enter_context(
+            allowed_tree(os.path.realpath(tempfile.mkdtemp(prefix="scouter-e2e-")))
+        )
         tmp = Path(cls._tmp)
         # NOT under `tmp`: see E2E_LIBRARY_ROOT for the darktable fact.
-        allow_tree(str(SCRATCH_DIR))
+        cls._trees.enter_context(allowed_tree(str(SCRATCH_DIR)))
         cls.library_root = E2E_LIBRARY_ROOT
         cls.backup_target = tmp / "backup"
         cls.vault = tmp / "vault"
@@ -1127,38 +1209,14 @@ class Phase2EndToEndTest(unittest.TestCase):
 
     @classmethod
     def _install_plugin(cls) -> None:
-        try:
-            INSTALLED_PLUGIN.parent.mkdir(parents=True, exist_ok=True)
-            cls._plugin_existed_before = INSTALLED_PLUGIN.exists()
-            if cls._plugin_existed_before:
-                cls._plugin_backup = INSTALLED_PLUGIN.read_bytes()
-            shutil.copy(PLUGIN_SRC, INSTALLED_PLUGIN)
-
-            luarc = INSTALLED_PLUGIN.parent.parent / "luarc"
-            cls._luarc_path = luarc
-            line = 'require "darktable_mcp"\n'
-            cls._luarc_existed_before = luarc.exists()
-            if not luarc.exists() or line not in luarc.read_text():
-                cls._luarc_line_added = True
-                with luarc.open("a") as fh:
-                    fh.write(line)
-        except BaseException:
-            cls._cleanup_plugin_install()
-            raise
+        cls._install = _PluginInstall()
+        cls._install.install()
 
     @classmethod
     def _cleanup_plugin_install(cls) -> None:
-        if cls._luarc_line_added and cls._luarc_path is not None:
-            line = 'require "darktable_mcp"\n'
-            if cls._luarc_existed_before:
-                text = cls._luarc_path.read_text()
-                cls._luarc_path.write_text(text.replace(line, "", 1))
-            else:
-                cls._luarc_path.unlink(missing_ok=True)
-        if cls._plugin_existed_before and cls._plugin_backup is not None:
-            INSTALLED_PLUGIN.write_bytes(cls._plugin_backup)
-        elif not cls._plugin_existed_before:
-            INSTALLED_PLUGIN.unlink(missing_ok=True)
+        if cls._install is not None:
+            cls._install.restore()
+            cls._install = None
 
     @classmethod
     def _restore_env(cls) -> None:
@@ -1213,8 +1271,32 @@ class Phase2EndToEndTest(unittest.TestCase):
         )
 
     @classmethod
+    def _delete_created_style(cls) -> None:
+        """Blocker 2 (fix round 1): the `scouter-e2e-hero-<ts>` style this class
+        creates lives in the user's REAL `data.db` and was never removed --
+        two green runs left two styles behind. Deleted here, in
+        `tearDownClass`'s own `finally` chain, exactly the way
+        `PinDtstyleFormatTest` has always cleaned up its probe styles.
+
+        Best effort and never fatal: a teardown that raises would mask
+        whatever the run was actually reporting, and a leftover style is a
+        warning, not a reason to lose the result.
+        """
+        if not cls.style_name:
+            return
+        try:
+            from scouter.core import dtbridge
+
+            dtbridge.call("style.delete", {"name": cls.style_name, "confirm": True})
+        except Exception as e:  # noqa: BLE001 - cleanup must never mask the run
+            print(f"WARNING: cleanup could not delete style {cls.style_name!r}: {e}")
+
+    @classmethod
     def tearDownClass(cls) -> None:
         try:
+            # Before the quit: `style.delete` needs a live bridge.
+            if cls.proc is not None and cls.proc.poll() is None:
+                cls._delete_created_style()
             if cls.proc is not None and cls.proc.poll() is None and cls.edit_target:
                 # Ruling 16: commit before quitting, so darktable is never
                 # killed holding history it has not flushed.
@@ -1226,14 +1308,24 @@ class Phase2EndToEndTest(unittest.TestCase):
                     pass
             if cls.proc is not None:
                 _quit(cls.proc)
-            assert (
-                subprocess.run(["pgrep", "-f", "MacOS/darktable"], capture_output=True).returncode
-                != 0
-            ), "darktable is still running after _quit's full escalation"
+                # Ruling 14 wants a REAL assertion that the instance is gone,
+                # and this is the instance we launched -- by pid. The old
+                # `pgrep -f MacOS/darktable` also matched a darktable the USER
+                # had opened in another window, so it failed a run that had
+                # cleaned up perfectly and, worse, would have passed while
+                # OUR instance survived under a different match. `poll()` is
+                # the honest question: has the child we started exited?
+                assert cls.proc.poll() is not None, (
+                    f"the darktable this test launched (pid {cls.proc.pid}) is still "
+                    "running after _quit's full escalation"
+                )
         finally:
             cls._write_measurements()
             cls._cleanup_plugin_install()
             cls._restore_env()
+            if cls._trees is not None:
+                cls._trees.close()
+                cls._trees = None
             if os.environ.get("SCOUTER_KEEP_SYNTHETIC") != "1":
                 shutil.rmtree(SYNTHETIC_ROOT, ignore_errors=True)
                 # The card ROOT (`<scratch>/e2e-card`), not just the DCIM
@@ -1258,14 +1350,25 @@ class Phase2EndToEndTest(unittest.TestCase):
             return
         lines = [
             "",
-            f"## Phase 2 end-to-end, 30 synthetic frames (task 14, {time.strftime('%Y-%m-%d')}, "
+            f"## Phase 2 end-to-end, 30 REAL frames (task 14, {time.strftime('%Y-%m-%d')}, "
             "darktable 5.4.1, real host, MacBook)",
             "",
-            "| stage | wall seconds |",
-            "|---|---|",
+            # The unit column is per-row: `cls.timings` carries wall seconds
+            # AND byte/frame counts (`*_bytes`, `*_frames`, `*_ms`), and a
+            # single "wall seconds" header made 526387934.00 read as 6 days.
+            "| measurement | value | unit |",
+            "|---|---|---|",
         ]
         for key, value in cls.timings.items():
-            lines.append(f"| `{key}` | {value:.2f} |")
+            if key.endswith("_bytes"):
+                unit, shown = "bytes", f"{value:.0f}"
+            elif key.endswith("_frames"):
+                unit, shown = "frames", f"{value:.0f}"
+            elif key.endswith("_ms"):
+                unit, shown = "milliseconds", f"{value:.0f}"
+            else:
+                unit, shown = "wall seconds", f"{value:.2f}"
+            lines.append(f"| `{key}` | {shown} | {unit} |")
         if cls.facts:
             lines.extend(["", "New darktable facts observed in this run:", ""])
             lines.extend(f"- {fact}" for fact in cls.facts)
@@ -1425,9 +1528,19 @@ class Phase2EndToEndTest(unittest.TestCase):
     # -- E3 -----------------------------------------------------------------
 
     def test_02_cull(self) -> None:
-        """E3: `cull propose` finds 6 bursts and proposes 6 picks with
-        `tie_broken_by == "seq"`; `cull apply --yes` writes the ratings and
-        reports `verified + unverified == changed`."""
+        """E3: `cull propose` groups the job into the bursts its frames' own
+        capture times imply and proposes exactly one pick per burst, every
+        proposal carrying its numbers; `cull apply --yes` writes the ratings
+        and every changed frame is accounted for as verified or unverified.
+
+        NOT "6 bursts of 5": that was the synthetic card's shape. These are
+        30 consecutive frames of one real evening shoot, so the answer is a
+        property of the shoot -- 20 bursts on the runs so far (one of 7, one
+        of 3, two of 2, sixteen singletons) -- and the expected grouping is
+        derived here from the files' EXIF rather than written down, because a
+        number baked into this test would only prove that two copies of the
+        same constant agree.
+        """
         started = time.monotonic()
         proposal = self._ok("cull.propose", job_slug=E2E_SLUG)
         type(self).timings["cull_propose_30_frames_s"] = time.monotonic() - started
@@ -1470,16 +1583,25 @@ class Phase2EndToEndTest(unittest.TestCase):
                 f"multi-frame burst {g['burst_id']} must have exactly one pick",
             )
 
-        # Real pixels differ, so sharpness ties are the exception rather than
-        # the rule here -- the assertion is that a burst that DID tie says so
-        # with "seq", never that every burst tied (which is the synthetic
-        # card's shape, and is why the synthetic builder stays a unit fixture).
+        # `tie_broken_by` is asserted against what the DATA implies, not
+        # against "one of the two legal values" -- that was a tautology
+        # (`assertIn(x, (None, "seq"))` passes for every value the field can
+        # hold). A burst ties exactly when its two sharpest frames report the
+        # same sharpness, which this computes from the proposals themselves.
+        sharpness_by_seq = {p["seq"]: p["sharpness"] for p in proposal["proposals"]}
         for g in real_bursts:
-            self.assertIn(g["tie_broken_by"], (None, "seq"), g)
+            ranked = sorted((sharpness_by_seq[s] for s in g["frames"]), reverse=True)
+            tied = len(ranked) >= 2 and ranked[0] == ranked[1]
+            self.assertEqual(
+                g["tie_broken_by"],
+                "seq" if tied else None,
+                f"burst {g['burst_id']} sharpnesses {ranked} say tied={tied}, "
+                f"but tie_broken_by is {g['tie_broken_by']!r}",
+            )
+        ties = sum(1 for g in real_bursts if g["tie_broken_by"] == "seq")
         type(self).facts.append(
-            f"real-frame sharpness ties: "
-            f"{sum(1 for g in real_bursts if g['tie_broken_by'] == 'seq')} of "
-            f"{len(real_bursts)} bursts needed the seq tie-break"
+            f"real-frame sharpness ties: {ties} of {len(real_bursts)} bursts "
+            "needed the seq tie-break"
         )
 
         for p in proposal["proposals"]:
@@ -1525,8 +1647,6 @@ class Phase2EndToEndTest(unittest.TestCase):
             f"window, {applied['unverified']} not yet"
         )
 
-    # -- E8 -----------------------------------------------------------------
-
     # -- E4 -----------------------------------------------------------------
 
     def test_04_style_extract_filtered(self) -> None:
@@ -1535,7 +1655,14 @@ class Phase2EndToEndTest(unittest.TestCase):
         own `list_styles` shows it."""
         from scouter.core import dtbridge
 
-        name = f"e2e-hero-{int(time.time())}"
+        # `scouter-` prefixed on purpose: the Lua `style.delete` verb refuses
+        # any name that does not start with it, which is the safety check
+        # that stops a test from deleting one of Pratik's own styles. Fix
+        # round 1 (blocker 2) found the teardown hitting exactly that
+        # refusal -- the guard was right and this NAME was wrong, so the name
+        # changed rather than the guard being bypassed with a `prefix`
+        # override.
+        name = f"scouter-e2e-hero-{int(time.time())}"
         type(self).style_name = name
         # The style comes from the frame that was actually EDITED
         # (`test_00a`'s target, the image darktable had loaded), because that

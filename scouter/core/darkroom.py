@@ -961,13 +961,25 @@ def _rb_ratio(params: dict | None) -> float | None:
     `verified`. Three copies of a comparison that decides whether an undo
     is reported as verified is three chances for them to drift apart.
 
-    `None` when either coefficient is missing, or when blue is zero or
-    non-finite: the ratio does not exist, and 0.0 would be a lie about it.
+    `None` when either coefficient is missing, when blue is zero, or when
+    EITHER is non-finite: the ratio does not exist, and a number would be a
+    lie about it.
+
+    Fix round 1, minor b: the docstring already promised `None` for a
+    non-finite blue and the code did not deliver it -- `r / inf` is `0.0`, a
+    finite-looking ratio that `_ratio_within_tolerance` would then happily
+    compare, and `coeff_g2 = inf` is a REAL value on this camera (phase 1's
+    pinned `temperature` params), so a stray `inf` in `coeff_b` is not a
+    hypothetical. `nan` is caught by the same check: it is not finite, and a
+    `nan` ratio compares false against everything, which would read as "did
+    not verify" rather than "could not be compared".
     """
     if not params:
         return None
     r, b = params.get("coeff_r"), params.get("coeff_b")
     if r is None or not b:
+        return None
+    if not math.isfinite(r) or not math.isfinite(b):
         return None
     return r / b
 
@@ -1462,6 +1474,16 @@ def status(
     pairs = (
         [(module, param)] if param else [(m, p) for (m, p) in dtbridge.ACTION_PATHS if m == module]
     )
+    if not pairs:
+        # Fix round 1, minor f: `status(module="nosuchmodule")` with no
+        # `param` used to return an EMPTY positions/nan dict and the generic
+        # "positions are normalised" warning -- indistinguishable from a
+        # module that exists and happens to have nothing readable, and the
+        # exact opposite of what the same unpinned module gets when a `param`
+        # IS given (`action_path`'s typed refusal naming the pinned modules).
+        # One unpinned module, one answer. `action_path` composes the message,
+        # so there is no second copy of it here to drift.
+        dtbridge.action_path(module, param or "")
     for mod, par in pairs:
         path = dtbridge.action_path(mod, par)
         result = dtbridge.call("darkroom.status", {"path": path, "instance": instance})

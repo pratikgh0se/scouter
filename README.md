@@ -442,8 +442,8 @@ These are load-bearing. Read them before scripting against phase 2.
 ### Phase 2 exit criteria
 
 E1-E9 each have a named passing test (`tests/test_host_phase2.py::
-Phase2EndToEndTest`, a 30-frame synthetic job built from the EditingTrial ORFs
-by `tests/make_synthetic_job.py`); E10 and E11 are covered by
+Phase2EndToEndTest`, which runs on **30 real ORFs** from one shoot, staged as
+a card under `~/Pictures/ScouterScratch`); E10 and E11 are covered by
 `tests/test_metrics.py` and `tests/test_layer_parity.py` +
 `tests/test_scouter_mcp_schemas.py`. **E12 — one real 300-frame job, delivered
 end to end — is Pratik's own run**, not something CI can assert.
