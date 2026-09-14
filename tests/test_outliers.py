@@ -13,6 +13,7 @@ committed table up and use it", never for a real Kelvin number.
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -20,7 +21,7 @@ from pathlib import Path
 from unittest import mock
 
 from scouter.config import Config
-from scouter.core import dtbridge, scout, style
+from scouter.core import dtbridge, scout, style, wb
 from scouter.errors import UsageError
 from tests.scouter_fakes import FakeBridge, TempCache, fake_cli_script
 
@@ -175,6 +176,96 @@ class KelvinFallbackTest(unittest.TestCase):
         self.assertIsNotNone(row["temperature_k_delta"])
         self.assertAlmostEqual(row["temperature_k_delta"], 1000.0, places=1)
         self.assertNotIn("temperature_k_reason", row)
+
+        # Fix round 1: the fixture is a marked-synthetic placeholder (task 11
+        # commits the real measured table under this same name, `synthetic:
+        # false`) -- `wb.kelvin`'s own result surfaces that, so a caller
+        # reading it directly (not just through `_measure_frame`, which never
+        # exposes `table`) can tell a placeholder table from a real one.
+        direct = wb.kelvin([1.80, 1.00, 1.60], "em10iii")
+        self.assertTrue(direct["table"]["synthetic"], direct)
+
+    def test_kelvin_uses_each_frames_own_camera(self) -> None:
+        # Fix round 1, review finding: `_measure_frame` used to look the
+        # REFERENCE's Kelvin up against the CURRENT frame's camera table --
+        # invisible in the single-camera tests above, since both sides used
+        # "em10iii" either way. Two cameras with DISJOINT r/b ranges make the
+        # bug loud: looking the hero's em10iii coefficients up in the a7
+        # table (ratio range 2.0-3.0) would land outside that range, wrongly
+        # falling back to the ratio test.
+        wb_dir = self.tmp / "wb"
+        wb_dir.mkdir(parents=True)
+        (wb_dir / "em10iii.json").write_text(
+            (FIXTURES / "wb-em10iii.json").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        a7_table = {
+            "synthetic": True,
+            "note": "test-only a7 table, ratio range deliberately disjoint from em10iii's",
+            "points": [
+                {"kelvin": 4000, "coeffs": [2.0, 1.0, 1.0]},
+                {"kelvin": 5000, "coeffs": [2.5, 1.0, 1.0]},
+                {"kelvin": 6000, "coeffs": [3.0, 1.0, 1.0]},
+            ],
+        }
+        (wb_dir / "a7.json").write_text(json.dumps(a7_table), encoding="utf-8")
+
+        ref = _frame(lum=100.0, coeffs=[1.60, 1.00, 1.80], camera="em10iii")  # 5000 K, exact
+        frame = _frame(lum=100.0, coeffs=[2.5, 1.0, 1.0], camera="a7")  # 5000 K, exact
+
+        row = style._measure_frame(frame, ref, self.tol)
+
+        self.assertEqual(row["wb_test"], "kelvin", row)
+        self.assertIsNotNone(row["temperature_k_delta"])
+        self.assertAlmostEqual(row["temperature_k_delta"], 0.0, places=1)
+
+
+class WbTableEdgeCasesTest(unittest.TestCase):
+    """Fix round 1: `wb.py`'s own typed refusals -- a zero blue coefficient
+    can't form an r/b ratio, and a non-monotone table can't be inverted."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="scouter-wb-edge-")
+        self.tmp = Path(self._tmp.name)
+        self._saved_config = os.environ.get("SCOUTER_CONFIG")
+        os.environ["SCOUTER_CONFIG"] = str(self.tmp / "config.json")
+        self.wb_dir = self.tmp / "wb"
+        self.wb_dir.mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        if self._saved_config is None:
+            os.environ.pop("SCOUTER_CONFIG", None)
+        else:
+            os.environ["SCOUTER_CONFIG"] = self._saved_config
+        self._tmp.cleanup()
+
+    def test_zero_blue_coefficient_is_a_typed_usage_error(self) -> None:
+        (self.wb_dir / "em10iii.json").write_text(
+            (FIXTURES / "wb-em10iii.json").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        with self.assertRaises(UsageError) as ctx:
+            wb.kelvin([1.0, 1.0, 0.0], "em10iii")
+        self.assertEqual(ctx.exception.code, "usage")
+        self.assertIn("zero blue", ctx.exception.message)
+
+    def test_non_monotone_table_is_a_typed_error_naming_the_table(self) -> None:
+        bad_table = {
+            "synthetic": True,
+            "note": "deliberately non-monotone, for this test only",
+            "points": [
+                {"kelvin": 3000, "coeffs": [1.0, 1.0, 2.0]},  # ratio 0.5
+                {"kelvin": 4000, "coeffs": [1.0, 1.0, 1.0]},  # ratio 1.0 (ok, increasing)
+                {"kelvin": 5000, "coeffs": [1.0, 1.0, 1.5]},  # ratio 0.667 (drops -- non-monotone)
+            ],
+        }
+        table_path = self.wb_dir / "bad.json"
+        table_path.write_text(json.dumps(bad_table), encoding="utf-8")
+
+        with self.assertRaises(wb.NonMonotonicTable) as ctx:
+            wb.kelvin([1.0, 1.0, 1.2], "bad")
+        self.assertEqual(ctx.exception.code, "non_monotone_table")
+        self.assertIn(str(table_path), ctx.exception.message)
+        self.assertEqual(ctx.exception.detail["kelvin_a"], 4000)
+        self.assertEqual(ctx.exception.detail["kelvin_b"], 5000)
 
 
 class OutliersListTest(unittest.TestCase):

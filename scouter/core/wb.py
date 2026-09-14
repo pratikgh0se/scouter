@@ -10,14 +10,22 @@ per-camera calibration table from `paths.wb_dir()` and invert Kelvin from it.
 No `wb.calibrate` verb, no probe, no registry entry here -- task 11 adds
 those, plus `wb.kelvin` as a registered verb of its own.
 
-Table shape (written by `scouter wb calibrate`, task 11): a JSON array of
-`{"kelvin": int, "coeffs": [r, g, b]}` points. Inversion bisects the sorted
-samples on the r/b coefficient ratio (monotone in Kelvin at fixed tint,
-task 11's own calibration check enforces this when the table is written) and
-interpolates linearly between the two bracketing points; within 1% of a
-sample counts as `exact`. Outside the sampled range the answer is `None`
-with a reason -- extrapolating a blackbody curve past the measurements would
-be exactly the invented value this project refuses to produce.
+Table shape (written by `scouter wb calibrate`, task 11): a JSON object
+`{"synthetic": bool, "note": str | null, "points": [{"kelvin": int,
+"coeffs": [r, g, b]}, ...]}` -- `synthetic: true` marks a placeholder table
+(fix round 1: `tests/fixtures/wb-em10iii.json` is one, until task 11 commits
+the real measured points under the same name with `synthetic: false`). A
+bare JSON array of points (no `synthetic`/`note` wrapper) is also accepted,
+read as `synthetic: false`, for forward compatibility with a table written
+before this wrapper existed. Inversion bisects the sorted points on the r/b
+coefficient ratio (monotone in Kelvin at fixed tint, task 11's own
+calibration check enforces this when the table is written; this module
+checks it again on every load, so a table hand-edited or corrupted after the
+fact is refused rather than silently mis-inverted) and interpolates linearly
+between the two bracketing points; within 1% of a point counts as `exact`.
+Outside the sampled range the answer is `None` with a reason -- extrapolating
+a blackbody curve past the measurements would be exactly the invented value
+this project refuses to produce.
 """
 
 from __future__ import annotations
@@ -26,30 +34,62 @@ import json
 from pathlib import Path
 
 from scouter import paths
+from scouter.errors import ScouterError, UsageError
 
 #: How close `target` has to be to a sample's own ratio to call it `exact`
 #: rather than interpolated.
 _EXACT_TOLERANCE = 0.01
 
 
+class NonMonotonicTable(ScouterError):
+    """A camera's calibration table is not monotone in the r/b ratio.
+
+    `wb.calibrate` (task 11) refuses to WRITE a non-monotone table in the
+    first place, so seeing this means the table on disk was hand-edited or
+    corrupted after the fact -- `kelvin`'s bisection cannot honestly pick a
+    bracket for a target ratio it has already confirmed sits inside the
+    table's own range.
+    """
+
+    code = "non_monotone_table"
+    fix = (
+        "recalibrate: `scouter wb calibrate --confirm` refuses to write a "
+        "table whose r/b ratio isn't strictly increasing in Kelvin"
+    )
+
+
 def _table_path(camera: str) -> Path:
     return paths.wb_dir() / f"{camera}.json"
 
 
-def load_table(camera: str) -> list[dict] | None:
-    """`camera`'s calibration table, sorted by Kelvin, or `None` when no table
-    file exists for it. Raises `ValueError` if the file exists but is not the
-    documented shape -- a malformed table must never be silently ignored."""
-    path = _table_path(camera)
-    if not path.is_file():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        raise ValueError(f"{path} is not valid JSON: {e}") from e
-    if not isinstance(data, list) or not data:
-        raise ValueError(f"{path} must hold a non-empty JSON array of calibration points")
-    for point in data:
+def _ratio(coeffs: list[float]) -> float:
+    """r/b: monotone in Kelvin at fixed tint (task 11's calibration check)."""
+    b = float(coeffs[2])
+    if b == 0:
+        raise UsageError(
+            f"coefficient vector {list(coeffs)!r} has a zero blue coefficient: "
+            "cannot form an r/b ratio",
+            detail={"coeffs": list(coeffs)},
+        )
+    return float(coeffs[0]) / b
+
+
+def _validate_points(path: Path, points: object) -> list[dict]:
+    """Shape-check `points`, sort by Kelvin, and confirm the r/b ratio is
+    strictly increasing across the sorted points.
+
+    The monotonicity check is proactive, not just a defensive fallback:
+    `wb.calibrate` (task 11) refuses to WRITE a non-monotone table, but a
+    table can still be hand-edited or corrupted on disk afterwards, and a
+    non-monotone table can silently pick the WRONG bracket in `kelvin`'s
+    interpolation (the first adjacent pair that happens to straddle the
+    target, not necessarily the intended one) without ever tripping an
+    "unreachable" fallback -- checking it here, once, at load time, is what
+    makes that impossible rather than merely unlikely.
+    """
+    if not isinstance(points, list) or not points:
+        raise ValueError(f"{path} must hold a non-empty array of calibration points")
+    for point in points:
         if (
             not isinstance(point, dict)
             or "kelvin" not in point
@@ -59,12 +99,63 @@ def load_table(camera: str) -> list[dict] | None:
             raise ValueError(
                 f"{path}: every point needs 'kelvin' and a 3+ element 'coeffs' list, got {point!r}"
             )
-    return sorted(data, key=lambda p: p["kelvin"])
+    sorted_points = sorted(points, key=lambda p: p["kelvin"])
+    ratios = [_ratio(p["coeffs"]) for p in sorted_points]
+    for i in range(len(ratios) - 1):
+        if ratios[i + 1] <= ratios[i]:
+            a, b = sorted_points[i], sorted_points[i + 1]
+            raise NonMonotonicTable(
+                f"{path}: r/b ratio is not strictly increasing between "
+                f"{a['kelvin']} K (ratio {ratios[i]:.4f}) and {b['kelvin']} K "
+                f"(ratio {ratios[i + 1]:.4f}) -- a non-monotone table cannot be inverted",
+                detail={
+                    "table": str(path),
+                    "kelvin_a": a["kelvin"],
+                    "ratio_a": ratios[i],
+                    "kelvin_b": b["kelvin"],
+                    "ratio_b": ratios[i + 1],
+                },
+            )
+    return sorted_points
 
 
-def _ratio(coeffs: list[float]) -> float:
-    """r/b: monotone in Kelvin at fixed tint (task 11's calibration check)."""
-    return float(coeffs[0]) / float(coeffs[2])
+def _read_table_file(camera: str) -> dict | None:
+    """The raw parsed table file: `{"synthetic": bool, "note": str | None,
+    "points": [...]}` (points sorted by Kelvin), or `None` when no table file
+    exists for `camera`. Raises `ValueError` if the file exists but is not
+    the documented shape -- a malformed table must never be silently ignored.
+
+    Internal: `load_table` (the public, task-9-frozen interface) returns just
+    the points, unchanged; `kelvin` uses this directly so it can surface
+    `synthetic` in its own result without changing `load_table`'s shape.
+    """
+    path = _table_path(camera)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"{path} is not valid JSON: {e}") from e
+    if isinstance(data, list):
+        # Forward-compat: a bare points array, written before the
+        # synthetic/note wrapper existed.
+        return {"synthetic": False, "note": None, "points": _validate_points(path, data)}
+    if isinstance(data, dict) and "points" in data:
+        return {
+            "synthetic": bool(data.get("synthetic", False)),
+            "note": data.get("note"),
+            "points": _validate_points(path, data["points"]),
+        }
+    raise ValueError(f"{path} must hold either a points array, or an object with a 'points' array")
+
+
+def load_table(camera: str) -> list[dict] | None:
+    """`camera`'s calibration points, sorted by Kelvin, or `None` when no
+    table file exists for it. Task 9's frozen public shape: just the points,
+    same as before the synthetic/note wrapper -- use `kelvin`'s own `table`
+    field to learn whether the table is synthetic."""
+    parsed = _read_table_file(camera)
+    return parsed["points"] if parsed is not None else None
 
 
 def _no_table_result(camera: str) -> dict:
@@ -87,18 +178,22 @@ def kelvin(coeffs: list[float], camera: str) -> dict:
     residual_ratio, exact, camera, table, reason}`. No table -> `kelvin: None`
     with a reason naming `scouter wb calibrate`. Outside the calibrated
     range -> `kelvin: None` with a reason naming the range, never
-    extrapolated.
+    extrapolated. `table`, when a table was found, is `{"path": str,
+    "synthetic": bool}` (fix round 1) -- a synthetic (placeholder) table is
+    perfectly usable for testing the plumbing, but a caller reading the
+    result can tell it apart from a real measured one.
     """
     try:
-        table = load_table(camera)
+        parsed = _read_table_file(camera)
     except ValueError as e:
         result = _no_table_result(camera)
         result["reason"] = str(e)
         return result
-    if not table:
+    if parsed is None:
         return _no_table_result(camera)
 
-    table_path = str(_table_path(camera))
+    table = parsed["points"]
+    table_ref = {"path": str(_table_path(camera)), "synthetic": parsed["synthetic"]}
     target = _ratio(coeffs)
     ratios = [_ratio(p["coeffs"]) for p in table]
 
@@ -111,7 +206,7 @@ def kelvin(coeffs: list[float], camera: str) -> dict:
                 "residual_ratio": 0.0,
                 "exact": True,
                 "camera": camera,
-                "table": table_path,
+                "table": table_ref,
                 "reason": None,
             }
 
@@ -124,7 +219,7 @@ def kelvin(coeffs: list[float], camera: str) -> dict:
             "residual_ratio": None,
             "exact": False,
             "camera": camera,
-            "table": table_path,
+            "table": table_ref,
             "reason": (
                 f"r/b ratio {target:.4f} is outside {camera}'s calibrated range "
                 f"[{lo_bound:.4f}, {hi_bound:.4f}] ({table[0]['kelvin']}-{table[-1]['kelvin']} K); "
@@ -145,10 +240,19 @@ def kelvin(coeffs: list[float], camera: str) -> dict:
                 "residual_ratio": target - lo_r,
                 "exact": False,
                 "camera": camera,
-                "table": table_path,
+                "table": table_ref,
                 "reason": None,
             }
 
-    # Unreachable: the range check above already guarantees a bracket exists
-    # between two consecutive samples somewhere in the sorted list.
-    raise AssertionError(f"{camera}: {target!r} in range but no bracket found -- table not sorted?")
+    # Unreachable in practice: `_validate_points` already confirmed the
+    # table's r/b ratio is strictly increasing before this point ever ran,
+    # and the range check above guarantees a bracket exists somewhere in a
+    # genuinely monotone, sorted sequence. Kept as a typed refusal rather
+    # than a bare assertion anyway (fix round 1) -- belt and braces naming
+    # the table, not a crash with no code a caller could match on.
+    raise NonMonotonicTable(
+        f"{_table_path(camera)}: r/b ratio {target:.4f} is inside the table's own range "
+        f"[{lo_bound:.4f}, {hi_bound:.4f}] but no consecutive pair of points brackets it -- "
+        "the table is not monotone in r/b",
+        detail={"camera": camera, "table": str(_table_path(camera)), "target_ratio": target},
+    )

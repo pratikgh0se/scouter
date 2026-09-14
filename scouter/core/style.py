@@ -649,7 +649,7 @@ def _measure_frame(frame: dict, ref: dict, tolerances) -> dict:
     bg_delta = frame["stats"].get("wb_ratio_bg", 0.0) - ref["stats"].get("wb_ratio_bg", 0.0)
 
     frame_k, frame_k_reason = _resolve_kelvin(frame.get("coeffs"), frame.get("camera"))
-    ref_k, ref_k_reason = _resolve_kelvin(ref.get("coeffs"), frame.get("camera"))
+    ref_k, ref_k_reason = _resolve_kelvin(ref.get("coeffs"), ref.get("camera"))
 
     temperature_k_delta: float | None = None
     temperature_k_reason: str | None = None
