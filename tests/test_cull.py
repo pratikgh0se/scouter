@@ -387,5 +387,90 @@ class CullApplyTest(unittest.TestCase):
         self.assertEqual(bridge.count("image.rate"), 0, "a dry run never writes")
 
 
+class RejectedFrameTest(unittest.TestCase):
+    """Carried finding 4 (task 6): a rejected frame (`xmp:Rating` -1) is never
+    promoted. The clamp is `min(candidate, keep_rating)` and `min(2, 1)` is 1,
+    so before this fix the sharpest frame of a burst came out proposed for
+    rating 1 or 2 even when Pratik had rejected it."""
+
+    def setUp(self) -> None:
+        self.cfg = Config()
+
+    def test_a_rejected_frame_is_left_rejected_even_as_the_burst_pick(self) -> None:
+        frames = [
+            _frame(1, captured_at="2026-01-01 10:00:00", sharpness=0.9, rating_now=-1),
+            _frame(2, captured_at="2026-01-01 10:00:01", sharpness=0.3),
+        ]
+        proposals, _ = cull._build_proposals(frames, self.cfg)
+        by_seq = {p["seq"]: p for p in proposals}
+
+        self.assertEqual(by_seq[1]["rating_proposed"], -1, "a reject must never be raised")
+        self.assertTrue(any("rejected in darktable" in r for r in by_seq[1]["reasons"]))
+        # The rest of the burst is still judged normally.
+        self.assertEqual(by_seq[2]["rating_proposed"], self.cfg.cull.keep_rating)
+
+    def test_a_rejected_flagged_singleton_is_not_promoted_to_keep(self) -> None:
+        """The exact path the clamp opened: flagged -> min(candidate, 1) -> 1."""
+        frames = [_frame(1, sharpness=0.9, clipped=40.0, rating_now=-1)]
+        proposals, _ = cull._build_proposals(frames, self.cfg)
+        self.assertEqual(proposals[0]["rating_proposed"], -1)
+
+    def test_a_rejected_frame_counts_as_unchanged_and_apply_skips_it(self) -> None:
+        frames = [_frame(1, sharpness=0.9, rating_now=-1)]
+        proposals, groups = cull._build_proposals(frames, self.cfg)
+        counts = cull._counts(proposals, groups, self.cfg)
+        self.assertEqual(counts["unchanged"], 1)
+        self.assertEqual(counts["pick"], 0)
+        self.assertEqual(counts["keep"], 0)
+
+
+class VerifyPollIsBatchedTest(unittest.TestCase):
+    """Carried finding 4 (task 6): the XMP verify poll shares ONE deadline
+    across the whole set. It used to be per-frame serial, so a 300-frame job
+    whose sidecars never caught up spent `300 * VERIFY_TIMEOUT_S` in a verb
+    whose real work is six bridge calls."""
+
+    def setUp(self) -> None:
+        self.cache = TempCache()
+        self.tmp = self.cache.start()
+        self._saved = (cull.VERIFY_TIMEOUT_S, cull.VERIFY_INTERVAL_S)
+        cull.VERIFY_TIMEOUT_S = 0.20
+        cull.VERIFY_INTERVAL_S = 0.01
+
+    def tearDown(self) -> None:
+        cull.VERIFY_TIMEOUT_S, cull.VERIFY_INTERVAL_S = self._saved
+        self.cache.stop()
+
+    def test_a_never_caught_up_set_costs_one_timeout_not_one_per_frame(self) -> None:
+        expected = {str(self.tmp / f"n{i}.orf"): 2 for i in range(20)}
+        started = time.monotonic()
+        verified = cull._poll_verified_set(expected)
+        elapsed = time.monotonic() - started
+
+        self.assertEqual(verified, set())
+        # Serial polling would have cost 20 * 0.20 s = 4 s.
+        self.assertLess(elapsed, cull.VERIFY_TIMEOUT_S * 3)
+
+    def test_it_returns_exactly_the_paths_whose_sidecar_caught_up(self) -> None:
+        good = str(self.tmp / "good.orf")
+        wrong = str(self.tmp / "wrong.orf")
+        absent = str(self.tmp / "absent.orf")
+        xmp.sidecar_path(good).write_text('<x xmp:Rating="2"/>', encoding="utf-8")
+        xmp.sidecar_path(wrong).write_text('<x xmp:Rating="1"/>', encoding="utf-8")
+
+        verified = cull._poll_verified_set({good: 2, wrong: 2, absent: 2})
+
+        self.assertEqual(verified, {good})
+
+    def test_an_all_verified_set_returns_without_waiting_out_the_deadline(self) -> None:
+        paths = [str(self.tmp / f"v{i}.orf") for i in range(5)]
+        for p in paths:
+            xmp.sidecar_path(p).write_text('<x xmp:Rating="2"/>', encoding="utf-8")
+        started = time.monotonic()
+        verified = cull._poll_verified_set({p: 2 for p in paths})
+        self.assertEqual(verified, set(paths))
+        self.assertLess(time.monotonic() - started, cull.VERIFY_TIMEOUT_S)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -138,6 +138,23 @@ def _propose_one(frame: dict, burst: dict, best_seq: int, cfg) -> tuple[int, lis
     table. `burst["members"]` (this frame's whole burst, itself included) is
     what lets the sharpness reasons name the runner-up's number."""
     reasons: list[str] = []
+
+    # Carried finding 4 (task 6): a REJECTED frame is never promoted.
+    # darktable stores a reject as a negative `xmp:Rating` (-1). The clamp
+    # below is `min(candidate, keep_rating)`, and `min(2, 1)` is 1 -- so a
+    # rejected frame that happened to be the sharpest of its burst came out
+    # of here proposed for rating 1 or 2, and `cull.apply` would have
+    # un-rejected a frame Pratik had deliberately thrown away. A reject is a
+    # human decision about content this stats-only culler cannot see (design
+    # 8.2's whole premise), so it is returned untouched, before any burst or
+    # flag arithmetic runs.
+    if frame["rating_now"] < 0:
+        return frame["rating_now"], [
+            f"rejected in darktable (xmp:Rating {frame['rating_now']}): a reject is "
+            "your decision about content this stats-only culler cannot see, so it is "
+            "never raised -- clear the reject in darktable to have it proposed again"
+        ]
+
     flagged = False
     if frame["clipped_high_pct"] > cfg.cull.clipped_flag_pct:
         reasons.append(
@@ -424,16 +441,32 @@ def propose(
     )
 
 
-def _poll_verified(path: str, expected_rating: int) -> bool:
-    """Poll `path`'s sidecar for up to `VERIFY_TIMEOUT_S` for `xmp:Rating` to
-    catch up to `expected_rating`. darktable owns when it flushes to disk, so
-    this never claims a write it cannot see -- only reports what it read."""
+def _poll_verified_set(expected: dict[str, int]) -> set[str]:
+    """Poll every sidecar in `expected` together, under ONE shared deadline.
+
+    Returns the paths whose `xmp:Rating` caught up. darktable owns when it
+    flushes to disk, so this never claims a write it cannot see -- it only
+    reports what it read.
+
+    Carried finding 4 (task 6): this used to be a per-frame serial poll, so
+    the worst case was `len(frames) * VERIFY_TIMEOUT_S` -- 10 minutes for a
+    300-frame job whose sidecars never caught up, on a verb whose real work
+    is ~6 bridge calls. One deadline for the whole set bounds it at
+    `VERIFY_TIMEOUT_S` no matter how many frames there are, and it is also
+    *more* accurate: darktable flushes sidecars in its own batches, so the
+    frames waited for concurrently are the frames that land concurrently.
+    Each sweep re-reads only the frames still outstanding.
+    """
+    pending = dict(expected)
+    verified: set[str] = set()
     deadline = time.monotonic() + VERIFY_TIMEOUT_S
     while True:
-        if xmp.rating(path) == expected_rating:
-            return True
-        if time.monotonic() >= deadline:
-            return False
+        for path in list(pending):
+            if xmp.rating(path) == pending[path]:
+                verified.add(path)
+                del pending[path]
+        if not pending or time.monotonic() >= deadline:
+            return verified
         time.sleep(VERIFY_INTERVAL_S)
 
 
@@ -533,6 +566,16 @@ def apply(
             for entry in result.get("per_image", []):
                 per_bridge[int(entry["image_id"])] = entry
 
+    # One poll pass over every frame the bridge did not miss, before the
+    # per-image rows are built: the whole set shares one deadline.
+    verified_paths = _poll_verified_set(
+        {
+            f["path"]: f["rating_proposed"]
+            for f in to_change
+            if int(f["image_id"]) not in set(missed_ids)
+        }
+    )
+
     per_image: list[dict] = []
     verified_count = 0
     unverified_count = 0
@@ -551,7 +594,7 @@ def apply(
         entry = per_bridge.get(image_id, {})
         rating_before = entry.get("rating_before", f["rating_now"])
         rating_after = entry.get("rating_after", f["rating_proposed"])
-        verified = _poll_verified(f["path"], f["rating_proposed"])
+        verified = f["path"] in verified_paths
         if verified:
             verified_count += 1
         else:
