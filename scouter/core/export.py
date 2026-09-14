@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from scouter import __version__, config, metrics
-from scouter.core import dtbridge, scout, xmp
+from scouter.core import dtbridge, scout, wb, xmp
 from scouter.errors import ChecksumMismatch, ExportAllFailed, ManifestUnauthenticated, UsageError
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
@@ -109,6 +109,29 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _fsync_dir(directory: Path) -> None:
+    """Carried finding 6: fsync the DIRECTORY after an atomic rename.
+
+    `fsync` on the temp file only guarantees the bytes; on macOS/APFS and
+    on ext4 the directory entry that makes them reachable under the final
+    name is a separate metadata write. Without this a crash can leave a
+    manifest whose contents are durable but whose name is not -- which for
+    a delivery manifest is the same as losing it. Best effort: a
+    filesystem that refuses `O_RDONLY` on a directory (or refuses to sync
+    one) is not a reason to fail a release that already wrote its files.
+    """
+    try:
+        fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def _write_atomic(path: Path, content: str, *, fsync: bool = False) -> None:
     tmp = path.with_name(f".{path.name}.tmp")
     with tmp.open("w", encoding="utf-8") as fh:
@@ -117,35 +140,44 @@ def _write_atomic(path: Path, content: str, *, fsync: bool = False) -> None:
             fh.flush()
             os.fsync(fh.fileno())
     os.replace(tmp, path)
+    if fsync:
+        _fsync_dir(path.parent)
 
 
 def _now_z() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
-def _planned_outputs(selected: list[dict], out_dir: Path, ext: str) -> list[tuple[dict, Path]]:
-    """One output path per candidate, deterministic and collision-free.
+def _plan_outputs(items: list, path_of, out_dir: Path, ext: str) -> list[tuple[object, Path]]:
+    """One output path per item, deterministic and collision-free.
+
+    `path_of(item)` yields the item's source path, so both callers share
+    this one implementation: `export.release` passes candidate dicts,
+    `export.run` passes `ResolvedImage`s (carried finding 6 -- `run` built
+    its own `<stem>.<ext>` inline with no collision check at all, so
+    `export.run /a/x.orf /b/x.orf` rendered twice into the same file and
+    reported both as exported).
 
     A raw and a same-stem JPEG that share a `seq` (a card holding both
     RAW+JPEG for a frame) would otherwise both plan `<stem>.<ext>`, and the
     second render would silently clobber the first (fix round 1, blocker
-    2). Any stem shared by more than one selected candidate gets the
-    source's own suffix folded in -- `<stem>-orf.jpg` / `<stem>-jpg.jpg` --
+    2). Any stem shared by more than one selected item gets the source's
+    own suffix folded in -- `<stem>-orf.jpg` / `<stem>-jpg.jpg` --
     deterministic (same input suffix always yields the same output name,
     unlike a `-2`/`-3` counter that depends on selection order). A
-    collision that survives even that (two selected candidates with the
-    same stem AND the same source suffix) is refused rather than silently
-    overwritten.
+    collision that survives even that (two items with the same stem AND the
+    same source suffix, i.e. the same filename from two directories) is
+    refused rather than silently overwritten.
     """
     stem_counts: dict[str, int] = {}
-    for c in selected:
-        stem = Path(c["path"]).stem
+    for item in items:
+        stem = Path(path_of(item)).stem
         stem_counts[stem] = stem_counts.get(stem, 0) + 1
 
-    planned: list[tuple[dict, Path]] = []
-    seen: dict[Path, dict] = {}
-    for c in selected:
-        source = Path(c["path"])
+    planned: list[tuple[object, Path]] = []
+    seen: dict[Path, str] = {}
+    for item in items:
+        source = Path(path_of(item))
         if stem_counts[source.stem] > 1:
             suffix = source.suffix.lstrip(".").lower() or "src"
             name = f"{source.stem}-{suffix}.{ext}"
@@ -155,12 +187,19 @@ def _planned_outputs(selected: list[dict], out_dir: Path, ext: str) -> list[tupl
         if out in seen:
             raise UsageError(
                 f"two selected frames would both export to {out.name}: "
-                f"{seen[out]['path']} and {c['path']}",
-                detail={"output": str(out), "inputs": [seen[out]["path"], c["path"]]},
+                f"{seen[out]} and {source}",
+                detail={"output": str(out), "inputs": [seen[out], str(source)]},
             )
-        seen[out] = c
-        planned.append((c, out))
+        seen[out] = str(source)
+        planned.append((item, out))
     return planned
+
+
+def _planned_outputs(selected: list[dict], out_dir: Path, ext: str) -> list[tuple[dict, Path]]:
+    """`_plan_outputs` for `export.release`'s candidate dicts."""
+    return [
+        (c, out) for c, out in _plan_outputs(selected, lambda c: c["path"], out_dir, ext)
+    ]  # type: ignore[misc]
 
 
 def _select_by_label(
@@ -240,11 +279,24 @@ def run(
         raise ValueError(f"preset must be one of {sorted(PRESETS)}, got {preset!r}")
     spec = PRESETS[preset]
     destination = Path(out_dir)
+    # Carried finding 6: an empty selection is a caller mistake, never a
+    # zero-file success. `export.run` with no images used to fall straight
+    # through the n>1 gate and return `exported=0, failed=0, outcome="ok"` --
+    # a phantom success for work it never did. (`export.release` already
+    # refuses its own empty selections; this is the same rule one layer down.)
+    if not images:
+        raise UsageError(
+            "export.run needs at least one image",
+            detail={"preset": preset, "out_dir": out_dir, "images": images},
+        )
     resolved = [dtbridge.resolve_image(image) for image in images]
 
-    planned: list[tuple[object, Path]] = []
-    for item in resolved:
-        planned.append((item, destination / f"{Path(item.path).stem}.{spec['ext']}"))
+    # Carried finding 6: the same collision guard `export.release` uses.
+    # This loop used to be `destination / f"{stem}.{ext}"` with no check, so
+    # two inputs sharing a filename (`/a/x.orf` and `/b/x.orf`, or a
+    # RAW+JPEG pair) rendered one on top of the other and BOTH were
+    # reported exported.
+    planned = _plan_outputs(resolved, lambda r: r.path, destination, spec["ext"])
     existing = [str(out) for _, out in planned if out.exists()]
 
     plan = [
@@ -407,15 +459,23 @@ def release(
         label_histogram = {}
 
     if not selected:
+        # Carried finding 6: the warnings collected so far travel WITH the
+        # refusal. They are usually the actual explanation -- "12 frames are
+        # not registered in darktable's library, so their colour label could
+        # not be read" is why the label selection came back empty, and
+        # raising a bare histogram used to throw that sentence away and
+        # leave the caller staring at `{}`.
+        suffix = (" Warnings: " + " | ".join(warnings)) if warnings else ""
         if rule.startswith("color_label="):
             raise UsageError(
                 f"no frames matched {rule} (0 of {len(candidates)}); label histogram "
-                f"(label -> count of frames): {label_histogram}",
+                f"(label -> count of frames): {label_histogram}.{suffix}",
                 detail={
                     "rule": rule,
                     "final_label": label,
                     "histogram": label_histogram,
                     "of": len(candidates),
+                    "warnings": warnings,
                 },
             )
         histogram: dict[str, int] = {}
@@ -424,12 +484,13 @@ def release(
             histogram[key] = histogram.get(key, 0) + 1
         raise UsageError(
             f"no frames matched {rule} (0 of {len(candidates)}); ratings histogram "
-            f"(rating -> count of frames): {histogram}",
+            f"(rating -> count of frames): {histogram}.{suffix}",
             detail={
                 "rule": rule,
                 "min_rating": resolved_min_rating,
                 "histogram": histogram,
                 "of": len(candidates),
+                "warnings": warnings,
             },
         )
 
@@ -479,10 +540,14 @@ def release(
     out_dir.mkdir(parents=True, exist_ok=True)
     extra_args = preset_args(spec, style=style, overwrite_style=overwrite_style)
 
-    try:
-        darktable_version = scout.CLIWrapper(darktable_cli_path=scout.cli_binary()).get_version()
-    except Exception:  # doctor-shaped info only, never a reason to refuse a release
-        darktable_version = None
+    # Carried finding 10: this stored the raw multi-line `--version` blob in
+    # the delivery manifest and shelled out unconditionally -- including from
+    # unit tests running against a FakeBridge, where `scout.cli_binary()`
+    # still resolves the real Mac install path. `wb._resolve_darktable_version`
+    # already solved both: it returns the parsed `X.Y.Z` token (or
+    # `"unknown"`, never `None`) and refuses to spawn a subprocess unless the
+    # installed bridge is the real one.
+    darktable_version = wb._resolve_darktable_version()
 
     files_result: list[ExportedFile] = []
     manifest_files: list[dict] = []

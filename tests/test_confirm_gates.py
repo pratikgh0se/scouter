@@ -38,6 +38,13 @@ class RefusingBridge:
         self.test = test
         self.raw = raw
         self.calls: list[str] = []
+        self._ids: dict[str, int] = {}
+
+    def _id_for(self, path: str) -> int:
+        """A stable, distinct id per path, handed out in first-seen order."""
+        if path not in self._ids:
+            self._ids[path] = len(self._ids) + 1
+        return self._ids[path]
 
     def call(self, method: str, params: dict, timeout: float | None = None):
         self.calls.append(method)
@@ -49,7 +56,21 @@ class RefusingBridge:
         if method == "view.current":
             return {"view": "darkroom"}
         if method == "image.lookup":
-            return {"found": True, "image_id": 1, "path": self.raw}
+            # ECHOES what was asked for, rather than answering `self.raw` for
+            # every input: two distinct paths must resolve to two distinct
+            # results, or a fake this permissive hides real refusals (task
+            # 14 found `export.run`'s new collision guard firing here purely
+            # because the fake collapsed both inputs onto one path).
+            def one(params: dict) -> dict:
+                if params.get("path"):
+                    path = str(params["path"])
+                    return {"found": True, "image_id": self._id_for(path), "path": path}
+                iid = int(params.get("image_id") or 1)
+                return {"found": True, "image_id": iid, "path": self.raw}
+
+            if params.get("items") is not None:
+                return {"results": [one(item) for item in params["items"]]}
+            return one(params)
         if method == "darkroom.open":
             return {
                 "image_id": 1,
@@ -74,6 +95,14 @@ class ConfirmGateTest(unittest.TestCase):
         root = self.cache.start()
         self.raw = str(root / "hero.ORF")
         (root / "hero.ORF").write_bytes(b"raw")
+        # A SECOND, distinct raw for the verbs whose gated argument is a list
+        # of more than one image. Substituting the same path twice used to be
+        # enough; it no longer is, because `export.run` now refuses two
+        # inputs that would render into the same output file (carried finding
+        # 6) -- and "the same file twice" is not what those gates are about.
+        self.raw2 = str(root / "hero2.ORF")
+        (root / "hero2.ORF").write_bytes(b"raw")
+        write_minimal_style_sidecar(self.raw2)
         # Fix round 2, blocker 1: style.extract(no_filter=True) reads the
         # sidecar too now (never_include applies to the whole active
         # history, not just a requested `modules` list).
@@ -250,7 +279,7 @@ class ConfirmGateTest(unittest.TestCase):
                                     self.raw
                                     if v is None
                                     else (
-                                        [self.raw] * len(v)
+                                        [self.raw, self.raw2][: len(v)]
                                         if isinstance(v, list) and v and v[0] is None
                                         else v
                                     )

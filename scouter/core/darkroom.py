@@ -952,6 +952,39 @@ def reset(
 #: `coeff_g2` is `inf` on the EM10iii body (never a real slider target there),
 #: so it is only ever sent when it is BOTH pinned AND finite (fix round: a
 #: caller never sends `_require_finite`-rejected inf/nan to the bridge).
+def _rb_ratio(params: dict | None) -> float | None:
+    """A `temperature` param dict's red/blue coefficient ratio, or `None`.
+
+    Carried finding 10 (task 11): this arithmetic, and the tolerance test
+    below, were spelled out three times inside the tier-3 Kelvin-inversion
+    undo -- in `_after_ratio`, in `_confirm`, and again inlined for
+    `verified`. Three copies of a comparison that decides whether an undo
+    is reported as verified is three chances for them to drift apart.
+
+    `None` when either coefficient is missing, or when blue is zero or
+    non-finite: the ratio does not exist, and 0.0 would be a lie about it.
+    """
+    if not params:
+        return None
+    r, b = params.get("coeff_r"), params.get("coeff_b")
+    if r is None or not b:
+        return None
+    return r / b
+
+
+def _ratio_within_tolerance(measured: float | None, target: float | None) -> bool:
+    """`measured` is within `wb._EXACT_TOLERANCE` (relative) of `target`.
+
+    A missing ratio on either side is `False` -- "cannot compare" is never
+    reported as "verified".
+    """
+    from scouter.core import wb
+
+    if measured is None or target is None:
+        return False
+    return abs(measured - target) / abs(target) <= wb._EXACT_TOLERANCE
+
+
 _TEMPERATURE_COEFF_NAMES = ("coeff_r", "coeff_g", "coeff_b", "coeff_g2")
 
 
@@ -1090,9 +1123,7 @@ def _undo_temperature_via_kelvin(
     target_k, _ = _temperature_target_kelvin(before_params, camera)
     if target_k is None:
         return None
-    target_ratio = (
-        before_params["coeff_r"] / before_params["coeff_b"] if before_params["coeff_b"] else None
-    )
+    target_ratio = _rb_ratio(before_params)
 
     dtbridge.action(
         dtbridge.action_path("temperature", "temperature"),
@@ -1102,16 +1133,9 @@ def _undo_temperature_via_kelvin(
         value=float(target_k),
     )
 
-    def _after_ratio() -> float | None:
-        after_params = _temperature_extra(entry.path, entry.instance).get("params") or {}
-        r, b = after_params.get("coeff_r"), after_params.get("coeff_b")
-        return r / b if r is not None and b else None
-
     def _confirm() -> bool:
-        after_ratio = _after_ratio()
-        if after_ratio is None or target_ratio is None:
-            return False
-        return abs(after_ratio - target_ratio) / abs(target_ratio) <= wb._EXACT_TOLERANCE
+        after_params = _temperature_extra(entry.path, entry.instance).get("params") or {}
+        return _ratio_within_tolerance(_rb_ratio(after_params), target_ratio)
 
     committed, warnings = _commit_with_readback(
         job,
@@ -1128,13 +1152,8 @@ def _undo_temperature_via_kelvin(
     # `_commit_with_readback`, is a genuinely different moment (before this
     # function knows the commit settled) and is left alone.
     after_params = _temperature_extra(entry.path, entry.instance).get("params") or {}
-    after_r, after_b = after_params.get("coeff_r"), after_params.get("coeff_b")
-    after_ratio = after_r / after_b if after_r is not None and after_b else None
-    verified = (
-        after_ratio is not None
-        and target_ratio is not None
-        and abs(after_ratio - target_ratio) / abs(target_ratio) <= wb._EXACT_TOLERANCE
-    )
+    after_ratio = _rb_ratio(after_params)
+    verified = _ratio_within_tolerance(after_ratio, target_ratio)
     if not verified:
         raise _UndoUnverified(
             f"seq {entry.seq}: Kelvin-inversion undo committed ({target_k:.0f} K from "

@@ -468,5 +468,110 @@ class ExportVerifyTest(ExportReleaseTestBase):
         self.assertEqual(verified.missing, [])
 
 
+class CarriedFindingsTest(ExportReleaseTestBase):
+    """Carried findings 6 and 10 (task 10)."""
+
+    def test_export_run_refuses_two_inputs_that_share_an_output(self) -> None:
+        """Finding 6: `export.run` built `<stem>.<ext>` with no collision
+        check, so two directories holding the same filename rendered one on
+        top of the other and BOTH were reported exported."""
+        a = self.tmp / "a"
+        b = self.tmp / "b"
+        a.mkdir()
+        b.mkdir()
+        (a / "x.orf").write_bytes(b"1")
+        (b / "x.orf").write_bytes(b"2")
+
+        with self.assertRaises(UsageError) as ctx:
+            export.run(
+                images=[str(a / "x.orf"), str(b / "x.orf")],
+                preset="preview",
+                out_dir=str(self.tmp / "out"),
+                confirm=True,
+            )
+        self.assertIn("would both export to x-orf.png", str(ctx.exception))
+        self.assertEqual(
+            sorted(ctx.exception.detail["inputs"]), sorted([str(a / "x.orf"), str(b / "x.orf")])
+        )
+        self.assertEqual(FakeCLIWrapper.calls, [], "nothing was rendered")
+
+    def test_export_run_folds_the_suffix_in_for_a_raw_jpeg_pair(self) -> None:
+        """Same stem, DIFFERENT suffix is not a collision: both are exported,
+        under deterministic names -- the rule `export.release` already used."""
+        d = self.tmp / "pair"
+        d.mkdir()
+        (d / "x.orf").write_bytes(b"1")
+        (d / "x.jpg").write_bytes(b"2")
+
+        result = export.run(
+            images=[str(d / "x.orf"), str(d / "x.jpg")],
+            preset="preview",
+            out_dir=str(self.tmp / "out2"),
+            confirm=True,
+        )
+        self.assertEqual(result.exported, 2)
+        self.assertEqual(
+            sorted(Path(f.output).name for f in result.files), ["x-jpg.png", "x-orf.png"]
+        )
+
+    def test_export_run_refuses_an_empty_image_list(self) -> None:
+        """Finding 6: it used to return `exported=0, failed=0, outcome="ok"` --
+        a phantom success for work it never did."""
+        with self.assertRaises(UsageError) as ctx:
+            export.run(images=[], preset="preview", out_dir=str(self.tmp / "out3"), confirm=True)
+        self.assertIn("at least one image", str(ctx.exception))
+
+    def test_an_empty_selection_refusal_carries_its_warnings(self) -> None:
+        """Finding 6: the warnings collected while selecting are usually the
+        explanation for why nothing matched, and the refusal used to throw
+        them away."""
+        self._write_import_json([{"dest": "raw/f1.orf", "sha256": "x"}])
+        self._write_frame("f1.orf", 0)
+
+        with self.assertRaises(UsageError) as ctx:
+            export.release(self.JOB_SLUG, "client-proof", min_rating=2, confirm=True)
+        self.assertIn("warnings", ctx.exception.detail)
+        self.assertIsInstance(ctx.exception.detail["warnings"], list)
+
+    def test_the_manifest_records_a_parsed_version_never_the_raw_blob(self) -> None:
+        """Finding 10: the manifest stored darktable-cli's whole multi-line
+        `--version` blob, and shelled out to get it unconditionally -- from
+        unit tests included. `wb._resolve_darktable_version` returns the
+        parsed `X.Y.Z` token (or `"unknown"`) and refuses to spawn a
+        subprocess while a FakeBridge is installed."""
+        self._standard_job()
+        with mock.patch(
+            "scouter.core.scout.CLIWrapper.get_version",
+            side_effect=AssertionError("no subprocess from a unit test"),
+        ):
+            result = export.release(self.JOB_SLUG, "client-proof", confirm=True)
+        manifest = json.loads(Path(result.manifest_path).read_text())
+        self.assertEqual(manifest["darktable"], "unknown")
+        self.assertNotIn("\n", manifest["darktable"])
+
+    def test_the_manifest_directory_is_fsynced_after_the_rename(self) -> None:
+        """Finding 6: fsyncing the temp file makes the BYTES durable; the
+        directory entry that makes them reachable under the final name is a
+        separate metadata write."""
+        self._standard_job()
+        synced: list[str] = []
+        real_fsync = os.fsync
+
+        def spy(fd):
+            try:
+                synced.append(os.fstat(fd).st_mode and "fd")
+            except OSError:
+                pass
+            return real_fsync(fd)
+
+        with mock.patch.object(export.os, "fsync", spy):
+            result = export.release(self.JOB_SLUG, "client-proof", confirm=True)
+        scouter_d = Path(result.manifest_path).parent
+        # Two files written with fsync=True, each followed by a directory
+        # sync: four syncs, not two.
+        self.assertGreaterEqual(len(synced), 4)
+        self.assertTrue((scouter_d / Path(result.manifest_path).name).is_file())
+
+
 if __name__ == "__main__":
     unittest.main()

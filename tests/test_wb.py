@@ -874,3 +874,35 @@ class RefusalCarriesCoefficientsTest(unittest.TestCase):
         self.assertIn("target_kelvin", detail)
         entry = journal.latest_open("job-test")
         self.assertIsNotNone(entry, "a refused undo leaves the write journaled and reachable")
+
+
+class RatioHelpersTest(unittest.TestCase):
+    """Carried finding 10 (task 11): the tier-3 Kelvin-inversion undo spelled
+    the r/b ratio and its tolerance test out three times (`_after_ratio`,
+    `_confirm`, and again inlined for `verified`). Three copies of the
+    comparison that decides whether an undo is reported verified is three
+    chances to drift; these are the one helper each, tested directly."""
+
+    def test_rb_ratio(self) -> None:
+        from scouter.core import darkroom
+
+        self.assertAlmostEqual(darkroom._rb_ratio({"coeff_r": 2.0, "coeff_b": 1.0}), 2.0)
+        self.assertIsNone(darkroom._rb_ratio(None))
+        self.assertIsNone(darkroom._rb_ratio({}))
+        self.assertIsNone(darkroom._rb_ratio({"coeff_r": 2.0}), "no blue, no ratio")
+        self.assertIsNone(darkroom._rb_ratio({"coeff_b": 1.0}), "no red, no ratio")
+        self.assertIsNone(
+            darkroom._rb_ratio({"coeff_r": 2.0, "coeff_b": 0.0}), "zero blue is not a ratio of 0"
+        )
+
+    def test_ratio_within_tolerance(self) -> None:
+        from scouter.core import darkroom, wb
+
+        tol = wb._EXACT_TOLERANCE
+        self.assertTrue(darkroom._ratio_within_tolerance(2.0, 2.0))
+        self.assertTrue(darkroom._ratio_within_tolerance(2.0 * (1 + tol / 2), 2.0))
+        self.assertFalse(darkroom._ratio_within_tolerance(2.0 * (1 + tol * 4), 2.0))
+        # "Cannot compare" is never "verified".
+        self.assertFalse(darkroom._ratio_within_tolerance(None, 2.0))
+        self.assertFalse(darkroom._ratio_within_tolerance(2.0, None))
+        self.assertFalse(darkroom._ratio_within_tolerance(None, None))
