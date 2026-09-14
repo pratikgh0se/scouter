@@ -4,8 +4,8 @@
 -- `dtbridge.ACTION_PATHS` already pins (`iop/temperature/temperature`).
 --
 -- Standalone artifact, not exercised by CI: `tests/test_host_phase2.py::
--- WhiteBalanceHostTest.test_1_pin_wb_coefficient_sliders` is the test that
--- actually runs and records this probe, through the real darktable_mcp
+-- PinWbCoefficientSlidersHostTest.test_pin_wb_coefficient_sliders` is the
+-- test that actually runs and records this probe, through the real darktable_mcp
 -- bridge (`darkroom.status`), because that is what `dtbridge.py`/
 -- `darkroom.py` consume in production and what the brief asks to be pinned.
 -- This script exists alongside it as the plain, no-bridge, no-Python

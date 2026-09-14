@@ -11,17 +11,33 @@ files as an API.
 
 SO: a faithful closed-form conversion from the XMP alone is NOT POSSIBLE, and
 nothing here pretends otherwise. What is possible, and is what this module
-does:
-  1. journal the whole coefficient vector before every temperature write;
-  2. restore it through the coefficient sliders, whose action paths are PINNED
-     by a host probe (spike/scouter_wb_probe.lua) -- an exact undo;
-  3. invert Kelvin from a MEASURED per-camera table (`wb.calibrate`), because
-     the coefficient ratio is monotone in Kelvin at fixed tint;
-  4. and when none of that is available, refuse -- handing over the exact
-     coefficients, which is a different thing from shrugging.
+does (design §11's own tier numbers, `scouter/core/darkroom.py`'s
+`undo_last` implements 2-4):
+  1. (design 11.2, unconditional) journal the whole coefficient vector
+     before every temperature write;
+  2. (design 11.3, probe-gated) restore it through the coefficient sliders,
+     whose action paths are PINNED by a host probe
+     (spike/scouter_wb_probe.lua) -- an exact undo;
+  3. (design 11.4, built regardless) invert Kelvin from a MEASURED
+     per-camera table (`wb.calibrate`), because the coefficient ratio is
+     monotone in Kelvin at fixed tint;
+  4. (design 11.5) and when none of that is available, refuse -- handing
+     over the exact coefficients, which is a different thing from shrugging.
 
-Table shape (written by `scouter wb calibrate`): a JSON array of
-`{"kelvin": int, "coeffs": [r, g, b]}` points, `~/.config/scouter/wb/<camera>.json`.
+Table shape (design 11.4, written by `scouter wb calibrate`),
+`~/.config/scouter/wb/<camera>.json`:
+
+    {"version": 1, "camera": "em10iii", "camera_model": "E-M10 Mark III",
+     "measured_at": "2026-09-14T00:42:42+00:00", "darktable": "5.4.1",
+     "tint": 1.0, "source_image": "em10iii.ORF", "synthetic": false,
+     "samples": [{"k": 3000, "coeff_r": 1.34, "coeff_g": 1.0, "coeff_b": 2.93},
+                 {"k": 4000, "coeff_r": 1.70, "coeff_g": 1.0, "coeff_b": 2.24}]}
+
+`load_table` also still reads task 9's original bare-array shape
+(`[{"kelvin": int, "coeffs": [r, g, b]}, ...]`, no provenance at all) --
+normalised to the same internal `samples` list, `synthetic: true` assumed,
+and a warning surfaced through `wb.kelvin`'s own `warnings`.
+
 Inversion bisects the sorted samples on the r/b coefficient ratio (monotone in
 Kelvin at fixed tint -- `calibrate` itself refuses to write a table that
 isn't) and interpolates linearly between the two bracketing points; within 1%
@@ -35,6 +51,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from scouter import metrics, paths
@@ -43,6 +60,20 @@ from scouter.errors import ScouterError, UsageError
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
 from scouter.types import CalibrateResult, KelvinResult
+
+
+class WbCalibrationUnreadable(ScouterError):
+    """One sweep point's `temperature` coefficients were unusable for the r/b
+    ratio: `None` (never decoded, or `inf`/`nan` -- `xmp.latest_params`
+    already cleans those to `None`), or a zero `coeff_b`, which would
+    divide-by-zero the ratio. Typed (fix round 1, should-fix) so a caller
+    can tell "the sweep genuinely produced garbage at this point" apart from
+    any other unclassified failure.
+    """
+
+    code = "wb_calibration_unreadable"
+    fix = "check darkroom.status/history for what actually landed at that Kelvin point and re-run"
+
 
 #: How close `target` has to be to a sample's own ratio to call it `exact`
 #: rather than interpolated.
@@ -59,10 +90,61 @@ def _table_path(camera: str) -> Path:
     return paths.wb_dir() / f"{camera}.json"
 
 
-def load_table(camera: str) -> list[dict] | None:
-    """`camera`'s calibration table, sorted by Kelvin, or `None` when no table
-    file exists for it. Raises `ValueError` if the file exists but is not the
-    documented shape -- a malformed table must never be silently ignored."""
+#: Every field `load_table` carries through from the object shape (design
+#: 11.4), besides `samples` itself (normalised separately) and the derived
+#: `synthetic`/`warnings` this module adds.
+_TABLE_METADATA_FIELDS = (
+    "version",
+    "camera",
+    "camera_model",
+    "measured_at",
+    "darktable",
+    "tint",
+    "source_image",
+)
+
+
+def _validate_object_sample(path: Path, point: object) -> None:
+    if (
+        not isinstance(point, dict)
+        or "k" not in point
+        or any(name not in point for name in _TEMPERATURE_COEFF_NAMES)
+    ):
+        raise ValueError(
+            f"{path}: every sample needs 'k', 'coeff_r', 'coeff_g' and 'coeff_b', got {point!r}"
+        )
+
+
+def _validate_legacy_point(path: Path, point: object) -> None:
+    if (
+        not isinstance(point, dict)
+        or "kelvin" not in point
+        or "coeffs" not in point
+        or len(point["coeffs"]) < 3
+    ):
+        raise ValueError(
+            f"{path}: every point needs 'kelvin' and a 3+ element 'coeffs' list, got {point!r}"
+        )
+
+
+def load_table(camera: str) -> dict | None:
+    """`camera`'s full calibration table, or `None` when no table file exists.
+
+    Reads two shapes (fix round 1, blocker 1): the object shape design 11.4
+    documents (`{version, camera, camera_model, measured_at, darktable,
+    tint, source_image, synthetic, samples: [{k, coeff_r, coeff_g,
+    coeff_b}, ...]}`, written by this module's own `calibrate`), and task 9's
+    original bare JSON array (`[{"kelvin": int, "coeffs": [r, g, b]}, ...]`,
+    no provenance at all) -- the latter is normalised into the same shape
+    with `synthetic: true` assumed and a warning in the returned `warnings`
+    list, never silently treated as equally trustworthy.
+
+    The returned dict's `samples` is always `[{"kelvin": int, "coeffs": [r,
+    g, b]}, ...]`, sorted by Kelvin -- `_invert`'s own internal shape,
+    regardless of which external shape the file used. Raises `ValueError` if
+    the file exists but matches neither shape -- a malformed table must
+    never be silently ignored.
+    """
     path = _table_path(camera)
     if not path.is_file():
         return None
@@ -70,19 +152,47 @@ def load_table(camera: str) -> list[dict] | None:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         raise ValueError(f"{path} is not valid JSON: {e}") from e
-    if not isinstance(data, list) or not data:
-        raise ValueError(f"{path} must hold a non-empty JSON array of calibration points")
-    for point in data:
-        if (
-            not isinstance(point, dict)
-            or "kelvin" not in point
-            or "coeffs" not in point
-            or len(point["coeffs"]) < 3
-        ):
+
+    warnings: list[str] = []
+    if isinstance(data, list):
+        if not data:
+            raise ValueError(f"{path} must hold a non-empty JSON array of calibration points")
+        for point in data:
+            _validate_legacy_point(path, point)
+        samples = [{"kelvin": p["kelvin"], "coeffs": list(p["coeffs"])} for p in data]
+        table: dict = dict.fromkeys(_TABLE_METADATA_FIELDS)
+        table["version"] = 1
+        table["camera"] = camera
+        table["synthetic"] = True
+        warnings.append(
+            f"{path} is the legacy bare-array shape (task 9, no provenance) -- treated as "
+            "synthetic; run `scouter wb calibrate` for a real, provenanced table"
+        )
+    elif isinstance(data, dict):
+        if not isinstance(data.get("samples"), list) or not data["samples"]:
             raise ValueError(
-                f"{path}: every point needs 'kelvin' and a 3+ element 'coeffs' list, got {point!r}"
+                f"{path}: object shape needs a non-empty 'samples' array, got {data!r}"
             )
-    return sorted(data, key=lambda p: p["kelvin"])
+        for point in data["samples"]:
+            _validate_object_sample(path, point)
+        samples = [
+            {
+                "kelvin": p["k"],
+                "coeffs": [p["coeff_r"], p["coeff_g"], p["coeff_b"]],
+            }
+            for p in data["samples"]
+        ]
+        table = {field: data.get(field) for field in _TABLE_METADATA_FIELDS}
+        table["synthetic"] = bool(data.get("synthetic", False))
+    else:
+        raise ValueError(
+            f"{path} must hold a JSON object (design 11.4 shape) or a legacy array of "
+            f"calibration points, got {type(data).__name__}"
+        )
+
+    table["samples"] = sorted(samples, key=lambda p: p["kelvin"])
+    table["warnings"] = warnings
+    return table
 
 
 def _ratio(coeffs: list[float]) -> float:
@@ -106,10 +216,13 @@ def _invert(samples: list[dict], ratio: float) -> tuple[float | None, dict]:
 
     for point, r in zip(samples, ratios):
         if r != 0 and abs(ratio - r) / abs(r) <= _EXACT_TOLERANCE:
+            # Should-fix (task 11 fix round 1): the MEASURED residual, not a
+            # hard-coded 0.0 -- `ratio` need only be within `_EXACT_TOLERANCE`
+            # of the sample, not bit-identical to it.
             return point["kelvin"], {
                 "interpolated": False,
                 "bracket": None,
-                "residual_ratio": 0.0,
+                "residual_ratio": ratio - r,
                 "exact": True,
                 "reason": None,
             }
@@ -158,6 +271,7 @@ def _no_table_result(camera: str, reason: str | None = None) -> dict:
         "camera": camera,
         "table": None,
         "reason": reason or f"no wb calibration table for {camera}; run scouter wb calibrate",
+        "warnings": [],
     }
 
 
@@ -232,11 +346,12 @@ def kelvin(
         return _no_table_result(camera)
 
     target = _ratio(coeffs)
-    k, info = _invert(table, target)
+    k, info = _invert(table["samples"], target)
     return {
         "kelvin": k,
         "camera": camera,
         "table": str(_table_path(camera)),
+        "warnings": list(table.get("warnings") or []),
         **info,
     }
 
@@ -263,6 +378,7 @@ def kelvin_verb(image: str | int, *, job: str | None = None) -> KelvinResult:
         camera=result["camera"],
         table=result["table"],
         reason=result["reason"],
+        warnings=list(result.get("warnings") or []),
     )
 
 
@@ -281,9 +397,9 @@ def _unwrapped(fn):
 @metrics.instrumented("wb.calibrate")
 def calibrate(
     image: str | int,
-    k_from: int,
-    k_to: int,
-    step: int = 100,
+    k_from: int = 2000,
+    k_to: int = 12000,
+    step: int = 500,
     *,
     allow_in_job: bool = False,
     confirm: bool = False,
@@ -391,14 +507,29 @@ def calibrate(
                 fix="check darkroom.status/history for what actually landed and re-run",
                 detail={"kelvin": k, "path": resolved.path},
             )
-        points.append(
-            {
-                "k": k,
-                "coeff_r": params.get("coeff_r"),
-                "coeff_g": params.get("coeff_g"),
-                "coeff_b": params.get("coeff_b"),
-            }
+        coeff_r, coeff_g, coeff_b = (
+            params.get("coeff_r"),
+            params.get("coeff_g"),
+            params.get("coeff_b"),
         )
+        # Should-fix (fix round 1): a typed refusal for a sample the sweep
+        # cannot use -- None (never decoded, OR inf/nan, since
+        # `xmp.latest_params` already cleans those to None) or a zero
+        # `coeff_b` (which would divide-by-zero the r/b ratio below). Never
+        # let a garbage sample silently ride into the table or crash later.
+        if coeff_r is None or coeff_g is None or coeff_b is None or coeff_b == 0:
+            raise WbCalibrationUnreadable(
+                f"wb.calibrate: temperature's coefficients at {k} K are not usable for the "
+                f"r/b ratio (coeff_r={coeff_r!r}, coeff_g={coeff_g!r}, coeff_b={coeff_b!r})",
+                detail={
+                    "kelvin": k,
+                    "path": resolved.path,
+                    "coeff_r": coeff_r,
+                    "coeff_g": coeff_g,
+                    "coeff_b": coeff_b,
+                },
+            )
+        points.append({"k": k, "coeff_r": coeff_r, "coeff_g": coeff_g, "coeff_b": coeff_b})
 
     ratios = [p["coeff_r"] / p["coeff_b"] for p in points]
     for i in range(len(ratios) - 1):
@@ -414,14 +545,38 @@ def calibrate(
                 },
             )
 
-    table = [
-        {"kelvin": p["k"], "coeffs": [p["coeff_r"], p["coeff_g"], p["coeff_b"]]} for p in points
-    ]
+    # Fix round 1, blocker 1: the object shape design 11.4 documents, not
+    # task 9's bare array -- provenance (camera model, when, which darktable,
+    # which source image) travels WITH the numbers from here on.
+    measured_at = datetime.now(timezone.utc).isoformat()
+    try:
+        from scouter.core import scout
+
+        darktable_version = scout.CLIWrapper(darktable_cli_path=scout.cli_binary()).get_version()
+    except Exception:  # doctor-shaped info only, never a reason to refuse the write
+        darktable_version = None
+
+    table_doc = {
+        "version": 1,
+        "camera": camera,
+        "camera_model": tags.model,
+        "measured_at": measured_at,
+        "darktable": darktable_version,
+        # Never touched by this sweep (only "temperature" is set) -- darktable's
+        # own default, recorded rather than measured. See task-11-report.md.
+        "tint": 1.0,
+        "source_image": Path(resolved.path).name,
+        "synthetic": False,
+        "samples": [
+            {"k": p["k"], "coeff_r": p["coeff_r"], "coeff_g": p["coeff_g"], "coeff_b": p["coeff_b"]}
+            for p in points
+        ],
+    }
     paths.ensure(table_path)
     fd, tmp_name = tempfile.mkstemp(dir=str(table_path.parent), prefix=".wb-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(table, fh, indent=2, sort_keys=True)
+            json.dump(table_doc, fh, indent=2, sort_keys=True)
         os.replace(tmp_name, table_path)
     except BaseException:
         try:
@@ -467,9 +622,9 @@ for verb in (
         fn=calibrate,
         args=(
             IMAGE_ARG,
-            ArgSpec("k_from", "int", required=True, positional=True, help="first Kelvin point"),
-            ArgSpec("k_to", "int", required=True, positional=True, help="last Kelvin point"),
-            ArgSpec("step", "int", default=100, help="Kelvin step between points"),
+            ArgSpec("k_from", "int", default=2000, positional=True, help="first Kelvin point"),
+            ArgSpec("k_to", "int", default=12000, positional=True, help="last Kelvin point"),
+            ArgSpec("step", "int", default=500, help="Kelvin step between points"),
             ArgSpec(
                 "allow_in_job",
                 "bool",

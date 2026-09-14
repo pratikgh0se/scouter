@@ -47,6 +47,22 @@ class _UnsupportedUndo(ScouterError):
     fix = "press Ctrl-Z in darktable; Scouter cannot restore discarded params"
 
 
+class _UndoUnverified(ScouterError):
+    """Task 11 fix round 1, blocker 2: tier 3's Kelvin-inversion undo (design
+    11.4) sent a value and committed, but the post-restore coefficient ratio
+    did not come back within `wb._EXACT_TOLERANCE` -- an approximate undo
+    Scouter cannot confirm landed is never silently reported as done. The
+    journal entry stays open (this raises before `mark_undone` is reached),
+    so the same undo is reachable again on the next call.
+    """
+
+    code = "undo_unverified"
+    fix = (
+        "check the darkroom by eye; pin the coefficient sliders "
+        "(spike/scouter_wb_probe.lua) for an exact undo, or restore by hand"
+    )
+
+
 def _require_finite(name: str, value: float) -> float:
     """Reject nan/inf BEFORE any bridge call (final review, should-fix 5).
 
@@ -734,9 +750,10 @@ _TEMPERATURE_COEFF_NAMES = ("coeff_r", "coeff_g", "coeff_b", "coeff_g2")
 
 
 def _temperature_sliders_pinned() -> bool:
-    """Tier 1 (design 11.3) is available only once the host probe (task 11
-    step 3, `tests/test_host_phase2.py::test_pin_wb_coefficient_sliders`) has
-    pinned all three always-finite coefficients' `dt.gui.action` paths into
+    """Tier 2 (design 11.3, "probe-gated: undo through the coefficient
+    sliders") is available only once the host probe (task 11 step 3,
+    `tests/test_host_phase2.py::test_pin_wb_coefficient_sliders`) has pinned
+    all three always-finite coefficients' `dt.gui.action` paths into
     `dtbridge.ACTION_PATHS`. `coeff_g2` is optional -- it is `inf`/unused on
     the EM10iii body -- and is restored too when it happens to be pinned and
     the journalled value is finite.
@@ -749,8 +766,8 @@ def _temperature_sliders_pinned() -> bool:
 def _undo_temperature_via_sliders(
     job: str, entry: journal.Entry, before_params: dict
 ) -> tuple[bool, list[str], dict]:
-    """Tier 1: one absolute `set` per pinned coefficient, ONE `history.commit`,
-    then verify the whole vector from the XMP (design 11.3; brief step 4).
+    """Tier 2 (design 11.3): one absolute `set` per pinned coefficient, ONE
+    `history.commit`, then verify the whole vector from the XMP (brief step 4).
 
     `_close` compares each component against the CLEANED value --
     `xmp.latest_params` already turns `inf`/`nan` into `None` (fix: both this
@@ -802,9 +819,9 @@ def _undo_temperature_via_sliders(
 
 
 def _temperature_camera(entry: journal.Entry) -> str | None:
-    """Best-effort camera slug for `entry.path`, or `None` -- tier 2/4 both
+    """Best-effort camera slug for `entry.path`, or `None` -- tier 3/4 both
     need this, and neither may raise: an EXIF read failing is not a reason
-    to skip straight past tier 2 to a worse refusal message."""
+    to skip straight past tier 3 to a worse refusal message."""
     from scouter.config import load as load_config
     from scouter.core import exif
 
@@ -838,15 +855,28 @@ def _temperature_target_kelvin(
 def _undo_temperature_via_kelvin(
     job: str, entry: journal.Entry, before_params: dict, camera: str
 ) -> tuple[bool, list[str], dict] | None:
-    """Tier 2 (design 11.4): when the coefficient sliders are not pinned,
-    invert the journalled coefficients to a target Kelvin from the measured
-    table (`wb.calibrate`) and restore THAT through the ordinary Kelvin
-    slider. This is an APPROXIMATE undo -- a Kelvin round trip through
-    darktable's own blackbody model, not an exact coefficient restore --
-    which is why tier 1 (the coefficient sliders) is always tried first.
-    Returns `None` when no measured table (or no camera) is available, so
-    the caller falls through to tier 4's honest refusal.
+    """Tier 3 (design 11.4, "built regardless: the per-camera calibration
+    table"): when the coefficient sliders are not pinned, invert the
+    journalled coefficients to a target Kelvin from the measured table
+    (`wb.calibrate`) and restore THAT through the ordinary Kelvin slider.
+    This is an APPROXIMATE undo -- a Kelvin round trip through darktable's
+    own blackbody model, not an exact coefficient restore -- which is why
+    tier 2 (the coefficient sliders) is always tried first. Returns `None`
+    when no measured table (or no camera) is available, so the caller falls
+    through to tier 4's honest refusal.
+
+    Fix round 1, blocker 2: the write is only reported "done" when the
+    post-restore ratio verifies within `wb._EXACT_TOLERANCE` -- the same
+    tolerance `wb._invert` uses to call a sample "exact", since both
+    questions are "is this ratio close enough to trust." On a verification
+    failure this RAISES `_UndoUnverified` (never returns a normal result
+    with a warning): the caller's `journal.mark_undone` is then never
+    reached, so the entry stays open and reachable on the next call --
+    an approximate undo Scouter cannot confirm landed must not be
+    indistinguishable from one that did.
     """
+    from scouter.core import wb
+
     target_k, _ = _temperature_target_kelvin(before_params, camera)
     if target_k is None:
         return None
@@ -871,17 +901,27 @@ def _undo_temperature_via_kelvin(
         after_ratio = _after_ratio()
         if after_ratio is None or target_ratio is None:
             return False
-        return abs(after_ratio - target_ratio) / abs(target_ratio) <= 0.02
+        return abs(after_ratio - target_ratio) / abs(target_ratio) <= wb._EXACT_TOLERANCE
 
     committed, warnings = _commit_with_readback(
         job, entry.image_id, confirm=_confirm, what="temperature (undo via Kelvin inversion)"
     )
+    after_ratio = _after_ratio()
     verified = _confirm()
     after_params = _temperature_extra(entry.path, entry.instance).get("params") or {}
     if not verified:
-        warnings.append(
-            f"could not verify the Kelvin-inversion restore for seq {entry.seq}: this is an "
-            "approximate undo (coefficient ratio, not the exact coefficients)"
+        raise _UndoUnverified(
+            f"seq {entry.seq}: Kelvin-inversion undo committed ({target_k:.0f} K from "
+            f"{camera}'s measured table) but the coefficient ratio did not verify within "
+            f"{wb._EXACT_TOLERANCE:.0%}: measured r/b={after_ratio!r}, target r/b={target_ratio!r}",
+            detail={
+                "seq": entry.seq,
+                "target_kelvin": target_k,
+                "measured_ratio": after_ratio,
+                "target_ratio": target_ratio,
+                "tolerance": wb._EXACT_TOLERANCE,
+                "coefficients": before_params,
+            },
         )
     warnings.append(
         f"restored via Kelvin inversion ({target_k:.0f} K from {camera}'s measured table), not "
@@ -975,16 +1015,31 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
         journal.mark_undone(job, entry.seq, note="skipped: reset is not undoable")
         raise _UnsupportedUndo(reason, detail={"seq": entry.seq, "module": entry.module})
 
-    plan = [
-        {
-            "action": "darkroom.undo_last",
-            "seq": entry.seq,
-            "verb": entry.verb,
-            "module": entry.module,
-            "param": entry.param,
-            "restore_to": entry.before.get("value"),
-        }
-    ]
+    plan_entry = {
+        "action": "darkroom.undo_last",
+        "seq": entry.seq,
+        "verb": entry.verb,
+        "module": entry.module,
+        "param": entry.param,
+        "restore_to": entry.before.get("value"),
+    }
+    if entry.module == "temperature":
+        # Should-fix (task 11 fix round 1): a dry run on a temperature entry
+        # names the journalled coefficient vector (the one thing every tier
+        # would restore from) and predicts WHICH tier a real call would
+        # take, without sending anything -- the same "no darktable calls
+        # were made" promise every other dry run here keeps.
+        before_params = entry.before.get("params")
+        plan_entry["coefficients"] = before_params
+        if before_params and _temperature_sliders_pinned():
+            plan_entry["tier"] = "coefficient_sliders"
+        elif before_params:
+            camera = _temperature_camera(entry)
+            target_k, _ = _temperature_target_kelvin(before_params, camera)
+            plan_entry["tier"] = "kelvin_inversion" if target_k is not None else "refuse"
+        else:
+            plan_entry["tier"] = "refuse"
+    plan = [plan_entry]
     if dry_run:
         return UndoResult(
             outcome="dry_run",
@@ -1051,10 +1106,10 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
         }
         mark_undone_ok = True
     elif entry.module == "temperature":
-        # Task 11: three tiers, tried in order (design 11.2-11.4; brief
-        # steps 4/6). `before_params` is `None` for a journal entry written
-        # before this task landed (or when the module never decoded) -- that
-        # is tier 4 too, with no coefficients to hand over.
+        # Task 11: tiers 2/3/4 (design 11.3/11.4/11.5), tried in order.
+        # `before_params` is `None` for a journal entry written before this
+        # task landed (or when the module never decoded) -- that is tier 4
+        # too, with no coefficients to hand over.
         before_params = entry.before.get("params")
         if before_params and _temperature_sliders_pinned():
             committed, warnings, undone = _undo_temperature_via_sliders(job, entry, before_params)
@@ -1073,6 +1128,10 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             if via_kelvin is None:
                 _refuse_temperature_undo(entry, before_params)
                 raise AssertionError("unreachable: _refuse_temperature_undo always raises")
+            # Fix round 1, blocker 2: `_undo_temperature_via_kelvin` itself
+            # raises `_UndoUnverified` (propagating past this whole function,
+            # never reaching `mark_undone` below) when the ratio does not
+            # verify -- a normal return here is always a verified tier 3.
             committed, warnings, undone = via_kelvin
             mark_undone_ok = True
     else:

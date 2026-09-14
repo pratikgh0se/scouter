@@ -116,10 +116,23 @@ class _ConfigDirFixture(unittest.TestCase):
         self._tmpdir.cleanup()
 
 
+def _expected_interpolated_kelvin(lo: dict, hi: dict, coeffs: list[float]) -> float:
+    """The exact value `wb._invert` computes for a point strictly between
+    `lo` and `hi`'s own ratios -- same linear interpolation over r/b,
+    reproduced here so `InvertRealTableTest` pins a computed number instead
+    of just bounds-checking it (should-fix, fix round 1)."""
+    lo_r = lo["coeff_r"] / lo["coeff_b"]
+    hi_r = hi["coeff_r"] / hi["coeff_b"]
+    target = coeffs[0] / coeffs[2]
+    frac = (target - lo_r) / (hi_r - lo_r)
+    return lo["k"] + frac * (hi["k"] - lo["k"])
+
+
 class InvertRealTableTest(_ConfigDirFixture):
-    """`wb.kelvin` against the real committed table -- three points computed
-    from whatever it actually holds: the first sample (exact), a midpoint
-    between the first two (interpolated, bracket correct), and the last
+    """`wb.kelvin` against the real committed table (design 11.4's object
+    shape) -- three points computed from whatever it actually holds: the
+    first sample (exact), a midpoint between the first two (interpolated,
+    bracket AND value pinned to a computed expectation), and the last
     sample (exact)."""
 
     def setUp(self) -> None:
@@ -129,30 +142,33 @@ class InvertRealTableTest(_ConfigDirFixture):
         (wb_dir / "em10iii.json").write_text(
             REAL_TABLE.read_text(encoding="utf-8"), encoding="utf-8"
         )
-        self.table = json.loads(REAL_TABLE.read_text(encoding="utf-8"))
-        self.assertGreaterEqual(
-            len(self.table), 2, "the real table needs at least two points to test"
-        )
+        doc = json.loads(REAL_TABLE.read_text(encoding="utf-8"))
+        self.assertIsInstance(doc, dict, "the committed table is the object shape (design 11.4)")
+        self.assertFalse(doc["synthetic"])
+        self.samples = sorted(doc["samples"], key=lambda p: p["k"])
+        self.assertGreaterEqual(len(self.samples), 2, "need at least two points to test")
+
+    def _coeffs(self, sample: dict) -> list[float]:
+        return [sample["coeff_r"], sample["coeff_g"], sample["coeff_b"]]
 
     def test_inverts_the_real_table(self) -> None:
-        first = self.table[0]
-        result = wb.kelvin(first["coeffs"], "em10iii")
-        self.assertEqual(result["kelvin"], first["kelvin"])
+        first = self.samples[0]
+        result = wb.kelvin(self._coeffs(first), "em10iii")
+        self.assertEqual(result["kelvin"], first["k"])
         self.assertFalse(result["interpolated"])
         self.assertTrue(result["exact"])
 
-        lo, hi = self.table[0], self.table[1]
-        mid_coeffs = [(a + b) / 2 for a, b in zip(lo["coeffs"][:3], hi["coeffs"][:3])]
+        lo, hi = self.samples[0], self.samples[1]
+        mid_coeffs = [(a + b) / 2 for a, b in zip(self._coeffs(lo), self._coeffs(hi))]
+        expected_k = _expected_interpolated_kelvin(lo, hi, mid_coeffs)
         mid_result = wb.kelvin(mid_coeffs, "em10iii")
         self.assertTrue(mid_result["interpolated"])
-        self.assertEqual(mid_result["bracket"], [lo["kelvin"], hi["kelvin"]])
-        assert mid_result["kelvin"] is not None
-        self.assertGreaterEqual(mid_result["kelvin"], lo["kelvin"])
-        self.assertLessEqual(mid_result["kelvin"], hi["kelvin"])
+        self.assertEqual(mid_result["bracket"], [lo["k"], hi["k"]])
+        self.assertAlmostEqual(mid_result["kelvin"], expected_k, places=6)
 
-        last = self.table[-1]
-        last_result = wb.kelvin(last["coeffs"], "em10iii")
-        self.assertEqual(last_result["kelvin"], last["kelvin"])
+        last = self.samples[-1]
+        last_result = wb.kelvin(self._coeffs(last), "em10iii")
+        self.assertEqual(last_result["kelvin"], last["k"])
         self.assertTrue(last_result["exact"])
 
     def test_out_of_range_is_none_with_a_reason(self) -> None:
@@ -162,31 +178,38 @@ class InvertRealTableTest(_ConfigDirFixture):
         self.assertIn("calibrated range", result["reason"])
 
 
-class NonMonotoneTableRefusedTest(unittest.TestCase):
-    """A hand-built sample list with one inverted pair: `_invert` (and
-    `wb.calibrate`'s own check, exercised in `CalibrateMonotonicityTest`
-    below) must never silently accept it."""
+class LoadTableLegacyShapeTest(_ConfigDirFixture):
+    """`load_table` (fix round 1, blocker 1) still reads task 9's original
+    bare-array shape -- `synthetic: true` assumed, and a warning surfaced
+    all the way out through `wb.kelvin`'s own `warnings`."""
 
-    def test_non_monotone_table_refused(self) -> None:
-        # calibrate()'s own monotonicity check operates on consecutive
-        # ratios directly; reproduce that check here against a hand-built,
-        # deliberately non-monotone list, the same shape calibrate() builds
-        # internally before it ever writes a table.
-        points = [
-            {"k": 3000, "coeff_r": 0.50, "coeff_b": 1.0},
-            {"k": 3100, "coeff_r": 0.60, "coeff_b": 1.0},
-            {"k": 3200, "coeff_r": 0.55, "coeff_b": 1.0},
-        ]
-        ratios = [p["coeff_r"] / p["coeff_b"] for p in points]
-        breaking = None
-        for i in range(len(ratios) - 1):
-            if ratios[i + 1] <= ratios[i]:
-                breaking = (points[i], points[i + 1], ratios[i], ratios[i + 1])
-                break
-        assert breaking is not None
-        self.assertEqual((breaking[0]["k"], breaking[1]["k"]), (3100, 3200))
-        self.assertAlmostEqual(breaking[2], 0.60)
-        self.assertAlmostEqual(breaking[3], 0.55)
+    def setUp(self) -> None:
+        super().setUp()
+        wb_dir = self.tmp / "wb"
+        wb_dir.mkdir(parents=True)
+        (wb_dir / "em10iii.json").write_text(
+            json.dumps(
+                [
+                    {"kelvin": 3000, "coeffs": [1.2, 1.0, 2.4]},
+                    {"kelvin": 6000, "coeffs": [1.8, 1.0, 1.6]},
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def test_load_table_reads_the_legacy_array_as_synthetic_with_a_warning(self) -> None:
+        table = wb.load_table("em10iii")
+        assert table is not None
+        self.assertTrue(table["synthetic"])
+        self.assertEqual([s["kelvin"] for s in table["samples"]], [3000, 6000])
+        self.assertTrue(table["warnings"])
+        self.assertIn("legacy", table["warnings"][0])
+
+    def test_kelvin_surfaces_the_legacy_warning(self) -> None:
+        result = wb.kelvin([1.2, 1.0, 2.4], "em10iii")
+        self.assertEqual(result["kelvin"], 3000)
+        self.assertTrue(result["warnings"])
+        self.assertIn("legacy", result["warnings"][0])
 
 
 class LatestParamsRealVectorTest(unittest.TestCase):
@@ -357,7 +380,7 @@ class CalibrateOverwriteTest(_CalibrateFixture):
         )
         self.assertEqual(self.bridge.count("darkroom.open"), 0)
 
-    def test_calibrate_refuses_to_clobber_without_confirm_even_when_asked_to_run(self) -> None:
+    def test_calibrate_overwrites_an_existing_table_when_confirmed(self) -> None:
         """`confirm` is the one gate: passing it lets a second calibrate call
         overwrite a table that already exists, and the result says so."""
         from scouter.config import load as load_config
@@ -378,7 +401,7 @@ class CalibrateOverwriteTest(_CalibrateFixture):
 
 
 class UndoRestoresEveryCoefficientTest(unittest.TestCase):
-    """Tier 1 (design 11.3): with all four coefficient sliders pinned, undo
+    """Tier 2 (design 11.3): with all four coefficient sliders pinned, undo
     sends one `set` per component, ONE commit, and verifies the whole vector
     -- a failure on any single component leaves the journal entry open."""
 
@@ -483,6 +506,19 @@ class UndoRestoresEveryCoefficientTest(unittest.TestCase):
         self.assertTrue(result.undone["verified"])
         self.assertIsNone(journal.latest_open("job-test"))
 
+    def test_dry_run_reports_the_coefficient_vector_and_the_tier(self) -> None:
+        # Should-fix (fix round 1): a dry run on a temperature entry never
+        # sends anything, but names the journalled coefficients and
+        # predicts the tier a real call would take -- here "coefficient_
+        # sliders" (tier 2), since all four are pinned in this fixture.
+        result = darkroom.undo_last(dry_run=True)
+        self.assertEqual(result.outcome, "dry_run")
+        self.assertEqual(self.bridge.count("darkroom.action"), 0)
+        self.assertEqual(len(self.commit_calls), 0)
+        plan_entry = result.plan[0]
+        self.assertEqual(plan_entry["coefficients"], self.before_params)
+        self.assertEqual(plan_entry["tier"], "coefficient_sliders")
+
     def test_a_verification_failure_on_one_component_leaves_the_entry_open(self) -> None:
         self.fail_component = "coeff_g"
         result = darkroom.undo_last()
@@ -492,6 +528,199 @@ class UndoRestoresEveryCoefficientTest(unittest.TestCase):
         self.assertIsNotNone(entry)
         assert entry is not None
         self.assertFalse(entry.undone, "a failed component must leave the entry undone: false")
+
+
+class UndoViaKelvinInversionTest(unittest.TestCase):
+    """Tier 3 (design 11.4): no pinned coefficient sliders, but a measured
+    table exists -- undo inverts the journalled coefficients to a target
+    Kelvin and restores through the ordinary `temperature` slider, verified
+    within `wb._EXACT_TOLERANCE` (fix round 1, blocker 2/3). A verification
+    failure raises `_UndoUnverified` (`undo_unverified`) rather than
+    reporting an unconfirmed restore as done, and leaves the entry open.
+    """
+
+    def setUp(self) -> None:
+        self.cache = TempCache()
+        root = self.cache.start()
+        self.raw = root / "test.ORF"
+        self.raw.write_bytes(_build_tiff_header())
+
+        self._saved_config = os.environ.get("SCOUTER_CONFIG")
+        os.environ["SCOUTER_CONFIG"] = str(root / "config.json")
+
+        from scouter.config import load as load_config
+        from scouter.core import exif
+
+        tags = exif.read_tags(self.raw)
+        self.camera = exif.camera_slug(tags, load_config())
+        wb_dir = root / "wb"
+        wb_dir.mkdir(parents=True)
+        (wb_dir / f"{self.camera}.json").write_text(
+            REAL_TABLE.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        table = json.loads(REAL_TABLE.read_text(encoding="utf-8"))
+        samples = sorted(table["samples"], key=lambda p: p["k"])
+        exact = samples[3]
+        self.target_kelvin = exact["k"]
+        self.before_params = {
+            "coeff_r": exact["coeff_r"],
+            "coeff_g": exact["coeff_g"],
+            "coeff_b": exact["coeff_b"],
+            "coeff_g2": None,
+        }
+        self._target_ratio = exact["coeff_r"] / exact["coeff_b"]
+
+        # No pinned coefficient sliders -- tier 3 is what must run.
+        self._original_action_paths = dict(dtbridge.ACTION_PATHS)
+        for key in list(dtbridge.ACTION_PATHS):
+            if key[0] == "temperature" and key[1].startswith("coeff_"):
+                del dtbridge.ACTION_PATHS[key]
+
+        self._landed_ratio: float | None = None
+        self.bridge = FakeBridge(
+            {
+                "darkroom.current": {
+                    "image_id": 12,
+                    "path": str(self.raw),
+                    "view": "darkroom",
+                    "source": "action_images",
+                },
+                "darkroom.action": self._action,
+            }
+        )
+        dtbridge.set_bridge(self.bridge)
+
+        self.commit_calls: list[tuple] = []
+
+        def fake_commit(job, image, *, strategy="auto"):
+            self.commit_calls.append((job, image, strategy))
+            return CommitResult(committed=True, warnings=[])
+
+        self._commit_patcher = mock.patch("scouter.core.darkroom._commit", side_effect=fake_commit)
+        self._commit_patcher.start()
+        self.addCleanup(self._commit_patcher.stop)
+
+        entry = journal.begin(
+            "job-test",
+            verb="darkroom.set",
+            image_id=12,
+            path=str(self.raw),
+            module="temperature",
+            param="temperature",
+            instance=0,
+            before={
+                "source": "xmp",
+                "enabled": True,
+                "history_end": 14,
+                "value": None,
+                "params": dict(self.before_params),
+                "params_hex": "deadbeef",
+            },
+        )
+        journal.complete("job-test", entry.seq, after={"value": 6500.0})
+
+    def _action(self, params: dict) -> dict:
+        value = params.get("value")
+        if params.get("path") == "iop/temperature/temperature" and self._landed_ratio is not None:
+            Path(str(self.raw) + ".xmp").write_text(
+                _temperature_sidecar((self._landed_ratio, 1.0, 1.0, float("inf")), num=15),
+                encoding="utf-8",
+            )
+        return {"nan": False, "status": value, "view": "darkroom", **params}
+
+    def tearDown(self) -> None:
+        dtbridge.set_bridge(None)
+        dtbridge.ACTION_PATHS.clear()
+        dtbridge.ACTION_PATHS.update(self._original_action_paths)
+        if self._saved_config is None:
+            os.environ.pop("SCOUTER_CONFIG", None)
+        else:
+            os.environ["SCOUTER_CONFIG"] = self._saved_config
+        self.cache.stop()
+
+    def test_undo_via_kelvin_inversion_when_verified(self) -> None:
+        self._landed_ratio = self._target_ratio  # exact match: within tolerance
+        result = darkroom.undo_last()
+        sent = [
+            p
+            for m, p in self.bridge.calls
+            if m == "darkroom.action" and p["path"] == "iop/temperature/temperature"
+        ]
+        self.assertEqual(len(sent), 1)
+        self.assertAlmostEqual(sent[0]["value"], self.target_kelvin, places=0)
+        self.assertEqual(len(self.commit_calls), 1)
+        assert result.undone is not None
+        self.assertTrue(result.undone["verified"])
+        self.assertEqual(result.undone["tier"], "kelvin_inversion")
+        self.assertEqual(result.undone["restored_kelvin"], self.target_kelvin)
+        self.assertIsNone(journal.latest_open("job-test"))
+
+    def test_undo_via_kelvin_inversion_unverified_raises_and_leaves_entry_open(self) -> None:
+        self._landed_ratio = self._target_ratio * 2  # well outside wb._EXACT_TOLERANCE
+        with self.assertRaises(darkroom._UndoUnverified) as ctx:
+            darkroom.undo_last()
+        self.assertEqual(ctx.exception.code, "undo_unverified")
+        detail = ctx.exception.detail
+        self.assertAlmostEqual(detail["measured_ratio"], self._landed_ratio, places=4)
+        self.assertAlmostEqual(detail["target_ratio"], self._target_ratio, places=4)
+        self.assertEqual(detail["tolerance"], wb._EXACT_TOLERANCE)
+        entry = journal.latest_open("job-test")
+        self.assertIsNotNone(entry)
+        assert entry is not None
+        self.assertFalse(entry.undone, "an unverified tier-3 undo must leave the entry open")
+
+
+class WbKelvinVerbTest(_ConfigDirFixture):
+    """`wb.kelvin` as a REGISTERED verb, through `registry.call` end to end
+    (fix round 1, blocker 3) -- not just the undecorated `kelvin()` function
+    `outliers.list`/`style.py` call directly."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.cache = TempCache()
+        root = self.cache.start()
+        self.raw = root / "em10iii.ORF"
+        self.raw.write_bytes(_build_tiff_header())
+
+        from scouter.config import load as load_config
+        from scouter.core import exif
+
+        tags = exif.read_tags(self.raw)
+        self.camera = exif.camera_slug(tags, load_config())
+
+        wb_dir = self.tmp / "wb"
+        wb_dir.mkdir(parents=True)
+        (wb_dir / f"{self.camera}.json").write_text(
+            REAL_TABLE.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        table = json.loads(REAL_TABLE.read_text(encoding="utf-8"))
+        first = sorted(table["samples"], key=lambda p: p["k"])[0]
+        Path(str(self.raw) + ".xmp").write_text(
+            _temperature_sidecar(
+                (first["coeff_r"], first["coeff_g"], first["coeff_b"], float("inf")), num=0
+            ),
+            encoding="utf-8",
+        )
+        self.expected_kelvin = first["k"]
+
+        self.bridge = FakeBridge(
+            {"image.lookup": {"found": True, "image_id": 9, "path": str(self.raw)}}
+        )
+        dtbridge.set_bridge(self.bridge)
+
+    def tearDown(self) -> None:
+        dtbridge.set_bridge(None)
+        self.cache.stop()
+        super().tearDown()
+
+    def test_wb_kelvin_verb_through_registry(self) -> None:
+        from scouter import registry
+
+        envelope = registry.call("wb.kelvin", "cli", image=str(self.raw))
+        self.assertTrue(envelope.ok, envelope.to_dict())
+        self.assertEqual(envelope.data["kelvin"], self.expected_kelvin)
+        self.assertTrue(envelope.data["exact"])
+        self.assertEqual(envelope.data["camera"], self.camera)
 
 
 class RefusalCarriesCoefficientsTest(unittest.TestCase):

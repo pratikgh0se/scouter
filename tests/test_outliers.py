@@ -169,19 +169,22 @@ class KelvinFallbackTest(unittest.TestCase):
             (FIXTURES / "wb-em10iii.json").read_text(encoding="utf-8"), encoding="utf-8"
         )
         # Task 11: `wb-em10iii.json` is now the REAL measured table (a host
-        # calibration of the EditingTrial ORF), not five made-up points --
-        # two of its own sample rows stand in for the old hard-coded
+        # calibration of the EditingTrial ORF, design 11.4's object shape --
+        # fix round 1 rewrapped it with provenance), not five made-up points
+        # -- two of its own sample rows stand in for the old hard-coded
         # 5000/6000 K coefficients, so this stays an "exact" match (delta ==
         # the Kelvin gap between the two rows) however the real numbers move
         # on a future re-calibration.
-        table = json.loads((FIXTURES / "wb-em10iii.json").read_text(encoding="utf-8"))
-        lo, hi = sorted(table, key=lambda p: p["kelvin"])[:2]
-        ref = _frame(lum=100.0, coeffs=lo["coeffs"], camera="em10iii")
-        frame = _frame(lum=100.0, coeffs=hi["coeffs"], camera="em10iii")
+        doc = json.loads((FIXTURES / "wb-em10iii.json").read_text(encoding="utf-8"))
+        lo, hi = sorted(doc["samples"], key=lambda p: p["k"])[:2]
+        lo_coeffs = [lo["coeff_r"], lo["coeff_g"], lo["coeff_b"]]
+        hi_coeffs = [hi["coeff_r"], hi["coeff_g"], hi["coeff_b"]]
+        ref = _frame(lum=100.0, coeffs=lo_coeffs, camera="em10iii")
+        frame = _frame(lum=100.0, coeffs=hi_coeffs, camera="em10iii")
         row = style._measure_frame(frame, ref, self.tol)
         self.assertEqual(row["wb_test"], "kelvin")
         self.assertIsNotNone(row["temperature_k_delta"])
-        self.assertAlmostEqual(row["temperature_k_delta"], hi["kelvin"] - lo["kelvin"], places=1)
+        self.assertAlmostEqual(row["temperature_k_delta"], hi["k"] - lo["k"], places=1)
         self.assertNotIn("temperature_k_reason", row)
 
 

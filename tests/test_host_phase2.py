@@ -400,9 +400,10 @@ WB_SLIDER_CANDIDATES: tuple[str, ...] = (
 #: the rest of that session, regardless of which candidate is first (both
 #: "iop/temperature/red" and "iop/temperature/channel coefficients/red"
 #: reproduced it independently) -- `dt.gui.action` on an unrecognised path
-#: under this module does not fail gracefully on darktable 5.4.1. Tier 1 is
-#: not available on this host; see docs/measurements-generated.md and the
-#: task 11 report for the full record.
+#: under this module does not fail gracefully on darktable 5.4.1. Tier 2
+#: (design 11.3, the coefficient-slider undo) is not available on this
+#: host; see docs/measurements-generated.md and the task 11 report for the
+#: full record.
 
 #: The two candidate NAMING SCHEMES that would pin all three always-finite
 #: coefficients (red/green/blue), tried in this order.
@@ -836,13 +837,26 @@ class PinWbCoefficientSlidersHostTest(unittest.TestCase):
             )
         if pinned_scheme:
             names = ("coeff_r", "coeff_g", "coeff_b")
-            lines.append(f"**Pinned:** {dict(zip(names, pinned_scheme))}")
-            for name, path in zip(names, pinned_scheme):
-                dtbridge.ACTION_PATHS[("temperature", name)] = path
+            pins = dict(zip(names, pinned_scheme))
+            lines.append(f"**Pinned:** {pins}")
+            # Nit (fix round 1): a host TEST must never mutate
+            # `dtbridge.ACTION_PATHS` in-process -- that pin would vanish the
+            # moment the process exits, and a "pinned" entry that isn't
+            # actually in the committed source is worse than an honest
+            # refusal. Print the exact source edit for a human to review and
+            # commit into `scouter/core/dtbridge.py`'s own `ACTION_PATHS`
+            # table instead.
+            lines.append("")
+            lines.append("Add to `scouter/core/dtbridge.py`'s `ACTION_PATHS`:")
+            lines.append("```python")
+            for name, path in pins.items():
+                lines.append(f'    ("temperature", {name!r}): {path!r},')
+            lines.append("```")
         else:
             lines.append(
-                "**Pinned: none.** Tier 1 (the coefficient-slider undo) is not available from "
-                "this run -- the negative result IS the evidence for tier 4's refusal."
+                "**Pinned: none.** Tier 2 (the coefficient-slider undo, design 11.3) is not "
+                "available from this run -- the negative result IS the evidence for tier 4's "
+                "refusal (design 11.5)."
             )
         lines.append("")
 

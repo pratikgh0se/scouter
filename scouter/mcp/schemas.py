@@ -719,11 +719,19 @@ TOOL_SPECS: list[dict] = [
         "inputSchema": _schema(
             {
                 "image": IMAGE,
-                "k_from": {"type": "integer", "description": "first Kelvin point"},
-                "k_to": {"type": "integer", "description": "last Kelvin point"},
+                "k_from": {
+                    "type": "integer",
+                    "default": 2000,
+                    "description": "first Kelvin point",
+                },
+                "k_to": {
+                    "type": "integer",
+                    "default": 12000,
+                    "description": "last Kelvin point",
+                },
                 "step": {
                     "type": "integer",
-                    "default": 100,
+                    "default": 500,
                     "description": "Kelvin step between points",
                 },
                 "allow_in_job": {
@@ -738,7 +746,7 @@ TOOL_SPECS: list[dict] = [
                 },
                 "dry_run": DRY_RUN,
             },
-            ["image", "k_from", "k_to"],
+            ["image"],
         ),
     },
 ]
