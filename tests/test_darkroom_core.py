@@ -78,9 +78,9 @@ class _DarkroomFixture(unittest.TestCase):
         # (fix round 2, should-fix 8).
         self.commit_calls: list[tuple] = []
 
-        def fake_commit(job, image, *, strategy="auto"):
-            self.commit_calls.append((job, image, strategy))
-            return CommitResult(committed=True, warnings=[])
+        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True):
+            self.commit_calls.append((job, image, strategy, attempts, expect_change))
+            return CommitResult(committed=True, changed=expect_change, warnings=[])
 
         self._commit_patcher = mock.patch("scouter.core.darkroom._commit", side_effect=fake_commit)
         self._commit_patcher.start()
@@ -114,8 +114,9 @@ class DarkroomCoreTest(_DarkroomFixture):
     def test_set_with_commit_routes_through_the_commit_seam(self) -> None:
         darkroom.set_param(module="exposure", param="exposure", value=2.0)
         self.assertEqual(len(self.commit_calls), 1)
-        job, image, strategy = self.commit_calls[0]
+        job, image, strategy, _attempts, expect_change = self.commit_calls[0]
         self.assertEqual((job, image, strategy), ("job-test", 12, "auto"))
+        self.assertTrue(expect_change, "a real change (2.0 != fixture's 1.55) expects a change")
         entry = journal.latest_open("job-test")
         assert entry is not None
         self.assertTrue(entry.commit)

@@ -198,9 +198,32 @@ TOOL_SPECS: list[dict] = [
                     "description": "commit trigger; auto picks the cheapest "
                     "that works on this build",
                 },
+                "attempts": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3,
+                    "default": 2,
+                    "description": "view-bounce attempts, clamped to 1..3; a caller "
+                    "sure this is a no-op should pass 1",
+                },
+                "expect_change": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "False forces attempts=1 and reports a confirmed "
+                    "no-op as ok/changed=false instead of raising commit_timeout",
+                },
             },
             [],
         ),
+    },
+    {
+        "name": "history_changed",
+        "description": "Whether an image's XMP sidecar is still the one Scouter last "
+        "committed (a watermark comparison, not a bounce). A pure read: "
+        "no darkroom action, no history.commit. Call this before a "
+        "repeat set to skip a bounce it already knows will find nothing "
+        "to write.",
+        "inputSchema": _schema({"image": IMAGE}, ["image"]),
     },
     {
         "name": "scout_stats",

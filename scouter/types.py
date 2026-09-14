@@ -56,6 +56,9 @@ class SetResult(Payload):
     previous: float | None = None
     committed: bool = False
     source: str = "xmp"
+    # Task 12: True only on the zero-bounce, zero-bridge-write shortcut --
+    # the requested value already matches a FRESH-watermarked sidecar.
+    noop: bool = False
 
 
 @dataclass
@@ -121,6 +124,19 @@ class CommitResult(Payload):
     view_after: str = "unknown"
     ms: int = 0
     xmp_mtime: float | None = None
+    # Task 12: True when this commit's own poll actually saw the sidecar
+    # change; False only reachable with `expect_change=False`, when the
+    # bridge confirmed nothing changed and that was the expected outcome.
+    changed: bool = True
+
+
+@dataclass
+class ChangedResult(Payload):
+    """`history.changed`'s result -- a pure read, no bounce (task 12)."""
+
+    fresh: bool = False
+    watermark: dict | None = None
+    sidecar: dict | None = None
 
 
 @dataclass

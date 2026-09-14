@@ -97,8 +97,16 @@ def _job_state_read(job: str) -> dict:
 
 
 def _record_opened_image(job: str, image_id: int, path: str) -> None:
-    """Remember which image THIS job opened (ruling 30)."""
-    _job_state_write(job, {"opened_image_id": int(image_id), "opened_path": path})
+    """Remember which image THIS job opened (ruling 30).
+
+    Read-modify-write, not a blind overwrite (task 12): `scouter.core.history`
+    writes the same per-job state file (a `watermarks` key), and an `open`
+    call must not silently wipe out every watermark this job has recorded.
+    """
+    state = _job_state_read(job)
+    state["opened_image_id"] = int(image_id)
+    state["opened_path"] = path
+    _job_state_write(job, state)
 
 
 def _require_job_image(job: str, loaded_image_id: int) -> None:
@@ -146,6 +154,11 @@ def _commit_with_readback(
     except CommitTimeout:
         if not confirm():
             raise
+        # Task 12, step 2: a readback-resolved commit still means the sidecar
+        # on disk is now the state Scouter believes it committed, so the
+        # watermark is recorded here too -- `history.commit`'s own success
+        # path never ran (it raised), so nothing else would record it.
+        _watermark_write(job, image_id)
         return True, [
             f"darktable wrote no new sidecar for {what}: the state requested is the "
             "one the XMP already carried, so there was no history change to write. "
@@ -154,7 +167,25 @@ def _commit_with_readback(
     return result.committed, list(result.warnings)
 
 
-def _commit(job: str, image_id: int, *, strategy: str = "auto") -> CommitResult:
+def _watermark_write(job: str, image_id: int) -> None:
+    """`history.watermark_write`, resolved against the image's own sidecar path."""
+    from scouter.core import history
+
+    current = dtbridge.call("darkroom.current", {})
+    path = current.get("path")
+    if path is None:
+        return
+    history.watermark_write(job, image_id, str(xmp.sidecar_path(str(path))))
+
+
+def _commit(
+    job: str,
+    image_id: int,
+    *,
+    strategy: str = "auto",
+    attempts: int | None = None,
+    expect_change: bool = True,
+) -> CommitResult:
     """Every write's post-action commit, routed through one seam (ruling 21).
 
     Imports `scouter.core.history` lazily so `darkroom.py` stays importable
@@ -164,11 +195,23 @@ def _commit(job: str, image_id: int, *, strategy: str = "auto") -> CommitResult:
     two -- `history.commit` is itself `@instrumented`. Falls back to the
     wrapped function if `__wrapped__` is ever absent, so this never breaks
     outright if that decorator detail changes.
+
+    `attempts`/`expect_change` (task 12): forwarded straight to
+    `history.commit`, whose docstring covers the no-op-pre-check use case.
+    `attempts=None` lets `history.commit` supply its own default.
     """
     from scouter.core import history
 
     commit_fn = getattr(history.commit, "__wrapped__", history.commit)
-    return commit_fn(image_id, timeout_s=5.0, strategy=strategy, job=job)
+    kwargs: dict = {
+        "timeout_s": 5.0,
+        "strategy": strategy,
+        "expect_change": expect_change,
+        "job": job,
+    }
+    if attempts is not None:
+        kwargs["attempts"] = attempts
+    return commit_fn(image_id, **kwargs)
 
 
 def _close(a: float | None, b: float | None, tol: float = 1e-4) -> bool:
@@ -302,6 +345,61 @@ def _before_state(
     return state
 
 
+def _noop_shortcut(
+    job: str,
+    resolved: dtbridge.ResolvedImage,
+    module: str,
+    param: str,
+    instance: int,
+    target: float | None,
+    before: dict,
+    *,
+    requested: float | None,
+) -> SetResult | None:
+    """The zero-bounce, zero-bridge-write path (task 12).
+
+    `target` is the absolute value this write would end up at, known BEFORE
+    sending anything: `set`'s own requested value, or (for `nudge`) its own
+    current value when `steps=0` asks for no movement at all. `None` means
+    the caller cannot know the target without sending the action first (a
+    nonzero-step nudge), so there is nothing to short-circuit.
+
+    When the target already matches the module's last-committed value, the
+    module is enabled, AND the watermark proves that value is still fresh
+    (not stale from an uncommitted edit), there is nothing to send: darktable
+    only writes the sidecar when the history actually CHANGES (phase 1 live
+    finding 4), so a repeat of the same value would otherwise cost a full
+    commit to discover it had nothing to write -- ~5.5s in the worst case,
+    two bounces and two sidecar waits. Returns `None` (not a shortcut) when
+    the watermark is missing or stale, or the value or `enabled` disagrees --
+    the caller falls through to the normal write-and-commit path.
+    """
+    if target is None:
+        return None
+    from scouter.core import history
+
+    fresh, _why = history.watermark_fresh(job, resolved.image_id, resolved.xmp_path)
+    if not (fresh and before.get("enabled") is not False and _close(target, before.get("value"))):
+        return None
+    return SetResult(
+        image_id=resolved.image_id,
+        path=resolved.path,
+        module=module,
+        param=param,
+        instance=instance,
+        requested=requested,
+        applied=before.get("value"),
+        previous=before.get("value"),
+        committed=True,
+        noop=True,
+        source="xmp",
+        warnings=[
+            f"no-op: {module}.{param} is already {before.get('value')} in the sidecar, "
+            "which Scouter last committed; nothing was sent to darktable"
+        ],
+    )
+
+
 def _current_image() -> dtbridge.ResolvedImage:
     """The darkroom's currently loaded image, read-only, via `darkroom.current`.
 
@@ -384,6 +482,20 @@ def set_param(
     _require_job_image(job, resolved.image_id)
     dtbridge.require_darkroom()
     before_state = _before_state(job, resolved.image_id, resolved.path, module, param, instance)
+    shortcut = _noop_shortcut(
+        job, resolved, module, param, instance, value, before_state, requested=value
+    )
+    if shortcut is not None:
+        return shortcut
+    # The pre-check matched the requested value but the watermark was stale
+    # (or absent), so the write below is genuinely sent -- but a real change
+    # is still the unlikely outcome here: the XMP already says `value`, just
+    # not provably freshly. `expect_change=False, attempts=1` tells the
+    # commit to spend one bounce, not two, and to report a confirmed no-op
+    # honestly instead of raising `commit_timeout` (task 12).
+    predicted_noop = before_state.get("enabled") is not False and _close(
+        value, before_state.get("value")
+    )
     entry = journal.begin(
         job,
         verb="darkroom.set",
@@ -426,7 +538,12 @@ def set_param(
         commit_result = None
         commit_error: CommitTimeout | None = None
         try:
-            commit_result = _commit(job, resolved.image_id, strategy="auto")
+            if predicted_noop:
+                commit_result = _commit(
+                    job, resolved.image_id, strategy="auto", expect_change=False, attempts=1
+                )
+            else:
+                commit_result = _commit(job, resolved.image_id, strategy="auto")
         except CommitTimeout as e:
             commit_error = e
         applied = _read_value(resolved.path, module, param, instance)
@@ -514,6 +631,24 @@ def nudge(
     _require_job_image(job, resolved.image_id)
     dtbridge.require_darkroom()
     before_state = _before_state(job, resolved.image_id, resolved.path, module, param, instance)
+    # `nudge` computes its absolute target BEFORE writing only in the trivial
+    # case: `steps=0` asks for no movement at all, so the target is simply
+    # the module's own current value (task 12). A nonzero-step nudge cannot
+    # know its landing value without sending the action -- darktable, not
+    # Scouter, owns the step size -- so there is nothing to short-circuit
+    # there; `_noop_shortcut` returns `None` and the nudge proceeds normally.
+    shortcut = _noop_shortcut(
+        job,
+        resolved,
+        module,
+        param,
+        instance,
+        before_state.get("value") if steps == 0 else None,
+        before_state,
+        requested=None,
+    )
+    if shortcut is not None:
+        return shortcut
     entry = journal.begin(
         job,
         verb="darkroom.nudge",

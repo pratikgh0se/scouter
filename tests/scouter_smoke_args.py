@@ -45,6 +45,7 @@ SMOKE_ARGS: dict[str, dict] = {
     "darkroom.describe_history": {"image": SMOKE_RAW},
     "history.read": {"image": SMOKE_RAW},
     "history.commit": {"image": SMOKE_RAW, "timeout_s": 0.05},
+    "history.changed": {"image": SMOKE_RAW},
     "scout.stats": {"image": SMOKE_RAW, "px": 64},
     "scout.preview": {"image": SMOKE_RAW, "px": 64, "fmt": "ppm"},
     "scout.compare": {"a": SMOKE_RAW, "b": SMOKE_RAW, "px": 64},

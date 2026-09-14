@@ -22,6 +22,7 @@ EXPECTED_VERBS = {
     "darkroom.describe_history",
     "history.read",
     "history.commit",
+    "history.changed",
     "scout.stats",
     "scout.preview",
     "scout.compare",
