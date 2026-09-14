@@ -268,6 +268,10 @@ scouter --pretty metrics summary --since 7d
 ```sh
 python3 -m pytest tests -q          # no darktable needed; host-only tests skip
 SCOUTER_HOST_TESTS=1 python3 -m pytest tests/test_host_integration.py tests/test_commit_trigger_host.py -q -s   # needs darktable + the ORF, and this env var
+lua tests/lua/test_dispatcher.lua   # the Lua plugin's own harness, no darktable needed
+
+# Phase 2's end-to-end job: 30 real ORFs, one darktable session, E1-E9 + metrics
+SCOUTER_HOST_TESTS=1 python3 -m pytest tests/test_host_phase2.py::Phase2EndToEndTest -q -s
 ```
 
 The host-only suite (`tests/test_host_integration.py`,
@@ -278,6 +282,171 @@ CI or a plain `pytest tests`.
 
 Design: `docs/superpowers/specs/2026-09-13-scouter-phase1-design.md`.
 Measurements: `docs/measurements.md`.
+
+## Scouter phase 2 (volume: a whole job, delivered)
+
+Phase 1 made one frame editable by conversation. Phase 2 makes a **job**
+deliverable: a card becomes a named, checksummed, backed-up film roll; a
+proposal culls it; one hero's recipe becomes a style that lands on the whole
+set; the frames outside tolerance are listed by number; proofs and finals
+leave with a manifest. Every step is a deterministic core function that runs
+with **no model**.
+
+### The config file
+
+`~/.config/scouter/config.json` (override with `$SCOUTER_CONFIG`, or
+`$XDG_CONFIG_HOME/scouter/config.json`). JSON rather than TOML on purpose:
+`tomllib` is stdlib only from Python 3.11 and this package's floor is 3.10, so
+TOML would mean either raising the floor or adding a dependency.
+
+```sh
+scouter config init          # writes a commented starter file, backup DISARMED
+scouter --pretty config show # what is loaded, and whether the backup gate passes
+scouter doctor               # + config_path, backup_gate, encryption_tool, library_root
+```
+
+Every key has a default except `library_root`, which has none — a config
+without it fails every library verb with `usage`. **Unknown keys are
+rejected**, with the nearest known key suggested: a typo in `backup.target`
+must not silently disarm the gate.
+
+### The job layout
+
+```
+<library_root>/
+  2026/
+    2026-06-28 harbour-wedding/
+      raw/          the copied, renamed originals (0444) + darktable's .xmp sidecars
+      exports/
+        client-proof/  client-final/  print-tiff/     one directory per preset
+      .scouter/
+        import.json            what was copied, from where, with what EXIF
+        checksums.sha256       coreutils-format sha256 lines over raw/
+        cull-<ts>.json         the proposal `cull apply` consumes
+        styles-applied.json    the per-job style idempotency ledger
+        manifest-<preset>-<ts>.json   + .sha256, so the manifest itself verifies
+  scouter/memory/   reserved for phase 3, empty, inside the backup set
+```
+
+Everything Scouter writes inside a job uses paths **relative to the job
+directory**, so a job is portable; the only absolute path Scouter holds is
+`library_root`, and `library relocate` rewrites that one key and re-verifies.
+
+### The six new CLI groups
+
+```sh
+scouter config  init | show
+scouter library import <card> --job-slug harbour-wedding --yes
+scouter library verify harbour-wedding | jobs | register | relocate --to <root>
+scouter cull    propose --job-slug harbour-wedding --pretty
+scouter cull    apply   --job-slug harbour-wedding --yes
+scouter style   extract <hero> --name hero-harbour --modules exposure,sigmoid --yes
+scouter style   apply-set --name hero-harbour --job-slug harbour-wedding --exclude <hero> --yes
+scouter outliers list --reference <hero> --job-slug harbour-wedding --pretty
+scouter export  release --job-slug harbour-wedding --preset client-proof --yes
+scouter export  verify --manifest <path>
+scouter backup  run --yes
+scouter backup  verify
+scouter wb      calibrate <scratch.orf> --yes   # measures this camera's Kelvin table
+scouter wb      kelvin <image>
+```
+
+Every one of them is the same function the MCP server exposes, under the same
+name and arguments — `tests/test_layer_parity.py` pins that.
+
+### The backup gate
+
+`library import` **refuses to run** if no backup target is configured, before
+it reads a single file from the card: exit code `11`,
+`backup_not_configured`, with the message naming the exact key to fix. It
+refuses when the config file is missing, `backup.enabled` is false,
+`backup.target` is null or its parent does not exist or is not writable,
+`encryption` is `"none"` without `allow_unencrypted`, the `openssl` passfile is
+missing/empty/wider than `0600`, or `age` is selected without a recipient or
+without `age` on `$PATH`. `scouter config init` writes `backup.enabled: false`
+deliberately, so the very first run fails loudly rather than importing
+unprotected.
+
+The gate is **not** checked by reads, `cull.*`, `style.*`, `outliers list` or
+`export.*`: those work on a library that already passed it at import time, and
+blocking a proof export because a backup disk is unplugged would be gate
+theatre.
+
+### The nightly backup job (launchd)
+
+```sh
+ops/install-backup-job.sh            # render, lint and load com.pratik.scouter-backup
+ops/install-backup-job.sh --uninstall
+```
+
+It refuses to install while the backup gate is not `ok` — a launchd job firing
+against an unconfigured target would just accumulate silent failures in
+`~/Library/Logs/scouter-backup.log`.
+
+### Honest limits, phase 2
+
+These are load-bearing. Read them before scripting against phase 2.
+
+- **darktable's film rolls go stale after a move.** darktable's own film rolls
+  live in `library.db` with absolute paths, and Scouter may never write
+  `library.db`. After `library relocate`, darktable still points at the old
+  paths: the result says `darktable_rollpaths_stale: true` and prints the exact
+  GUI step (re-import each new `<job>/raw`; darktable reads the sidecars beside
+  the raws and the history comes back). No edit is lost, but darktable does
+  need re-pointing. Claiming otherwise would be a phantom success.
+- **`openssl enc` is unauthenticated, and that hole is closed rather than
+  hidden.** `openssl enc -aes-256-cbc` provides confidentiality only: it has no
+  MAC, so a tampered ciphertext decrypts to garbage rather than being rejected.
+  Scouter therefore writes its own sha256 manifest **inside** the archive and
+  `backup verify` re-hashes every sampled member against it after decrypting —
+  the integrity check `openssl enc` does not provide. `backup.encryption:
+  "age"` needs no such workaround (ChaCha20-Poly1305 is authenticated) and the
+  result says which of the two it used, per archive.
+- **`ev_proxy` is not EV.** `outliers list`'s `ev_proxy_delta` is
+  `log2(frame_luminance / reference_luminance)` on a rendered 512 px preview —
+  a rendered-luminance ratio, not a metered exposure difference, and scene
+  content moves it. It is named `ev_proxy` everywhere, in the field name and in
+  the docs, so no caller mistakes it for an EV reading.
+- **Kelvin needs a measured calibration table.** darktable's white-balance UI
+  is Kelvin; the stored state is coefficients, and the conversion uses the
+  camera's XYZ matrix and an illuminant model that live in darktable's own
+  data, not in the XMP. There is no faithful closed-form inversion from the
+  sidecar alone, and Scouter does not pretend there is: `wb kelvin` returns
+  `kelvin: null` with a reason naming `scouter wb calibrate` when the camera has
+  no table, and `null` with the measured range when a value falls outside it —
+  never an extrapolated guess. `outliers list` says which test actually ran
+  (`wb_test: "kelvin" | "ratio"`) and falls back to the always-available
+  coefficient ratio.
+- **Scouter cannot move darktable's darkroom onto a frame imported in the same
+  session.** Measured five times on darktable 5.4.1 (`docs/measurements.md`,
+  phase 2 fact 4): `display_image` returns without error and the darkroom
+  keeps showing the image it already had; bouncing out to the lighttable with
+  the target selected and switching back returns to the same previously-edited
+  image. `darkroom.open` raises rather than reporting `opened: true` for an
+  image that never loaded. **So the workflow is: pick the frame in
+  darktable, and Scouter edits what is loaded.** No set-wide verb is affected
+  -- `cull.*`, `style.*`, `outliers list` and `export.*` all work off the XMP
+  and `darktable-cli` and never touch the darkroom.
+- **Hand darktable RESOLVED paths.** `/var` is a symlink to `/private/var` on
+  macOS and darktable records the resolved film path, so a `library_root`
+  reached through a symlink makes every `image.lookup` miss and every film
+  roll register as 0 images (phase 2 fact 1).
+- **An unpinned slider path is refused, not guessed.** `dt.gui.action` on a path
+  darktable 5.4.1 does not recognise wedges its Lua worker for the rest of the
+  session, so `dtbridge.ACTION_PATHS` is a whitelist and an unlisted
+  `(module, param)` is a `usage` refusal. Adding one is a host-probe job.
+- **`style apply-set --mode overwrite` is still refused.** The Lua API only
+  appends. The one place overwrite exists is render-only:
+  `export release --overwrite-style`.
+
+### Phase 2 exit criteria
+
+E1-E9 each have a named passing test (`tests/test_host_phase2.py::
+Phase2EndToEndTest`, a 30-frame synthetic job built from the EditingTrial ORFs
+by `tests/make_synthetic_job.py`); E10 and E11 are covered by
+`tests/test_metrics.py` and `tests/test_layer_parity.py` +
+`tests/test_scouter_mcp_schemas.py`. **E12 — one real 300-frame job, delivered
+end to end — is Pratik's own run**, not something CI can assert.
 
 ## Contributing
 

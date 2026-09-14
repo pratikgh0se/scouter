@@ -345,3 +345,32 @@ class EnvelopeTest(unittest.TestCase):
         self.assertIsNone(d["data"]["positions"]["y"])
         # a plain json.dumps would raise ValueError on nan/inf by default if not cleaned
         json.dumps(d)
+
+
+class ConftestAllowTreeTest(unittest.TestCase):
+    """`tests/conftest.py::allow_tree` is the ONE opt-in that lets a test
+    pin its own throwaway tree past the session isolation fixture. It must
+    never be usable to point a test at a real user path -- that is the rule
+    the fixture exists to enforce (a suite run once wrote a 1.7 MB test note
+    into the real Obsidian vault)."""
+
+    def test_it_accepts_a_temp_directory_and_returns_it(self) -> None:
+        from tests.conftest import allow_tree
+
+        with tempfile.TemporaryDirectory(prefix="scouter-allow-") as d:
+            self.assertEqual(allow_tree(d), d)
+
+    def test_it_refuses_the_real_vault_config_cache_and_home(self) -> None:
+        from tests.conftest import allow_tree
+
+        for candidate in (
+            "~/second-brain",
+            "~/second-brain/Projects",
+            "~/.config/scouter",
+            "~/.cache/scouter",
+            "~/.hermes",
+            "~",
+        ):
+            with self.subTest(path=candidate):
+                with self.assertRaises(ValueError):
+                    allow_tree(os.path.expanduser(candidate))

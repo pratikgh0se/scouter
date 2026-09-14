@@ -821,6 +821,18 @@ local function is_nan(v) return type(v) == "number" and v ~= v end
 -- is supposed to change the view.
 local VIEW_SETTLE_POLL_MS = 50
 local VIEW_SETTLE_BUDGET_MS = 5000
+-- The FIRST entry into the darkroom after a cold start gets its own, larger
+-- budget. Measured on the real host (scouter phase 2 task 14's end-to-end run,
+-- 2026-09-14, darktable 5.4.1): with 30 freshly imported 20 MP ORFs in a
+-- brand-new library, `darkroom.open` raised "view is still lighttable 5000ms
+-- after switching to darkroom" -- darktable was building the pipeline for an
+-- image it had never rendered, and 5s is simply not enough for that. The
+-- mid-bounce return leg keeps the 5s budget: by then the darkroom has already
+-- been entered once and coming back is fast, so a long budget there would only
+-- turn a genuinely stuck bounce into a 20s hang. 20s also stays well
+-- inside the client's own 60s budget for `darkroom.open`: a handler that
+-- outlives its caller cannot report anything.
+local VIEW_ENTER_DARKROOM_BUDGET_MS = 20000
 -- How long to stay in the lighttable mid-bounce. Leaving the darkroom is what
 -- makes darktable flush the pipe's history to the sidecar; task 1's probe used
 -- 500ms and the XMP advanced, so this dwell is deliberate, not a guess.
@@ -850,6 +862,22 @@ local function ids_match(a, b)
   local na, nb = tonumber(a), tonumber(b)
   return na ~= nil and nb ~= nil and na == nb
 end
+
+-- How long to yield-poll for the darkroom to actually be showing the image we
+-- asked for. `display_image` is ASYNCHRONOUS, exactly like
+-- `dt.gui.current_view`: measured on the real host (scouter phase 2 task 14's
+-- live run, 2026-09-14), `darkroom.open` on a 30-frame library came back
+-- "wrong image loaded" because the verification read the loaded image
+-- immediately after the call and still saw the PREVIOUS one. Task 12 already
+-- learned this lesson for the view and fixed it with `wait_for_view`; the
+-- loaded image needs the same treatment, and reading it once was simply a
+-- second instance of the same bug.
+local WAIT_FOR_IMAGE_BUDGET_MS = 15000
+-- How long to give `display_image` alone before falling back to a real view
+-- transition. Short on purpose: task 12 measured a darkroom -> lighttable ->
+-- darkroom bounce at 150 + 50 ms, so waiting long on a call that may simply
+-- not work for this image costs more than just doing the bounce.
+local DISPLAY_IMAGE_BUDGET_MS = 2000
 
 -- Run one dt.gui.action. Returns (value, nan_flag). Raises only when the API
 -- itself is missing or the call blows up -- a nan is data, not an error.
@@ -1002,6 +1030,23 @@ local function darkroom_image()
   return image
 end
 
+-- Yield-poll until the darkroom is showing `image`. Returns true when it
+-- landed. `display_image` is asynchronous, so a single read right after the
+-- call can see the PREVIOUS image -- the same lesson task 12 learned for
+-- `dt.gui.current_view` and fixed with `wait_for_view`.
+local function wait_for_darkroom_image(image, budget_ms)
+  budget_ms = budget_ms or WAIT_FOR_IMAGE_BUDGET_MS
+  local waited = 0
+  while true do
+    local loaded = loaded_darkroom_image()
+    if loaded ~= nil and ids_match(loaded.id, image.id) then return true, waited end
+    if waited >= budget_ms then return false, waited end
+    if not (dt.control and dt.control.sleep) then return false, waited end
+    dt.control.sleep(VIEW_SETTLE_POLL_MS)
+    waited = waited + VIEW_SETTLE_POLL_MS
+  end
+end
+
 -- A read-only snapshot of "what is loaded right now", with NO side effects --
 -- never selects, never switches views, never imports. This is the honest way
 -- for a caller to learn which image (if any) the darkroom has loaded: unlike
@@ -1052,10 +1097,22 @@ local function switch_to_darkroom(image)
   if current_view_name() == "darkroom" then
     if image and type(view.display_image) == "function" then
       local ok = pcall(view.display_image, image)
-      if ok then return true, "display_image" end
+      if ok and wait_for_darkroom_image(image, DISPLAY_IMAGE_BUDGET_MS) then
+        return true, "display_image"
+      end
+      -- `pcall` said ok and the image still did not land. Measured on the
+      -- real host (scouter phase 2 task 14's live run, 2026-09-14): with
+      -- darktable sitting in the darkroom on one image and the target in a
+      -- film roll imported AFTERWARDS, `display_image` returns without error
+      -- and the darkroom keeps showing the old image -- 15s of polling, and
+      -- `darkroom.current` still reported the launch image. So a successful
+      -- `pcall` is not evidence the swap happened, and this falls through to
+      -- the real view transition below instead of reporting a swap that did
+      -- not occur.
     end
-    -- No usable display_image: bounce out to the lighttable so the switch
-    -- back is a real transition rather than another no-op.
+    -- No usable display_image -- or one that did not actually swap: bounce
+    -- out to the lighttable so the switch back is a real transition rather
+    -- than another no-op.
     if not (dt.gui.views and dt.gui.views.lighttable) then
       return false, "dt.gui.views.lighttable missing"
     end
@@ -1070,7 +1127,7 @@ local function switch_to_darkroom(image)
 
   local ok, err = pcall(dt.gui.current_view, view)
   if not ok then return false, "view switch failed: " .. tostring(err) end
-  local landed, waited = wait_for_view("darkroom")
+  local landed, waited = wait_for_view("darkroom", VIEW_ENTER_DARKROOM_BUDGET_MS)
   if not landed then
     return false, string.format("view is still %s %dms after switching to darkroom",
                                 current_view_name(), waited)
@@ -1151,11 +1208,17 @@ methods["darkroom.open"] = function(p)
   -- (a no-op when we are already there) so the `already` fast path is held to
   -- the same standard as a real switch.
   wait_for_view("darkroom")
+  -- `display_image` is asynchronous too (see WAIT_FOR_IMAGE_BUDGET_MS): poll
+  -- for the image the caller asked for instead of reading once and calling a
+  -- not-yet-landed swap a wrong image.
+  local matches, image_waited = wait_for_darkroom_image(image, WAIT_FOR_IMAGE_BUDGET_MS)
   local final_image, final_source = loaded_darkroom_image()
-  local matches = final_image ~= nil and ids_match(final_image.id, image.id)
   local final_view = current_view_name()
   if not matches then
-    error("wrong image loaded: " .. tostring(image.id))
+    error(string.format("wrong image loaded: asked for %s, darkroom shows %s after %dms",
+                        tostring(image.id),
+                        final_image and tostring(final_image.id) or "nothing",
+                        image_waited))
   end
   if final_view ~= "darkroom" then
     error("wrong image loaded: " .. tostring(image.id) .. " (view is "
@@ -2121,9 +2184,13 @@ return {
   switch_to_darkroom = switch_to_darkroom,
   return_to_darkroom = return_to_darkroom,
   wait_for_view = wait_for_view,
+  wait_for_darkroom_image = wait_for_darkroom_image,
   view_settle = {
     poll_ms = VIEW_SETTLE_POLL_MS,
     budget_ms = VIEW_SETTLE_BUDGET_MS,
+    enter_darkroom_budget_ms = VIEW_ENTER_DARKROOM_BUDGET_MS,
+    wait_for_image_budget_ms = WAIT_FOR_IMAGE_BUDGET_MS,
+    display_image_budget_ms = DISPLAY_IMAGE_BUDGET_MS,
     bounce_dwell_ms = VIEW_BOUNCE_DWELL_MS,
   },
   commit_view_bounce = commit_view_bounce,

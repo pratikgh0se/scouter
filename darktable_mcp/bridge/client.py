@@ -30,7 +30,15 @@ DEFAULT_TIMEOUTS = {
     # Scouter phase 1 darkroom verbs (design section 5.2).
     "view.current": 5.0,
     "image.lookup": 30.0,  # linear scan of dt.database, like view_photos
-    "darkroom.open": 30.0,  # pipeline load for a 20 MP raw
+    # 60s, not 30s: the PLUGIN's own budget for the first darkroom entry on a
+    # cold library is 20s (VIEW_ENTER_DARKROOM_BUDGET_MS), and a client
+    # timeout at or below the plugin's budget turns "the plugin is about to
+    # answer honestly" into "no response at all" -- the client must always
+    # outlast the handler it is waiting for. Measured on the real host
+    # (scouter phase 2 task 14's live run, 2026-09-14): with 30 freshly
+    # imported 20 MP ORFs, `darkroom.open` first hit the plugin's 5s view
+    # budget, and then, once that was raised, the client's own 30s.
+    "darkroom.open": 60.0,
     "darkroom.action": 10.0,
     "darkroom.status": 5.0,
     "module.enable": 10.0,

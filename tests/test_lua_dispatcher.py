@@ -459,9 +459,24 @@ def test_ids_match_behaves_correctly():
     assert "tonumber(final_image.id) == tonumber(image.id)" not in open_body, (
         "darkroom.open's post-switch verification reverted to the unguarded " "id comparison"
     )
-    assert open_body.count("ids_match(") == 2, (
-        "darkroom.open should call ids_match(...) exactly twice: the "
-        "already-open check and the post-switch verification"
+    # One direct call left in darkroom.open's own body (the already-open
+    # check); the post-switch verification now goes through
+    # `wait_for_darkroom_image`, which yield-polls (`display_image` is
+    # asynchronous -- the same lesson task 12 learned for the view). Both
+    # comparisons still go through ids_match, which is what this test is
+    # about, so the helper is asserted to use it too rather than the count
+    # here being quietly relaxed.
+    assert (
+        open_body.count("ids_match(") == 1
+    ), "darkroom.open's already-open check must still use ids_match"
+    assert "wait_for_darkroom_image(image" in open_body, (
+        "darkroom.open's post-switch verification must yield-poll for the "
+        "loaded image, not read it once"
+    )
+    waiter = source.split("local function wait_for_darkroom_image", 1)[1].split("\nend\n", 1)[0]
+    assert "ids_match(" in waiter, (
+        "wait_for_darkroom_image must compare ids through ids_match, not a bare "
+        "tonumber comparison"
     )
 
 
@@ -549,8 +564,16 @@ def test_display_image_is_never_the_view_changing_call():
         "switch_to_darkroom calls display_image before checking that it is in "
         "the darkroom -- from the lighttable that call is a silent no-op"
     )
-    assert 'wait_for_view("darkroom")' in body, (
+    # `wait_for_view("darkroom", ...)`: the budget argument was added in
+    # scouter phase 2 task 14 (the first darkroom entry on a cold library
+    # needs longer than the 5s bounce budget), so this checks the CALL, not a
+    # literal argument list.
+    assert 'wait_for_view("darkroom"' in body, (
         "switch_to_darkroom must yield-poll the view after the switch, not " "read it immediately"
+    )
+    assert "VIEW_ENTER_DARKROOM_BUDGET_MS" in body, (
+        "the first darkroom entry must pass its own, larger budget -- 5s is the "
+        "mid-bounce return leg's budget and is not enough for a cold pipeline"
     )
 
 

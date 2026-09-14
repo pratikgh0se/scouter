@@ -189,3 +189,173 @@ per-launch variance in the absolute coefficients (expected -- a fresh
 darktable process, not bit-identical rendering). Run 2's table is committed
 as `tests/fixtures/wb-em10iii.json` (10 points, ~20 numbers, the "~20
 numbers" the brief asks for).
+
+---
+
+# Phase 2 (task 14's live end-to-end run, 2026-09-14)
+
+Host: this Mac (Apple M4), darktable 5.4.1, Lua API 9.6.0. Produced by
+`tests/test_host_phase2.py::Phase2EndToEndTest`, green twice in a row, and
+copied here **by hand** from `docs/measurements-generated.md` (phase 1's
+convention: the test no longer rewrites this reviewed record).
+
+The job: 30 real ORFs from Pratik's 2026-05-24 shoot
+(`P5240141.ORF`..`P5240170.ORF`, 502 MiB), staged as a card under
+`~/Pictures/ScouterScratch`, imported into a library root under the same
+directory. `tests/make_synthetic_job.py` (the 6x5 synthetic card) stays the
+unit-level fixture: copies of four ORFs have identical pixels, so every
+sharpness inside a burst ties and the cull stage could only ever assert the
+tie-break.
+
+## Phase 2: import throughput
+
+| | |
+|---|---|
+| `library.import`, 30 frames / 526,387,934 bytes | **1.35 s** (run 2: 1.53 s) |
+| effective | ~372 MB/s, ~22 frames/s |
+| staging the card (30 file copies, not part of the verb) | 0.40 s |
+
+Two sha256 passes per file plus the copy, on the internal SSD with the OS page
+cache warm from the staging copy. Extrapolated to the 300-frame / ~5 GB job
+the spec's budget is written against (< 10 min): **~14 s** of hashing and
+copying. The budget is not the binding constraint on this host; it was written
+for an external disk.
+
+## Set stats, 30 frames at 512 px
+
+| | |
+|---|---|
+| `cull.propose` (30 frames, cold cache, 4 workers) | **33.5 s** (33.3 s of it in `stats_many`) |
+| per frame | ~1.1 s |
+| `outliers.list` (29 frames, after `style.apply_set` changed every XMP) | **33.3 s** |
+
+The second stats pass costs the same as the first **by design**: the cache key
+includes the XMP's mtime, so `style.apply_set` invalidating all 30 sidecars is
+exactly the case the key exists to catch. Extrapolated to 300 frames: ~5.5 min
+per pass, against the spec's < 6 min budget.
+
+## Repeat-set cost (before: 5.5-5.7 s)
+
+| | |
+|---|---|
+| repeat `darkroom.set exposure 0.6`, 1st | **0.22 s**, `noop: true` |
+| repeat `darkroom.set exposure 0.6`, 2nd | **0.22 s**, `noop: true` |
+
+E8's asserted budget is < 1.5 s; the measured cost is **25x better than phase
+1** and the assertion passes with a 7x margin. Both repeats are no-ops (zero
+bridge writes, zero view bounces) because the watermark was fresh and the
+requested value already matched the sidecar.
+
+Measured BEFORE the import, deliberately. With the job's 30 frames already in
+the library, `history.commit`'s view bounce did not get the sidecar written
+inside its 5 s budget: the bounce leaves the darkroom and darktable does not
+reliably come back to the same image once the library has grown (same root
+cause as the darkroom-navigation limitation below). Phase 1 measured commit at
+765-1305 ms against a one-image library, and that is the condition this
+measurement reproduces.
+
+## `style.apply_set`
+
+| | |
+|---|---|
+| 30 frames, one style, batches of 25 ids | **0.56 s** (19 ms/frame), `failed: 0` |
+
+A library write with no pipe reload, as designed. Extrapolated to 300 frames:
+~6 s, against the spec's < 2 min budget.
+
+## `export.release client-proof`
+
+| | |
+|---|---|
+| 30 frames, 2048 px longest edge, JPEG q90, sRGB | **67.3 s** (2.24 s/frame) |
+| every output's longest edge, read from its SOF marker | 2048, all 30 |
+| `export.verify` over the manifest | clean, 30 checked |
+
+Extrapolated to 60 full-size finals the spec budgets at < 8 min: full-size
+renders are slower than 2048 px, so this figure does not settle that budget --
+it is the proof figure, and it is what `client-proof` is for.
+
+## `backup.run` / `backup.verify`
+
+| | |
+|---|---|
+| `backup.run` (openssl, + rsync of the raws) | **2.14 s** |
+| tar / encrypt / rsync split | 128 ms / 137 ms / 1866 ms |
+| archive size | 214,420 plaintext -> 214,448 ciphertext bytes |
+| `backup.verify` | **0.24 s**, `verified: true`, 6 named checks all ok |
+
+The archive is small because the raws travel by `rsync`, not inside the tar --
+the tar holds `.scouter/`, the sidecars and the manifests. rsync is 87 % of the
+wall time and is the part that scales with the job.
+
+## Cull over real frames (new, phase 2)
+
+30 consecutive frames of one evening shoot, `cull.burst_gap_s` 2.0:
+
+- **20 bursts**, sizes `[7, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]`
+  -- one real 7-frame burst (1 s apart), one of 3, two of 2, sixteen singletons.
+  `cull.propose`'s grouping matches what the files' own EXIF implies, asserted
+  frame by frame rather than against a number in a fixture.
+- **0 of 20 bursts needed the `seq` tie-break.** Real pixels differ, so
+  sharpness ties do not occur -- the opposite of the synthetic card, where
+  every burst ties. Both are now covered: the real set here, the tie-break by
+  `tests/test_cull.py`.
+- `cull.apply`: 4 of 30 frames needed a rating change; all 4 were visible in
+  the XMP within the 2.0 s poll window (`unverified: 0`).
+- `outliers.list`: `wb_test: "ratio"` (no Kelvin table for this camera under
+  the test's own config dir), 24 of 29 outside tolerance, 5 within -- an
+  evening shoot with real exposure variation, which is what an outlier report
+  is for.
+
+## Darktable facts pinned by this run
+
+**1. A library root under macOS's `/var/folders/...` temp tree does not work
+at all.** `/var` is a symlink to `/private/var`; darktable records the
+RESOLVED film path, so every `image.lookup` by the unresolved path misses.
+`import_batch` reported 0 images and every later verb refused with "not in
+darktable's library" -- nothing in Scouter was wrong, the test was asking
+darktable about a path it does not use. Any caller handing darktable a path
+should hand it a resolved one.
+
+**2. Entering the darkroom for the first time needs an image argument.** From
+a cold start with no image on the command line, darktable sits in the
+lighttable and `dt.gui.current_view(darkroom)` from the worker coroutine never
+lands -- "view is still lighttable" at a 5 s budget, again at 20 s, three runs
+in a row. Task 12 measured lighttable -> darkroom at 50 ms, but always on an
+instance that had already been in the darkroom once. The plugin's
+`VIEW_ENTER_DARKROOM_BUDGET_MS` (20 s, larger than the 5 s mid-bounce budget)
+and the client's matching 60 s `darkroom.open` timeout come from this; the
+budgets are pinned against each other by
+`tests/test_bridge.py::test_darkroom_open_client_timeout_outlasts_the_plugins_own_budget`.
+
+**3. `display_image` is asynchronous, like `dt.gui.current_view`.** Reading the
+loaded image immediately after the call returns the PREVIOUS one, so
+`darkroom.open` reported "wrong image loaded" for a swap that was simply not
+finished. Fixed with a yield-poll (`wait_for_darkroom_image`), the same
+treatment task 12 gave the view.
+
+**4. Scouter cannot move darktable's darkroom onto a frame from a film roll
+imported during the same session.** `display_image(image)` returns without
+error and the darkroom keeps showing the image it already had -- 15 s of
+polling, `darkroom.current` unchanged. Bouncing out to the lighttable with
+that image selected and switching back returns to the SAME previously-edited
+image, not the selection. Five runs, consistent.
+
+`darkroom.open` is honest about it: it raises rather than reporting
+`opened: true` for an image that never loaded, and
+`Phase2EndToEndTest::test_06a_darkroom_open_refuses_a_frame_imported_this_session`
+pins the refusal so a future darktable that CAN do this fails the test loudly
+instead of silently changing behaviour.
+
+What follows for the product: the frame is chosen in darktable's GUI and
+Scouter edits what is loaded. No set-wide verb is affected -- `cull.*`,
+`style.*`, `outliers.list` and `export.*` all work off the XMP and
+`darktable-cli` and never touch the darkroom, which is why the other ten
+stages pass.
+
+**5. darktable's `library.db` remembers a path's rating across a delete and
+re-import.** Run 4 found every frame already carrying run 3's cull ratings in
+a library directory that had been deleted and rebuilt. The test now carries
+its process id in the job slug so two runs never share a library path; any
+script that re-imports to the same path should expect darktable's own
+remembered metadata, not a clean slate.

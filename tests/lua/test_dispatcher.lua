@@ -2171,6 +2171,135 @@ do
   view_state.current = "darkroom"
 end
 
+-- Entering the darkroom gets a LARGER budget than the mid-bounce return leg
+-- (scouter phase 2 task 14's live run: with 30 freshly imported 20 MP ORFs in
+-- a brand-new library, the first darkroom entry did not land inside the 5s
+-- view-settle budget -- darktable was building a pipeline for an image it had
+-- never rendered). The bounce keeps the short budget on purpose: by then the
+-- darkroom has been entered once, so a long budget there would only turn a
+-- genuinely stuck bounce into a 30s hang.
+do
+  assertTrue(plugin.view_settle.enter_darkroom_budget_ms > plugin.view_settle.budget_ms,
+    "the first darkroom entry must get more time than a mid-bounce return")
+  assertEq(plugin.view_settle.budget_ms, 5000, "the bounce budget is unchanged")
+
+  -- The budget is actually PASSED, not just exported: a lag longer than the
+  -- short budget but inside the long one must still land.
+  local long_lag = math.floor(plugin.view_settle.budget_ms / plugin.view_settle.poll_ms) + 5
+  view_state.current = "lighttable"
+  view_state.switch_lag_sleeps = long_lag
+  local ok_open, method_open = plugin.switch_to_darkroom(images_by_id[101])
+  assertTrue(ok_open,
+    "switch_to_darkroom must wait past the 5s bounce budget for the first entry")
+  assertEq(method_open, "view_switch", "and it got there by a real view switch")
+  view_state.switch_lag_sleeps = 0
+  view_state.current = "darkroom"
+end
+
+-- darkroom.open yield-polls for the LOADED IMAGE, not just the view.
+--
+-- `display_image` is asynchronous, exactly like `dt.gui.current_view`:
+-- scouter phase 2 task 14's live run had `darkroom.open` fail with "wrong
+-- image loaded" on a 30-frame library because the verification read the
+-- loaded image once, immediately after the call, and still saw the previous
+-- one. Task 12 fixed that class of bug for the view; this is the same bug for
+-- the image. Scripted here by making the selection (which the
+-- action_images fallback reads) lag behind by a few polls.
+do
+  local pending = nil
+  local lag = 0
+  local real_selection = stub_dt.gui.selection
+  stub_dt.gui.selection = function(images)
+    table.insert(selection_log, images)
+    -- Do NOT update action_images yet: land it only after `lag` polls, the
+    -- way the real GUI lands a swap some milliseconds later.
+    pending = images
+    lag = 4
+    return images
+  end
+  local real_sleep = stub_dt.control.sleep
+  stub_dt.control.sleep = function(ms)
+    if lag > 0 then
+      lag = lag - 1
+      if lag == 0 and pending then stub_dt.gui.action_images = pending end
+    end
+    return real_sleep and real_sleep(ms) or nil
+  end
+
+  view_state.current = "darkroom"
+  stub_dt.gui.action_images = {images_by_id[101]}
+  local reply = plugin.methods["darkroom.open"]({image_id = 103})
+  assertEq(reply.image_id, 103,
+    "darkroom.open must wait for the swap to land instead of calling a "
+    .. "not-yet-landed display_image a wrong image")
+  assertTrue(plugin.view_settle.wait_for_image_budget_ms > 0,
+    "the image wait has a real, exported budget")
+
+  stub_dt.gui.selection = real_selection
+  stub_dt.control.sleep = real_sleep
+  lag = 0
+  pending = nil
+  stub_dt.gui.action_images = {}
+  view_state.current = "darkroom"
+end
+
+-- `display_image` that returns ok and does NOT swap must fall through to a
+-- real view transition, not report a swap that never happened.
+--
+-- Measured on the real host (scouter phase 2 task 14's live run, 2026-09-14):
+-- with darktable in the darkroom on one image and the target in a film roll
+-- imported AFTERWARDS, `display_image` returned without error and the
+-- darkroom kept showing the old image for a full 15s of polling. So a
+-- successful pcall is not evidence of a swap.
+do
+  local lying_calls = 0
+  views.darkroom.display_image = function(image)
+    if image == nil then return nil end
+    lying_calls = lying_calls + 1
+    return image  -- says yes, changes nothing
+  end
+  -- Inside the DARKROOM the host's `dt.gui.action_images` reports the image
+  -- being edited, not the lighttable selection, so selecting does not move
+  -- it. The default stub's selection-updates-action_images shortcut is right
+  -- for the lighttable and wrong here, and the shortcut is exactly what hid
+  -- this bug: with it, `display_image` looks like it worked.
+  local real_selection = stub_dt.gui.selection
+  stub_dt.gui.selection = function(images)
+    table.insert(selection_log, images)
+    return images
+  end
+  -- ...except once a REAL view transition happens, which is what actually
+  -- loads the selected image on the host.
+  local real_current_view = stub_dt.gui.current_view
+  stub_dt.gui.current_view = function(v)
+    local result = real_current_view(v)
+    if v ~= nil and v.id == "darkroom" then
+      stub_dt.gui.action_images = {images_by_id[103]}
+    end
+    return result
+  end
+  view_state.current = "darkroom"
+  stub_dt.gui.action_images = {images_by_id[101]}
+
+  local switched, method = plugin.switch_to_darkroom(images_by_id[103])
+
+  assertTrue(switched, "switch_to_darkroom still succeeds, by the other route")
+  assertEq(method, "view_switch",
+    "a display_image that did not actually swap must NOT be reported as the "
+    .. "mechanism that worked")
+  assertTrue(lying_calls >= 1, "display_image was tried first, as the cheap path")
+  assertTrue(plugin.view_settle.display_image_budget_ms
+    < plugin.view_settle.wait_for_image_budget_ms,
+    "the display_image attempt gets a SHORT budget: the bounce fallback is "
+    .. "cheaper than waiting on a call that may simply not work here")
+
+  views.darkroom.display_image = nil
+  stub_dt.gui.selection = real_selection
+  stub_dt.gui.current_view = real_current_view
+  stub_dt.gui.action_images = {}
+  view_state.current = "darkroom"
+end
+
 -- wait_for_view gives up at its budget rather than spinning forever, and
 -- reports having done so.
 do
