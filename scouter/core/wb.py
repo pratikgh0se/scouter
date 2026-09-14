@@ -1,21 +1,31 @@
-"""Kelvin <-> coefficients, table lookup only.
+"""Kelvin <-> coefficients, honestly.
 
-Ruling R19 (controller, task 9): `outliers.list` needs `wb.kelvin` to turn a
-frame's `temperature` coefficients into a Kelvin value it can diff against
-the hero's, but the real white-balance machinery -- `wb.calibrate`, the
-coefficient-slider probe, and the journalled `temperature` undo -- is task
-11's job (it needs a host probe this task is not scoped to run). This module
-is deliberately the minimal slice task 9 needs and nothing more: read a
-per-camera calibration table from `paths.wb_dir()` and invert Kelvin from it.
-No `wb.calibrate` verb, no probe, no registry entry here -- task 11 adds
-those, plus `wb.kelvin` as a registered verb of its own.
+THE FACT (phase 1 design 7.2, verified against the real sidecar): darktable's
+`temperature` module stores modversion 4 params as `<4f i` =
+coeff_r, coeff_g, coeff_b, coeff_g2, preset -- camera-relative multipliers, with
+coeff_g2 = inf on this body. The UI slider is Kelvin. darktable converts between
+them inside src/iop/temperature.c using (a) the camera's XYZ->camera matrix from
+its own camera-support data and (b) a blackbody/daylight illuminant model.
+NEITHER input is in the XMP, and Scouter may not read darktable's internal data
+files as an API.
 
-Table shape (written by `scouter wb calibrate`, task 11): a JSON array of
-`{"kelvin": int, "coeffs": [r, g, b]}` points. Inversion bisects the sorted
-samples on the r/b coefficient ratio (monotone in Kelvin at fixed tint,
-task 11's own calibration check enforces this when the table is written) and
-interpolates linearly between the two bracketing points; within 1% of a
-sample counts as `exact`. Outside the sampled range the answer is `None`
+SO: a faithful closed-form conversion from the XMP alone is NOT POSSIBLE, and
+nothing here pretends otherwise. What is possible, and is what this module
+does:
+  1. journal the whole coefficient vector before every temperature write;
+  2. restore it through the coefficient sliders, whose action paths are PINNED
+     by a host probe (spike/scouter_wb_probe.lua) -- an exact undo;
+  3. invert Kelvin from a MEASURED per-camera table (`wb.calibrate`), because
+     the coefficient ratio is monotone in Kelvin at fixed tint;
+  4. and when none of that is available, refuse -- handing over the exact
+     coefficients, which is a different thing from shrugging.
+
+Table shape (written by `scouter wb calibrate`): a JSON array of
+`{"kelvin": int, "coeffs": [r, g, b]}` points, `~/.config/scouter/wb/<camera>.json`.
+Inversion bisects the sorted samples on the r/b coefficient ratio (monotone in
+Kelvin at fixed tint -- `calibrate` itself refuses to write a table that
+isn't) and interpolates linearly between the two bracketing points; within 1%
+of a sample counts as `exact`. Outside the sampled range the answer is `None`
 with a reason -- extrapolating a blackbody curve past the measurements would
 be exactly the invented value this project refuses to produce.
 """
@@ -23,13 +33,26 @@ be exactly the invented value this project refuses to produce.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 
-from scouter import paths
+from scouter import metrics, paths
+from scouter.core import dtbridge, xmp
+from scouter.errors import ScouterError, UsageError
+from scouter.paths import current_job
+from scouter.registry import ArgSpec, Verb, register
+from scouter.types import CalibrateResult, KelvinResult
 
 #: How close `target` has to be to a sample's own ratio to call it `exact`
 #: rather than interpolated.
 _EXACT_TOLERANCE = 0.01
+
+#: `calibrate`'s own measured cost (task 11 host runs): about how long one
+#: Kelvin point (a `darkroom.set` + commit + XMP readback) takes.
+_SECONDS_PER_POINT = 1.8
+
+_TEMPERATURE_COEFF_NAMES = ("coeff_r", "coeff_g", "coeff_b")
 
 
 def _table_path(camera: str) -> Path:
@@ -63,11 +86,69 @@ def load_table(camera: str) -> list[dict] | None:
 
 
 def _ratio(coeffs: list[float]) -> float:
-    """r/b: monotone in Kelvin at fixed tint (task 11's calibration check)."""
+    """r/b: monotone in Kelvin at fixed tint (`calibrate`'s own check enforces
+    this when a table is written)."""
     return float(coeffs[0]) / float(coeffs[2])
 
 
-def _no_table_result(camera: str) -> dict:
+def _invert(samples: list[dict], ratio: float) -> tuple[float | None, dict]:
+    """Bisect the sorted `samples` on `r = coeff_r / coeff_b`, then interpolate
+    linearly between the two bracketing entries.
+
+    Returns `(kelvin, info)`: `info` carries `interpolated`, `bracket`,
+    `residual_ratio`, `exact`, `reason` -- everything `kelvin()` folds into
+    its result besides `kelvin`/`camera`/`table` themselves. Outside the
+    sampled range the answer is `(None, info-with-a-reason)`: extrapolating a
+    blackbody curve past the measurements would be exactly the invented value
+    this project refuses to produce.
+    """
+    ratios = [_ratio(p["coeffs"]) for p in samples]
+
+    for point, r in zip(samples, ratios):
+        if r != 0 and abs(ratio - r) / abs(r) <= _EXACT_TOLERANCE:
+            return point["kelvin"], {
+                "interpolated": False,
+                "bracket": None,
+                "residual_ratio": 0.0,
+                "exact": True,
+                "reason": None,
+            }
+
+    lo_bound, hi_bound = ratios[0], ratios[-1]
+    if ratio < lo_bound or ratio > hi_bound:
+        return None, {
+            "interpolated": False,
+            "bracket": None,
+            "residual_ratio": None,
+            "exact": False,
+            "reason": (
+                f"r/b ratio {ratio:.4f} is outside the calibrated range "
+                f"[{lo_bound:.4f}, {hi_bound:.4f}] "
+                f"({samples[0]['kelvin']}-{samples[-1]['kelvin']} K); "
+                "extrapolating past the measurements would be an invented value"
+            ),
+        }
+
+    for i in range(len(samples) - 1):
+        lo_r, hi_r = ratios[i], ratios[i + 1]
+        if lo_r <= ratio <= hi_r:
+            lo, hi = samples[i], samples[i + 1]
+            frac = (ratio - lo_r) / (hi_r - lo_r) if hi_r != lo_r else 0.0
+            k = lo["kelvin"] + frac * (hi["kelvin"] - lo["kelvin"])
+            return k, {
+                "interpolated": True,
+                "bracket": [lo["kelvin"], hi["kelvin"]],
+                "residual_ratio": ratio - lo_r,
+                "exact": False,
+                "reason": None,
+            }
+
+    # Unreachable: the range check above already guarantees a bracket exists
+    # between two consecutive samples somewhere in the sorted list.
+    raise AssertionError(f"{ratio!r} in range but no bracket found -- table not sorted?")
+
+
+def _no_table_result(camera: str, reason: str | None = None) -> dict:
     return {
         "kelvin": None,
         "interpolated": False,
@@ -76,79 +157,331 @@ def _no_table_result(camera: str) -> dict:
         "exact": False,
         "camera": camera,
         "table": None,
-        "reason": f"no wb calibration table for {camera}; run scouter wb calibrate",
+        "reason": reason or f"no wb calibration table for {camera}; run scouter wb calibrate",
     }
 
 
-def kelvin(coeffs: list[float], camera: str) -> dict:
-    """Invert Kelvin from `coeffs` (r, g, b, ...) against `camera`'s table.
+def _coeffs_and_camera_from_image(image: str | int) -> tuple[list[float] | None, str, str | None]:
+    """Resolve `image`'s active `temperature` coefficients and its camera slug.
 
-    Result shape (task 11's own): `{kelvin, interpolated, bracket,
-    residual_ratio, exact, camera, table, reason}`. No table -> `kelvin: None`
-    with a reason naming `scouter wb calibrate`. Outside the calibrated
-    range -> `kelvin: None` with a reason naming the range, never
-    extrapolated.
+    `coeffs` is `None` (with a `reason`) when the image has no sidecar, no
+    active `temperature` entry, or the entry did not decode -- never guessed.
+    Camera comes from the raw's own EXIF (`scouter.core.exif`, the same path
+    `library`/`style` use), not from the job manifest, so this works for an
+    image outside any job too.
     """
+    from scouter.config import load as load_config
+    from scouter.core import darkroom, exif
+
+    resolved = dtbridge.resolve_image(image)
+    cfg = load_config()
+    tags = exif.read_tags(resolved.path)
+    camera = exif.camera_slug(tags, cfg)
+
+    parsed = darkroom._read_sidecar_parsed(resolved.path)
+    if parsed is None:
+        return None, camera, f"no sidecar for {resolved.path}: darktable has not committed it yet"
+    params = xmp.latest_params(parsed, "temperature")
+    if params is None:
+        return None, camera, "no active temperature entry in this image's XMP"
+    try:
+        coeffs = [float(params[name]) for name in _TEMPERATURE_COEFF_NAMES]
+    except (KeyError, TypeError, ValueError):
+        return None, camera, "temperature's coefficients did not decode from the XMP"
+    return coeffs, camera, None
+
+
+def kelvin(
+    coeffs: list[float] | None = None,
+    camera: str | None = None,
+    *,
+    image: str | int | None = None,
+) -> dict:
+    """Invert Kelvin from `coeffs` (r, g, b, ...) against `camera`'s table, or
+    from `image`'s own committed XMP (which also supplies `camera`, via EXIF).
+
+    Exactly one of `image`, or `coeffs`+`camera`, is accepted -- positional
+    `coeffs`/`camera` first (task 9's own call shape: `wb.kelvin(coeffs,
+    camera)`), `image` keyword-only.
+
+    Result shape: `{kelvin, interpolated, bracket, residual_ratio, exact,
+    camera, table, reason}`. No table -> `kelvin: None` with a reason naming
+    `scouter wb calibrate`. Outside the calibrated range -> `kelvin: None`
+    with a reason naming the range, never extrapolated.
+    """
+    if image is not None:
+        if coeffs is not None or camera is not None:
+            raise UsageError(
+                "wb.kelvin: pass image=..., or coeffs and camera, not both",
+                detail={"image": image, "coeffs": coeffs, "camera": camera},
+            )
+        coeffs, camera, reason = _coeffs_and_camera_from_image(image)
+        if coeffs is None:
+            return _no_table_result(camera, reason)
+    elif coeffs is None or camera is None:
+        raise UsageError(
+            "wb.kelvin needs image=..., or both coeffs and camera",
+            detail={"coeffs": coeffs, "camera": camera},
+        )
+
     try:
         table = load_table(camera)
     except ValueError as e:
-        result = _no_table_result(camera)
-        result["reason"] = str(e)
-        return result
+        return _no_table_result(camera, str(e))
     if not table:
         return _no_table_result(camera)
 
-    table_path = str(_table_path(camera))
     target = _ratio(coeffs)
-    ratios = [_ratio(p["coeffs"]) for p in table]
+    k, info = _invert(table, target)
+    return {
+        "kelvin": k,
+        "camera": camera,
+        "table": str(_table_path(camera)),
+        **info,
+    }
 
-    for point, r in zip(table, ratios):
-        if r != 0 and abs(target - r) / abs(r) <= _EXACT_TOLERANCE:
-            return {
-                "kelvin": point["kelvin"],
-                "interpolated": False,
-                "bracket": None,
-                "residual_ratio": 0.0,
-                "exact": True,
-                "camera": camera,
-                "table": table_path,
-                "reason": None,
-            }
 
-    lo_bound, hi_bound = ratios[0], ratios[-1]
-    if target < lo_bound or target > hi_bound:
-        return {
-            "kelvin": None,
-            "interpolated": False,
-            "bracket": None,
-            "residual_ratio": None,
-            "exact": False,
-            "camera": camera,
-            "table": table_path,
-            "reason": (
-                f"r/b ratio {target:.4f} is outside {camera}'s calibrated range "
-                f"[{lo_bound:.4f}, {hi_bound:.4f}] ({table[0]['kelvin']}-{table[-1]['kelvin']} K); "
-                "extrapolating past the measurements would be an invented value"
+@metrics.instrumented("wb.kelvin")
+def kelvin_verb(image: str | int, *, job: str | None = None) -> KelvinResult:
+    """The registered verb: `wb.kelvin` on an image, end to end.
+
+    A thin wrapper over `kelvin()` (undecorated, and deliberately so --
+    `outliers.list`/`style._resolve_kelvin` call `kelvin()` directly, once per
+    frame, from inside their OWN top-level verb; if `kelvin()` itself were
+    `@instrumented`, every frame in an `outliers.list` run would add its own
+    metrics event under someone else's verb, breaking "one event per
+    top-level verb"). This wrapper is what a direct CLI/MCP call goes through.
+    """
+    job = job or current_job()
+    result = kelvin(image=image)
+    return KelvinResult(
+        kelvin=result["kelvin"],
+        interpolated=result["interpolated"],
+        bracket=result["bracket"],
+        residual_ratio=result["residual_ratio"],
+        exact=result["exact"],
+        camera=result["camera"],
+        table=result["table"],
+        reason=result["reason"],
+    )
+
+
+def _inside_job_raw(path: str) -> bool:
+    """True when `path`'s parent directory is a job's `raw/` (config.raw_dir's
+    own shape: `<job_path>/raw/<file>`) -- a cheap, dependency-free check that
+    needs no job manifest lookup, just the path `calibrate` was already given.
+    """
+    return Path(path).parent.name == "raw"
+
+
+def _unwrapped(fn):
+    return getattr(fn, "__wrapped__", fn)
+
+
+@metrics.instrumented("wb.calibrate")
+def calibrate(
+    image: str | int,
+    k_from: int,
+    k_to: int,
+    step: int = 100,
+    *,
+    allow_in_job: bool = False,
+    confirm: bool = False,
+    dry_run: bool = False,
+    job: str | None = None,
+) -> CalibrateResult:
+    """Sweep the Kelvin slider from `k_from` to `k_to` (inclusive) by `step`,
+    reading the landed coefficients back from the XMP after every commit, and
+    write the measured `~/.config/scouter/wb/<camera>.json` table.
+
+    Refuses on a job's own `raw/` frame unless `allow_in_job=True`: this adds
+    roughly one history item per Kelvin point (~21 for the brief's own sweep)
+    to whatever image is passed, which is fine for a scratch/calibration copy
+    and not something to do to a client frame by accident -- this check runs
+    even without `confirm` (it is not the confirm gate, `allow_in_job` is its
+    own escape hatch).
+
+    Gated (design's own table, "wb.calibrate: gated yes"): `confirm` is
+    required for any real run, same shape as every other gated verb here
+    (`dry_run or not confirm` -> a `dry_run` result, never a raised error) --
+    this also means an existing table is never overwritten without it, since
+    nothing runs without it. The EXIF/camera lookup that decides the table
+    path happens AFTER this gate, not before: a caller previewing without
+    `confirm` must never need a readable raw on disk.
+
+    Refuses (raising `UsageError`, naming the breaking pair) rather than
+    write a non-monotone table -- `wb.kelvin`'s bisection assumes r/b is
+    strictly increasing in K, and a table that violates that would silently
+    produce wrong answers.
+    """
+    job = job or current_job()
+    if step <= 0:
+        raise UsageError(
+            f"step must be a positive number of Kelvin, got {step!r}", detail={"step": step}
+        )
+    if k_to < k_from:
+        raise UsageError(
+            f"k_to ({k_to}) must be >= k_from ({k_from})", detail={"k_from": k_from, "k_to": k_to}
+        )
+    ks = list(range(int(k_from), int(k_to) + 1, int(step)))
+    if not ks:
+        raise UsageError(
+            f"no Kelvin points between {k_from} and {k_to} step {step}",
+            detail={"k_from": k_from, "k_to": k_to, "step": step},
+        )
+    estimated_s = round(len(ks) * _SECONDS_PER_POINT, 1)
+
+    resolved = dtbridge.resolve_image(image)
+    if _inside_job_raw(resolved.path) and not allow_in_job:
+        raise UsageError(
+            f"{resolved.path} is inside a job's raw/: wb.calibrate would add ~{len(ks)} history "
+            "items to a client frame. Pass allow_in_job=True to calibrate on it anyway, or point "
+            "this at a scratch copy instead",
+            detail={"path": resolved.path, "points": len(ks)},
+        )
+
+    plan = [
+        {"action": "darkroom.set", "module": "temperature", "param": "temperature", "value": k}
+        for k in ks
+    ]
+    if dry_run or not confirm:
+        return CalibrateResult(
+            outcome="dry_run",
+            image_id=resolved.image_id,
+            path=resolved.path,
+            ks=ks,
+            estimated_s=estimated_s,
+            plan=plan,
+            reason=(
+                f"dry run: would set {len(ks)} Kelvin points ({ks[0]}-{ks[-1]}, step {step}); "
+                f"estimated {estimated_s}s; nothing was written to darktable"
+                if dry_run
+                else (
+                    f"would sweep {len(ks)} Kelvin points ({ks[0]}-{ks[-1]}, step {step}, "
+                    f"~{estimated_s}s) and write (or overwrite) a wb calibration table; "
+                    "re-run with --yes / confirm=true"
+                )
             ),
-        }
+        )
 
-    for i in range(len(table) - 1):
-        lo_r, hi_r = ratios[i], ratios[i + 1]
-        if lo_r <= target <= hi_r:
-            lo, hi = table[i], table[i + 1]
-            frac = (target - lo_r) / (hi_r - lo_r) if hi_r != lo_r else 0.0
-            k = lo["kelvin"] + frac * (hi["kelvin"] - lo["kelvin"])
-            return {
-                "kelvin": k,
-                "interpolated": True,
-                "bracket": [lo["kelvin"], hi["kelvin"]],
-                "residual_ratio": target - lo_r,
-                "exact": False,
-                "camera": camera,
-                "table": table_path,
-                "reason": None,
+    from scouter.config import load as load_config
+    from scouter.core import darkroom, exif
+
+    cfg = load_config()
+    tags = exif.read_tags(resolved.path)
+    camera = exif.camera_slug(tags, cfg)
+
+    table_path = _table_path(camera)
+    # `confirm` is guaranteed True past the gate above, so this is never a
+    # silent overwrite -- just a fact worth reporting in the result.
+    overwritten = table_path.exists()
+
+    open_fn = _unwrapped(darkroom.open_image)
+    open_fn(image, job=job)
+
+    set_fn = _unwrapped(darkroom.set_param)
+    points: list[dict] = []
+    for k in ks:
+        set_fn("temperature", "temperature", float(k), job=job)
+        parsed = darkroom._read_sidecar_parsed(resolved.path)
+        params = xmp.latest_params(parsed, "temperature") if parsed is not None else None
+        if params is None:
+            raise ScouterError(
+                f"wb.calibrate: temperature did not decode from the XMP at {k} K",
+                fix="check darkroom.status/history for what actually landed and re-run",
+                detail={"kelvin": k, "path": resolved.path},
+            )
+        points.append(
+            {
+                "k": k,
+                "coeff_r": params.get("coeff_r"),
+                "coeff_g": params.get("coeff_g"),
+                "coeff_b": params.get("coeff_b"),
             }
+        )
 
-    # Unreachable: the range check above already guarantees a bracket exists
-    # between two consecutive samples somewhere in the sorted list.
-    raise AssertionError(f"{camera}: {target!r} in range but no bracket found -- table not sorted?")
+    ratios = [p["coeff_r"] / p["coeff_b"] for p in points]
+    for i in range(len(ratios) - 1):
+        if ratios[i + 1] <= ratios[i]:
+            raise UsageError(
+                f"calibration is not monotone between {points[i]['k']} K (r/b={ratios[i]:.4f}) and "
+                f"{points[i + 1]['k']} K (r/b={ratios[i + 1]:.4f}); refusing to write a table that "
+                "cannot be inverted",
+                detail={
+                    "camera": camera,
+                    "breaking_pair": [points[i]["k"], points[i + 1]["k"]],
+                    "ratios": [ratios[i], ratios[i + 1]],
+                },
+            )
+
+    table = [
+        {"kelvin": p["k"], "coeffs": [p["coeff_r"], p["coeff_g"], p["coeff_b"]]} for p in points
+    ]
+    paths.ensure(table_path)
+    fd, tmp_name = tempfile.mkstemp(dir=str(table_path.parent), prefix=".wb-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(table, fh, indent=2, sort_keys=True)
+        os.replace(tmp_name, table_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+    return CalibrateResult(
+        image_id=resolved.image_id,
+        path=resolved.path,
+        camera=camera,
+        table_path=str(table_path),
+        ks=ks,
+        estimated_s=estimated_s,
+        points=points,
+        written=True,
+        overwritten=overwritten,
+    )
+
+
+IMAGE_ARG = ArgSpec(
+    "image",
+    "image",
+    required=True,
+    positional=True,
+    help="absolute path to the raw, or an image id",
+)
+
+for verb in (
+    Verb(
+        id="wb.kelvin",
+        group="wb",
+        fn=kelvin_verb,
+        args=(IMAGE_ARG,),
+        writes=False,
+        gated=False,
+        summary="Invert an image's temperature coefficients to Kelvin, from its measured table.",
+    ),
+    Verb(
+        id="wb.calibrate",
+        group="wb",
+        fn=calibrate,
+        args=(
+            IMAGE_ARG,
+            ArgSpec("k_from", "int", required=True, positional=True, help="first Kelvin point"),
+            ArgSpec("k_to", "int", required=True, positional=True, help="last Kelvin point"),
+            ArgSpec("step", "int", default=100, help="Kelvin step between points"),
+            ArgSpec(
+                "allow_in_job",
+                "bool",
+                default=False,
+                help="required: image is inside a job's raw/",
+            ),
+            ArgSpec("confirm", "bool", default=False, help="required: overwrite an existing table"),
+            ArgSpec("dry_run", "bool", default=False, help="plan only, send nothing"),
+        ),
+        writes=True,
+        gated=True,
+        summary="Measure a per-camera Kelvin<->coefficient calibration table.",
+    ),
+):
+    register(verb)

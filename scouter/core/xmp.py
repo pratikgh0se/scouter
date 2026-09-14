@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import math
 import re
 import struct
 import xml.etree.ElementTree as ET
@@ -281,22 +282,41 @@ def active_entries(parsed: ParsedXmp) -> list[HistoryEntry]:
     ]
 
 
+def _json_safe(value):
+    """`nan`/`inf` -> `None` (phase 1's rule, `types._clean`'s sibling): JSON has
+    no literal for either, and a caller comparing two `None`s (both "not a
+    finite number") is exactly the "both non-finite" equality task 11's
+    undo needs for `temperature`'s `coeff_g2 = inf` -- comparing raw floats
+    would make `inf != inf` look like a broken restore."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
 def latest_params(parsed: ParsedXmp, operation: str, instance: int = 0) -> dict | None:
-    """The active, decoded param dict for one module, newest entry wins.
+    """The active, decoded param dict for one module, PLUS `params_hex`
+    (design 11.2 / ruling R9), newest entry wins.
 
     Same newest-active-entry search as `latest_value`, but returns the whole
-    decoded dict instead of a single field -- for callers (task 9's WB delta)
-    that need more than one slot out of the same module. Returns None when
-    the module is absent, inactive, or its params could not be decoded (an
-    unknown module stays opaque hex, per the honesty rule); never a guessed
-    or partial dict.
+    decoded dict instead of a single field -- for callers (task 9's WB delta,
+    task 11's journalled coefficient vector) that need more than one slot out
+    of the same module. Every value that is `nan`/`inf` in the decoded dict
+    comes back as `None` (`_json_safe`), same as every other result Scouter
+    hands back. Returns None when the module is absent, inactive, or its
+    params could not be decoded (an unknown module stays opaque hex, per the
+    honesty rule); never a guessed or partial dict.
     """
     for entry in sorted(parsed.entries, key=lambda e: e.num, reverse=True):
         if entry.operation != operation or not entry.active:
             continue
         if entry.multi_priority != instance:
             continue
-        return entry.decoded
+        if entry.decoded is None:
+            return None
+        return {
+            **{k: _json_safe(v) for k, v in entry.decoded.items()},
+            "params_hex": entry.params_hex,
+        }
     return None
 
 

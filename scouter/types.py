@@ -75,6 +75,37 @@ class UndoResult(Payload):
 
 
 @dataclass
+class KelvinResult(Payload):
+    """`wb.kelvin`'s result (task 11). No table -> `kelvin: None`, `reason`
+    naming `scouter wb calibrate`; outside the calibrated range -> `kelvin:
+    None`, `reason` naming the range -- never an extrapolated guess."""
+
+    kelvin: float | None = None
+    interpolated: bool = False
+    bracket: list[int] | None = None
+    residual_ratio: float | None = None
+    exact: bool = False
+    camera: str = ""
+    table: str | None = None
+
+
+@dataclass
+class CalibrateResult(Payload):
+    """`wb.calibrate`'s result (task 11). `points` is one `{k, coeff_r,
+    coeff_g, coeff_b}` row per swept Kelvin value -- the same rows written to
+    `table_path`'s JSON (as `{kelvin, coeffs}`), so what Pratik reads back
+    here and what landed on disk never drift."""
+
+    camera: str = ""
+    table_path: str = ""
+    ks: list[int] = field(default_factory=list)
+    estimated_s: float = 0.0
+    points: list[dict] = field(default_factory=list)
+    written: bool = False
+    overwritten: bool = False
+
+
+@dataclass
 class StatusResult(Payload):
     view: str = "unknown"
     positions: dict[str, float | None] = field(default_factory=dict)

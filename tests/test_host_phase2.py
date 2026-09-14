@@ -379,5 +379,484 @@ class PinDtstyleFormatTest(unittest.TestCase):
         )
 
 
+#: task 11 step 3: candidate `dt.gui.action` paths for the temperature
+#: module's coefficient sliders -- exactly the brief's own list. Tried in
+#: this order; `darkroom.status` on each records `nan`/non-`nan` (never a
+#: value -- design 7.3), which is what tells the pin apart from a guess.
+WB_SLIDER_CANDIDATES: tuple[str, ...] = (
+    "iop/temperature/red",
+    "iop/temperature/green",
+    "iop/temperature/blue",
+    "iop/temperature/emerald",
+    "iop/temperature/channel coefficients/red",
+    "iop/temperature/channel coefficients/green",
+    "iop/temperature/channel coefficients/blue",
+    "iop/temperature/channel coefficients/emerald",
+    "iop/temperature/scene illuminant temp",
+    "iop/temperature/settings",
+)
+#: task 11, host-confirmed (docs/measurements-generated.md, two runs): the
+#: FIRST candidate this list ever reaches wedges darktable's Lua worker for
+#: the rest of that session, regardless of which candidate is first (both
+#: "iop/temperature/red" and "iop/temperature/channel coefficients/red"
+#: reproduced it independently) -- `dt.gui.action` on an unrecognised path
+#: under this module does not fail gracefully on darktable 5.4.1. Tier 1 is
+#: not available on this host; see docs/measurements-generated.md and the
+#: task 11 report for the full record.
+
+#: The two candidate NAMING SCHEMES that would pin all three always-finite
+#: coefficients (red/green/blue), tried in this order.
+WB_SLIDER_SCHEMES: tuple[tuple[str, str, str], ...] = (
+    ("iop/temperature/red", "iop/temperature/green", "iop/temperature/blue"),
+    (
+        "iop/temperature/channel coefficients/red",
+        "iop/temperature/channel coefficients/green",
+        "iop/temperature/channel coefficients/blue",
+    ),
+)
+
+SCRATCH_DIR = Path.home() / "Pictures" / "ScouterScratch"
+SCRATCH_ORF = SCRATCH_DIR / "em10iii.ORF"
+MEASUREMENTS_GENERATED = (
+    Path(__file__).resolve().parent.parent / "docs" / "measurements-generated.md"
+)
+COMMITTED_TABLE = Path(__file__).resolve().parent / "fixtures" / "wb-em10iii.json"
+
+
+@unittest.skipUnless(not _MISSING, SKIP_REASON)
+class WhiteBalanceCalibrationHostTest(unittest.TestCase):
+    """Task 11 step 7: measure the real per-camera Kelvin table, same
+    install/launch/quit/restore discipline as `PinDtstyleFormatTest`, run
+    against a SCRATCH COPY of the EditingTrial ORF, never the original.
+
+    Kept in its OWN darktable launch, separate from the slider probe below
+    (`PinWbCoefficientSlidersHostTest`): a host run proved that sending
+    `dt.gui.action` an unrecognised path (exactly what the slider probe does,
+    on purpose, to discover which candidates are real) can leave darktable's
+    Lua worker permanently unresponsive to every later bridge call in that
+    SAME session -- so calibration, which only ever uses the already-proven
+    `iop/temperature/temperature` path, must not share a session with the
+    probe's guesses.
+    """
+
+    maxDiff = None
+    proc: subprocess.Popen[bytes] | None = None
+
+    _plugin_existed_before: bool = False
+    _plugin_backup: bytes | None = None
+    _luarc_existed_before: bool = False
+    _luarc_line_added: bool = False
+    _luarc_path: Path | None = None
+    _job_before: str | None = None
+    _config_before: str | None = None
+    _config_tmp: tempfile.TemporaryDirectory | None = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy(HERO, SCRATCH_ORF)
+        # Never touch the original's sidecar: a scratch copy starts with none.
+        Path(str(SCRATCH_ORF) + ".xmp").unlink(missing_ok=True)
+
+        # A pinned camera slug for the duration of this run (task 11's own
+        # committed-fixture naming convention, "em10iii" -- matching
+        # tests/fixtures/wb-em10iii.json, tests/test_outliers.py, etc.),
+        # independent of whatever (if anything) `~/.config/scouter/config.json`
+        # says on this machine.
+        cls._config_before = os.environ.get("SCOUTER_CONFIG")
+        cls._config_tmp = tempfile.TemporaryDirectory(prefix="scouter-wb-host-config-")
+        config_path = Path(cls._config_tmp.name) / "config.json"
+        config_path.write_text(
+            '{"version": 1, "cameras": {"E-M10 Mark III": "em10iii"}}', encoding="utf-8"
+        )
+        os.environ["SCOUTER_CONFIG"] = str(config_path)
+
+        cls._install_plugin()
+        try:
+            cls._launch_and_wait()
+        except BaseException:
+            if cls.proc is not None:
+                _quit(cls.proc)
+            cls._cleanup_plugin_install()
+            cls._restore_job_env()
+            raise
+
+    @classmethod
+    def _install_plugin(cls) -> None:
+        try:
+            INSTALLED_PLUGIN.parent.mkdir(parents=True, exist_ok=True)
+            cls._plugin_existed_before = INSTALLED_PLUGIN.exists()
+            if cls._plugin_existed_before:
+                cls._plugin_backup = INSTALLED_PLUGIN.read_bytes()
+            shutil.copy(PLUGIN_SRC, INSTALLED_PLUGIN)
+
+            luarc = INSTALLED_PLUGIN.parent.parent / "luarc"
+            cls._luarc_path = luarc
+            line = 'require "darktable_mcp"\n'
+            cls._luarc_existed_before = luarc.exists()
+            if not luarc.exists() or line not in luarc.read_text():
+                cls._luarc_line_added = True
+                with luarc.open("a") as fh:
+                    fh.write(line)
+        except BaseException:
+            cls._cleanup_plugin_install()
+            raise
+
+    @classmethod
+    def _launch_and_wait(cls) -> None:
+        cls._job_before = os.environ.get("SCOUTER_JOB")
+        os.environ["SCOUTER_JOB"] = f"job-wbhost-{os.getpid()}-{int(time.time())}"
+
+        cls.proc = subprocess.Popen(
+            [str(DARKTABLE), str(SCRATCH_ORF)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        from scouter.core import dtbridge
+
+        deadline = time.monotonic() + 90
+        last = "never answered"
+        reached_darkroom = False
+        while time.monotonic() < deadline:
+            try:
+                view = dtbridge.current_view()
+            except Exception as e:  # bridge not up yet
+                last = str(e)
+            else:
+                last = view
+                if view == "darkroom":
+                    reached_darkroom = True
+                    break
+            time.sleep(1.0)
+
+        if not reached_darkroom:
+            raise unittest.SkipTest(
+                f"darktable did not reach the darkroom within 90s (last view: {last})"
+            )
+
+        deadline = time.monotonic() + 60
+        detail = "never answered"
+        while time.monotonic() < deadline:
+            try:
+                current = dtbridge.call("darkroom.current", timeout=10.0)
+            except Exception as e:
+                detail = str(e)
+            else:
+                if current.get("image_id") is not None:
+                    return
+                detail = f"no image loaded yet: {current}"
+            time.sleep(0.5)
+        raise unittest.SkipTest(f"the darkroom never reported a loaded image within 60s ({detail})")
+
+    @classmethod
+    def _restore_job_env(cls) -> None:
+        if cls._job_before is None:
+            os.environ.pop("SCOUTER_JOB", None)
+        else:
+            os.environ["SCOUTER_JOB"] = cls._job_before
+        if cls._config_before is None:
+            os.environ.pop("SCOUTER_CONFIG", None)
+        else:
+            os.environ["SCOUTER_CONFIG"] = cls._config_before
+        if cls._config_tmp is not None:
+            cls._config_tmp.cleanup()
+
+    @classmethod
+    def _cleanup_plugin_install(cls) -> None:
+        if cls._luarc_line_added and cls._luarc_path is not None:
+            line = 'require "darktable_mcp"\n'
+            if cls._luarc_existed_before:
+                text = cls._luarc_path.read_text()
+                cls._luarc_path.write_text(text.replace(line, "", 1))
+            else:
+                cls._luarc_path.unlink(missing_ok=True)
+        if cls._plugin_existed_before and cls._plugin_backup is not None:
+            INSTALLED_PLUGIN.write_bytes(cls._plugin_backup)
+        elif not cls._plugin_existed_before:
+            INSTALLED_PLUGIN.unlink(missing_ok=True)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        try:
+            if cls.proc is not None and cls.proc.poll() is None:
+                try:
+                    from scouter import registry
+
+                    registry.call("history.commit", "cli", image=str(SCRATCH_ORF), timeout_s=10.0)
+                except Exception:
+                    pass
+            if cls.proc is not None:
+                _quit(cls.proc)
+            assert (
+                subprocess.run(["pgrep", "-f", "MacOS/darktable"], capture_output=True).returncode
+                != 0
+            ), "darktable is still running after _quit's full escalation"
+        finally:
+            cls._cleanup_plugin_install()
+            cls._restore_job_env()
+
+    def test_calibrate_measures_the_real_table(self) -> None:
+        """Step 7: `wb.calibrate` on the scratch copy, real darktable, real
+        commits. Writes `~/.config/scouter/wb/em10iii.json`; this test then
+        copies that file to `tests/fixtures/wb-em10iii.json` (staged for
+        review, same discipline `PinDtstyleFormatTest` uses for
+        `hero.dtstyle`) -- committed by hand once the sweep is reviewed."""
+        from scouter import registry
+
+        opened = registry.call("darkroom.open", "cli", image=str(SCRATCH_ORF))
+        self.assertTrue(opened.ok, opened.to_dict())
+
+        result = registry.call(
+            "wb.calibrate",
+            "cli",
+            image=str(SCRATCH_ORF),
+            k_from=3000,
+            k_to=12000,
+            step=1000,
+            confirm=True,
+        )
+        print(f"\nWB CALIBRATE: outcome={result.outcome}, data={result.data}")
+        self.assertTrue(result.ok, result.to_dict())
+        self.assertTrue(result.data["written"])
+        table_path = Path(result.data["table_path"])
+        self.assertTrue(table_path.is_file())
+
+        table_text = table_path.read_text(encoding="utf-8")
+        COMMITTED_TABLE.write_text(table_text, encoding="utf-8")
+        print(f"\nSTAGED {COMMITTED_TABLE} from {table_path} ({len(result.data['points'])} points)")
+
+        with MEASUREMENTS_GENERATED.open("a", encoding="utf-8") as fh:
+            fh.write(
+                "\n## White balance calibration (task 11 step 7, "
+                f"{time.strftime('%Y-%m-%d')}, real host, scratch copy of EditingTrial ORF)\n\n"
+                f"- camera: {result.data['camera']}\n"
+                f"- table: {table_path}\n"
+                f"- points: {result.data['points']}\n"
+            )
+
+
+@unittest.skipUnless(not _MISSING, SKIP_REASON)
+class PinWbCoefficientSlidersHostTest(unittest.TestCase):
+    """Task 11 step 3, in its own darktable launch (see
+    `WhiteBalanceCalibrationHostTest`'s docstring for why): probes each
+    candidate ONE AT A TIME, with a `view.current` sanity call after every
+    one, and STOPS at the first candidate that leaves the bridge
+    unresponsive -- a host run showed `dt.gui.action` on an unrecognised
+    path can wedge darktable's Lua worker for the rest of the session, so
+    probing all ten candidates in one go turns one bad guess into zero
+    evidence about the other nine. Stopping early after the first wedge
+    trades "all ten pinned or refused" for "an honest partial result,"
+    which is still real evidence for tier 4's refusal (brief step 3: "If
+    none answer: ... Do not guess a path").
+    """
+
+    maxDiff = None
+    proc: subprocess.Popen[bytes] | None = None
+
+    _plugin_existed_before: bool = False
+    _plugin_backup: bytes | None = None
+    _luarc_existed_before: bool = False
+    _luarc_line_added: bool = False
+    _luarc_path: Path | None = None
+    _job_before: str | None = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy(HERO, SCRATCH_ORF)
+        Path(str(SCRATCH_ORF) + ".xmp").unlink(missing_ok=True)
+
+        cls._install_plugin()
+        try:
+            cls._launch_and_wait()
+        except BaseException:
+            if cls.proc is not None:
+                _quit(cls.proc)
+            cls._cleanup_plugin_install()
+            cls._restore_job_env()
+            raise
+
+    @classmethod
+    def _install_plugin(cls) -> None:
+        try:
+            INSTALLED_PLUGIN.parent.mkdir(parents=True, exist_ok=True)
+            cls._plugin_existed_before = INSTALLED_PLUGIN.exists()
+            if cls._plugin_existed_before:
+                cls._plugin_backup = INSTALLED_PLUGIN.read_bytes()
+            shutil.copy(PLUGIN_SRC, INSTALLED_PLUGIN)
+
+            luarc = INSTALLED_PLUGIN.parent.parent / "luarc"
+            cls._luarc_path = luarc
+            line = 'require "darktable_mcp"\n'
+            cls._luarc_existed_before = luarc.exists()
+            if not luarc.exists() or line not in luarc.read_text():
+                cls._luarc_line_added = True
+                with luarc.open("a") as fh:
+                    fh.write(line)
+        except BaseException:
+            cls._cleanup_plugin_install()
+            raise
+
+    @classmethod
+    def _launch_and_wait(cls) -> None:
+        cls._job_before = os.environ.get("SCOUTER_JOB")
+        os.environ["SCOUTER_JOB"] = f"job-wbprobe-{os.getpid()}-{int(time.time())}"
+
+        cls.proc = subprocess.Popen(
+            [str(DARKTABLE), str(SCRATCH_ORF)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        from scouter.core import dtbridge
+
+        deadline = time.monotonic() + 90
+        last = "never answered"
+        reached_darkroom = False
+        while time.monotonic() < deadline:
+            try:
+                view = dtbridge.current_view()
+            except Exception as e:  # bridge not up yet
+                last = str(e)
+            else:
+                last = view
+                if view == "darkroom":
+                    reached_darkroom = True
+                    break
+            time.sleep(1.0)
+
+        if not reached_darkroom:
+            raise unittest.SkipTest(
+                f"darktable did not reach the darkroom within 90s (last view: {last})"
+            )
+
+        deadline = time.monotonic() + 60
+        detail = "never answered"
+        while time.monotonic() < deadline:
+            try:
+                current = dtbridge.call("darkroom.current", timeout=10.0)
+            except Exception as e:
+                detail = str(e)
+            else:
+                if current.get("image_id") is not None:
+                    return
+                detail = f"no image loaded yet: {current}"
+            time.sleep(0.5)
+        raise unittest.SkipTest(f"the darkroom never reported a loaded image within 60s ({detail})")
+
+    @classmethod
+    def _restore_job_env(cls) -> None:
+        if cls._job_before is None:
+            os.environ.pop("SCOUTER_JOB", None)
+        else:
+            os.environ["SCOUTER_JOB"] = cls._job_before
+
+    @classmethod
+    def _cleanup_plugin_install(cls) -> None:
+        if cls._luarc_line_added and cls._luarc_path is not None:
+            line = 'require "darktable_mcp"\n'
+            if cls._luarc_existed_before:
+                text = cls._luarc_path.read_text()
+                cls._luarc_path.write_text(text.replace(line, "", 1))
+            else:
+                cls._luarc_path.unlink(missing_ok=True)
+        if cls._plugin_existed_before and cls._plugin_backup is not None:
+            INSTALLED_PLUGIN.write_bytes(cls._plugin_backup)
+        elif not cls._plugin_existed_before:
+            INSTALLED_PLUGIN.unlink(missing_ok=True)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        try:
+            if cls.proc is not None:
+                _quit(cls.proc)
+            assert (
+                subprocess.run(["pgrep", "-f", "MacOS/darktable"], capture_output=True).returncode
+                != 0
+            ), "darktable is still running after _quit's full escalation"
+        finally:
+            cls._cleanup_plugin_install()
+            cls._restore_job_env()
+
+    def test_pin_wb_coefficient_sliders(self) -> None:
+        from scouter.core import dtbridge
+
+        results: dict[str, dict] = {}
+        wedged_at: str | None = None
+        for path in WB_SLIDER_CANDIDATES:
+            try:
+                reply = dtbridge.call("darkroom.status", {"path": path, "instance": 0}, timeout=8.0)
+            except Exception as e:
+                results[path] = {"nan": None, "position": None, "error": str(e)}
+            else:
+                results[path] = {"nan": bool(reply.get("nan")), "position": reply.get("position")}
+
+            # Sanity check: a host run showed `dt.gui.action` on an
+            # unrecognised path can wedge the worker for every LATER bridge
+            # call too -- catching it here (instead of only at the very
+            # end) stops the loop after the candidate that actually broke
+            # it, rather than burning a timeout on nine more doomed calls.
+            try:
+                dtbridge.call("view.current", timeout=8.0)
+            except Exception as e:
+                wedged_at = path
+                results[path].setdefault("wedged_the_bridge", True)
+                results[path]["sanity_check_error"] = str(e)
+                break
+
+        pinned_scheme: tuple[str, str, str] | None = None
+        for scheme in WB_SLIDER_SCHEMES:
+            if all(results.get(p, {}).get("nan") is False for p in scheme):
+                pinned_scheme = scheme
+                break
+
+        lines = [
+            "",
+            "## White balance coefficient-slider probe (task 11 step 3, "
+            f"{time.strftime('%Y-%m-%d')}, darktable 5.4.1, real host, "
+            "scratch copy of EditingTrial ORF)",
+            "",
+        ]
+        for path in WB_SLIDER_CANDIDATES:
+            r = results.get(path)
+            if r is None:
+                lines.append(
+                    f"- `{path}`: not tried (probe stopped after an earlier "
+                    "candidate wedged the bridge)"
+                )
+            else:
+                lines.append(f"- `{path}`: {r}")
+        lines.append("")
+        if wedged_at:
+            lines.append(
+                f"**Bridge wedged after `{wedged_at}`**: darktable's Lua worker stopped answering "
+                "ANY bridge call after this candidate, including the unrelated `view.current` "
+                "sanity check -- a real host limitation of `dt.gui.action` on an unrecognised "
+                "path, not a probe bug. The probe stopped here rather than burn timeouts on the "
+                "remaining candidates."
+            )
+        if pinned_scheme:
+            names = ("coeff_r", "coeff_g", "coeff_b")
+            lines.append(f"**Pinned:** {dict(zip(names, pinned_scheme))}")
+            for name, path in zip(names, pinned_scheme):
+                dtbridge.ACTION_PATHS[("temperature", name)] = path
+        else:
+            lines.append(
+                "**Pinned: none.** Tier 1 (the coefficient-slider undo) is not available from "
+                "this run -- the negative result IS the evidence for tier 4's refusal."
+            )
+        lines.append("")
+
+        MEASUREMENTS_GENERATED.parent.mkdir(parents=True, exist_ok=True)
+        with MEASUREMENTS_GENERATED.open("a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+
+        print("\n".join(lines))
+        # The assertion here is that the probe ran and recorded SOMETHING --
+        # a wedge after the first candidate, or a clean pass/nan through
+        # all ten, are both valid, honest outcomes; neither is a test
+        # failure. Only a probe that recorded nothing at all is a bug.
+        self.assertTrue(results, "the probe recorded no results at all")
+
+
 if __name__ == "__main__":
     unittest.main()

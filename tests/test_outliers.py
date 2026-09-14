@@ -4,15 +4,15 @@ directly; the set-assembly tests (exclusion, sorting, failed frames, the
 empty-set refusal) exercise `style.outliers` end to end against a fake
 darktable-cli whose output pixel value is chosen by the raw path's own name.
 
-`tests/fixtures/wb-em10iii.json` here is a SYNTHETIC placeholder table (five
-made-up, monotone points) -- task 11 is the one that measures the real
-`~/Pictures/ScouterScratch/em10iii.ORF` table and commits it under this same
-name; until then this fixture is only good for "does outliers.list pick a
-committed table up and use it", never for a real Kelvin number.
+`tests/fixtures/wb-em10iii.json` here is the REAL table (task 11's own host
+calibration of `~/Pictures/ScouterScratch/em10iii.ORF`, a scratch copy of the
+EditingTrial ORF) -- ten measured points, 3000-12000 K, replacing task 9's
+five made-up ones.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -168,12 +168,20 @@ class KelvinFallbackTest(unittest.TestCase):
         (wb_dir / "em10iii.json").write_text(
             (FIXTURES / "wb-em10iii.json").read_text(encoding="utf-8"), encoding="utf-8"
         )
-        ref = _frame(lum=100.0, coeffs=[1.60, 1.00, 1.80], camera="em10iii")  # 5000 K, exact
-        frame = _frame(lum=100.0, coeffs=[1.80, 1.00, 1.60], camera="em10iii")  # 6000 K, exact
+        # Task 11: `wb-em10iii.json` is now the REAL measured table (a host
+        # calibration of the EditingTrial ORF), not five made-up points --
+        # two of its own sample rows stand in for the old hard-coded
+        # 5000/6000 K coefficients, so this stays an "exact" match (delta ==
+        # the Kelvin gap between the two rows) however the real numbers move
+        # on a future re-calibration.
+        table = json.loads((FIXTURES / "wb-em10iii.json").read_text(encoding="utf-8"))
+        lo, hi = sorted(table, key=lambda p: p["kelvin"])[:2]
+        ref = _frame(lum=100.0, coeffs=lo["coeffs"], camera="em10iii")
+        frame = _frame(lum=100.0, coeffs=hi["coeffs"], camera="em10iii")
         row = style._measure_frame(frame, ref, self.tol)
         self.assertEqual(row["wb_test"], "kelvin")
         self.assertIsNotNone(row["temperature_k_delta"])
-        self.assertAlmostEqual(row["temperature_k_delta"], 1000.0, places=1)
+        self.assertAlmostEqual(row["temperature_k_delta"], hi["kelvin"] - lo["kelvin"], places=1)
         self.assertNotIn("temperature_k_reason", row)
 
 

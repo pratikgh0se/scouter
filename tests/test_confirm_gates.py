@@ -218,6 +218,10 @@ class ConfirmGateTest(unittest.TestCase):
         # `test_every_gated_verb_dry_runs_without_confirm` instead.
         "cull.apply": {"proposal": "<cull-proposal>"},
         "backup.run": {},
+        # `k_from`/`k_to` need no fixture staging (task 11): the confirm gate
+        # fires before any EXIF/camera lookup, so `self.raw`'s fake bytes
+        # (not a readable TIFF header) never get that far without confirm.
+        "wb.calibrate": {"image": None, "k_from": 3000, "k_to": 3100},
     }
     # `style.apply` is deliberately NOT here (final review, should-fix 7): its
     # only would-be gate was mode=overwrite, which darktable cannot do at all,

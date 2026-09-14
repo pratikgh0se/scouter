@@ -696,6 +696,51 @@ TOOL_SPECS: list[dict] = [
             [],
         ),
     },
+    {
+        "name": "wb_kelvin",
+        "description": "Invert an image's committed `temperature` coefficients to Kelvin "
+        "against its camera's measured calibration table (scouter wb calibrate). "
+        "No table -> kelvin: null, reason names `scouter wb calibrate`. Outside "
+        "the calibrated range -> kelvin: null, reason names the range -- never "
+        "an extrapolated guess.",
+        "inputSchema": _schema({"image": IMAGE}, ["image"]),
+    },
+    {
+        "name": "wb_calibrate",
+        "description": "Sweep the darkroom's Kelvin slider from k_from to k_to and write "
+        "the measured per-camera table `~/.config/scouter/wb/<camera>.json`, "
+        "which wb.kelvin and outliers.list's temperature_k_delta then use. "
+        "Costs ~1.8s per point and adds one history item per point, so it "
+        "refuses inside a job's raw/ unless allow_in_job=true -- run it on a "
+        "scratch copy. Refuses (usage error) rather than write a table whose "
+        "r/b coefficient ratio is not strictly increasing in Kelvin. "
+        "Requires confirm=true to run at all (never overwrites an existing "
+        "table otherwise).",
+        "inputSchema": _schema(
+            {
+                "image": IMAGE,
+                "k_from": {"type": "integer", "description": "first Kelvin point"},
+                "k_to": {"type": "integer", "description": "last Kelvin point"},
+                "step": {
+                    "type": "integer",
+                    "default": 100,
+                    "description": "Kelvin step between points",
+                },
+                "allow_in_job": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: image is inside a job's raw/",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required to run at all (never overwrites without it)",
+                },
+                "dry_run": DRY_RUN,
+            },
+            ["image", "k_from", "k_to"],
+        ),
+    },
 ]
 
 

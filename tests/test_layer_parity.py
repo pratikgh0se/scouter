@@ -41,6 +41,8 @@ EXPECTED_VERBS = {
     "backup.run",
     "backup.verify",
     "outliers.list",
+    "wb.kelvin",
+    "wb.calibrate",
 }
 
 

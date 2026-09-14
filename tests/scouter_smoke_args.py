@@ -97,6 +97,14 @@ SMOKE_ARGS: dict[str, dict] = {
     # `usage` error, still exactly one event, which is all this coverage
     # test asserts.
     "outliers.list": {"reference": SMOKE_RAW, "images": [SMOKE_RAW], "px": 64, "workers": 1},
+    # No calibration table for whatever camera this fake raw resolves to (and
+    # no readable EXIF at all, since this smoke raw is never written to disk)
+    # -- kelvin() fails fast one way or another, still exactly one event.
+    "wb.kelvin": {"image": SMOKE_RAW},
+    # confirm omitted (same reasoning as darkroom.reset/library.import above):
+    # wb.calibrate is gated, so this is a dry run -- one event, no darktable
+    # writes, no table touched.
+    "wb.calibrate": {"image": SMOKE_RAW, "k_from": 3000, "k_to": 3100},
 }
 
 

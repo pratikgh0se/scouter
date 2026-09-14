@@ -103,12 +103,30 @@ class LoadVerbsImportGuardTest(unittest.TestCase):
                     "outliers",
                     "backup",
                     "metrics",
+                    "wb",
                 },
             )
         finally:
             for name in core_module_names:
                 sys.modules.pop(name, None)
             sys.modules.update(saved_modules)
+            # Task 11 fix: `sys.modules` is not the only place a module
+            # lives once it has been imported -- `import scouter.core.style`
+            # (and `load_verbs()`'s own re-imports) also set each leaf as an
+            # ATTRIBUTE on its parent package object (`scouter.core.darkroom
+            # = <the fresh module>`), which `from scouter.core import
+            # darkroom` prefers over a `sys.modules` lookup. Restoring only
+            # `sys.modules` left that attribute pointing at the throwaway
+            # module this test created, so every LATER `from scouter.core
+            # import darkroom` (e.g. `wb.calibrate`'s own lazy import) kept
+            # getting a different `darkroom` module object than the one
+            # `mock.patch("scouter.core.darkroom._commit", ...)` patched --
+            # a real bug this test's restoration used to leave behind.
+            for name, module in saved_modules.items():
+                parent_name, _, leaf = name.rpartition(".")
+                parent = sys.modules.get(parent_name)
+                if parent is not None:
+                    setattr(parent, leaf, module)
 
 
 class _FakeResult:

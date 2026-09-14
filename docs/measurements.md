@@ -154,3 +154,38 @@ in a live `list_styles` afterwards, then was deleted again via the new
 
 **Verdict: dense, XMP-history-order 0..N-1 renumbering round-trips through
 real darktable for a multi-plugin filtered style, confirmed live.**
+
+## White balance (task 11, 2026-09-14, this Mac, darktable 5.4.1, real host)
+
+Provenance: `SCOUTER_HOST_TESTS=1 pytest tests/test_host_phase2.py -k WhiteBalanceCalibrationHostTest`
+and `... -k PinWbCoefficientSlidersHostTest`, copied here by hand from
+`docs/measurements-generated.md` after review. Every run confirmed darktable
+gone (`pgrep`) before and after.
+
+**Coefficient-slider probe (step 3): tier 1 is NOT available on this
+host/darktable build.** Two independent runs, each starting from a
+DIFFERENT first candidate, both reproduced the same failure: the first
+`dt.gui.action` call on an unrecognised path under the `temperature` module
+(`iop/temperature/red` in run 1, `iop/temperature/channel coefficients/red`
+in run 2) leaves darktable's Lua worker unresponsive to every LATER bridge
+call in that session too -- including an unrelated `view.current` sanity
+check. `dt.gui.action` does not fail gracefully on an unrecognised path
+under this module on darktable 5.4.1; it wedges the worker. None of the
+brief's ten candidate paths were confirmed non-`nan`, and none could be,
+without accepting that risk per candidate (each wedge costs a full
+darktable relaunch to recover from). `dtbridge.ACTION_PATHS` gets no new
+`("temperature", "coeff_*")` entries from this task. `darkroom.undo_last`'s
+tier 1 (restore through the coefficient sliders) therefore never fires on
+this host; tier 2 (Kelvin inversion, now backed by a real measured table)
+and tier 4 (the improved honest refusal) are what actually run.
+
+**Calibration (step 7): real table measured, twice, both runs monotone.**
+`wb.calibrate` on a scratch copy of the EditingTrial ORF
+(`~/Pictures/ScouterScratch/em10iii.ORF`), `k_from=3000 k_to=12000 step=1000`
+(10 points, ~18s estimated / ~27-29s actual wall time including the darkroom
+open). Run 1's r/b ratios: 0.4517 (3000 K) rising to 2.1354 (12000 K), every
+step strictly increasing. Run 2: 0.4587 -> 2.1635, same shape, small
+per-launch variance in the absolute coefficients (expected -- a fresh
+darktable process, not bit-identical rendering). Run 2's table is committed
+as `tests/fixtures/wb-em10iii.json` (10 points, ~20 numbers, the "~20
+numbers" the brief asks for).

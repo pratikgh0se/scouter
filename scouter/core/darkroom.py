@@ -226,15 +226,38 @@ def _module_enabled(path: str, module: str, instance: int) -> bool | None:
     return _module_state(path, module, instance)["enabled"]
 
 
+def _temperature_extra(path: str, instance: int) -> dict:
+    """`params` (the whole decoded vector) + `params_hex`, for `temperature`
+    only (task 11 step 2). A `temperature` write needs the FULL coefficient
+    vector to be undoable, not just the one field `_read_value` can name --
+    the Kelvin slider has no `temperature` field in the XMP at all (design
+    §11.1: Kelvin is never stored, only camera-relative coefficients are).
+    """
+    parsed = _read_sidecar_parsed(path)
+    if parsed is None:
+        return {"params": None, "params_hex": None}
+    params = xmp.latest_params(parsed, "temperature", instance)
+    if params is None:
+        return {"params": None, "params_hex": None}
+    params = dict(params)
+    params_hex = params.pop("params_hex", None)
+    return {"params": params, "params_hex": params_hex}
+
+
 def _read_state(path: str, module: str, param: str, instance: int) -> dict:
     """Everything the journal needs about one slider's current state
 
     (fix round 1, blocker 7): not just `value`, but `enabled` and
     `history_end` too, so a future reader can tell "this slider was disabled"
-    or "this was a stale read" apart from a plain missing value.
+    or "this was a stale read" apart from a plain missing value. Ruling 20
+    still holds: `enabled` travels with every one of these, so a disabled
+    module is never reported as live.
     """
     state = _module_state(path, module, instance)
-    return {**state, "value": _read_value(path, module, param, instance)}
+    state = {**state, "value": _read_value(path, module, param, instance)}
+    if module == "temperature":
+        state = {**state, **_temperature_extra(path, instance)}
+    return state
 
 
 def _last_journal_write(
@@ -703,6 +726,203 @@ def reset(
     )
 
 
+#: The fields `("temperature", 4)`'s layout names (`scouter/core/xmp.py`).
+#: `coeff_g2` is `inf` on the EM10iii body (never a real slider target there),
+#: so it is only ever sent when it is BOTH pinned AND finite (fix round: a
+#: caller never sends `_require_finite`-rejected inf/nan to the bridge).
+_TEMPERATURE_COEFF_NAMES = ("coeff_r", "coeff_g", "coeff_b", "coeff_g2")
+
+
+def _temperature_sliders_pinned() -> bool:
+    """Tier 1 (design 11.3) is available only once the host probe (task 11
+    step 3, `tests/test_host_phase2.py::test_pin_wb_coefficient_sliders`) has
+    pinned all three always-finite coefficients' `dt.gui.action` paths into
+    `dtbridge.ACTION_PATHS`. `coeff_g2` is optional -- it is `inf`/unused on
+    the EM10iii body -- and is restored too when it happens to be pinned and
+    the journalled value is finite.
+    """
+    return all(
+        ("temperature", name) in dtbridge.ACTION_PATHS for name in ("coeff_r", "coeff_g", "coeff_b")
+    )
+
+
+def _undo_temperature_via_sliders(
+    job: str, entry: journal.Entry, before_params: dict
+) -> tuple[bool, list[str], dict]:
+    """Tier 1: one absolute `set` per pinned coefficient, ONE `history.commit`,
+    then verify the whole vector from the XMP (design 11.3; brief step 4).
+
+    `_close` compares each component against the CLEANED value --
+    `xmp.latest_params` already turns `inf`/`nan` into `None` (fix: both this
+    function's `before_params` and its post-restore read go through the same
+    `_temperature_extra`/`xmp.latest_params` cleaning), so `coeff_g2 = inf`
+    compares as "both non-finite", never as two unequal raw floats.
+    """
+    sent: list[str] = []
+    for name in _TEMPERATURE_COEFF_NAMES:
+        value = before_params.get(name)
+        if value is None or ("temperature", name) not in dtbridge.ACTION_PATHS:
+            continue
+        dtbridge.action(
+            dtbridge.action_path("temperature", name),
+            instance=entry.instance,
+            element="value",
+            effect="set",
+            value=float(value),
+        )
+        sent.append(name)
+
+    def _after_params() -> dict:
+        return _temperature_extra(entry.path, entry.instance).get("params") or {}
+
+    def _confirm() -> bool:
+        after_params = _after_params()
+        return all(_close(after_params.get(name), before_params.get(name)) for name in sent)
+
+    committed, warnings = _commit_with_readback(
+        job, entry.image_id, confirm=_confirm, what="temperature (undo coefficients)"
+    )
+    after_params = _after_params()
+    failed = [name for name in sent if not _close(after_params.get(name), before_params.get(name))]
+    verified = not failed
+    if failed:
+        warnings.append(
+            f"could not verify the restore for seq {entry.seq}: component(s) {failed} did not "
+            f"come back as journaled (read {after_params!r}, expected {before_params!r})"
+        )
+    undone = {
+        "verb": entry.verb,
+        "module": entry.module,
+        "param": entry.param,
+        "restored_to": after_params,
+        "verified": verified,
+        "tier": "coefficient_sliders",
+    }
+    return committed, warnings, undone
+
+
+def _temperature_camera(entry: journal.Entry) -> str | None:
+    """Best-effort camera slug for `entry.path`, or `None` -- tier 2/4 both
+    need this, and neither may raise: an EXIF read failing is not a reason
+    to skip straight past tier 2 to a worse refusal message."""
+    from scouter.config import load as load_config
+    from scouter.core import exif
+
+    try:
+        cfg = load_config()
+        tags = exif.read_tags(entry.path)
+        return exif.camera_slug(tags, cfg)
+    except ScouterError:
+        return None
+
+
+def _temperature_target_kelvin(
+    before_params: dict | None, camera: str | None
+) -> tuple[float | None, dict]:
+    """`wb.kelvin`'s answer for the journalled coefficients, or `(None, {})`."""
+    if not before_params or not camera:
+        return None, {}
+    coeffs = [
+        before_params.get("coeff_r"),
+        before_params.get("coeff_g"),
+        before_params.get("coeff_b"),
+    ]
+    if any(c is None for c in coeffs):
+        return None, {}
+    from scouter.core import wb
+
+    result = wb.kelvin(coeffs, camera)
+    return result.get("kelvin"), result
+
+
+def _undo_temperature_via_kelvin(
+    job: str, entry: journal.Entry, before_params: dict, camera: str
+) -> tuple[bool, list[str], dict] | None:
+    """Tier 2 (design 11.4): when the coefficient sliders are not pinned,
+    invert the journalled coefficients to a target Kelvin from the measured
+    table (`wb.calibrate`) and restore THAT through the ordinary Kelvin
+    slider. This is an APPROXIMATE undo -- a Kelvin round trip through
+    darktable's own blackbody model, not an exact coefficient restore --
+    which is why tier 1 (the coefficient sliders) is always tried first.
+    Returns `None` when no measured table (or no camera) is available, so
+    the caller falls through to tier 4's honest refusal.
+    """
+    target_k, _ = _temperature_target_kelvin(before_params, camera)
+    if target_k is None:
+        return None
+    target_ratio = (
+        before_params["coeff_r"] / before_params["coeff_b"] if before_params["coeff_b"] else None
+    )
+
+    dtbridge.action(
+        dtbridge.action_path("temperature", "temperature"),
+        instance=entry.instance,
+        element="value",
+        effect="set",
+        value=float(target_k),
+    )
+
+    def _after_ratio() -> float | None:
+        after_params = _temperature_extra(entry.path, entry.instance).get("params") or {}
+        r, b = after_params.get("coeff_r"), after_params.get("coeff_b")
+        return r / b if r is not None and b else None
+
+    def _confirm() -> bool:
+        after_ratio = _after_ratio()
+        if after_ratio is None or target_ratio is None:
+            return False
+        return abs(after_ratio - target_ratio) / abs(target_ratio) <= 0.02
+
+    committed, warnings = _commit_with_readback(
+        job, entry.image_id, confirm=_confirm, what="temperature (undo via Kelvin inversion)"
+    )
+    verified = _confirm()
+    after_params = _temperature_extra(entry.path, entry.instance).get("params") or {}
+    if not verified:
+        warnings.append(
+            f"could not verify the Kelvin-inversion restore for seq {entry.seq}: this is an "
+            "approximate undo (coefficient ratio, not the exact coefficients)"
+        )
+    warnings.append(
+        f"restored via Kelvin inversion ({target_k:.0f} K from {camera}'s measured table), not "
+        "the exact coefficient sliders -- pin the sliders on this host (`scouter_wb_probe.lua`) "
+        "for an exact undo"
+    )
+    undone = {
+        "verb": entry.verb,
+        "module": entry.module,
+        "param": entry.param,
+        "restored_to": after_params,
+        "restored_kelvin": target_k,
+        "verified": verified,
+        "tier": "kelvin_inversion",
+    }
+    return committed, warnings, undone
+
+
+def _refuse_temperature_undo(entry: journal.Entry, before_params: dict | None) -> None:
+    """Tier 4 (brief step 6): the honest refusal, carrying the journalled
+    coefficient vector, the target Kelvin (when a table happens to answer
+    one even though sliders are not pinned), and the exact fix."""
+    camera = _temperature_camera(entry)
+    target_kelvin, _ = _temperature_target_kelvin(before_params, camera)
+    raise _UnsupportedUndo(
+        f"cannot undo seq {entry.seq}: temperature's coefficient sliders are not pinned on "
+        "this host, and no Kelvin calibration table lets Scouter compute a safe restore",
+        detail={
+            "seq": entry.seq,
+            "module": entry.module,
+            "coefficients": before_params,
+            "target_kelvin": target_kelvin,
+            "hint": (
+                "darktable stores white balance as camera-relative coefficients; run "
+                "`scouter wb calibrate` to make this undoable, or restore these coefficients "
+                "in the module's coefficients tab"
+            ),
+        },
+    )
+
+
 @metrics.instrumented("darkroom.undo_last")
 def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
     """Revert the newest Scouter write in this job by re-setting its old value."""
@@ -829,7 +1049,34 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             "restored_to": None,
             "verified": verified,
         }
+        mark_undone_ok = True
+    elif entry.module == "temperature":
+        # Task 11: three tiers, tried in order (design 11.2-11.4; brief
+        # steps 4/6). `before_params` is `None` for a journal entry written
+        # before this task landed (or when the module never decoded) -- that
+        # is tier 4 too, with no coefficients to hand over.
+        before_params = entry.before.get("params")
+        if before_params and _temperature_sliders_pinned():
+            committed, warnings, undone = _undo_temperature_via_sliders(job, entry, before_params)
+            # Brief step 4: a component that does not come back leaves the
+            # entry `undone: false` -- unlike every other undo here, a
+            # partially-verified coefficient restore is not marked done, so
+            # the failure stays visible and reachable on the next call.
+            mark_undone_ok = bool(undone["verified"])
+        else:
+            camera = _temperature_camera(entry)
+            via_kelvin = (
+                _undo_temperature_via_kelvin(job, entry, before_params, camera)
+                if before_params and camera
+                else None
+            )
+            if via_kelvin is None:
+                _refuse_temperature_undo(entry, before_params)
+                raise AssertionError("unreachable: _refuse_temperature_undo always raises")
+            committed, warnings, undone = via_kelvin
+            mark_undone_ok = True
     else:
+        mark_undone_ok = True
         previous = entry.before.get("value")
         if previous is None:
             raise ScouterError(
@@ -870,7 +1117,8 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             "verified": verified,
         }
 
-    journal.mark_undone(job, entry.seq)
+    if mark_undone_ok:
+        journal.mark_undone(job, entry.seq)
     return UndoResult(
         image_id=entry.image_id,
         path=entry.path,
