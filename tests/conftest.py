@@ -30,8 +30,12 @@ _FORCED = {
     # under the throwaway session tmp dir, never created) makes every such
     # attempt fail fast and locally instead of silently succeeding against
     # production software.
-    "SCOUTER_DARKTABLE_CLI": os.path.join(_SESSION_TMP, "no-such-darktable-cli"),
 }
+# Task 11 fix round 3 (re-review of 815dcc4): the CLI pin must not leak into
+# SCOUTER_HOST_TESTS=1 runs - host renders need the real binary and the real
+# calibrate must record the real darktable version, not "unknown".
+if os.environ.get("SCOUTER_HOST_TESTS") != "1":
+    _FORCED["SCOUTER_DARKTABLE_CLI"] = os.path.join(_SESSION_TMP, "no-such-darktable-cli")
 for _d in (_FORCED["OBSIDIAN_VAULT_PATH"], _FORCED["SCOUTER_CACHE"]):
     os.makedirs(_d, exist_ok=True)
 for _k, _v in _FORCED.items():
