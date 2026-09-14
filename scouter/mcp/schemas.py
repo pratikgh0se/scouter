@@ -329,6 +329,42 @@ TOOL_SPECS: list[dict] = [
         ),
     },
     {
+        "name": "outliers_list",
+        "description": "Flag frames whose rendered exposure, white balance or clipping drift "
+        "too far from the reference (hero) frame -- ev_proxy vs "
+        "tolerances.exposure_ev, Kelvin (or, with no calibration table, the "
+        "wb_ratio_rg/bg fallback) vs tolerances.temperature_k / wb_ratio, and "
+        "clipped_high_pct vs tolerances.clipped_high_pct. Read-only: one "
+        "metrics event, scout.stats_many and the XMP sidecars only, no "
+        "bridge writes. The reference is excluded from its own comparison. "
+        "A frame whose stats failed to render is reported in `failed`, never "
+        "counted as within tolerance.",
+        "inputSchema": _schema(
+            {
+                "reference": IMAGE,
+                "job_slug": {
+                    "type": "string",
+                    "description": "job slug; frames come from its import.json",
+                },
+                "images": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "description": "explicit image list, instead of (or alongside) "
+                    "job_slug (the reference is excluded from its own comparison either way)",
+                },
+                "px": {
+                    "type": "integer",
+                    "description": "stats render size (default: stats.set_px)",
+                },
+                "workers": {
+                    "type": "integer",
+                    "description": "thread pool size (default: stats.workers)",
+                },
+            },
+            ["reference"],
+        ),
+    },
+    {
         "name": "style_apply_set",
         "description": "Apply one style to a whole set, batched through the bridge, "
         "keeping per-image results. Always requires confirm=true (a set apply is "

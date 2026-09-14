@@ -417,6 +417,26 @@ class CullResult(Payload):
 
 
 @dataclass
+class OutliersResult(Payload):
+    """`outliers.list`'s result. `outliers` carries one row per frame that
+    breached at least one tolerance, sorted worst-first by
+    `max(|breach| / tolerance)`; `failed` is stats-failed frames, which are
+    never counted in `within_tolerance` or promoted to `outliers` -- an
+    unmeasured frame is not a passing frame. `wb_test` names which test ran
+    across the set: `kelvin` when every frame resolved a real Kelvin value
+    against the hero, `ratio` when none did (`wb.kelvin`'s designed
+    fallback), `mixed` when it differed frame to frame."""
+
+    reference: dict = field(default_factory=dict)
+    tolerances: dict = field(default_factory=dict)
+    wb_test: str = "ratio"
+    checked: int = 0
+    within_tolerance: int = 0
+    outliers: list[dict] = field(default_factory=list)
+    failed: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class CullApplyResult(Payload):
     """`cull.apply`'s result. `verified`/`unverified` are reported separately
     (design 8.3) rather than folded into `applied`: darktable owns when it

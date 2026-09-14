@@ -16,6 +16,16 @@ there is nothing to confirm (final review, should-fix 7). The bridge refuses
 it too, but that refusal arrives as a generic bridge failure after a round
 trip.
 
+`outliers.list` lives in this module too (task 9): the registry
+(`scouter.registry._CORE_MODULES`) has no separate `scouter.core.outliers`
+entry, only `scouter.core.style`, so a verb registered from a standalone
+module would never load. It is otherwise unrelated to styles -- it closes
+spec 4.4's loop, flagging frames whose rendered exposure, white balance or
+clipping drift too far from the hero for `style.apply` to have made them
+look consistent. A pure read verb: one metrics event, no bridge writes
+beyond the read-only `image.lookup` behind `resolve_image`, everything else
+from `scout.stats_many` and the XMP sidecars.
+
 `style.apply_set` (task 8) is the batched sibling: it never touches the
 darkroom view at all. The Lua handler for `style.apply` looks images up in
 `dt.database` and calls `image:apply_style` directly -- it does not read
@@ -117,15 +127,18 @@ instead of a bare array, so a future shape change has somewhere to say so.
 from __future__ import annotations
 
 import json
+import math
 import os
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from scouter import metrics, paths
-from scouter.core import dtbridge, dtstyle
+from scouter import config, metrics, paths
+from scouter.core import dtbridge, dtstyle, exif, scout
 from scouter.core import xmp as xmp_module
 from scouter.errors import (
     BridgeTimeout,
+    ExifUnreadable,
     NoSidecar,
     NotInDarkroom,
     ScouterError,
@@ -135,7 +148,7 @@ from scouter.errors import (
 )
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
-from scouter.types import ResolvedImage, StyleResult, StyleSetResult
+from scouter.types import OutliersResult, ResolvedImage, StyleResult, StyleSetResult
 
 MODES = ("append", "overwrite")
 
@@ -680,6 +693,306 @@ def apply(
         mode=mode,
         applied=applied,
         per_image=errors,
+    )
+
+
+def _ev_proxy(frame_lum: float, ref_lum: float) -> float:
+    """log2 of the rendered-luminance ratio. Named ev_proxy, NEVER ev.
+
+    It is a ratio of mean luminance on a 512/1024 px render, not a metered
+    exposure difference: scene content moves it, and two frames of different
+    subjects can differ by 0.4 "EV" with identical camera settings. The name
+    and the result's own label say so, so no caller mistakes it for a reading.
+    """
+    return math.log2((frame_lum + 0.5) / (ref_lum + 0.5))
+
+
+def _frame_coeffs(path: str) -> list[float] | None:
+    """The frame's `temperature` coefficients [r, g, b] from its XMP, or
+    `None` when there is no sidecar or no active `temperature` entry."""
+    from scouter.core import darkroom
+
+    parsed = darkroom._read_sidecar_parsed(path)
+    if parsed is None:
+        return None
+    params = xmp_module.latest_params(parsed, "temperature")
+    if not params:
+        return None
+    try:
+        return [float(params["coeff_r"]), float(params["coeff_g"]), float(params["coeff_b"])]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _resolve_kelvin(coeffs: list[float] | None, camera: str | None) -> tuple[float | None, str]:
+    """`wb.kelvin`'s answer for one frame's coefficients, or a reason why
+    there isn't one. `wb.kelvin` is imported lazily (task 11 -- until it
+    lands this always degrades to the ratio test, its own designed
+    fallback)."""
+    if coeffs is None:
+        return None, "no temperature coefficients in this frame's XMP (module not committed)"
+    if not camera:
+        return None, "camera unknown: cannot look up a wb calibration table"
+    try:
+        from scouter.core import wb
+    except ImportError:
+        return None, "wb.kelvin is not available yet (run scouter wb calibrate once task 11 lands)"
+    result = wb.kelvin(coeffs, camera)
+    return result.get("kelvin"), result.get("reason") or ""
+
+
+def _measure_frame(frame: dict, ref: dict, tolerances) -> dict:
+    """One frame's four measures against `ref` (the hero): `ev_proxy_delta`,
+    `temperature_k_delta` (or a reason it is `None`), the always-available
+    `wb_ratio_rg_delta`/`wb_ratio_bg_delta`, and the absolute
+    `clipped_high_pct`. `reasons` carries one sentence per breach, each with
+    both numbers and the tolerance; `severity` is `max(|breach| /
+    tolerance)` across every breach this frame has, for worst-first sorting.
+    """
+    reasons: list[str] = []
+    severities: list[float] = []
+
+    frame_lum = frame["stats"].get("luminance_mean", 0.0)
+    ref_lum = ref["stats"].get("luminance_mean", 0.0)
+    ev_delta = _ev_proxy(frame_lum, ref_lum)
+    if abs(ev_delta) > tolerances.exposure_ev:
+        severities.append(abs(ev_delta) / tolerances.exposure_ev)
+        reasons.append(
+            f"ev_proxy {ev_delta:+.2f} outside ±{tolerances.exposure_ev:.2f} "
+            f"(mean luminance {frame_lum:.0f} vs hero {ref_lum:.0f})"
+        )
+
+    rg_delta = frame["stats"].get("wb_ratio_rg", 0.0) - ref["stats"].get("wb_ratio_rg", 0.0)
+    bg_delta = frame["stats"].get("wb_ratio_bg", 0.0) - ref["stats"].get("wb_ratio_bg", 0.0)
+
+    frame_k, frame_k_reason = _resolve_kelvin(frame.get("coeffs"), frame.get("camera"))
+    ref_k, ref_k_reason = _resolve_kelvin(ref.get("coeffs"), ref.get("camera"))
+
+    temperature_k_delta: float | None = None
+    temperature_k_reason: str | None = None
+    if frame_k is not None and ref_k is not None:
+        wb_test = "kelvin"
+        temperature_k_delta = frame_k - ref_k
+        if abs(temperature_k_delta) > tolerances.temperature_k:
+            severities.append(abs(temperature_k_delta) / tolerances.temperature_k)
+            reasons.append(
+                f"temperature_k {temperature_k_delta:+.0f} outside "
+                f"±{tolerances.temperature_k:.0f}"
+            )
+    else:
+        wb_test = "ratio"
+        temperature_k_reason = frame_k_reason or ref_k_reason
+        worst = rg_delta if abs(rg_delta) >= abs(bg_delta) else bg_delta
+        worst_name = "wb_ratio_rg" if abs(rg_delta) >= abs(bg_delta) else "wb_ratio_bg"
+        if abs(worst) > tolerances.wb_ratio:
+            severities.append(abs(worst) / tolerances.wb_ratio)
+            reasons.append(
+                f"{worst_name} {worst:+.3f} outside ±{tolerances.wb_ratio:.3f} "
+                f"({temperature_k_reason})"
+            )
+
+    clip = frame["stats"].get("clipped_high_pct", 0.0)
+    if clip > tolerances.clipped_high_pct:
+        severities.append(clip / tolerances.clipped_high_pct)
+        reasons.append(f"clipped_high_pct {clip:.2f}% outside {tolerances.clipped_high_pct:.2f}%")
+
+    row: dict = {
+        "seq": frame["seq"],
+        "path": frame["path"],
+        "image_id": frame.get("image_id"),
+        "ev_proxy_delta": round(ev_delta, 4),
+        "temperature_k_delta": (
+            round(temperature_k_delta, 1) if temperature_k_delta is not None else None
+        ),
+        "wb_ratio_rg_delta": round(rg_delta, 6),
+        "wb_ratio_bg_delta": round(bg_delta, 6),
+        "wb_test": wb_test,
+        "clipped_high_pct": clip,
+        "reasons": reasons,
+        "is_outlier": bool(reasons),
+        "severity": max(severities) if severities else 0.0,
+    }
+    if temperature_k_delta is None:
+        row["temperature_k_reason"] = temperature_k_reason
+    return row
+
+
+def _gather_frames(
+    cfg,
+    ref_resolved: ResolvedImage,
+    *,
+    job_slug: str | None,
+    images: list | None,
+) -> tuple[list[dict], Path | None]:
+    """Every non-reference frame in the set, as `{seq, path, image_id,
+    camera}` dicts. `--job-slug` reads the job's `import.json` (same shape
+    `cull.propose` reads); `--images` resolves each image and reads its own
+    EXIF for a camera slug. The reference is excluded from its own set
+    either way (fix round: a hero comparing itself to itself is not a
+    finding)."""
+    job_path: Path | None = None
+    raw_frames: list[dict] = []
+    if images:
+        for idx, image in enumerate(images, start=1):
+            resolved = dtbridge.resolve_image(image)
+            if resolved.image_id == ref_resolved.image_id:
+                continue
+            try:
+                tags = exif.read_tags(resolved.path)
+                camera = exif.camera_slug(tags, cfg)
+            except (ExifUnreadable, OSError):
+                camera = ""
+            raw_frames.append(
+                {
+                    "seq": idx,
+                    "path": resolved.path,
+                    "image_id": resolved.image_id,
+                    "camera": camera,
+                }
+            )
+        if job_slug:
+            job_path = config.find_job(cfg, job_slug)
+    else:
+        job_path = config.find_job(cfg, job_slug)
+        import_path = config.scouter_dir(job_path) / "import.json"
+        if not import_path.is_file():
+            raise UsageError(
+                f"no {import_path} for job {job_slug!r}: run `library import` first",
+                detail={"job_slug": job_slug, "import_json": str(import_path)},
+            )
+        manifest = json.loads(import_path.read_text(encoding="utf-8"))
+        camera = manifest.get("camera", "")
+        for f in manifest.get("files", []):
+            path = str(job_path / f["dest"])
+            resolved = dtbridge.resolve_image(path)
+            if resolved.image_id == ref_resolved.image_id:
+                continue
+            raw_frames.append(
+                {"seq": f["seq"], "path": path, "image_id": resolved.image_id, "camera": camera}
+            )
+    return raw_frames, job_path
+
+
+@metrics.instrumented("outliers.list")
+def outliers(
+    reference: str | int,
+    *,
+    job_slug: str | None = None,
+    images: list[str | int] | None = None,
+    px: int | None = None,
+    workers: int | None = None,
+    job: str | None = None,
+) -> OutliersResult:
+    """Flag frames whose rendered exposure, white balance or clipping drift
+    too far from `reference` (the hero) -- spec 4.4's loop closer, "these six
+    frames need you". A read verb: one metrics event, `scout.stats_many` and
+    the XMP sidecars only, no bridge writes."""
+    cfg = config.load()
+    px = px if px is not None else cfg.stats.set_px
+    workers = workers if workers is not None else cfg.stats.workers
+
+    if not job_slug and not images:
+        raise UsageError(
+            "outliers.list needs --job-slug or --images",
+            detail={"job_slug": job_slug, "images": images},
+        )
+
+    ref_resolved = dtbridge.resolve_image(reference)
+    try:
+        ref_tags = exif.read_tags(ref_resolved.path)
+        ref_camera = exif.camera_slug(ref_tags, cfg)
+    except (ExifUnreadable, OSError):
+        ref_camera = ""
+
+    raw_frames, job_path = _gather_frames(cfg, ref_resolved, job_slug=job_slug, images=images)
+    if not raw_frames:
+        raise UsageError(
+            "outliers.list: the comparison set is empty once the reference is excluded",
+            detail={"job_slug": job_slug, "images": images, "reference": str(reference)},
+        )
+
+    all_paths = [ref_resolved.path] + [f["path"] for f in raw_frames]
+    stats_job_dir = config.scouter_dir(job_path) if job_path is not None else None
+    stats_results = scout.stats_many(all_paths, px=px, workers=workers, job_dir=stats_job_dir)
+
+    ref_stat = stats_results[0]
+    if "error" in ref_stat:
+        raise UsageError(
+            f"could not compute stats for the reference {ref_resolved.path}: "
+            f"{ref_stat['error'].get('message')}",
+            detail={"reference": ref_resolved.path, "error": ref_stat["error"]},
+        )
+    ref_frame = {
+        "path": ref_resolved.path,
+        "image_id": ref_resolved.image_id,
+        "camera": ref_camera,
+        "stats": ref_stat.get("stats", {}),
+        "coeffs": _frame_coeffs(ref_resolved.path),
+    }
+
+    failed: list[dict] = []
+    rows: list[dict] = []
+    for raw, stat in zip(raw_frames, stats_results[1:]):
+        if "error" in stat:
+            failed.append({"seq": raw["seq"], "path": raw["path"], "error": stat["error"]})
+            continue
+        merged = dict(raw)
+        merged["stats"] = stat.get("stats", {})
+        merged["coeffs"] = _frame_coeffs(raw["path"])
+        rows.append(_measure_frame(merged, ref_frame, cfg.tolerances))
+
+    outlier_rows = sorted(
+        (r for r in rows if r["is_outlier"]), key=lambda r: (-r["severity"], r["seq"])
+    )
+    within_rows = [r for r in rows if not r["is_outlier"]]
+
+    wb_tests_used = {r["wb_test"] for r in rows}
+    if wb_tests_used == {"kelvin"}:
+        wb_test = "kelvin"
+    elif wb_tests_used == {"ratio"} or not wb_tests_used:
+        wb_test = "ratio"
+    else:
+        wb_test = "mixed"
+
+    warnings: list[str] = [
+        "ev_proxy is log2 of the rendered-luminance ratio on a 512/1024px preview, "
+        "not a metered exposure reading -- scene content moves it, never call it 'ev'"
+    ]
+    if failed:
+        warnings.append(
+            f"stats failed for {len(failed)} frame(s); excluded from both outliers and "
+            "within_tolerance -- an unmeasured frame is not a passing frame"
+        )
+
+    if job_slug:
+        vault_rows = [
+            ("checked", str(len(rows))),
+            ("within tolerance", str(len(within_rows))),
+            ("outliers", str(len(outlier_rows))),
+            ("failed", str(len(failed))),
+            ("wb test", wb_test),
+        ]
+        try:
+            from scouter.core import vault
+
+            vault.append_stage(cfg, job_slug, "Outliers", vault_rows, "outliers reviewed")
+        except Exception as e:  # noqa: BLE001 - vault write must never roll back a read verb
+            warnings.append(f"vault stage not appended: {e}")
+
+    return OutliersResult(
+        reference={
+            "image_id": ref_resolved.image_id,
+            "path": ref_resolved.path,
+            "camera": ref_camera,
+        },
+        tolerances=asdict(cfg.tolerances),
+        wb_test=wb_test,
+        checked=len(rows),
+        within_tolerance=len(within_rows),
+        outliers=outlier_rows,
+        failed=failed,
+        warnings=warnings,
+        path=str(job_path) if job_path is not None else None,
     )
 
 
@@ -1657,3 +1970,33 @@ for verb in (
     ),
 ):
     register(verb)
+
+
+register(
+    Verb(
+        id="outliers.list",
+        group="outliers",
+        fn=outliers,
+        args=(
+            ArgSpec(
+                "reference",
+                "image",
+                required=True,
+                help="path or image id of the hero frame every other frame is compared to",
+            ),
+            ArgSpec("job_slug", "str", help="job slug; frames come from its import.json"),
+            ArgSpec(
+                "images",
+                "list[str]",
+                help="explicit image list, instead of (or alongside) --job-slug "
+                "(the reference is excluded from its own comparison either way)",
+            ),
+            ArgSpec("px", "int", help="stats render size (default: stats.set_px)"),
+            ArgSpec("workers", "int", help="thread pool size (default: stats.workers)"),
+        ),
+        writes=False,
+        gated=False,
+        summary="Flag frames whose exposure, white balance or clipping drift "
+        "too far from the reference.",
+    )
+)

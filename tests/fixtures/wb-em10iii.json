@@ -1,0 +1,11 @@
+{
+  "synthetic": true,
+  "note": "placeholder until task 11's measured table (scouter wb calibrate against a real EditingTrial ORF)",
+  "points": [
+    {"kelvin": 3000, "coeffs": [1.20, 1.00, 2.40]},
+    {"kelvin": 4000, "coeffs": [1.40, 1.00, 2.10]},
+    {"kelvin": 5000, "coeffs": [1.60, 1.00, 1.80]},
+    {"kelvin": 6000, "coeffs": [1.80, 1.00, 1.60]},
+    {"kelvin": 7000, "coeffs": [2.00, 1.00, 1.40]}
+  ]
+}

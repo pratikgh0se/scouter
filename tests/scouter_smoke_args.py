@@ -97,6 +97,12 @@ SMOKE_ARGS: dict[str, dict] = {
     # which is fine, this coverage test only cares about the event count.
     "backup.run": {"dry_run": True},
     "backup.verify": {},
+    # `reference` and the one `images` entry resolve to the SAME smoke raw
+    # (`install_doubles` maps every SMOKE_RAW placeholder to one fixed path),
+    # so the set is empty once the reference excludes itself -- a fast
+    # `usage` error, still exactly one event, which is all this coverage
+    # test asserts.
+    "outliers.list": {"reference": SMOKE_RAW, "images": [SMOKE_RAW], "px": 64, "workers": 1},
 }
 
 

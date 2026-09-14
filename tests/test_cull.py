@@ -197,7 +197,9 @@ class TablesTest(unittest.TestCase):
             self.assertTrue(line.startswith(str(i)), line)
 
     def test_unregistered_verb_falls_back_to_none(self) -> None:
-        self.assertIsNone(tables.render("outliers.list", {}))
+        # library.jobs has no renderer yet (its own task); outliers.list
+        # gained one in task 9 -- see tests/test_outliers.py for its table.
+        self.assertIsNone(tables.render("library.jobs", {}))
 
 
 def _rate_response(params: dict) -> dict:
