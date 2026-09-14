@@ -151,8 +151,91 @@ def _doctor() -> dict:
         report["view"] = None
         report["bridge"] = e.code
         report["bridge_fix"] = e.fix
+
+    # Phase 2's four lines (task 14 step 4). `doctor` is the one verb whose
+    # job is to answer "why did that refuse?" before the refusal happens,
+    # and phase 2 added four ways to be mis-set up that phase 1 had no way
+    # to report: no config file, a disarmed backup gate, a missing
+    # encryption binary, and a library root that is absent or full.
+    #
+    # NONE of these change `report["ok"]`, which stays a statement about
+    # the BRIDGE. A config that has never been written is the correct state
+    # for a fresh install, and `doctor` exiting non-zero for it would make
+    # the first thing a new user runs look broken.
+    _doctor_config(report)
     report["ok"] = report["bridge"] == "ok"
     return report
+
+
+def _doctor_config(report: dict) -> None:
+    """The config/backup/encryption/library half of `doctor`, in its own
+    function so `_doctor`'s bridge half stays readable.
+
+    Every branch here is a report line, never a raise: `doctor` must be
+    runnable when the config is broken -- that is exactly when it is most
+    needed.
+    """
+    import shutil
+    from pathlib import Path
+
+    from scouter import config as config_module
+    from scouter import paths
+
+    report["config_path"] = str(paths.config_path())
+    report["config_exists"] = Path(paths.config_path()).is_file()
+    cfg = None
+    try:
+        cfg = config_module.load()
+        report["config_parses"] = True
+        report["config_error"] = None
+    except ScouterError as e:
+        report["config_parses"] = False
+        report["config_error"] = f"{e.code}: {e.message}"
+
+    if cfg is None:
+        report["backup_gate"] = "config_unreadable: see config_error"
+        report["encryption_tool"] = None
+        report["library_root"] = None
+        report["library_root_exists"] = False
+        report["library_free_bytes"] = None
+        return
+
+    try:
+        config_module.require_backup(cfg)
+        report["backup_gate"] = "ok"
+    except ScouterError as e:
+        report["backup_gate"] = f"{e.code}: {e.message}"
+
+    # The resolved PATH of the tool this config would actually use, not just
+    # its name -- "encryption: openssl" is not the same fact as "the openssl
+    # this will run is /opt/homebrew/bin/openssl".
+    encryption = cfg.backup.encryption
+    if encryption == "age":
+        report["encryption_tool"] = shutil.which("age")
+    elif encryption == "openssl":
+        preferred = Path("/opt/homebrew/bin/openssl")
+        report["encryption_tool"] = (
+            str(preferred) if preferred.exists() else shutil.which("openssl")
+        )
+    else:
+        report["encryption_tool"] = None
+    report["encryption"] = encryption
+
+    root = cfg.library_root
+    report["library_root"] = root
+    if not root:
+        report["library_root_exists"] = False
+        report["library_free_bytes"] = None
+        return
+    root_path = Path(root).expanduser()
+    report["library_root_exists"] = root_path.is_dir()
+    try:
+        report["library_free_bytes"] = shutil.disk_usage(
+            root_path if root_path.is_dir() else root_path.parent
+        ).free
+    except OSError as e:
+        report["library_free_bytes"] = None
+        report["library_free_bytes_error"] = str(e)
 
 
 def main(argv: list[str] | None = None) -> int:
