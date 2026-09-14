@@ -189,6 +189,28 @@ class DarkroomCoreTest(_DarkroomFixture):
         # `commit` flag was False (fix round 2, blocker 2).
         self.assertAlmostEqual(entries[-1].before["value"], 2.0, places=5)
 
+    def test_repeat_set_after_an_uncommitted_write_still_bounces_and_commits(self) -> None:
+        """Task 12 fix round 1, blocker 1 -- the reviewer's repro: set 4.25
+        with `commit=False` (a real, unflushed edit darktable now holds, that
+        the sidecar does not reflect yet), then set 4.25 again. The second
+        call's raw XMP read still shows the OLD (1.5500002) value -- not 4.25
+        -- so even the raw-XMP-only comparison alone would catch this. But
+        the deeper point (`pending_uncommitted`) is what stops a value that
+        happens to coincidentally match the sidecar from being treated as a
+        no-op while a real uncommitted edit is pending: this must always
+        bounce and commit for real, never take the zero-bounce shortcut.
+        """
+        darkroom.set_param(module="exposure", param="exposure", value=4.25, commit=False)
+        before_actions = self.bridge.count("darkroom.action")
+        result = darkroom.set_param(module="exposure", param="exposure", value=4.25)
+        self.assertFalse(result.noop, "a pending uncommitted write must never be a no-op")
+        self.assertEqual(
+            self.bridge.count("darkroom.action"),
+            before_actions + 1,
+            "the second set must still bounce (send the action)",
+        )
+        self.assertEqual(len(self.commit_calls), 1, "the second set must still commit")
+
     def test_before_state_ignores_an_undone_entry_set_undo_set(self) -> None:
         """The review's own probe: set 2.0, undo it, set 3.0 -- the third
         write's `before` must be the ORIGINAL 1.55, not the undone write's

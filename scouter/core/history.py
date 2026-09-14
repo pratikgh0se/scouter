@@ -9,9 +9,6 @@ fail for lack of a mechanism -- only for lack of time.
 
 from __future__ import annotations
 
-import json
-import os
-import tempfile
 import time
 from pathlib import Path
 
@@ -84,39 +81,6 @@ def read(image: str | int, *, job: str | None = None) -> HistoryResult:
     )
 
 
-def _job_state_read(job: str) -> dict:
-    """Read the per-job state file (ruling 30's file, shared with darkroom.py's
-    `opened_image_id`/`opened_path`). A private duplicate of darkroom.py's
-    helper of the same name and shape: history.py must not import darkroom.py
-    at module scope (darkroom.py already imports history.py lazily, and this
-    keeps the dependency one-directional), and this is the whole logic --
-    "read a small JSON dict, or {} when there is none yet."""
-    path = paths.job_state_path(job)
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _job_state_write(job: str, state: dict) -> None:
-    """Replace this job's state file atomically. Best-effort by design, same
-    as darkroom.py's identical helper."""
-    path = paths.ensure(paths.job_state_path(job))
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".state-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(state, fh, sort_keys=True)
-        os.replace(tmp_name, path)
-    except OSError:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-
-
 def _signature(xmp_path: str) -> dict | None:
     p = Path(xmp_path)
     if not p.exists():
@@ -128,28 +92,42 @@ def _signature(xmp_path: str) -> dict | None:
 def watermark_write(job: str, image_id: int, xmp_path: str) -> dict:
     """Record the sidecar's signature after a CONFIRMED commit.
 
-    This is what makes the no-op pre-check safe. The XMP can be stale: an
-    uncommitted darkroom change means the file on disk is older than
-    darktable's in-memory history, and skipping a write on a stale read would
-    silently drop a real edit. The watermark says "the last time Scouter
-    committed this image, the sidecar looked exactly like this" -- so a
-    sidecar that still looks like that is known-fresh, and anything else is
-    not trusted.
+    Precondition (fix round 1, should-fix 4): Scouter is the only writer
+    touching this image's history between commits. The watermark is a pure
+    FILE signature (mtime + size) -- it proves the sidecar's bytes have not
+    changed since Scouter last committed, nothing more. It cannot see
+    darktable's in-memory history: an edit made directly in the GUI (a
+    slider moved by hand, never through Scouter) leaves the sidecar
+    untouched until the NEXT commit, so the watermark would still read
+    "fresh" even though the live history has already diverged from disk.
+    Scouter's own uncommitted writes are guarded separately -- by the
+    journal, not the watermark (`darkroom.py`'s `pending_uncommitted` check,
+    task 12 fix round 1, blocker 1). The watermark alone only ever proves
+    "this exact file", never "this is still what darktable's memory holds".
 
-    A read-modify-write on the shared per-job state file (not a blind
-    overwrite): `_record_opened_image` in darkroom.py writes the same file,
-    and each write must preserve the other's keys.
+    Callers must only call this after independently confirming the sidecar
+    really is in the state being recorded -- either `history.commit`'s own
+    poll (a real, observed mtime/size change) or an explicit readback
+    against the requested value (never from an UNCONFIRMED `expect_change=
+    False` result: see `commit`'s docstring and `CommitResult.confirmed`).
+
+    A read-modify-write on the shared per-job state file, under
+    `paths.job_state_update`'s lock (fix round 1, should-fix 5):
+    `darkroom.py`'s `_record_opened_image` writes the same file, possibly
+    concurrently, and each write must preserve the other's keys.
     """
     sig = _signature(xmp_path)
-    state = _job_state_read(job)
-    watermarks = dict(state.get("watermarks") or {})
     key = str(int(image_id))
-    if sig is None:
-        watermarks.pop(key, None)
-    else:
-        watermarks[key] = sig
-    state["watermarks"] = watermarks
-    _job_state_write(job, state)
+
+    def _mutate(state: dict) -> None:
+        watermarks = dict(state.get("watermarks") or {})
+        if sig is None:
+            watermarks.pop(key, None)
+        else:
+            watermarks[key] = sig
+        state["watermarks"] = watermarks
+
+    paths.job_state_update(job, _mutate)
     return sig or {}
 
 
@@ -157,7 +135,7 @@ def watermark_fresh(job: str, image_id: int, xmp_path: str) -> tuple[bool, str |
     """(fresh, reason_when_not). No watermark -> (False, "no watermark for this
     image in job <job>"): a fresh session, or an edit Pratik made by hand, both
     correctly fall through to the safe path."""
-    state = _job_state_read(job)
+    state = paths.job_state_read(job)
     watermarks = state.get("watermarks") or {}
     stored = watermarks.get(str(int(image_id)))
     if stored is None:
@@ -207,11 +185,26 @@ def commit(
     watermark is stale but the requested value already matches the XMP --
     asks for `attempts=1, expect_change=False` and pays one bounce (~1.0s)
     instead of the two-bounce, ~5.5s worst case a real "nothing to write"
-    discovery costs. With `expect_change=False`, a bounce that confirms
-    nothing changed is reported as an honest `changed=False` success, never
-    raised as `commit_timeout`.
+    discovery costs.
+
+    Fix round 1, blocker 2: `expect_change=False`'s early return is NEVER
+    proof nothing changed -- only proof that ONE bounce found nothing to
+    flush WITHIN ITS BUDGET, which is not the same thing if the caller's
+    prediction was wrong. So this path never raises `commit_timeout` (an
+    honest, expected outcome is not a failure), but it also never stamps a
+    watermark on its own: it returns `changed=False, confirmed=False`, and
+    it is the CALLER's job (`darkroom.set_param`'s mid path) to
+    independently confirm the requested state via readback before trusting
+    it -- only that readback earns a watermark.
     """
     job = job or paths.current_job()
+    if not expect_change:
+        # Mirrors the Lua handler's own clamp (nit, fix round 1):
+        # `expect_change=False` always means exactly one bounce, regardless
+        # of what the caller passed. Enforced on both sides so a caller who
+        # bypasses the bridge (a test double, or a future strategy that
+        # never reaches Lua) still gets the same contract.
+        attempts = 1
     target = image if image is not None else _darkroom_image()
     # A writer, so an unknown path may be imported (that is `darkroom.open`'s
     # documented job); reads below never pass `may_import`.
@@ -232,25 +225,22 @@ def commit(
     def _watermark() -> None:
         watermark_write(job, resolved.image_id, resolved.xmp_path)
 
-    # `expect_change=False`: the bridge already spent its one bounce and its
-    # own sidecar wait (Lua's `wait_for_sidecar`, up to SIDECAR_WRITE_BUDGET_MS)
-    # confirming nothing changed. Polling again here for the rest of
-    # `timeout_s` would just re-pay that wait for no new information -- the
-    # bridge's own `sidecar_written=False` is already the answer.
     if not expect_change and ok and sidecar_written is False:
-        _watermark()
         return CommitResult(
             image_id=resolved.image_id,
             path=resolved.path,
             strategy_used=strategy_used,
-            committed=True,
+            committed=False,
             changed=False,
+            confirmed=False,
             view_after=view_after,
             ms=int((time.monotonic() - started) * 1000),
             xmp_mtime=sidecar.stat().st_mtime if sidecar.exists() else None,
             warnings=[
-                f"darktable confirmed no history change for {sidecar}: the caller "
-                "said a change was not expected, and none was found"
+                f"darktable's one bounce found nothing to flush for {sidecar}: this is "
+                "NOT proof nothing changed, only that this one bounce found nothing "
+                "within its budget. No watermark was recorded; confirm the requested "
+                "state via an independent readback before trusting it."
             ],
         )
 
@@ -345,7 +335,7 @@ def changed(image: str | int, *, job: str | None = None) -> ChangedResult:
     job = job or paths.current_job()
     resolved = dtbridge.resolve_image(image)
     fresh, reason = watermark_fresh(job, resolved.image_id, resolved.xmp_path)
-    state = _job_state_read(job)
+    state = paths.job_state_read(job)
     watermark = (state.get("watermarks") or {}).get(str(resolved.image_id))
     sidecar = _signature(resolved.xmp_path)
     return ChangedResult(

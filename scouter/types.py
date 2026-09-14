@@ -126,13 +126,30 @@ class CommitResult(Payload):
     xmp_mtime: float | None = None
     # Task 12: True when this commit's own poll actually saw the sidecar
     # change; False only reachable with `expect_change=False`, when the
-    # bridge confirmed nothing changed and that was the expected outcome.
+    # bridge reported nothing changed.
     changed: bool = True
+    # Task 12 fix round 1, blocker 2: True when `changed`'s value is backed
+    # by an actual observation (the poll saw the mtime/size move, or the
+    # caller independently confirmed via readback) -- False ONLY on the
+    # `expect_change=False` early-return path, where the bridge's own
+    # `sidecar_written=False` proves nothing beyond "this one bounce found
+    # nothing to flush". A caller must never stamp a watermark, or otherwise
+    # treat the sidecar as known-fresh, from a `confirmed=False` result.
+    confirmed: bool = True
 
 
 @dataclass
 class ChangedResult(Payload):
-    """`history.changed`'s result -- a pure read, no bounce (task 12)."""
+    """`history.changed`'s result -- a pure read, no bounce (task 12).
+
+    Fix round 1 nit: the design spec's section 13.2 also lists a
+    `history_end` field on this result. Deliberately not in this signature --
+    `watermark`/`sidecar` are file-signature dicts from a `stat()` alone, and
+    reporting `history_end` honestly would mean parsing the whole XMP (the
+    cost `history.changed` exists to avoid). `history.read`'s own
+    `HistoryResult.history_end` is the source for that number when a caller
+    actually wants it.
+    """
 
     fresh: bool = False
     watermark: dict | None = None

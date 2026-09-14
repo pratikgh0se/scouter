@@ -25,29 +25,63 @@ FIXTURE = Path(__file__).resolve().parent / "fixtures" / "P6281348.ORF.xmp"
 FIXTURE_EXPOSURE_VALUE = 1.5500002
 
 
-def _commit_handler(sidecar: Path, original_text: str):
+def _write_sidecar(sidecar: Path, original_text: str) -> None:
+    time.sleep(0.01)  # guarantee the mtime tick
+    sidecar.write_text(original_text)
+    future = time.time() + 2
+    os.utime(sidecar, (future, future))
+
+
+def _commit_handler(sidecar: Path, original_text: str, *, outcome: str = "auto"):
     """A `history.commit` bridge double that behaves like the real plugin
-    (task 12's Lua contract): `expect_change=False` never rewrites the
-    sidecar and still reports `ok=True, sidecar_written=False` (nothing to
-    write, honestly reported, not a failure); any other call performs a real
-    rewrite + mtime bump, so `history.commit`'s own poll loop has something
-    genuine to observe -- the same trick `test_metrics.py`'s
-    `WriteVerbSingleEventTest` uses.
+    (task 12's Lua contract; fix round 1, should-fix 6 asked for more than
+    one `outcome` so both blockers can be driven through this one double).
+
+    - `"auto"` (default): `expect_change=True` performs a real rewrite +
+      mtime bump, so `history.commit`'s own poll loop has something genuine
+      to observe (the same trick `test_metrics.py`'s
+      `WriteVerbSingleEventTest` uses); `expect_change=False` never
+      rewrites, and reports `ok=True, sidecar_written=False` (nothing to
+      write, honestly reported, not a failure).
+    - `"never_write"`: NEVER rewrites the sidecar, regardless of
+      `expect_change` -- `ok` follows the real Lua formula
+      (`written != False or not expect_change`), so a genuine change
+      (`expect_change=True`) that this one bounce failed to flush reports
+      `ok=False`, exactly like a real missed bounce.
+    - `"mismatch_then_recover"`: the FIRST call (the mid path's
+      `expect_change=False` attempt) deletes the sidecar outright --
+      simulating the on-disk state no longer being what the caller
+      predicted, so a post-bounce readback cannot possibly confirm it. Every
+      call after the first performs the real rewrite (as `"auto"` does for
+      `expect_change=True`), so the ESCALATED, `expect_change=True` retry a
+      correct fix round 1, blocker 2 succeeds.
     """
+    calls = {"n": 0}
 
     def handler(params: dict) -> dict:
+        calls["n"] += 1
         expect_change = params.get("expect_change", True)
         attempts = params.get("attempts", 2)
         written = False
-        if expect_change:
-            time.sleep(0.01)  # guarantee the mtime tick
-            sidecar.write_text(original_text)
-            future = time.time() + 2
-            os.utime(sidecar, (future, future))
-            written = True
+        ok = True
+        if outcome == "auto":
+            if expect_change:
+                _write_sidecar(sidecar, original_text)
+                written = True
+        elif outcome == "never_write":
+            ok = not expect_change
+        elif outcome == "mismatch_then_recover":
+            if calls["n"] == 1:
+                sidecar.unlink(missing_ok=True)
+                ok = not expect_change
+            else:
+                _write_sidecar(sidecar, original_text)
+                written = True
+        else:
+            raise AssertionError(f"unknown _commit_handler outcome: {outcome!r}")
         return {
             "strategy_used": "view_bounce",
-            "ok": True,
+            "ok": ok,
             "view_after": "darkroom",
             "cpu_ms": 5,
             "sidecar_written": written,
@@ -195,6 +229,92 @@ class HistoryChangedTest(unittest.TestCase):
 
         fresh, reason = history.watermark_fresh("job-test", 12, str(self.sidecar))
         self.assertTrue(fresh, reason)
+
+    # -- blocker 1: a pending uncommitted write disqualifies the shortcut,
+    #    even when the watermark is genuinely fresh -------------------------
+
+    def test_pending_uncommitted_write_disqualifies_the_noop_shortcut_even_with_a_fresh_watermark(
+        self,
+    ) -> None:
+        """Fix round 1, blocker 1, the deeper danger behind the reviewer's
+        repro: a watermark that is genuinely fresh (the sidecar has not
+        changed since Scouter last committed it) is STILL not enough, if a
+        `commit=False` write sits in between -- that write means darktable's
+        live history has moved on from what the sidecar (and the watermark)
+        show, so trusting the watermark here would silently drop the pending
+        edit and re-confirm stale disk state as if nothing had happened.
+        """
+        # Establish a real, fresh watermark for the fixture's own value.
+        warm = darkroom.set_param(
+            module="exposure", param="exposure", value=FIXTURE_EXPOSURE_VALUE, job="job-test"
+        )
+        self.assertTrue(warm.committed)
+        fresh, _ = history.watermark_fresh("job-test", 12, str(self.sidecar))
+        self.assertTrue(fresh, "the warm-up commit must leave a fresh watermark")
+
+        # An uncommitted write: darktable's live history is now 4.25, but the
+        # sidecar (and the watermark) still say FIXTURE_EXPOSURE_VALUE.
+        darkroom.set_param(module="exposure", param="exposure", value=4.25, commit=False)
+
+        self.bridge.calls.clear()
+        result = darkroom.set_param(module="exposure", param="exposure", value=4.25, job="job-test")
+        self.assertFalse(result.noop, "a pending uncommitted write must never be a no-op")
+        self.assertEqual(self.bridge.count("darkroom.action"), 1, "the write must still bounce")
+        self.assertGreaterEqual(self.bridge.count("history.commit"), 1, "and still commit")
+
+    # -- blocker 2: expect_change=False never certifies freshness on its own -
+
+    def test_expect_change_false_unconfirmed_stamps_no_watermark(self) -> None:
+        """Fix round 1, blocker 2, isolated: a bounce that found nothing to
+        flush is NOT proof nothing changed -- `history.commit` itself must
+        never stamp a watermark from that alone, and must report the
+        uncertainty honestly (`changed=False, confirmed=False`)."""
+        self.bridge.responses["history.commit"] = _commit_handler(
+            self.sidecar, self.original_text, outcome="never_write"
+        )
+        result = history.commit(
+            image=str(self.raw), job="job-test", attempts=1, expect_change=False
+        )
+        self.assertFalse(result.changed)
+        self.assertFalse(result.confirmed)
+        fresh, reason = history.watermark_fresh("job-test", 12, str(self.sidecar))
+        self.assertFalse(fresh, "no watermark may be stamped without a confirming readback")
+        self.assertIn("no watermark", reason or "")
+
+    def test_expect_change_true_unwritten_still_raises_commit_timeout(self) -> None:
+        """The companion case (should-fix 6): a GENUINE change
+        (`expect_change=True`) that a bounce fails to flush is still a real
+        failure -- `history.commit` must keep raising `commit_timeout`, not
+        silently swallow it the way `expect_change=False` now honestly can."""
+        from scouter.errors import CommitTimeout
+
+        self.bridge.responses["history.commit"] = _commit_handler(
+            self.sidecar, self.original_text, outcome="never_write"
+        )
+        with self.assertRaises(CommitTimeout):
+            history.commit(image=str(self.raw), job="job-test", timeout_s=0.2)
+
+    def test_wrong_prediction_escalates_to_a_real_commit_not_a_false_noop(self) -> None:
+        """Fix round 1, blocker 2, end-to-end: the mid path's `expect_change=
+        False` bounce reports nothing written, and the post-bounce readback
+        does NOT confirm the requested value (the sidecar vanished from under
+        it -- standing in for "the prediction was wrong"). `set_param` must
+        escalate to a real `expect_change=True` commit rather than ever
+        certifying a stale/missing sidecar as fresh, and the escalated commit
+        landing for real must still report `committed=True, noop=False`.
+        """
+        self.bridge.responses["history.commit"] = _commit_handler(
+            self.sidecar, self.original_text, outcome="mismatch_then_recover"
+        )
+        result = darkroom.set_param(
+            module="exposure", param="exposure", value=FIXTURE_EXPOSURE_VALUE, job="job-test"
+        )
+        self.assertTrue(result.committed)
+        self.assertFalse(result.noop)
+        calls = [p for m, p in self.bridge.calls if m == "history.commit"]
+        self.assertEqual(len(calls), 2, "the wrong prediction must escalate to a second commit")
+        self.assertIs(calls[0]["expect_change"], False)
+        self.assertIs(calls[1]["expect_change"], True)
 
     # -- nudge's steps=0 shortcut ---------------------------------------------
 

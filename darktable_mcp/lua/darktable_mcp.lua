@@ -1422,6 +1422,10 @@ methods["history.commit"] = function(p)
   -- bounce (~0.78 s) instead of two bounces plus two sidecar waits (~5.5 s,
   -- phase 1's measured worst case).
   local attempts = tonumber(p.attempts) or COMMIT_BOUNCE_ATTEMPTS
+  -- Fix round 1 nit: floor BEFORE clamping, so a fractional attempts (JSON
+  -- has no int/float distinction) can't slip an extra partial bounce past
+  -- the `for attempt = 1, attempts do` loop below.
+  attempts = math.floor(attempts)
   if attempts < 1 then attempts = 1 elseif attempts > 3 then attempts = 3 end
   local expect_change = p.expect_change
   if expect_change == nil then expect_change = true end
