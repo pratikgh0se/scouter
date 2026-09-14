@@ -424,3 +424,104 @@ class ConftestAllowTreeTest(unittest.TestCase):
             with self.subTest(path=candidate):
                 with self.assertRaises(ValueError):
                     allow_tree(os.path.expanduser(candidate))
+
+
+class HostClassTreeReleaseTest(unittest.TestCase):
+    """Fix round 2, item 3: `Phase2EndToEndTest` must release its
+    `allowed_tree` registrations however `setUpClass` ends -- including a
+    SKIP, which is not an error and so is the easy case to forget.
+
+    Non-host: this drives `_close_trees` and the `ExitStack` discipline
+    directly, without launching darktable. What it cannot do is run the real
+    `setUpClass` (that needs a host), so it asserts the two things that make
+    the failure path correct: the helper is idempotent, and `setUpClass`'s
+    own handler calls it.
+    """
+
+    def test_close_trees_releases_registrations_and_is_idempotent(self) -> None:
+        import contextlib
+
+        from tests import conftest
+        from tests.test_host_phase2 import Phase2EndToEndTest
+
+        cls = Phase2EndToEndTest
+        saved = cls._trees
+        try:
+            with tempfile.TemporaryDirectory(prefix="scouter-trees-") as d:
+                before = list(conftest._ALLOWED_TREES)
+                cls._trees = contextlib.ExitStack()
+                cls._trees.enter_context(conftest.allowed_tree(d))
+                self.assertTrue(conftest._is_allowed(os.path.join(d, "x")))
+
+                cls._close_trees()
+                self.assertEqual(conftest._ALLOWED_TREES, before)
+                self.assertFalse(conftest._is_allowed(os.path.join(d, "x")))
+                self.assertIsNone(cls._trees)
+
+                # Called again from tearDownClass after the failure path
+                # already ran: must not raise.
+                cls._close_trees()
+        finally:
+            cls._trees = saved
+
+    def test_set_up_class_failure_path_closes_the_trees(self) -> None:
+        """A source check, because the real `setUpClass` needs a host: the
+        `except BaseException` handler must call `_close_trees`, and
+        `tearDownClass` must too."""
+        import inspect
+
+        from tests import test_host_phase2
+
+        source = inspect.getsource(test_host_phase2.Phase2EndToEndTest)
+        setup = source.split("def setUpClass", 1)[1].split("def _close_trees", 1)[0]
+        handler = setup.split("except BaseException:", 1)[1]
+        self.assertIn(
+            "_close_trees()",
+            handler,
+            "setUpClass's failure/skip path must release the allowed_tree "
+            "registrations before re-raising",
+        )
+        teardown = source.split("def tearDownClass", 1)[1]
+        self.assertIn("_close_trees()", teardown)
+
+
+class IsAllowedResolvesBothSidesTest(unittest.TestCase):
+    """Fix round 2, minor m3: `_is_allowed` must resolve BOTH sides.
+
+    It resolved only `value`, so on macOS -- where `/var` is a symlink to
+    `/private/var` and `tempfile.mkdtemp()` hands back a `/var/...` path --
+    the session root compared unequal to its own resolved form. Only nested
+    paths matched (that arm did resolve its side), so a test pinning an env
+    var at the session root exactly would have been re-pinned out from under
+    it.
+    """
+
+    def test_the_session_root_itself_is_allowed(self) -> None:
+        from tests import conftest
+
+        self.assertTrue(
+            conftest._is_allowed(conftest._SESSION_TMP),
+            "the session tmp root must be allowed as itself",
+        )
+        self.assertTrue(conftest._is_allowed(os.path.realpath(conftest._SESSION_TMP)))
+        self.assertTrue(
+            conftest._is_allowed(os.path.join(conftest._SESSION_TMP, "nested", "x.json")),
+            "and so must anything under it",
+        )
+
+    def test_a_registered_tree_is_allowed_as_itself_too(self) -> None:
+        from tests import conftest
+
+        with tempfile.TemporaryDirectory(prefix="scouter-selfpath-") as d:
+            with conftest.allowed_tree(d):
+                self.assertTrue(conftest._is_allowed(d))
+                self.assertTrue(conftest._is_allowed(os.path.realpath(d)))
+
+    def test_an_unrelated_path_is_still_refused(self) -> None:
+        from tests import conftest
+
+        self.assertFalse(conftest._is_allowed(os.path.expanduser("~/second-brain")))
+        self.assertFalse(conftest._is_allowed(""))
+        # A sibling whose name merely starts with the session root's name
+        # must not match -- that is what the explicit separator is for.
+        self.assertFalse(conftest._is_allowed(conftest._SESSION_TMP + "-evil"))

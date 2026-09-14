@@ -123,10 +123,17 @@ def _doctor() -> dict:
     import shutil
     from pathlib import Path
 
+    from darktable_mcp.bridge.client import plugin_path as bridge_plugin_path
     from scouter import paths
     from scouter.core import dtbridge, scout
 
-    plugin = Path.home() / ".config" / "darktable" / "lua" / "darktable_mcp.lua"
+    # Through the bridge's OWN resolver (fix round 2, item 2): this used to
+    # recompute the path from `Path.home()`, which ignores
+    # `DARKTABLE_MCP_PLUGIN_PATH` -- so `doctor` could report
+    # `plugin_installed: true` about a file the bridge was not looking at, or
+    # false about one it was. A doctor line that contradicts the thing it is
+    # reporting on is worse than no line.
+    plugin = bridge_plugin_path()
     report: dict = {
         "verb": "doctor",
         "darktable": "/Applications/darktable.app/Contents/MacOS/darktable",

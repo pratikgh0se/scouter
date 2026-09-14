@@ -103,11 +103,25 @@ def _cache_dir() -> Path:
 PLUGIN_PATH_ENV = "DARKTABLE_MCP_PLUGIN_PATH"
 
 
-def _plugin_path() -> Path:
+def plugin_path() -> Path:
+    """Where the installed Lua plugin lives, honouring `PLUGIN_PATH_ENV`.
+
+    The ONE resolver for this path. `darktable_mcp.cli.install_plugin` writes
+    here and `scouter.cli.main`'s `doctor` reports it, so the installer, the
+    doctor line and the bridge can never disagree about which file matters
+    (fix round 2, item 2: they did -- `doctor` and the installer both
+    recomputed it from `Path.home()` and so ignored the override the bridge
+    honours, which meant `doctor` could report "plugin installed" about a
+    file the bridge was not looking at).
+    """
     override = os.environ.get(PLUGIN_PATH_ENV)
     if override:
         return Path(override)
     return Path.home() / ".config" / "darktable" / "lua" / "darktable_mcp.lua"
+
+
+#: Kept as the old private name so existing call sites keep working.
+_plugin_path = plugin_path
 
 
 class Bridge:

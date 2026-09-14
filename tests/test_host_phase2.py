@@ -63,12 +63,14 @@ import shutil
 import signal
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 DARKTABLE = Path("/Applications/darktable.app/Contents/MacOS/darktable")
 EDITING_TRIAL = Path("/Users/pratik/Pictures/EditingTrial")
@@ -123,16 +125,29 @@ class _PluginInstall:
         self.luarc_path: Path | None = None
 
     def install(self) -> None:
+        # FIRST, before any mkdir (fix round 2, minor m1): `install`'s own
+        # `except BaseException` calls `restore()`, and `restore()` UNLINKS
+        # the plugin when `plugin_existed_before` is False. Reading these
+        # flags after a mkdir meant a failing mkdir left them at their
+        # `False` defaults and the restore then deleted the user's real
+        # plugin -- the cleanup destroying exactly what the backup exists to
+        # protect. Two `exists()` calls, no side effects, nothing before them.
+        luarc = INSTALLED_PLUGIN.parent.parent / "luarc"
+        self.luarc_path = luarc
+        self.plugin_existed_before = INSTALLED_PLUGIN.exists()
+        self.luarc_existed_before = luarc.exists()
+
         try:
             INSTALLED_PLUGIN.parent.mkdir(parents=True, exist_ok=True)
             SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
-            self.backup_dir = SCRATCH_DIR / f"dtconfig-backup-{time.strftime('%Y%m%dT%H%M%SZ')}"
+            # The pid is in the name (minor m2) so two host classes running
+            # inside the same second -- or two pytest processes -- cannot
+            # share a backup directory and overwrite each other's copy of the
+            # user's plugin.
+            self.backup_dir = SCRATCH_DIR / (
+                f"dtconfig-backup-{time.strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}"
+            )
             self.backup_dir.mkdir(parents=True, exist_ok=True)
-
-            luarc = INSTALLED_PLUGIN.parent.parent / "luarc"
-            self.luarc_path = luarc
-            self.plugin_existed_before = INSTALLED_PLUGIN.exists()
-            self.luarc_existed_before = luarc.exists()
 
             # Everything needed to undo this, on disk, before the first write.
             if self.plugin_existed_before:
@@ -949,7 +964,7 @@ class PinWbCoefficientSlidersHostTest(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Task 14 step 5: the 30-frame synthetic job, end to end.
+# Task 14 step 5: the 30-frame job, end to end, on REAL ORFs.
 # ---------------------------------------------------------------------------
 
 #: The job id and slug carry the process id, so two runs of this class never
@@ -988,7 +1003,6 @@ E2E_CARD = SCRATCH_DIR / "e2e-card" / "DCIM" / "100OLYMP"
 #: with "not in darktable's library". Nothing in Scouter was wrong; the test
 #: was asking darktable about a path it does not use.
 E2E_LIBRARY_ROOT = SCRATCH_DIR / "e2e-library"
-SYNTHETIC_ROOT = SCRATCH_DIR / "synthetic"
 
 
 def _jpeg_longest_edge(path: Path) -> int:
@@ -1024,9 +1038,11 @@ class Phase2EndToEndTest(unittest.TestCase):
     """E1-E9 plus the metrics check, in ONE darktable session, in order.
 
     The exit criterion for phase 2 that CI can actually assert (the real one,
-    E12, is Pratik's own 300-frame job). The card is built by
-    `tests/make_synthetic_job.py` from the four EditingTrial ORFs; everything
-    Scouter writes goes into a throwaway tree (`SCOUTER_CACHE`,
+    E12, is Pratik's own 300-frame job). The card is staged by
+    `_stage_real_card` from **30 real ORFs** of one 2026-05-24 shoot (see
+    `E2E_SOURCE_FIRST`/`E2E_SOURCE_LAST` for why real frames rather than
+    `tests/make_synthetic_job.py`'s copies); everything Scouter writes goes
+    into a throwaway tree (`SCOUTER_CACHE`,
     `SCOUTER_CONFIG`, the library root, the backup target and
     `OBSIDIAN_VAULT_PATH` are all pointed at it) -- **the real vault is never
     written by a test**, which is `tests/conftest.py`'s whole reason for
@@ -1087,48 +1103,71 @@ class Phase2EndToEndTest(unittest.TestCase):
         # NOT under `tmp`: see E2E_LIBRARY_ROOT for the darktable fact.
         cls._trees.enter_context(allowed_tree(str(SCRATCH_DIR)))
         cls.library_root = E2E_LIBRARY_ROOT
-        cls.backup_target = tmp / "backup"
-        cls.vault = tmp / "vault"
-        cls.cache = tmp / "cache"
-        cls.config_path = tmp / "config.json"
-        cls.passfile = tmp / "backup.pass"
-        for d in (cls.library_root, cls.backup_target, cls.vault, cls.cache):
-            d.mkdir(parents=True, exist_ok=True)
-        cls.passfile.write_text("e2e-not-a-real-secret\n")
-        cls.passfile.chmod(0o600)
 
-        cls._env_before = {
-            k: os.environ.get(k)
-            for k in (
-                "SCOUTER_JOB",
-                "SCOUTER_CACHE",
-                "SCOUTER_CONFIG",
-                "OBSIDIAN_VAULT_PATH",
-            )
-        }
-        os.environ["SCOUTER_JOB"] = E2E_JOB
-        os.environ["SCOUTER_CACHE"] = str(cls.cache)
-        os.environ["SCOUTER_CONFIG"] = str(cls.config_path)
-        os.environ["OBSIDIAN_VAULT_PATH"] = str(cls.vault)
-
-        # E1 needs the gate DISARMED, so the first config written has
-        # `backup.enabled: false`; `test_00` flips it once it has proved the
-        # refusal.
-        cls._write_config(backup_enabled=False)
-
-        started = time.monotonic()
-        cls.card = cls._stage_real_card()
-        cls.timings["stage_real_card_s"] = time.monotonic() - started
-
-        cls._install_plugin()
+        # Everything after the ExitStack exists is inside this try, and the
+        # handler closes it (fix round 2, item 3). `_stage_real_card` can
+        # raise `SkipTest` and `_launch_and_wait` can raise or skip, and
+        # before this an `allowed_tree` registration for `~/Pictures/
+        # ScouterScratch` outlived a failed or SKIPPED setup -- silently
+        # widening the isolation guard for every test that ran afterwards in
+        # the same session, which is exactly what the context-manager form
+        # was introduced to prevent.
         try:
+            cls.backup_target = tmp / "backup"
+            cls.vault = tmp / "vault"
+            cls.cache = tmp / "cache"
+            cls.config_path = tmp / "config.json"
+            cls.passfile = tmp / "backup.pass"
+            for d in (cls.library_root, cls.backup_target, cls.vault, cls.cache):
+                d.mkdir(parents=True, exist_ok=True)
+            cls.passfile.write_text("e2e-not-a-real-secret\n")
+            cls.passfile.chmod(0o600)
+
+            cls._env_before = {
+                k: os.environ.get(k)
+                for k in (
+                    "SCOUTER_JOB",
+                    "SCOUTER_CACHE",
+                    "SCOUTER_CONFIG",
+                    "OBSIDIAN_VAULT_PATH",
+                )
+            }
+            os.environ["SCOUTER_JOB"] = E2E_JOB
+            os.environ["SCOUTER_CACHE"] = str(cls.cache)
+            os.environ["SCOUTER_CONFIG"] = str(cls.config_path)
+            os.environ["OBSIDIAN_VAULT_PATH"] = str(cls.vault)
+
+            # E1 needs the gate DISARMED, so the first config written has
+            # `backup.enabled: false`; `test_00` flips it once it has proved
+            # the refusal.
+            cls._write_config(backup_enabled=False)
+
+            started = time.monotonic()
+            cls.card = cls._stage_real_card()
+            cls.timings["stage_real_card_s"] = time.monotonic() - started
+
+            cls._install_plugin()
             cls._launch_and_wait()
         except BaseException:
             if cls.proc is not None:
                 _quit(cls.proc)
             cls._cleanup_plugin_install()
             cls._restore_env()
+            cls._close_trees()
             raise
+
+    @classmethod
+    def _close_trees(cls) -> None:
+        """Release this class's `allowed_tree` registrations.
+
+        Called from BOTH `setUpClass`'s failure handler and
+        `tearDownClass`, so a registration cannot outlive the class whichever
+        way the class ends -- including a `SkipTest`, which is not an error
+        and so is easy to forget about.
+        """
+        if cls._trees is not None:
+            cls._trees.close()
+            cls._trees = None
 
     @classmethod
     def _stage_real_card(cls) -> Path:
@@ -1323,11 +1362,14 @@ class Phase2EndToEndTest(unittest.TestCase):
             cls._write_measurements()
             cls._cleanup_plugin_install()
             cls._restore_env()
-            if cls._trees is not None:
-                cls._trees.close()
-                cls._trees = None
+            cls._close_trees()
+            # `SCOUTER_KEEP_SYNTHETIC=1` keeps this run's tree for
+            # inspection. The name is the one the brief documents and is kept
+            # for that reason, but what it actually preserves is the STAGED
+            # REAL CARD, the library root built from it and the temp tree --
+            # there is no synthetic card in this class any more (see
+            # `_stage_real_card`).
             if os.environ.get("SCOUTER_KEEP_SYNTHETIC") != "1":
-                shutil.rmtree(SYNTHETIC_ROOT, ignore_errors=True)
                 # The card ROOT (`<scratch>/e2e-card`), not just the DCIM
                 # directory inside it -- otherwise an empty shell is left
                 # behind in ~/Pictures/ScouterScratch after every run.
@@ -1929,3 +1971,91 @@ class Phase2EndToEndTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PluginInstallSafetyTest(unittest.TestCase):
+    """`_PluginInstall`'s non-host guarantees (fix round 2, minors m1/m2).
+
+    No darktable and no touching of the real `~/.config/darktable`:
+    `INSTALLED_PLUGIN` and `SCRATCH_DIR` are patched to a temp tree, so this
+    runs in the ordinary suite. What it pins is the property that makes the
+    class safe to use at all -- its own cleanup must never delete the user's
+    plugin.
+    """
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="scouter-plugininstall-")
+        self.tmp = Path(self._tmpdir.name)
+        self.addCleanup(self._tmpdir.cleanup)
+        self.plugin = self.tmp / "config" / "darktable" / "lua" / "darktable_mcp.lua"
+        self.luarc = self.tmp / "config" / "darktable" / "luarc"
+        self.scratch = self.tmp / "scratch"
+        self._patches = [
+            mock.patch.object(sys.modules[__name__], "INSTALLED_PLUGIN", self.plugin),
+            mock.patch.object(sys.modules[__name__], "SCRATCH_DIR", self.scratch),
+        ]
+        for patch in self._patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_a_failing_mkdir_never_unlinks_the_users_plugin(self) -> None:
+        """Minor m1, the reason it matters: `install`'s handler calls
+        `restore()`, and `restore()` unlinks the plugin when
+        `plugin_existed_before` is False. Reading that flag after the mkdir
+        meant a failing mkdir left it False and the cleanup deleted the real
+        plugin."""
+        self.plugin.parent.mkdir(parents=True)
+        self.plugin.write_text("-- the user's own plugin")
+        self.luarc.write_text('require "something_else"\n')
+
+        install = _PluginInstall()
+        with mock.patch.object(Path, "mkdir", side_effect=OSError("read-only fs")):
+            with self.assertRaises(OSError):
+                install.install()
+
+        self.assertTrue(self.plugin.is_file(), "the user's plugin was deleted by the cleanup")
+        self.assertEqual(self.plugin.read_text(), "-- the user's own plugin")
+        self.assertEqual(self.luarc.read_text(), 'require "something_else"\n')
+        self.assertTrue(install.plugin_existed_before, "the flag must be read before any mkdir")
+
+    def test_install_then_restore_round_trips_the_users_files(self) -> None:
+        self.plugin.parent.mkdir(parents=True)
+        self.plugin.write_text("-- the user's own plugin")
+        self.luarc.write_text('require "something_else"\n')
+
+        install = _PluginInstall()
+        install.install()
+        self.assertNotEqual(self.plugin.read_text(), "-- the user's own plugin")
+        self.assertIn('require "darktable_mcp"', self.luarc.read_text())
+        backup = install.backup_dir
+        self.assertIsNotNone(backup)
+        self.assertTrue((backup / "MANIFEST.txt").is_file())
+        self.assertIn("library.db", (backup / "MANIFEST.txt").read_text())
+
+        install.restore()
+        self.assertEqual(self.plugin.read_text(), "-- the user's own plugin")
+        self.assertEqual(self.luarc.read_text(), 'require "something_else"\n')
+        self.assertIsNone(install.backup_dir, "a successful restore cleans its backup up")
+        self.assertFalse(backup.exists())
+
+    def test_restore_removes_what_it_added_when_nothing_was_there_before(self) -> None:
+        install = _PluginInstall()
+        install.install()
+        self.assertTrue(self.plugin.is_file())
+
+        install.restore()
+        self.assertFalse(self.plugin.exists(), "a plugin we installed must be removed")
+        self.assertFalse(self.luarc.exists(), "a luarc we created must be removed")
+
+    def test_the_backup_directory_name_carries_the_pid(self) -> None:
+        """Minor m2: two classes inside the same second, or two pytest
+        processes, must not share a backup directory and overwrite each
+        other's copy of the user's plugin."""
+        install = _PluginInstall()
+        install.install()
+        self.addCleanup(install.restore)
+        self.assertIsNotNone(install.backup_dir)
+        self.assertTrue(
+            install.backup_dir.name.endswith(f"-{os.getpid()}"),
+            install.backup_dir.name,
+        )

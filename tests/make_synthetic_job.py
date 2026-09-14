@@ -20,8 +20,17 @@ Runnable by hand:
 
 No `--seed`: the builder is fully deterministic (the source files are fixed,
 the timestamps are arithmetic, and the names are `SYNTH<n>.ORF` in order), and
-`tests/test_host_phase2.py` asserts that building twice produces identical
-bytes.
+`tests/test_make_synthetic_job.py` asserts that building twice produces
+identical bytes -- a non-host test, so the claim is checked on every ordinary
+suite run.
+
+This builder is NOT what the end-to-end host test uses.
+`tests/test_host_phase2.py::Phase2EndToEndTest` stages 30 REAL ORFs from one
+shoot instead (`_stage_real_card`), because copies of four files have
+identical pixels: every sharpness inside a burst would tie and the cull stage
+could only ever assert the tie-break. This stays a unit fixture because the
+burst layout it produces is exact and controllable in a way a real shoot is
+not.
 """
 
 from __future__ import annotations

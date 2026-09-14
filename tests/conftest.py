@@ -171,11 +171,23 @@ def allowed_tree(prefix: str):
 
 
 def _is_allowed(value: str) -> bool:
+    """Is `value` inside the session tmp dir or a registered tree?
+
+    Both sides are `realpath`-ed before comparing (fix round 2, minor m3).
+    They were not: `value` was resolved and `_SESSION_TMP` was not, so the
+    equality arm never matched on macOS -- `/var` is a symlink to
+    `/private/var`, so the session root itself resolved to a different string
+    than the one it was compared against. Only paths NESTED under it matched,
+    via the `startswith` arm which did resolve its side. A test pinning an
+    env var at the session root exactly would have been "not allowed" and
+    silently re-pinned.
+    """
     if not value:
         return False
     real = os.path.realpath(value)
     for prefix in (_SESSION_TMP, *_ALLOWED_TREES):
-        if real == prefix or real.startswith(os.path.realpath(prefix) + os.sep):
+        resolved_prefix = os.path.realpath(prefix)
+        if real == resolved_prefix or real.startswith(resolved_prefix + os.sep):
             return True
     return False
 

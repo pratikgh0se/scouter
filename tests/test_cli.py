@@ -417,3 +417,58 @@ class DoctorUsesBackupsOwnResolverTest(unittest.TestCase):
         self.assertIsNone(report["encryption_tool"])
         self.assertEqual(report["encryption"], "openssl")
         self.assertEqual(report["verb"], "doctor", "doctor still produced a report")
+
+
+class DoctorPluginPathHonoursTheOverrideTest(unittest.TestCase):
+    """Fix round 2, item 2: `doctor`'s plugin line must come from the SAME
+    resolver the bridge uses.
+
+    It was recomputed from `Path.home()`, so with `DARKTABLE_MCP_PLUGIN_PATH`
+    set -- which `tests/conftest.py` now always does for the non-host suite --
+    `doctor` reported a path the bridge was not looking at. A doctor line that
+    contradicts the thing it reports on is worse than no line: it sends the
+    reader to the wrong file.
+    """
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="scouter-doctor-plugin-")
+        self.tmp = Path(self._tmpdir.name)
+        self.addCleanup(self._tmpdir.cleanup)
+        self._env = dict(os.environ)
+
+        from scouter.core import dtbridge
+        from tests.scouter_fakes import FakeBridge
+
+        dtbridge.set_bridge(FakeBridge({"view.current": {"view": "lighttable"}}))
+        self.addCleanup(dtbridge.set_bridge, None)
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._env)
+
+    def _report(self) -> dict:
+        from scouter.cli import main as cli_main
+
+        return cli_main._doctor()
+
+    def test_doctor_reports_the_overridden_path(self) -> None:
+        plugin = self.tmp / "elsewhere" / "lua" / "darktable_mcp.lua"
+        os.environ["DARKTABLE_MCP_PLUGIN_PATH"] = str(plugin)
+
+        report = self._report()
+        self.assertEqual(report["plugin_path"], str(plugin))
+        self.assertFalse(report["plugin_installed"])
+
+        plugin.parent.mkdir(parents=True)
+        plugin.write_text("-- fake")
+        self.assertTrue(self._report()["plugin_installed"])
+
+    def test_doctor_and_the_bridge_never_disagree(self) -> None:
+        """The property, asserted directly rather than via the string."""
+        from darktable_mcp.bridge.client import plugin_path as bridge_plugin_path
+
+        os.environ["DARKTABLE_MCP_PLUGIN_PATH"] = str(self.tmp / "a" / "b.lua")
+        self.assertEqual(self._report()["plugin_path"], str(bridge_plugin_path()))
+
+        os.environ.pop("DARKTABLE_MCP_PLUGIN_PATH", None)
+        self.assertEqual(self._report()["plugin_path"], str(bridge_plugin_path()))
