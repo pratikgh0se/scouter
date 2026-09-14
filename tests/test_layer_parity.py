@@ -10,6 +10,8 @@ from scouter.cli.main import NON_REGISTRY_COMMANDS, build_parser
 from scouter.mcp import schemas
 
 EXPECTED_VERBS = {
+    "config.init",
+    "config.show",
     "darkroom.open",
     "darkroom.set",
     "darkroom.nudge",
@@ -20,13 +22,29 @@ EXPECTED_VERBS = {
     "darkroom.describe_history",
     "history.read",
     "history.commit",
+    "history.changed",
     "scout.stats",
     "scout.preview",
     "scout.compare",
     "style.extract",
     "style.apply",
+    "style.apply_set",
     "export.run",
+    "export.release",
+    "export.verify",
     "metrics.summary",
+    "library.import",
+    "library.verify",
+    "library.register",
+    "library.jobs",
+    "library.relocate",
+    "cull.propose",
+    "cull.apply",
+    "backup.run",
+    "backup.verify",
+    "outliers.list",
+    "wb.kelvin",
+    "wb.calibrate",
 }
 
 

@@ -51,6 +51,139 @@ class PathsTest(unittest.TestCase):
             self.assertTrue(target.parent.is_dir())
 
 
+class JobStateTest(unittest.TestCase):
+    """Task 12 fix round 1, should-fix 5: `job_state_read`/`job_state_update`
+    is the ONE locked, merge-on-write seam both `darkroom.py`
+    (`opened_image_id`/`opened_path`) and `history.py` (`watermarks`) go
+    through, replacing each module's own private unlocked pair."""
+
+    def setUp(self) -> None:
+        self._env = dict(os.environ)
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ["SCOUTER_CACHE"] = self._tmp.name
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._env)
+        self._tmp.cleanup()
+
+    def test_read_of_a_missing_file_is_an_empty_dict(self) -> None:
+        self.assertEqual(paths.job_state_read("job-x"), {})
+
+    def test_update_merges_rather_than_overwrites(self) -> None:
+        paths.job_state_update("job-x", lambda s: s.update({"opened_image_id": 12}))
+        paths.job_state_update("job-x", lambda s: s.update({"watermarks": {"12": {"size": 1}}}))
+        state = paths.job_state_read("job-x")
+        self.assertEqual(state["opened_image_id"], 12)
+        self.assertEqual(state["watermarks"], {"12": {"size": 1}})
+
+    def test_update_returns_the_merged_state(self) -> None:
+        result = paths.job_state_update("job-x", lambda s: s.update({"a": 1}))
+        self.assertEqual(result, {"a": 1})
+
+    def test_concurrent_writers_never_lose_an_update(self) -> None:
+        """Losing `opened_image_id` to a race would silently disable ruling
+        30's guard -- this races many threads, each incrementing their own
+        counter key, and asserts every single increment from every thread
+        survived (the lock spans the whole read+merge+write, not just the
+        write)."""
+        import threading
+
+        job = "job-concurrent"
+        n_threads = 8
+        n_writes_each = 25
+
+        def worker(thread_id: int) -> None:
+            key = f"t{thread_id}"
+            for _ in range(n_writes_each):
+
+                def _mutate(state: dict, key: str = key) -> None:
+                    counters = state.setdefault("counters", {})
+                    counters[key] = counters.get(key, 0) + 1
+
+                paths.job_state_update(job, _mutate)
+
+        threads = [threading.Thread(target=worker, args=(t,)) for t in range(n_threads)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+
+        counters = paths.job_state_read(job).get("counters", {})
+        self.assertEqual(len(counters), n_threads, "every thread's key must survive")
+        for t in range(n_threads):
+            self.assertEqual(
+                counters.get(f"t{t}"), n_writes_each, f"thread {t} lost at least one update"
+            )
+
+
+class JobStateMultiProcessLockTest(unittest.TestCase):
+    """Carried finding 7 (task 12): the same no-lost-update property, across
+    PROCESSES.
+
+    `test_concurrent_writers_never_lose_an_update` races threads, which is
+    the weaker test: threads share one process, so an implementation that
+    guarded the read-modify-write with a `threading.Lock` (or that simply
+    got lucky on the GIL) would pass it while a second Scouter process --
+    `darkroom.set` in one shell, `scouter metrics summary` in another, the
+    launchd job alongside either -- still clobbered its update. `flock` is
+    per-open-file-description, so only separate processes actually exercise
+    it.
+    """
+
+    def setUp(self) -> None:
+        self._env = dict(os.environ)
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ["SCOUTER_CACHE"] = self._tmp.name
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._env)
+        self._tmp.cleanup()
+
+    def test_concurrent_processes_never_lose_an_update(self) -> None:
+        import subprocess
+        import sys
+
+        job = "job-multiproc"
+        n_procs = 6
+        n_writes_each = 20
+        repo_root = Path(paths.__file__).resolve().parent.parent
+        script = (
+            "import os, sys, time\n"
+            "sys.path.insert(0, sys.argv[3])\n"
+            "from scouter import paths\n"
+            "key, n = sys.argv[1], int(sys.argv[2])\n"
+            "def mutate(state):\n"
+            "    counters = state.setdefault('counters', {})\n"
+            "    counters[key] = counters.get(key, 0) + 1\n"
+            "for _ in range(n):\n"
+            f"    paths.job_state_update({job!r}, mutate)\n"
+            "    time.sleep(0.001)\n"
+        )
+        procs = [
+            subprocess.Popen(
+                [sys.executable, "-c", script, f"p{i}", str(n_writes_each), str(repo_root)],
+                env={**os.environ, "SCOUTER_CACHE": self._tmp.name},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            for i in range(n_procs)
+        ]
+        for proc in procs:
+            out, err = proc.communicate(timeout=120)
+            self.assertEqual(proc.returncode, 0, err.decode())
+
+        counters = paths.job_state_read(job).get("counters", {})
+        self.assertEqual(len(counters), n_procs, f"a whole process's key vanished: {counters}")
+        for i in range(n_procs):
+            self.assertEqual(
+                counters.get(f"p{i}"),
+                n_writes_each,
+                f"process p{i} lost at least one update: {counters}",
+            )
+
+
 class JobValidationTest(unittest.TestCase):
     """B3: a job id becomes a file name, so traversal must be impossible."""
 
@@ -129,6 +262,14 @@ class ErrorsTest(unittest.TestCase):
             "db_locked",
             "style_partial",
             "commit_timeout",
+            "backup_not_configured",
+            "checksum_mismatch",
+            "destination_collision",
+            "exif_unreadable",
+            "style_write_failed",
+            "encryption_unavailable",
+            "manifest_unauthenticated",
+            "export_all_failed",
         }
         codes = {cls.code for cls in errors.ERROR_CLASSES}
         self.assertEqual(codes, expected)
@@ -204,3 +345,183 @@ class EnvelopeTest(unittest.TestCase):
         self.assertIsNone(d["data"]["positions"]["y"])
         # a plain json.dumps would raise ValueError on nan/inf by default if not cleaned
         json.dumps(d)
+
+
+class ConftestAllowTreeTest(unittest.TestCase):
+    """`tests/conftest.py::allow_tree` is the ONE opt-in that lets a test
+    pin its own throwaway tree past the session isolation fixture. It must
+    never be usable to point a test at a real user path -- that is the rule
+    the fixture exists to enforce (a suite run once wrote a 1.7 MB test note
+    into the real Obsidian vault)."""
+
+    def test_it_accepts_a_temp_directory_and_returns_it(self) -> None:
+        from tests.conftest import allow_tree
+
+        with tempfile.TemporaryDirectory(prefix="scouter-allow-") as d:
+            self.assertEqual(allow_tree(d), d)
+
+    def test_allowed_tree_releases_the_entry_on_exit(self) -> None:
+        """Fix round 1, minor d: a permanently registered prefix keeps
+        widening the isolation guard for every test that runs afterwards, so
+        a class-scoped registration needs a class-scoped lifetime."""
+        from tests import conftest
+
+        with tempfile.TemporaryDirectory(prefix="scouter-allow-ctx-") as d:
+            before = list(conftest._ALLOWED_TREES)
+            with conftest.allowed_tree(d) as prefix:
+                self.assertEqual(prefix, d)
+                self.assertTrue(conftest._is_allowed(os.path.join(d, "nested", "x.json")))
+            self.assertEqual(conftest._ALLOWED_TREES, before, "the entry must be released")
+            self.assertFalse(conftest._is_allowed(os.path.join(d, "nested", "x.json")))
+
+    def test_allowed_tree_releases_even_when_the_body_raises(self) -> None:
+        from tests import conftest
+
+        with tempfile.TemporaryDirectory(prefix="scouter-allow-raise-") as d:
+            before = list(conftest._ALLOWED_TREES)
+            with self.assertRaises(RuntimeError):
+                with conftest.allowed_tree(d):
+                    raise RuntimeError("boom")
+            self.assertEqual(conftest._ALLOWED_TREES, before)
+
+    def test_it_refuses_the_bridge_spool_and_the_installed_plugin(self) -> None:
+        """Blocker 4's paths are forbidden too: `allow_tree` must not be
+        usable to point a test at the real spool or the real plugin."""
+        from tests import conftest
+
+        for candidate in (
+            conftest.REAL_BRIDGE_SPOOL,
+            conftest.REAL_PLUGIN_PATH,
+            os.path.dirname(os.path.dirname(conftest.REAL_PLUGIN_PATH)),
+        ):
+            with self.subTest(path=candidate):
+                with self.assertRaises(ValueError):
+                    conftest.allow_tree(candidate)
+
+    def test_the_forbidden_list_uses_the_vault_from_the_environment(self) -> None:
+        """Derived from `$OBSIDIAN_VAULT_PATH` as it was BEFORE the pin, not
+        hard-coded `~/second-brain` (fix round 1, minor d): a user whose vault
+        lived elsewhere would have had the one path that caused the original
+        incident left unguarded."""
+        from tests import conftest
+
+        forbidden = conftest._real_forbidden()
+        self.assertIn(os.path.realpath(os.path.expanduser("~/.config/scouter")), forbidden)
+        if conftest._REAL_VAULT_FROM_ENV:
+            self.assertIn(os.path.realpath(conftest._REAL_VAULT_FROM_ENV), forbidden)
+
+    def test_it_refuses_the_real_vault_config_cache_and_home(self) -> None:
+        from tests.conftest import allow_tree
+
+        for candidate in (
+            "~/second-brain",
+            "~/second-brain/Projects",
+            "~/.config/scouter",
+            "~/.cache/scouter",
+            "~/.hermes",
+            "~",
+        ):
+            with self.subTest(path=candidate):
+                with self.assertRaises(ValueError):
+                    allow_tree(os.path.expanduser(candidate))
+
+
+class HostClassTreeReleaseTest(unittest.TestCase):
+    """Fix round 2, item 3: `Phase2EndToEndTest` must release its
+    `allowed_tree` registrations however `setUpClass` ends -- including a
+    SKIP, which is not an error and so is the easy case to forget.
+
+    Non-host: this drives `_close_trees` and the `ExitStack` discipline
+    directly, without launching darktable. What it cannot do is run the real
+    `setUpClass` (that needs a host), so it asserts the two things that make
+    the failure path correct: the helper is idempotent, and `setUpClass`'s
+    own handler calls it.
+    """
+
+    def test_close_trees_releases_registrations_and_is_idempotent(self) -> None:
+        import contextlib
+
+        from tests import conftest
+        from tests.test_host_phase2 import Phase2EndToEndTest
+
+        cls = Phase2EndToEndTest
+        saved = cls._trees
+        try:
+            with tempfile.TemporaryDirectory(prefix="scouter-trees-") as d:
+                before = list(conftest._ALLOWED_TREES)
+                cls._trees = contextlib.ExitStack()
+                cls._trees.enter_context(conftest.allowed_tree(d))
+                self.assertTrue(conftest._is_allowed(os.path.join(d, "x")))
+
+                cls._close_trees()
+                self.assertEqual(conftest._ALLOWED_TREES, before)
+                self.assertFalse(conftest._is_allowed(os.path.join(d, "x")))
+                self.assertIsNone(cls._trees)
+
+                # Called again from tearDownClass after the failure path
+                # already ran: must not raise.
+                cls._close_trees()
+        finally:
+            cls._trees = saved
+
+    def test_set_up_class_failure_path_closes_the_trees(self) -> None:
+        """A source check, because the real `setUpClass` needs a host: the
+        `except BaseException` handler must call `_close_trees`, and
+        `tearDownClass` must too."""
+        import inspect
+
+        from tests import test_host_phase2
+
+        source = inspect.getsource(test_host_phase2.Phase2EndToEndTest)
+        setup = source.split("def setUpClass", 1)[1].split("def _close_trees", 1)[0]
+        handler = setup.split("except BaseException:", 1)[1]
+        self.assertIn(
+            "_close_trees()",
+            handler,
+            "setUpClass's failure/skip path must release the allowed_tree "
+            "registrations before re-raising",
+        )
+        teardown = source.split("def tearDownClass", 1)[1]
+        self.assertIn("_close_trees()", teardown)
+
+
+class IsAllowedResolvesBothSidesTest(unittest.TestCase):
+    """Fix round 2, minor m3: `_is_allowed` must resolve BOTH sides.
+
+    It resolved only `value`, so on macOS -- where `/var` is a symlink to
+    `/private/var` and `tempfile.mkdtemp()` hands back a `/var/...` path --
+    the session root compared unequal to its own resolved form. Only nested
+    paths matched (that arm did resolve its side), so a test pinning an env
+    var at the session root exactly would have been re-pinned out from under
+    it.
+    """
+
+    def test_the_session_root_itself_is_allowed(self) -> None:
+        from tests import conftest
+
+        self.assertTrue(
+            conftest._is_allowed(conftest._SESSION_TMP),
+            "the session tmp root must be allowed as itself",
+        )
+        self.assertTrue(conftest._is_allowed(os.path.realpath(conftest._SESSION_TMP)))
+        self.assertTrue(
+            conftest._is_allowed(os.path.join(conftest._SESSION_TMP, "nested", "x.json")),
+            "and so must anything under it",
+        )
+
+    def test_a_registered_tree_is_allowed_as_itself_too(self) -> None:
+        from tests import conftest
+
+        with tempfile.TemporaryDirectory(prefix="scouter-selfpath-") as d:
+            with conftest.allowed_tree(d):
+                self.assertTrue(conftest._is_allowed(d))
+                self.assertTrue(conftest._is_allowed(os.path.realpath(d)))
+
+    def test_an_unrelated_path_is_still_refused(self) -> None:
+        from tests import conftest
+
+        self.assertFalse(conftest._is_allowed(os.path.expanduser("~/second-brain")))
+        self.assertFalse(conftest._is_allowed(""))
+        # A sibling whose name merely starts with the session root's name
+        # must not match -- that is what the explicit separator is for.
+        self.assertFalse(conftest._is_allowed(conftest._SESSION_TMP + "-evil"))

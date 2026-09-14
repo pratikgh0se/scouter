@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import math
-import os
-import tempfile
 import time
 from collections.abc import Callable
 
@@ -47,6 +44,22 @@ class _UnsupportedUndo(ScouterError):
     fix = "press Ctrl-Z in darktable; Scouter cannot restore discarded params"
 
 
+class _UndoUnverified(ScouterError):
+    """Task 11 fix round 1, blocker 2: tier 3's Kelvin-inversion undo (design
+    11.4) sent a value and committed, but the post-restore coefficient ratio
+    did not come back within `wb._EXACT_TOLERANCE` -- an approximate undo
+    Scouter cannot confirm landed is never silently reported as done. The
+    journal entry stays open (this raises before `mark_undone` is reached),
+    so the same undo is reachable again on the next call.
+    """
+
+    code = "undo_unverified"
+    fix = (
+        "check the darkroom by eye; pin the coefficient sliders "
+        "(spike/scouter_wb_probe.lua) for an exact undo, or restore by hand"
+    )
+
+
 def _require_finite(name: str, value: float) -> float:
     """Reject nan/inf BEFORE any bridge call (final review, should-fix 5).
 
@@ -70,35 +83,21 @@ def _require_finite(name: str, value: float) -> float:
     return number
 
 
-def _job_state_write(job: str, state: dict) -> None:
-    """Replace this job's state file atomically. Best-effort by design."""
-    path = paths.ensure(paths.job_state_path(job))
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".state-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(state, fh, sort_keys=True)
-        os.replace(tmp_name, path)
-    except OSError:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-
-
-def _job_state_read(job: str) -> dict:
-    path = paths.job_state_path(job)
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
 def _record_opened_image(job: str, image_id: int, path: str) -> None:
-    """Remember which image THIS job opened (ruling 30)."""
-    _job_state_write(job, {"opened_image_id": int(image_id), "opened_path": path})
+    """Remember which image THIS job opened (ruling 30).
+
+    Read-modify-write under a lock, not a blind overwrite (task 12 fix round
+    1, should-fix 5): `scouter.core.history` writes the same per-job state
+    file (a `watermarks` key) from a possibly-concurrent writer, and
+    `paths.job_state_update` is the one seam both modules go through so
+    neither can silently clobber the other's key.
+    """
+
+    def _mutate(state: dict) -> None:
+        state["opened_image_id"] = int(image_id)
+        state["opened_path"] = path
+
+    paths.job_state_update(job, _mutate)
 
 
 def _require_job_image(job: str, loaded_image_id: int) -> None:
@@ -112,7 +111,7 @@ def _require_job_image(job: str, loaded_image_id: int) -> None:
     ids. A job that has never opened anything has nothing to compare against
     and is left alone.
     """
-    expected = _job_state_read(job).get("opened_image_id")
+    expected = paths.job_state_read(job).get("opened_image_id")
     if expected is None or int(expected) == int(loaded_image_id):
         return
     raise NotInDarkroom(
@@ -127,7 +126,13 @@ def _require_job_image(job: str, loaded_image_id: int) -> None:
 
 
 def _commit_with_readback(
-    job: str, image_id: int, *, confirm: Callable[[], bool], what: str, strategy: str = "auto"
+    job: str,
+    image_id: int,
+    *,
+    xmp_path: str,
+    confirm: Callable[[], bool],
+    what: str,
+    strategy: str = "auto",
 ) -> tuple[bool, list[str]]:
     """`_commit`, with a commit timeout resolved by reading the XMP back.
 
@@ -140,12 +145,26 @@ def _commit_with_readback(
     was asked for, the request is satisfied and says so in a warning. If it
     does not, the timeout is re-raised untouched -- a write that never landed
     is never reported as committed.
+
+    `xmp_path` (fix round 1, should-fix 3): the CALLER's already-resolved
+    sidecar path, so watermarking a readback-resolved commit costs no extra
+    `darkroom.current` round-trip -- every caller already has this path from
+    resolving its own image.
     """
     try:
         result = _commit(job, image_id, strategy=strategy)
     except CommitTimeout:
         if not confirm():
             raise
+        # Task 12, step 2: a readback-resolved commit still means the sidecar
+        # on disk is now the state Scouter believes it committed, so the
+        # watermark is recorded here too -- `history.commit`'s own success
+        # path never ran (it raised), so nothing else would record it. This
+        # branch's own `confirm()` already IS the readback confirmation
+        # blocker 2 (fix round 1) requires, so watermarking here is safe.
+        from scouter.core import history
+
+        history.watermark_write(job, image_id, xmp_path)
         return True, [
             f"darktable wrote no new sidecar for {what}: the state requested is the "
             "one the XMP already carried, so there was no history change to write. "
@@ -154,7 +173,14 @@ def _commit_with_readback(
     return result.committed, list(result.warnings)
 
 
-def _commit(job: str, image_id: int, *, strategy: str = "auto") -> CommitResult:
+def _commit(
+    job: str,
+    image_id: int,
+    *,
+    strategy: str = "auto",
+    attempts: int | None = None,
+    expect_change: bool = True,
+) -> CommitResult:
     """Every write's post-action commit, routed through one seam (ruling 21).
 
     Imports `scouter.core.history` lazily so `darkroom.py` stays importable
@@ -164,11 +190,23 @@ def _commit(job: str, image_id: int, *, strategy: str = "auto") -> CommitResult:
     two -- `history.commit` is itself `@instrumented`. Falls back to the
     wrapped function if `__wrapped__` is ever absent, so this never breaks
     outright if that decorator detail changes.
+
+    `attempts`/`expect_change` (task 12): forwarded straight to
+    `history.commit`, whose docstring covers the no-op-pre-check use case.
+    `attempts=None` lets `history.commit` supply its own default.
     """
     from scouter.core import history
 
     commit_fn = getattr(history.commit, "__wrapped__", history.commit)
-    return commit_fn(image_id, timeout_s=5.0, strategy=strategy, job=job)
+    kwargs: dict = {
+        "timeout_s": 5.0,
+        "strategy": strategy,
+        "expect_change": expect_change,
+        "job": job,
+    }
+    if attempts is not None:
+        kwargs["attempts"] = attempts
+    return commit_fn(image_id, **kwargs)
 
 
 def _close(a: float | None, b: float | None, tol: float = 1e-4) -> bool:
@@ -226,15 +264,38 @@ def _module_enabled(path: str, module: str, instance: int) -> bool | None:
     return _module_state(path, module, instance)["enabled"]
 
 
+def _temperature_extra(path: str, instance: int) -> dict:
+    """`params` (the whole decoded vector) + `params_hex`, for `temperature`
+    only (task 11 step 2). A `temperature` write needs the FULL coefficient
+    vector to be undoable, not just the one field `_read_value` can name --
+    the Kelvin slider has no `temperature` field in the XMP at all (design
+    §11.1: Kelvin is never stored, only camera-relative coefficients are).
+    """
+    parsed = _read_sidecar_parsed(path)
+    if parsed is None:
+        return {"params": None, "params_hex": None}
+    params = xmp.latest_params(parsed, "temperature", instance)
+    if params is None:
+        return {"params": None, "params_hex": None}
+    params = dict(params)
+    params_hex = params.pop("params_hex", None)
+    return {"params": params, "params_hex": params_hex}
+
+
 def _read_state(path: str, module: str, param: str, instance: int) -> dict:
     """Everything the journal needs about one slider's current state
 
     (fix round 1, blocker 7): not just `value`, but `enabled` and
     `history_end` too, so a future reader can tell "this slider was disabled"
-    or "this was a stale read" apart from a plain missing value.
+    or "this was a stale read" apart from a plain missing value. Ruling 20
+    still holds: `enabled` travels with every one of these, so a disabled
+    module is never reported as live.
     """
     state = _module_state(path, module, instance)
-    return {**state, "value": _read_value(path, module, param, instance)}
+    state = {**state, "value": _read_value(path, module, param, instance)}
+    if module == "temperature":
+        state = {**state, **_temperature_extra(path, instance)}
+    return state
 
 
 def _last_journal_write(
@@ -279,13 +340,34 @@ def _last_journal_write(
     return None
 
 
-def _before_state(
+def _raw_and_before_state(
     job: str, image_id: int, path: str, module: str, param: str, instance: int
-) -> dict:
-    """The `before` state for a new write on this slider.
+) -> tuple[dict, dict, bool]:
+    """Returns `(raw_state, before_state, pending_uncommitted)`.
 
-    Ordinarily this is whatever the XMP currently shows. But when the last
-    (live, landed) write to this exact (image, module, param, instance) used
+    `raw_state` is EXACTLY what the sidecar shows on disk right now -- the
+    only state the no-op shortcut and the stale-but-matching mid path may
+    ever compare a requested value against (task 12 fix round 1, blocker 1).
+    `before_state` additionally applies the journal `commit=False` fallback
+    below, for callers (the journal entry's `before=`, `SetResult.previous`,
+    `undo_last`) that want the logical "current value" INCLUDING an
+    uncommitted write Scouter itself made -- a fallback that is exactly
+    wrong for the no-op decision, which must never trust anything but the
+    bytes actually on disk.
+
+    `pending_uncommitted` is True when the last landed write for this exact
+    (image, module, param, instance) has `commit=False`: darktable's live
+    history already differs from the sidecar in a way the journal knows
+    about but the sidecar cannot show yet. Neither the shortcut nor the mid
+    path may fire in that case -- not even when `raw_state` happens to
+    coincidentally equal the requested value, because sending the SAME value
+    Scouter set last time is what would silently re-confirm a stale-on-disk
+    edit without ever flushing it (the reviewer's repro: set 4.25 with
+    `commit=False`, then set 4.25 again -- the second call must still bounce
+    and commit).
+
+    Ordinarily `before_state`'s fallback value is whatever the XMP currently
+    shows. But when the last (live, landed) write to this exact key used
     `commit=False`, darktable has not written the sidecar for it yet -- the
     XMP still shows whatever was true before THAT write, not Scouter's own
     true current value, so the journal's own `after` is used instead. This
@@ -295,11 +377,76 @@ def _before_state(
     `commit=True` write's own `history.commit` call already waited for the
     XMP to advance, so its value is trustworthy and no fallback is needed.
     """
-    state = _read_state(path, module, param, instance)
+    raw_state = _read_state(path, module, param, instance)
     last = _last_journal_write(job, image_id, module, param, instance)
-    if last is not None and last.commit is False:
-        state = {**state, "value": last.after["value"]}
-    return state
+    pending_uncommitted = last is not None and last.commit is False
+    before_state = {**raw_state, "value": last.after["value"]} if pending_uncommitted else raw_state
+    return raw_state, before_state, pending_uncommitted
+
+
+def _noop_shortcut(
+    job: str,
+    resolved: dtbridge.ResolvedImage,
+    module: str,
+    param: str,
+    instance: int,
+    target: float | None,
+    raw_state: dict,
+    *,
+    requested: float | None,
+) -> SetResult | None:
+    """The zero-bounce, zero-bridge-write path (task 12).
+
+    `target` is the absolute value this write would end up at, known BEFORE
+    sending anything: `set`'s own requested value, or (for `nudge`) its own
+    current value when `steps=0` asks for no movement at all. `None` means
+    either the caller cannot know the target without sending the action
+    first (a nonzero-step nudge), or (fix round 1, blocker 1) there is a
+    pending `commit=False` write for this key that disqualifies ANY
+    comparison against the sidecar -- either way, there is nothing to
+    short-circuit.
+
+    `raw_state` must be the sidecar EXACTLY as it reads on disk right now
+    (never the journal-adjusted `before_state`): a value that matches only
+    because of that fallback is proof of an unflushed edit sitting in
+    darktable, not proof there is nothing to write.
+
+    When the target already matches the module's raw on-disk value, the
+    module is enabled, AND the watermark proves that value is still fresh
+    (not stale from an uncommitted edit), there is nothing to send: darktable
+    only writes the sidecar when the history actually CHANGES (phase 1 live
+    finding 4), so a repeat of the same value would otherwise cost a full
+    commit to discover it had nothing to write -- ~5.5s in the worst case,
+    two bounces and two sidecar waits. Returns `None` (not a shortcut) when
+    the watermark is missing or stale, or the value or `enabled` disagrees --
+    the caller falls through to the normal write-and-commit path.
+    """
+    if target is None:
+        return None
+    from scouter.core import history
+
+    fresh, _why = history.watermark_fresh(job, resolved.image_id, resolved.xmp_path)
+    if not (
+        fresh and raw_state.get("enabled") is not False and _close(target, raw_state.get("value"))
+    ):
+        return None
+    return SetResult(
+        image_id=resolved.image_id,
+        path=resolved.path,
+        module=module,
+        param=param,
+        instance=instance,
+        requested=requested,
+        applied=raw_state.get("value"),
+        previous=raw_state.get("value"),
+        committed=True,
+        noop=True,
+        source="xmp",
+        warnings=[
+            f"no-op: {module}.{param} is already {raw_state.get('value')} in the sidecar, "
+            "which Scouter last committed; nothing was sent to darktable"
+        ],
+    )
 
 
 def _current_image() -> dtbridge.ResolvedImage:
@@ -383,7 +530,35 @@ def set_param(
     resolved = _current_image()
     _require_job_image(job, resolved.image_id)
     dtbridge.require_darkroom()
-    before_state = _before_state(job, resolved.image_id, resolved.path, module, param, instance)
+    raw_state, before_state, pending_uncommitted = _raw_and_before_state(
+        job, resolved.image_id, resolved.path, module, param, instance
+    )
+    shortcut = _noop_shortcut(
+        job,
+        resolved,
+        module,
+        param,
+        instance,
+        None if pending_uncommitted else value,
+        raw_state,
+        requested=value,
+    )
+    if shortcut is not None:
+        return shortcut
+    # The pre-check matched the RAW on-disk value but the watermark was stale
+    # (or absent), so the write below is genuinely sent -- but a real change
+    # is still the unlikely outcome here: the XMP already says `value`, just
+    # not provably freshly. `expect_change=False, attempts=1` tells the
+    # commit to spend one bounce, not two (task 12). Never predicted when
+    # `pending_uncommitted` (blocker 1, fix round 1): a value that matches
+    # the sidecar only by coincidence, while a real unflushed edit is
+    # sitting in darktable, is not a no-op -- it can be a real change that
+    # must still be sent and committed for real (`expect_change=True`).
+    predicted_noop = (
+        not pending_uncommitted
+        and raw_state.get("enabled") is not False
+        and _close(value, raw_state.get("value"))
+    )
     entry = journal.begin(
         job,
         verb="darkroom.set",
@@ -423,26 +598,72 @@ def set_param(
         # The timeout is still raised when the readback does NOT confirm the
         # value -- a write that genuinely never landed must never be reported
         # as committed.
-        commit_result = None
+        def _try_commit(expect_change: bool, attempts: int | None) -> CommitResult | None:
+            nonlocal commit_error
+            try:
+                return _commit(
+                    job,
+                    resolved.image_id,
+                    strategy="auto",
+                    expect_change=expect_change,
+                    attempts=attempts,
+                )
+            except CommitTimeout as e:
+                commit_error = e
+                return None
+
         commit_error: CommitTimeout | None = None
-        try:
-            commit_result = _commit(job, resolved.image_id, strategy="auto")
-        except CommitTimeout as e:
-            commit_error = e
-        applied = _read_value(resolved.path, module, param, instance)
-        if commit_result is not None:
-            committed = commit_result.committed
-            warnings.extend(commit_result.warnings)
-        elif _close(applied, value):
-            committed = True
-            warnings.append(
-                f"darktable wrote no new sidecar for {module}.{param}: the value requested "
-                f"({value:g}) is the one the XMP already carried, so there was no history "
-                "change to write. Confirmed by reading the value back from the sidecar."
-            )
+        if predicted_noop:
+            commit_result = _try_commit(False, 1)
         else:
-            assert commit_error is not None
-            raise commit_error
+            commit_result = _try_commit(True, None)
+
+        if commit_result is not None and not commit_result.committed:
+            # `expect_change=False` (fix round 1, blocker 2): the bridge's own
+            # `sidecar_written=False` is NOT proof nothing changed -- only proof
+            # that this ONE bounce found nothing to flush. `history.commit`
+            # never stamps a watermark on this path for exactly that reason
+            # (`CommitResult.confirmed=False`); only an independent readback
+            # against the REQUESTED value earns one. A mismatch means the
+            # one-bounce prediction was wrong -- a real, unflushed change is
+            # pending -- so this escalates to a genuine `expect_change=True`
+            # commit rather than ever certifying a stale sidecar as fresh.
+            applied = _read_value(resolved.path, module, param, instance)
+            if _close(applied, value):
+                from scouter.core import history as _history
+
+                _history.watermark_write(job, resolved.image_id, resolved.xmp_path)
+                committed = True
+                warnings.extend(commit_result.warnings)
+                warnings.append(
+                    f"readback confirmed {module}.{param} already carries {value:g}: "
+                    "the watermark was recorded now, from this confirmation, not from "
+                    "the bridge's own (unconfirmed) report."
+                )
+            else:
+                commit_result = _try_commit(True, None)
+                applied = None
+
+        if not committed:
+            if commit_result is not None and commit_result.committed:
+                committed = True
+                warnings.extend(commit_result.warnings)
+            else:
+                if applied is None:
+                    applied = _read_value(resolved.path, module, param, instance)
+                if _close(applied, value):
+                    committed = True
+                    warnings.append(
+                        f"darktable wrote no new sidecar for {module}.{param}: the value "
+                        f"requested ({value:g}) is the one the XMP already carried, so "
+                        "there was no history change to write. Confirmed by reading the "
+                        "value back from the sidecar."
+                    )
+                else:
+                    assert commit_error is not None
+                    raise commit_error
+        if applied is None:
+            applied = _read_value(resolved.path, module, param, instance)
         if applied is None:
             warnings.append(
                 f"{module}.{param} committed but could not be decoded from the XMP; "
@@ -513,7 +734,29 @@ def nudge(
     resolved = _current_image()
     _require_job_image(job, resolved.image_id)
     dtbridge.require_darkroom()
-    before_state = _before_state(job, resolved.image_id, resolved.path, module, param, instance)
+    raw_state, before_state, pending_uncommitted = _raw_and_before_state(
+        job, resolved.image_id, resolved.path, module, param, instance
+    )
+    # `nudge` computes its absolute target BEFORE writing only in the trivial
+    # case: `steps=0` asks for no movement at all, so the target is simply
+    # the module's own RAW on-disk value (task 12). A nonzero-step nudge
+    # cannot know its landing value without sending the action -- darktable,
+    # not Scouter, owns the step size -- so there is nothing to short-circuit
+    # there; `_noop_shortcut` returns `None` and the nudge proceeds normally.
+    # `pending_uncommitted` (fix round 1, blocker 1) disqualifies the
+    # shortcut the same way it does for `set`.
+    shortcut = _noop_shortcut(
+        job,
+        resolved,
+        module,
+        param,
+        instance,
+        raw_state.get("value") if (steps == 0 and not pending_uncommitted) else None,
+        raw_state,
+        requested=None,
+    )
+    if shortcut is not None:
+        return shortcut
     entry = journal.begin(
         job,
         verb="darkroom.nudge",
@@ -565,6 +808,7 @@ def nudge(
         committed, warnings = _commit_with_readback(
             job,
             resolved.image_id,
+            xmp_path=resolved.xmp_path,
             confirm=_confirm_nudge,
             what=f"{module}.{param}",
         )
@@ -647,6 +891,7 @@ def _do_module_action(
     committed, warnings = _commit_with_readback(
         job,
         resolved.image_id,
+        xmp_path=resolved.xmp_path,
         confirm=_confirm_module,
         what=f"{module} ({action_name})",
     )
@@ -703,6 +948,283 @@ def reset(
     )
 
 
+#: The fields `("temperature", 4)`'s layout names (`scouter/core/xmp.py`).
+#: `coeff_g2` is `inf` on the EM10iii body (never a real slider target there),
+#: so it is only ever sent when it is BOTH pinned AND finite (fix round: a
+#: caller never sends `_require_finite`-rejected inf/nan to the bridge).
+def _rb_ratio(params: dict | None) -> float | None:
+    """A `temperature` param dict's red/blue coefficient ratio, or `None`.
+
+    Carried finding 10 (task 11): this arithmetic, and the tolerance test
+    below, were spelled out three times inside the tier-3 Kelvin-inversion
+    undo -- in `_after_ratio`, in `_confirm`, and again inlined for
+    `verified`. Three copies of a comparison that decides whether an undo
+    is reported as verified is three chances for them to drift apart.
+
+    `None` when either coefficient is missing, when blue is zero, or when
+    EITHER is non-finite: the ratio does not exist, and a number would be a
+    lie about it.
+
+    Fix round 1, minor b: the docstring already promised `None` for a
+    non-finite blue and the code did not deliver it -- `r / inf` is `0.0`, a
+    finite-looking ratio that `_ratio_within_tolerance` would then happily
+    compare, and `coeff_g2 = inf` is a REAL value on this camera (phase 1's
+    pinned `temperature` params), so a stray `inf` in `coeff_b` is not a
+    hypothetical. `nan` is caught by the same check: it is not finite, and a
+    `nan` ratio compares false against everything, which would read as "did
+    not verify" rather than "could not be compared".
+    """
+    if not params:
+        return None
+    r, b = params.get("coeff_r"), params.get("coeff_b")
+    if r is None or not b:
+        return None
+    if not math.isfinite(r) or not math.isfinite(b):
+        return None
+    return r / b
+
+
+def _ratio_within_tolerance(measured: float | None, target: float | None) -> bool:
+    """`measured` is within `wb._EXACT_TOLERANCE` (relative) of `target`.
+
+    A missing ratio on either side is `False` -- "cannot compare" is never
+    reported as "verified".
+    """
+    from scouter.core import wb
+
+    if measured is None or target is None:
+        return False
+    return abs(measured - target) / abs(target) <= wb._EXACT_TOLERANCE
+
+
+_TEMPERATURE_COEFF_NAMES = ("coeff_r", "coeff_g", "coeff_b", "coeff_g2")
+
+
+def _temperature_sliders_pinned() -> bool:
+    """Tier 2 (design 11.3, "probe-gated: undo through the coefficient
+    sliders") is available only once the host probe (task 11 step 3,
+    `tests/test_host_phase2.py::test_pin_wb_coefficient_sliders`) has pinned
+    all three always-finite coefficients' `dt.gui.action` paths into
+    `dtbridge.ACTION_PATHS`. `coeff_g2` is optional -- it is `inf`/unused on
+    the EM10iii body -- and is restored too when it happens to be pinned and
+    the journalled value is finite.
+    """
+    return all(
+        ("temperature", name) in dtbridge.ACTION_PATHS for name in ("coeff_r", "coeff_g", "coeff_b")
+    )
+
+
+def _undo_temperature_via_sliders(
+    job: str, entry: journal.Entry, before_params: dict
+) -> tuple[bool, list[str], dict]:
+    """Tier 2 (design 11.3): one absolute `set` per pinned coefficient, ONE
+    `history.commit`, then verify the whole vector from the XMP (brief step 4).
+
+    `_close` compares each component against the CLEANED value --
+    `xmp.latest_params` already turns `inf`/`nan` into `None` (fix: both this
+    function's `before_params` and its post-restore read go through the same
+    `_temperature_extra`/`xmp.latest_params` cleaning), so `coeff_g2 = inf`
+    compares as "both non-finite", never as two unequal raw floats.
+    """
+    sent: list[str] = []
+    for name in _TEMPERATURE_COEFF_NAMES:
+        value = before_params.get(name)
+        if value is None or ("temperature", name) not in dtbridge.ACTION_PATHS:
+            continue
+        dtbridge.action(
+            dtbridge.action_path("temperature", name),
+            instance=entry.instance,
+            element="value",
+            effect="set",
+            value=float(value),
+        )
+        sent.append(name)
+
+    def _after_params() -> dict:
+        return _temperature_extra(entry.path, entry.instance).get("params") or {}
+
+    def _confirm() -> bool:
+        after_params = _after_params()
+        return all(_close(after_params.get(name), before_params.get(name)) for name in sent)
+
+    committed, warnings = _commit_with_readback(
+        job,
+        entry.image_id,
+        xmp_path=str(xmp.sidecar_path(entry.path)),
+        confirm=_confirm,
+        what="temperature (undo coefficients)",
+    )
+    after_params = _after_params()
+    failed = [name for name in sent if not _close(after_params.get(name), before_params.get(name))]
+    verified = not failed
+    if failed:
+        warnings.append(
+            f"could not verify the restore for seq {entry.seq}: component(s) {failed} did not "
+            f"come back as journaled (read {after_params!r}, expected {before_params!r})"
+        )
+    undone = {
+        "verb": entry.verb,
+        "module": entry.module,
+        "param": entry.param,
+        "restored_to": after_params,
+        "verified": verified,
+        "tier": "coefficient_sliders",
+    }
+    return committed, warnings, undone
+
+
+def _temperature_camera(entry: journal.Entry) -> str | None:
+    """Best-effort camera slug for `entry.path`, or `None` -- tier 3/4 both
+    need this, and neither may raise: an EXIF read failing is not a reason
+    to skip straight past tier 3 to a worse refusal message."""
+    from scouter.config import load as load_config
+    from scouter.core import exif
+
+    try:
+        cfg = load_config()
+        tags = exif.read_tags(entry.path)
+        return exif.camera_slug(tags, cfg)
+    except ScouterError:
+        return None
+
+
+def _temperature_target_kelvin(
+    before_params: dict | None, camera: str | None
+) -> tuple[float | None, dict]:
+    """`wb.kelvin`'s answer for the journalled coefficients, or `(None, {})`."""
+    if not before_params or not camera:
+        return None, {}
+    coeffs = [
+        before_params.get("coeff_r"),
+        before_params.get("coeff_g"),
+        before_params.get("coeff_b"),
+    ]
+    if any(c is None for c in coeffs):
+        return None, {}
+    from scouter.core import wb
+
+    result = wb.kelvin(coeffs, camera)
+    return result.get("kelvin"), result
+
+
+def _undo_temperature_via_kelvin(
+    job: str, entry: journal.Entry, before_params: dict, camera: str
+) -> tuple[bool, list[str], dict] | None:
+    """Tier 3 (design 11.4, "built regardless: the per-camera calibration
+    table"): when the coefficient sliders are not pinned, invert the
+    journalled coefficients to a target Kelvin from the measured table
+    (`wb.calibrate`) and restore THAT through the ordinary Kelvin slider.
+    This is an APPROXIMATE undo -- a Kelvin round trip through darktable's
+    own blackbody model, not an exact coefficient restore -- which is why
+    tier 2 (the coefficient sliders) is always tried first. Returns `None`
+    when no measured table (or no camera) is available, so the caller falls
+    through to tier 4's honest refusal.
+
+    Fix round 1, blocker 2: the write is only reported "done" when the
+    post-restore ratio verifies within `wb._EXACT_TOLERANCE` -- the same
+    tolerance `wb._invert` uses to call a sample "exact", since both
+    questions are "is this ratio close enough to trust." On a verification
+    failure this RAISES `_UndoUnverified` (never returns a normal result
+    with a warning): the caller's `journal.mark_undone` is then never
+    reached, so the entry stays open and reachable on the next call --
+    an approximate undo Scouter cannot confirm landed must not be
+    indistinguishable from one that did.
+    """
+    from scouter.core import wb
+
+    target_k, _ = _temperature_target_kelvin(before_params, camera)
+    if target_k is None:
+        return None
+    target_ratio = _rb_ratio(before_params)
+
+    dtbridge.action(
+        dtbridge.action_path("temperature", "temperature"),
+        instance=entry.instance,
+        element="value",
+        effect="set",
+        value=float(target_k),
+    )
+
+    def _confirm() -> bool:
+        after_params = _temperature_extra(entry.path, entry.instance).get("params") or {}
+        return _ratio_within_tolerance(_rb_ratio(after_params), target_ratio)
+
+    committed, warnings = _commit_with_readback(
+        job,
+        entry.image_id,
+        xmp_path=str(xmp.sidecar_path(entry.path)),
+        confirm=_confirm,
+        what="temperature (undo via Kelvin inversion)",
+    )
+    # Fix round 2, minor (d): ONE read here for both the verification ratio
+    # and `restored_to`, instead of three separate `_temperature_extra`
+    # calls (`_after_ratio()`, `_confirm()` again, and a bare
+    # `_temperature_extra` for `after_params`) round 1 had. `_confirm`'s own
+    # read, used during a commit-TIMEOUT retry inside
+    # `_commit_with_readback`, is a genuinely different moment (before this
+    # function knows the commit settled) and is left alone.
+    after_params = _temperature_extra(entry.path, entry.instance).get("params") or {}
+    after_ratio = _rb_ratio(after_params)
+    verified = _ratio_within_tolerance(after_ratio, target_ratio)
+    if not verified:
+        raise _UndoUnverified(
+            f"seq {entry.seq}: Kelvin-inversion undo committed ({target_k:.0f} K from "
+            f"{camera}'s measured table) but the coefficient ratio did not verify within "
+            f"{wb._EXACT_TOLERANCE:.0%}: measured r/b={after_ratio!r}, target r/b={target_ratio!r}",
+            detail={
+                "seq": entry.seq,
+                "target_kelvin": target_k,
+                "measured_ratio": after_ratio,
+                "target_ratio": target_ratio,
+                "tolerance": wb._EXACT_TOLERANCE,
+                "coefficients": before_params,
+                # Fix round 2, minor (a): `_commit_with_readback`'s own
+                # warnings (e.g. a commit-timeout resolved by readback) were
+                # silently dropped on this path -- real information about
+                # what happened, not just the verified path's to keep.
+                "warnings": warnings,
+            },
+        )
+    warnings.append(
+        f"restored via Kelvin inversion ({target_k:.0f} K from {camera}'s measured table), not "
+        "the exact coefficient sliders -- pin the sliders on this host (`scouter_wb_probe.lua`) "
+        "for an exact undo"
+    )
+    undone = {
+        "verb": entry.verb,
+        "module": entry.module,
+        "param": entry.param,
+        "restored_to": after_params,
+        "restored_kelvin": target_k,
+        "verified": verified,
+        "tier": "kelvin_inversion",
+    }
+    return committed, warnings, undone
+
+
+def _refuse_temperature_undo(entry: journal.Entry, before_params: dict | None) -> None:
+    """Tier 4 (brief step 6): the honest refusal, carrying the journalled
+    coefficient vector, the target Kelvin (when a table happens to answer
+    one even though sliders are not pinned), and the exact fix."""
+    camera = _temperature_camera(entry)
+    target_kelvin, _ = _temperature_target_kelvin(before_params, camera)
+    raise _UnsupportedUndo(
+        f"cannot undo seq {entry.seq}: temperature's coefficient sliders are not pinned on "
+        "this host, and no Kelvin calibration table lets Scouter compute a safe restore",
+        detail={
+            "seq": entry.seq,
+            "module": entry.module,
+            "coefficients": before_params,
+            "target_kelvin": target_kelvin,
+            "hint": (
+                "darktable stores white balance as camera-relative coefficients; run "
+                "`scouter wb calibrate` to make this undoable, or restore these coefficients "
+                "in the module's coefficients tab"
+            ),
+        },
+    )
+
+
 @metrics.instrumented("darkroom.undo_last")
 def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
     """Revert the newest Scouter write in this job by re-setting its old value."""
@@ -755,16 +1277,31 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
         journal.mark_undone(job, entry.seq, note="skipped: reset is not undoable")
         raise _UnsupportedUndo(reason, detail={"seq": entry.seq, "module": entry.module})
 
-    plan = [
-        {
-            "action": "darkroom.undo_last",
-            "seq": entry.seq,
-            "verb": entry.verb,
-            "module": entry.module,
-            "param": entry.param,
-            "restore_to": entry.before.get("value"),
-        }
-    ]
+    plan_entry = {
+        "action": "darkroom.undo_last",
+        "seq": entry.seq,
+        "verb": entry.verb,
+        "module": entry.module,
+        "param": entry.param,
+        "restore_to": entry.before.get("value"),
+    }
+    if entry.module == "temperature":
+        # Should-fix (task 11 fix round 1): a dry run on a temperature entry
+        # names the journalled coefficient vector (the one thing every tier
+        # would restore from) and predicts WHICH tier a real call would
+        # take, without sending anything -- the same "no darktable calls
+        # were made" promise every other dry run here keeps.
+        before_params = entry.before.get("params")
+        plan_entry["coefficients"] = before_params
+        if before_params and _temperature_sliders_pinned():
+            plan_entry["tier"] = "coefficient_sliders"
+        elif before_params:
+            camera = _temperature_camera(entry)
+            target_k, _ = _temperature_target_kelvin(before_params, camera)
+            plan_entry["tier"] = "kelvin_inversion" if target_k is not None else "refuse"
+        else:
+            plan_entry["tier"] = "refuse"
+    plan = [plan_entry]
     if dry_run:
         return UndoResult(
             outcome="dry_run",
@@ -814,6 +1351,7 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             committed, warnings = _commit_with_readback(
                 job,
                 entry.image_id,
+                xmp_path=str(xmp.sidecar_path(entry.path)),
                 confirm=lambda: _module_enabled(entry.path, entry.module, entry.instance) is False,
                 what=f"{entry.module} (disable)",
             )
@@ -829,7 +1367,38 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             "restored_to": None,
             "verified": verified,
         }
+        mark_undone_ok = True
+    elif entry.module == "temperature":
+        # Task 11: tiers 2/3/4 (design 11.3/11.4/11.5), tried in order.
+        # `before_params` is `None` for a journal entry written before this
+        # task landed (or when the module never decoded) -- that is tier 4
+        # too, with no coefficients to hand over.
+        before_params = entry.before.get("params")
+        if before_params and _temperature_sliders_pinned():
+            committed, warnings, undone = _undo_temperature_via_sliders(job, entry, before_params)
+            # Brief step 4: a component that does not come back leaves the
+            # entry `undone: false` -- unlike every other undo here, a
+            # partially-verified coefficient restore is not marked done, so
+            # the failure stays visible and reachable on the next call.
+            mark_undone_ok = bool(undone["verified"])
+        else:
+            camera = _temperature_camera(entry)
+            via_kelvin = (
+                _undo_temperature_via_kelvin(job, entry, before_params, camera)
+                if before_params and camera
+                else None
+            )
+            if via_kelvin is None:
+                _refuse_temperature_undo(entry, before_params)
+                raise AssertionError("unreachable: _refuse_temperature_undo always raises")
+            # Fix round 1, blocker 2: `_undo_temperature_via_kelvin` itself
+            # raises `_UndoUnverified` (propagating past this whole function,
+            # never reaching `mark_undone` below) when the ratio does not
+            # verify -- a normal return here is always a verified tier 3.
+            committed, warnings, undone = via_kelvin
+            mark_undone_ok = True
     else:
+        mark_undone_ok = True
         previous = entry.before.get("value")
         if previous is None:
             raise ScouterError(
@@ -848,6 +1417,7 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
         committed, warnings = _commit_with_readback(
             job,
             entry.image_id,
+            xmp_path=str(xmp.sidecar_path(entry.path)),
             confirm=lambda: _close(
                 _read_value(entry.path, entry.module, entry.param, entry.instance), float(previous)
             ),
@@ -870,7 +1440,8 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             "verified": verified,
         }
 
-    journal.mark_undone(job, entry.seq)
+    if mark_undone_ok:
+        journal.mark_undone(job, entry.seq)
     return UndoResult(
         image_id=entry.image_id,
         path=entry.path,
@@ -903,6 +1474,16 @@ def status(
     pairs = (
         [(module, param)] if param else [(m, p) for (m, p) in dtbridge.ACTION_PATHS if m == module]
     )
+    if not pairs:
+        # Fix round 1, minor f: `status(module="nosuchmodule")` with no
+        # `param` used to return an EMPTY positions/nan dict and the generic
+        # "positions are normalised" warning -- indistinguishable from a
+        # module that exists and happens to have nothing readable, and the
+        # exact opposite of what the same unpinned module gets when a `param`
+        # IS given (`action_path`'s typed refusal naming the pinned modules).
+        # One unpinned module, one answer. `action_path` composes the message,
+        # so there is no second copy of it here to drift.
+        dtbridge.action_path(module, param or "")
     for mod, par in pairs:
         path = dtbridge.action_path(mod, par)
         result = dtbridge.call("darkroom.status", {"path": path, "instance": instance})

@@ -62,11 +62,16 @@ def register(verb: Verb) -> Verb:
 #: verb source via `metrics.summary`). Imported by module name, one at a time,
 #: so a module that doesn't exist yet (tasks 7-9) doesn't block the others.
 _CORE_MODULES: tuple[str, ...] = (
+    "scouter.config",
     "scouter.core.darkroom",
     "scouter.core.export",
     "scouter.core.history",
     "scouter.core.scout",
     "scouter.core.style",
+    "scouter.core.library",
+    "scouter.core.cull",
+    "scouter.core.wb",
+    "scouter.core.backup",
     "scouter.metrics",
 )
 

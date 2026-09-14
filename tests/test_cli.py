@@ -199,7 +199,19 @@ class SubprocessTest(unittest.TestCase):
         self.addCleanup(self._tmpdir.cleanup)
 
     def test_stdout_is_exactly_one_json_object(self) -> None:
-        env = dict(os.environ, SCOUTER_CACHE=str(self.tmp / "doctor-cache"))
+        # A SUBPROCESS, so a FakeBridge cannot be installed into it (fix
+        # round 1, blocker 4). The isolation is by environment instead: the
+        # bridge spool (`$XDG_CACHE_HOME/darktable-mcp`) and the installed
+        # plugin are pinned under this test's own temp dir, so `doctor`'s
+        # `view.current` call cannot reach the real spool or a live
+        # darktable -- it fails fast with `bridge_timeout`, which is exactly
+        # what `doctor` is supposed to report when darktable is absent.
+        env = dict(
+            os.environ,
+            SCOUTER_CACHE=str(self.tmp / "doctor-cache"),
+            XDG_CACHE_HOME=str(self.tmp / "xdg"),
+            DARKTABLE_MCP_PLUGIN_PATH=str(self.tmp / "no-plugin" / "darktable_mcp.lua"),
+        )
         proc = subprocess.run(
             [sys.executable, "-m", "scouter", "doctor"],
             cwd=REPO,
@@ -226,3 +238,237 @@ class SubprocessTest(unittest.TestCase):
         payload = json.loads(proc.stdout)
         self.assertEqual(payload["verb"], "metrics.summary")
         self.assertEqual(payload["layer"], "cli")
+
+
+class DoctorPhase2LinesTest(unittest.TestCase):
+    """Task 14 step 4: `doctor`'s four phase-2 lines -- `config_path` and
+    whether it parses, `backup_gate`, `encryption_tool`, and `library_root`
+    + its free bytes.
+
+    All four are REPORT lines: none changes `ok`, which stays a statement
+    about the bridge. A config that has never been written is the correct
+    state for a fresh install, and the first command a new user runs must
+    not exit non-zero because of it.
+    """
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="scouter-doctor-test-")
+        self.tmp = Path(self._tmpdir.name)
+        self.addCleanup(self._tmpdir.cleanup)
+        self._env = dict(os.environ)
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._env)
+
+    def _report(self, config) -> dict:
+        from scouter.cli import main as cli_main
+
+        # A FakeBridge, always (fix round 1, blocker 4): `_doctor` calls
+        # `dtbridge.current_view()`, and without one that reaches the REAL
+        # `Bridge` -- writing a request file into the user's own spool and, if
+        # a darktable with the plugin happened to be running, getting a real
+        # answer out of their live session. `tests/conftest.py` now pins the
+        # spool and the plugin path too, so the blast radius is contained
+        # either way, but a unit test should not be firing bridge calls at
+        # all: the fake makes the intent explicit and the test fast.
+        from scouter.core import dtbridge
+        from tests.scouter_fakes import FakeBridge
+
+        dtbridge.set_bridge(FakeBridge({"view.current": {"view": "lighttable"}}))
+        self.addCleanup(dtbridge.set_bridge, None)
+
+        if config is None:
+            os.environ["SCOUTER_CONFIG"] = str(self.tmp / "absent.json")
+        else:
+            path = self.tmp / "config.json"
+            path.write_text(config if isinstance(config, str) else json.dumps(config))
+            os.environ["SCOUTER_CONFIG"] = str(path)
+        return cli_main._doctor()
+
+    def test_a_missing_config_is_reported_not_an_error(self) -> None:
+        report = self._report(None)
+        self.assertTrue(report["config_path"].endswith("absent.json"))
+        self.assertFalse(report["config_exists"])
+        self.assertTrue(report["config_parses"], "defaults are not a parse failure")
+        self.assertIn("backup_not_configured", report["backup_gate"])
+        self.assertIsNone(report["library_root"])
+        self.assertIsNone(report["library_free_bytes"])
+
+    def test_an_unparseable_config_says_so_without_raising(self) -> None:
+        report = self._report("{not valid json")
+        self.assertFalse(report["config_parses"])
+        self.assertIn("usage", report["config_error"])
+        self.assertIn("config_unreadable", report["backup_gate"])
+        self.assertEqual(report["verb"], "doctor")
+
+    def test_a_disarmed_backup_gate_names_its_own_code_and_message(self) -> None:
+        report = self._report(
+            {
+                "version": 1,
+                "library_root": str(self.tmp / "library"),
+                "backup": {"enabled": False, "target": str(self.tmp / "target")},
+            }
+        )
+        self.assertTrue(report["backup_gate"].startswith("backup_not_configured: "))
+        self.assertIn("enabled", report["backup_gate"])
+
+    def test_library_root_and_free_bytes(self) -> None:
+        library = self.tmp / "library"
+        library.mkdir()
+        report = self._report({"version": 1, "library_root": str(library)})
+        self.assertEqual(report["library_root"], str(library))
+        self.assertTrue(report["library_root_exists"])
+        self.assertIsInstance(report["library_free_bytes"], int)
+        self.assertGreater(report["library_free_bytes"], 0)
+
+    def test_a_library_root_that_does_not_exist_yet_still_reports_free_bytes(self) -> None:
+        """The free space that matters is the filesystem's, and a root about
+        to be created shares its parent's -- reporting `null` would hide the
+        number right when an import is about to need it."""
+        report = self._report({"version": 1, "library_root": str(self.tmp / "not-yet")})
+        self.assertFalse(report["library_root_exists"])
+        self.assertIsInstance(report["library_free_bytes"], int)
+
+    def test_the_encryption_tool_is_a_resolved_path_or_none(self) -> None:
+        report = self._report(
+            {"version": 1, "library_root": str(self.tmp / "l"), "backup": {"encryption": "none"}}
+        )
+        self.assertEqual(report["encryption"], "none")
+        self.assertIsNone(report["encryption_tool"], "'none' resolves no tool")
+
+        report = self._report(
+            {
+                "version": 1,
+                "library_root": str(self.tmp / "l"),
+                "backup": {"encryption": "openssl"},
+            }
+        )
+        self.assertEqual(report["encryption"], "openssl")
+        tool = report["encryption_tool"]
+        # A resolved PATH, not the word "openssl": which binary will run is
+        # the fact a doctor line exists to give.
+        self.assertTrue(tool is None or tool.endswith("openssl"), tool)
+        if tool is not None:
+            self.assertTrue(tool.startswith("/"), tool)
+
+    def test_the_phase_2_lines_never_change_ok(self) -> None:
+        missing = self._report(None)
+        good = self._report({"version": 1, "library_root": str(self.tmp / "l")})
+        self.assertEqual(missing["ok"], missing["bridge"] == "ok")
+        self.assertEqual(good["ok"], good["bridge"] == "ok")
+
+
+class DoctorUsesBackupsOwnResolverTest(unittest.TestCase):
+    """Fix round 1, minor a: `doctor`'s `encryption_tool` line must report the
+    binary `backup.run` would actually run, not a second copy of the same
+    preference order that can drift away from it."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="scouter-doctor-tool-")
+        self.tmp = Path(self._tmpdir.name)
+        self.addCleanup(self._tmpdir.cleanup)
+        self._env = dict(os.environ)
+        config = self.tmp / "config.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "library_root": str(self.tmp / "library"),
+                    "backup": {"encryption": "openssl"},
+                }
+            )
+        )
+        os.environ["SCOUTER_CONFIG"] = str(config)
+
+        from scouter.core import dtbridge
+        from tests.scouter_fakes import FakeBridge
+
+        dtbridge.set_bridge(FakeBridge({"view.current": {"view": "lighttable"}}))
+        self.addCleanup(dtbridge.set_bridge, None)
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._env)
+
+    def test_it_calls_backup_openssl(self) -> None:
+        from unittest import mock
+
+        from scouter.cli import main as cli_main
+
+        with mock.patch(
+            "scouter.core.backup._openssl", return_value="/sentinel/openssl"
+        ) as resolver:
+            report = cli_main._doctor()
+        self.assertEqual(report["encryption_tool"], "/sentinel/openssl")
+        resolver.assert_called_once()
+
+    def test_a_missing_binary_is_a_report_value_not_a_raise(self) -> None:
+        from unittest import mock
+
+        from scouter.cli import main as cli_main
+        from scouter.errors import EncryptionUnavailable
+
+        with mock.patch(
+            "scouter.core.backup._openssl",
+            side_effect=EncryptionUnavailable("no openssl anywhere"),
+        ):
+            report = cli_main._doctor()
+        self.assertIsNone(report["encryption_tool"])
+        self.assertEqual(report["encryption"], "openssl")
+        self.assertEqual(report["verb"], "doctor", "doctor still produced a report")
+
+
+class DoctorPluginPathHonoursTheOverrideTest(unittest.TestCase):
+    """Fix round 2, item 2: `doctor`'s plugin line must come from the SAME
+    resolver the bridge uses.
+
+    It was recomputed from `Path.home()`, so with `DARKTABLE_MCP_PLUGIN_PATH`
+    set -- which `tests/conftest.py` now always does for the non-host suite --
+    `doctor` reported a path the bridge was not looking at. A doctor line that
+    contradicts the thing it reports on is worse than no line: it sends the
+    reader to the wrong file.
+    """
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="scouter-doctor-plugin-")
+        self.tmp = Path(self._tmpdir.name)
+        self.addCleanup(self._tmpdir.cleanup)
+        self._env = dict(os.environ)
+
+        from scouter.core import dtbridge
+        from tests.scouter_fakes import FakeBridge
+
+        dtbridge.set_bridge(FakeBridge({"view.current": {"view": "lighttable"}}))
+        self.addCleanup(dtbridge.set_bridge, None)
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._env)
+
+    def _report(self) -> dict:
+        from scouter.cli import main as cli_main
+
+        return cli_main._doctor()
+
+    def test_doctor_reports_the_overridden_path(self) -> None:
+        plugin = self.tmp / "elsewhere" / "lua" / "darktable_mcp.lua"
+        os.environ["DARKTABLE_MCP_PLUGIN_PATH"] = str(plugin)
+
+        report = self._report()
+        self.assertEqual(report["plugin_path"], str(plugin))
+        self.assertFalse(report["plugin_installed"])
+
+        plugin.parent.mkdir(parents=True)
+        plugin.write_text("-- fake")
+        self.assertTrue(self._report()["plugin_installed"])
+
+    def test_doctor_and_the_bridge_never_disagree(self) -> None:
+        """The property, asserted directly rather than via the string."""
+        from darktable_mcp.bridge.client import plugin_path as bridge_plugin_path
+
+        os.environ["DARKTABLE_MCP_PLUGIN_PATH"] = str(self.tmp / "a" / "b.lua")
+        self.assertEqual(self._report()["plugin_path"], str(bridge_plugin_path()))
+
+        os.environ.pop("DARKTABLE_MCP_PLUGIN_PATH", None)
+        self.assertEqual(self._report()["plugin_path"], str(bridge_plugin_path()))

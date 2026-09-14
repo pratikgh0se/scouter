@@ -1,10 +1,16 @@
 import os
 import unittest
+from pathlib import Path
 
 from darktable_mcp.bridge.client import BridgeError, BridgeTimeoutError
 from scouter.core import dtbridge
-from scouter.errors import BridgeTimeout, DbLocked, NotInDarkroom, WrongView
-from tests.scouter_fakes import FAKE_CLI_WRITES_PPM, FakeBridge, fake_cli_script
+from scouter.errors import BridgeTimeout, DbLocked, NotInDarkroom, UsageError, WrongView
+from tests.scouter_fakes import (
+    FAKE_CLI_WRITES_PPM,
+    FakeBridge,
+    fake_cli_script,
+    write_minimal_style_sidecar,
+)
 
 
 class ClassificationTest(unittest.TestCase):
@@ -56,10 +62,49 @@ class ClassificationTest(unittest.TestCase):
         self.assertIn("wrong image loaded", str(ctx.exception))
         self.assertIn("expected 12, got 7", str(ctx.exception))
 
-    def test_action_path_table_and_fallback(self) -> None:
+    def test_action_path_returns_the_pinned_path(self) -> None:
         self.assertEqual(dtbridge.action_path("exposure", "exposure"), "iop/exposure/exposure")
         self.assertEqual(dtbridge.action_path("sigmoid", "contrast"), "iop/sigmoid/contrast")
-        self.assertEqual(dtbridge.action_path("newmod", "newparam"), "iop/newmod/newparam")
+        self.assertEqual(
+            dtbridge.action_path("exposure", "black"), "iop/exposure/black level correction"
+        )
+
+    def test_action_path_refuses_an_unpinned_pair(self) -> None:
+        """Carried finding 1: the guessed `iop/<module>/<param>` fallback is
+        gone, because an unrecognised path wedges darktable's Lua worker for
+        the whole session."""
+        with self.assertRaises(UsageError) as ctx:
+            dtbridge.action_path("newmod", "newparam")
+        self.assertEqual(ctx.exception.code, "usage")
+        self.assertIn("newmod.newparam", ctx.exception.message)
+        self.assertIn("no parameter of `newmod` is pinned", ctx.exception.fix)
+        self.assertIn("exposure", ctx.exception.fix)
+        self.assertEqual(ctx.exception.detail["pinned_params_for_module"], [])
+
+    def test_action_path_names_the_modules_pinned_params(self) -> None:
+        with self.assertRaises(UsageError) as ctx:
+            dtbridge.action_path("exposure", "nosuchparam")
+        self.assertIn("pinned parameters for `exposure`", ctx.exception.fix)
+        self.assertEqual(ctx.exception.detail["pinned_params_for_module"], ["black", "exposure"])
+        self.assertIn("wedges", ctx.exception.fix)
+
+    def test_probe_bypass_is_explicit_and_test_only(self) -> None:
+        """The ONE bypass, for the host probes that must try unpinned paths.
+
+        The second half of this test is the guard that keeps it test-only:
+        no module under `scouter/` may pass `probe_unpinned`.
+        """
+        self.assertEqual(
+            dtbridge.action_path("newmod", "newparam", probe_unpinned=True),
+            "iop/newmod/newparam",
+        )
+        root = Path(dtbridge.__file__).resolve().parent.parent
+        offenders = [
+            str(p.relative_to(root.parent))
+            for p in sorted(root.rglob("*.py"))
+            if "probe_unpinned" in p.read_text(encoding="utf-8") and p.name != "dtbridge.py"
+        ]
+        self.assertEqual(offenders, [], "production code must never bypass the wedge guard")
 
     def test_resolve_image_accepts_a_path_and_an_id(self) -> None:
         bridge = FakeBridge(
@@ -146,6 +191,10 @@ class ReadsNeverOpenTheDarkroomTest(unittest.TestCase):
         self.root = self.cache.start()
         self.raw = self.root / "P6281348.ORF"
         self.raw.write_bytes(b"raw")
+        # Fix round 2, blocker 1: style.extract(no_filter=True) reads the
+        # sidecar too now (never_include applies to the whole active
+        # history, not just a requested `modules` list).
+        write_minimal_style_sidecar(self.raw)
         self.bridge = FakeBridge(
             {
                 "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
@@ -194,7 +243,7 @@ class ReadsNeverOpenTheDarkroomTest(unittest.TestCase):
     def test_style_and_export_dry_runs_do_not_open(self) -> None:
         from scouter.core import export, style
 
-        style.extract(image=str(self.raw), name="hero", modules=[], dry_run=True)
+        style.extract(image=str(self.raw), name="hero", modules=[], dry_run=True, no_filter=True)
         style.apply(image=str(self.raw), name="hero", dry_run=True)
         export.run(
             images=[str(self.raw)], preset="preview", out_dir=str(self.root / "out"), dry_run=True
@@ -207,6 +256,88 @@ class ReadsNeverOpenTheDarkroomTest(unittest.TestCase):
         darkroom.set_param(module="exposure", param="exposure", value=1.0, dry_run=True)
         darkroom.nudge(module="exposure", param="exposure", steps=1, dry_run=True)
         self.assertEqual(self.bridge.calls, [])
+
+
+class ResolveImagesBatchTest(unittest.TestCase):
+    """Ruling R15: `image.lookup` takes a list, so a set resolves in ONE
+    bridge call instead of one per frame (the Lua handler's path match walks
+    all of `dt.database`, so it was also one full library scan per frame)."""
+
+    def tearDown(self) -> None:
+        dtbridge.set_bridge(None)
+
+    def _listy_bridge(self, table: dict[str, int]) -> FakeBridge:
+        def one(params: dict) -> dict:
+            if params.get("image_id") is not None:
+                iid = int(params["image_id"])
+                path = next((p for p, i in table.items() if i == iid), None)
+                return {"found": path is not None, "image_id": iid, "path": path}
+            path = params.get("path")
+            iid = table.get(path)
+            return {"found": iid is not None, "image_id": iid, "path": path}
+
+        def lookup(params: dict) -> dict:
+            if params.get("items") is not None:
+                return {"results": [one(item) for item in params["items"]]}
+            return one(params)
+
+        bridge = FakeBridge({"image.lookup": lookup})
+        dtbridge.set_bridge(bridge)
+        return bridge
+
+    def test_a_whole_set_costs_one_call_and_keeps_request_order(self) -> None:
+        bridge = self._listy_bridge({"/a/1.orf": 11, "/a/2.orf": 12, "/a/3.orf": 13})
+        out = dtbridge.resolve_images(["/a/3.orf", 12, "/a/1.orf"])
+        self.assertEqual(bridge.count("image.lookup"), 1)
+        self.assertEqual([r.image_id for r in out], [13, 12, 11])
+        self.assertEqual(out[0].xmp_path, "/a/3.orf.xmp")
+
+    def test_a_miss_is_returned_not_raised_so_one_bad_frame_never_kills_the_set(self) -> None:
+        self._listy_bridge({"/a/1.orf": 11})
+        out = dtbridge.resolve_images(["/a/1.orf", "/a/gone.orf", 99])
+        self.assertEqual(out[0].image_id, 11)
+        self.assertIsInstance(out[1], dtbridge.ImageNotFound)
+        self.assertIn("/a/gone.orf", str(out[1]))
+        self.assertEqual(out[1].detail["path"], "/a/gone.orf")
+        self.assertIsInstance(out[2], dtbridge.ImageNotFound)
+        self.assertEqual(out[2].detail["image_id"], 99)
+
+    def test_an_empty_set_makes_no_bridge_call_at_all(self) -> None:
+        bridge = self._listy_bridge({})
+        self.assertEqual(dtbridge.resolve_images([]), [])
+        self.assertEqual(bridge.calls, [])
+
+    def test_a_plugin_too_old_for_the_list_form_degrades_to_one_call_each(self) -> None:
+        """A stale installed plugin answers without `results`. That must cost
+        speed, never correctness -- so the fallback is one single-form call
+        per image, exactly what `resolve_image` has always done."""
+        table = {"/a/1.orf": 11, "/a/2.orf": 12}
+
+        def legacy(params: dict) -> dict:
+            path = params.get("path")
+            iid = table.get(path)
+            return {"found": iid is not None, "image_id": iid, "path": path}
+
+        bridge = FakeBridge({"image.lookup": legacy})
+        dtbridge.set_bridge(bridge)
+        out = dtbridge.resolve_images(["/a/1.orf", "/a/2.orf"])
+        self.assertEqual([r.image_id for r in out], [11, 12])
+        # 1 rejected batch attempt + 2 single-form calls.
+        self.assertEqual(bridge.count("image.lookup"), 3)
+
+    def test_the_style_set_resolver_uses_the_list_form(self) -> None:
+        """The consumer ruling R15 was raised for: `style.apply_set`'s
+        `_resolve_set` must resolve its candidates in one call."""
+        from scouter.core import style
+
+        bridge = self._listy_bridge({"/a/1.orf": 11, "/a/2.orf": 12, "/a/3.orf": 13})
+        resolved, unresolved = style._resolve_set(
+            None, ["/a/1.orf", "/a/2.orf", "/a/3.orf"], ["/a/3.orf"]
+        )
+        self.assertEqual([r.image_id for r in resolved], [11, 12])
+        self.assertEqual(unresolved, [])
+        # One call for the candidates, one for the --exclude list.
+        self.assertEqual(bridge.count("image.lookup"), 2)
 
 
 if __name__ == "__main__":

@@ -56,6 +56,9 @@ class SetResult(Payload):
     previous: float | None = None
     committed: bool = False
     source: str = "xmp"
+    # Task 12: True only on the zero-bounce, zero-bridge-write shortcut --
+    # the requested value already matches a FRESH-watermarked sidecar.
+    noop: bool = False
 
 
 @dataclass
@@ -72,6 +75,44 @@ class UndoResult(Payload):
     undone: dict | None = None
     seq: int | None = None
     committed: bool = False
+
+
+@dataclass
+class KelvinResult(Payload):
+    """`wb.kelvin`'s result (task 11). No table -> `kelvin: None`, `reason`
+    naming `scouter wb calibrate`, `table: None`; outside the calibrated
+    range -> `kelvin: None`, `reason` naming the range -- never an
+    extrapolated guess. `table`, when a table was found, is `{"path": str,
+    "synthetic": bool}` (merged in from task 9's fix round, `phase-2`) -- a
+    synthetic (placeholder or legacy) table is perfectly usable for testing
+    the plumbing, but a caller can tell it apart from a real measured one."""
+
+    kelvin: float | None = None
+    interpolated: bool = False
+    bracket: list[int] | None = None
+    residual_ratio: float | None = None
+    exact: bool = False
+    camera: str = ""
+    table: dict | None = None
+
+
+@dataclass
+class CalibrateResult(Payload):
+    """`wb.calibrate`'s result (task 11). `points` is one `{k, coeff_r,
+    coeff_g, coeff_b}` row per swept Kelvin value -- the same rows written to
+    `table_path`'s JSON (design 11.4's object shape, under its own
+    `samples` key, each `{k, coeff_r, coeff_g, coeff_b}` -- fix round 2:
+    this used to say `{kelvin, coeffs}`, task 9's bare-array shape, which
+    `wb.calibrate` has not written since fix round 1), so what Pratik reads
+    back here and what landed on disk never drift."""
+
+    camera: str = ""
+    table_path: str = ""
+    ks: list[int] = field(default_factory=list)
+    estimated_s: float = 0.0
+    points: list[dict] = field(default_factory=list)
+    written: bool = False
+    overwritten: bool = False
 
 
 @dataclass
@@ -93,6 +134,13 @@ class HistoryEntry:
     params_hex: str
     decoded: dict[str, Any] | None
     reason: str | None
+    # Task 7: needed verbatim by the `.dtstyle` writer (scouter/core/dtstyle.py)
+    # -- every real `<plugin>` darktable itself wrote carries its own blendop
+    # params/version and a multi_name_hand_edited flag alongside multi_name,
+    # pinned against tests/fixtures/hero.dtstyle (2026-09-14 host probe).
+    blendop_params_hex: str = ""
+    blendop_version: int = 0
+    multi_name_hand_edited: bool = False
 
 
 @dataclass
@@ -114,6 +162,42 @@ class CommitResult(Payload):
     view_after: str = "unknown"
     ms: int = 0
     xmp_mtime: float | None = None
+    # Task 12: True when this commit's own poll actually saw the sidecar
+    # change; False only reachable with `expect_change=False`, when the
+    # bridge reported nothing changed.
+    changed: bool = True
+    # Task 12 fix round 1, blocker 2: True when `changed`'s value is backed
+    # by an actual observation (the poll saw the mtime/size move, or the
+    # caller independently confirmed via readback) -- False ONLY on the
+    # `expect_change=False` early-return path, where the bridge's own
+    # `sidecar_written=False` proves nothing beyond "this one bounce found
+    # nothing to flush". A caller must never stamp a watermark, or otherwise
+    # treat the sidecar as known-fresh, from a `confirmed=False` result.
+    confirmed: bool = True
+
+
+@dataclass
+class ChangedResult(Payload):
+    """`history.changed`'s result -- a pure read, no bounce (task 12).
+
+    Fix round 1 nit: the design spec's section 13.2 also lists a
+    `history_end` field on this result. Deliberately not in this signature --
+    `watermark`/`sidecar` are file-signature dicts from a `stat()` alone, and
+    reporting `history_end` honestly would mean parsing the whole XMP (the
+    cost `history.changed` exists to avoid). `history.read`'s own
+    `HistoryResult.history_end` is the source for that number when a caller
+    actually wants it.
+    """
+
+    fresh: bool = False
+    watermark: dict | None = None
+    sidecar: dict | None = None
+    #: Carried finding 7 (task 12): `"<module>.<param>"` for every write
+    #: Scouter journalled with `commit=False` for this image. Non-empty
+    #: forces `fresh=False`: the sidecar's bytes can be identical to the
+    #: watermark while darktable's live history has already moved on, and a
+    #: file signature cannot see that -- the journal can.
+    pending_uncommitted: list = field(default_factory=list)
 
 
 @dataclass
@@ -182,6 +266,40 @@ class StyleResult(Payload):
     per_image: list[dict] = field(default_factory=list)
     note: str | None = None
     source: str | None = None
+    # Task 7: the module filter is real now. `dtstyle_path` is set only on
+    # the filtered path (never on the `no_filter` / whole-history fallback);
+    # `operations_included` is the requested-and-present set actually
+    # written; `modules_missing` is what was requested but absent from the
+    # active history.
+    dtstyle_path: str | None = None
+    operations_included: list[str] = field(default_factory=list)
+    modules_missing: list[str] = field(default_factory=list)
+    # Fix round 1, should-fix 5: a requested module whose newest active entry
+    # is disabled is still written (honouring the request literally), but
+    # named here so the caller is never left thinking it is live.
+    modules_disabled: list[str] = field(default_factory=list)
+
+
+@dataclass
+class StyleSetResult(Payload):
+    """Task 8: `style.apply_set` -- a partial set is a RESULT, not an exception.
+
+    `missed` carries every image id that did not apply (batch timeout, not
+    found, or `apply_style` itself failing); `per_image` has one row per
+    image actually attempted (never one per `requested` -- an id the run
+    never got to, because two consecutive batches timed out, appears in
+    neither list, and is only visible as `requested - applied - failed`
+    plus a `warnings` line naming the count).
+    """
+
+    name: str = ""
+    mode: str = "append"
+    requested: int = 0
+    applied: int = 0
+    failed: int = 0
+    batches: int = 0
+    missed: list[int] = field(default_factory=list)
+    per_image: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -203,12 +321,181 @@ class ExportResult(Payload):
 
 
 @dataclass
+class ReleaseResult(Payload):
+    """`export.release`'s result. `selection_rule`/`selected`/`of` mirror the
+    manifest's own `selection` block, so the CLI's summary and the manifest on
+    disk never drift; `manifest_path` is what `export.verify` re-reads."""
+
+    job_slug: str = ""
+    preset: str = ""
+    out_dir: str = ""
+    manifest_path: str = ""
+    selection_rule: str = ""
+    selected: int = 0
+    of: int = 0
+    files: list[ExportedFile] = field(default_factory=list)
+    exported: int = 0
+    failed: int = 0
+    bytes: int = 0
+
+
+@dataclass
+class ImportResult(Payload):
+    """`library.import`'s result. `files`/`totals` mirror `.scouter/import.json`
+    (relative `raw/<name>` destinations, per design section 6) so the two never
+    drift; a dry run leaves both empty and reports the same shape via `plan`.
+
+    `duplicates` lists the byte-identical pairs the import deliberately KEPT
+    BOTH of, as `[already_present_dest, new_dest]` (ruling R17): resume
+    identity is `(source_name, sha256)`, so the same bytes arriving under a
+    different camera filename are a second frame with their own `seq`, never
+    a silent skip and never a refusal. A dry run cannot fill this in (it does
+    not hash every candidate) and leaves it empty."""
+
+    job_slug: str = ""
+    date: str = ""
+    camera: str = ""
+    camera_model: str | None = None
+    camera_make: str | None = None
+    source_root: str = ""
+    files: list[dict] = field(default_factory=list)
+    totals: dict[str, int] = field(default_factory=dict)
+    film_roll_registered: bool = False
+    imported: int = 0
+    scan_incomplete: bool | None = None
+    recursive_honoured: bool | None = None
+    duplicates: list[list[str]] = field(default_factory=list)
+
+
+@dataclass
+class VerifyResult(Payload):
+    job_slug: str = ""
+    checked: int = 0
+    ok: bool = True
+    mismatched: list[dict] = field(default_factory=list)
+    missing: list[str] = field(default_factory=list)
+    extra: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RegisterResult(Payload):
+    job_slug: str = ""
+    film_roll_registered: bool = False
+    imported: int = 0
+    scan_incomplete: bool | None = None
+    recursive_honoured: bool | None = None
+
+
+@dataclass
+class JobsResult(Payload):
+    jobs: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class RelocateResult(Payload):
+    old_root: str = ""
+    new_root: str = ""
+    jobs: list[dict] = field(default_factory=list)
+    darktable_rollpaths_stale: bool = False
+    next_step: str | None = None
+
+
+@dataclass
+class ConfigResult(Payload):
+    config_path: str = ""
+    config_exists: bool = False
+    written: bool = False
+    backup_gate: str = "unknown"
+    config: dict = field(default_factory=dict)
+
+
+@dataclass
+class BackupResult(Payload):
+    archive_dir: str = ""
+    manifest_path: str = ""
+    members: int = 0
+    plaintext_bytes: int = 0
+    ciphertext_bytes: int = 0
+    encryption: str = "openssl"
+    rsync_ran: bool = False
+    rsync_files: int = 0
+    rsync_bytes: int = 0
+    rsync_exit: int | None = None
+    pruned: list[str] = field(default_factory=list)
+    ms_tar: int = 0
+    ms_encrypt: int = 0
+    ms_rsync: int = 0
+
+
+@dataclass
+class BackupVerifyResult(Payload):
+    verified: bool = False
+    archive: str = ""
+    checks: list[dict] = field(default_factory=list)
+    sampled_members: list[dict] = field(default_factory=list)
+    sampled_raws: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class SummaryResult(Payload):
     since: str = "7d"
     from_ts: str = ""
     verbs: list[dict] = field(default_factory=list)
     totals: dict[str, Any] = field(default_factory=dict)
     alerts: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class CullResult(Payload):
+    """`cull.propose`'s result. `proposals` carries one entry per frame, each
+    with a `reasons` list that names its numbers (never a bare verdict); the
+    same list is persisted verbatim to `proposal_path` so `cull.apply`
+    consumes exactly the table Pratik read."""
+
+    proposal_path: str = ""
+    job_slug: str = ""
+    groups: list[dict] = field(default_factory=list)
+    proposals: list[dict] = field(default_factory=list)
+    counts: dict[str, int] = field(default_factory=dict)
+    stats: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class OutliersResult(Payload):
+    """`outliers.list`'s result. `outliers` carries one row per frame that
+    breached at least one tolerance, sorted worst-first by
+    `max(|breach| / tolerance)`; `failed` is stats-failed frames, which are
+    never counted in `within_tolerance` or promoted to `outliers` -- an
+    unmeasured frame is not a passing frame. `wb_test` names which test ran
+    across the set: `kelvin` when every frame resolved a real Kelvin value
+    against the hero, `ratio` when none did (`wb.kelvin`'s designed
+    fallback), `mixed` when it differed frame to frame."""
+
+    reference: dict = field(default_factory=dict)
+    tolerances: dict = field(default_factory=dict)
+    wb_test: str = "ratio"
+    checked: int = 0
+    within_tolerance: int = 0
+    outliers: list[dict] = field(default_factory=list)
+    failed: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class CullApplyResult(Payload):
+    """`cull.apply`'s result. `verified`/`unverified` are reported separately
+    (design 8.3) rather than folded into `applied`: darktable owns when it
+    flushes a rating to the sidecar, so an unverified write is real, just not
+    yet visible -- never claimed as a failure."""
+
+    job_slug: str = ""
+    proposal_path: str = ""
+    applied: int = 0
+    unchanged: int = 0
+    would_change: int = 0
+    missed: list[int] = field(default_factory=list)
+    verified: int = 0
+    unverified: int = 0
+    per_image: list[dict] = field(default_factory=list)
 
 
 @dataclass

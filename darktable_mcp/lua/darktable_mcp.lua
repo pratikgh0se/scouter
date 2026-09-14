@@ -471,6 +471,73 @@ methods.rate_photos = function(p)
   return {updated = updated}
 end
 
+-- Per-image rating writes with HONEST misses.
+--
+-- w1ne's rate_photos returns only {updated = n} and silently skips ids
+-- darktable does not know. For a 300-frame cull that is exactly the case that
+-- must be visible, so this verb reports the before/after rating per image and
+-- lists the ids it could not find. rate_photos is left untouched for its own
+-- MCP tool.
+methods["image.rate"] = function(p)
+  p = p or {}
+  local ids = p.image_ids or {}
+  if #ids == 0 then error("image.rate: image_ids required and non-empty") end
+  local rating = tonumber(p.rating)
+  if rating == nil or rating < -1 or rating > 5 then
+    error("image.rate: rating must be -1..5, got " .. tostring(p.rating))
+  end
+  local rated, missed, per_image = 0, {}, {}
+  for _, id in ipairs(ids) do
+    local image = dt.database[tonumber(id)]
+    if not image then
+      table.insert(missed, tonumber(id))
+    else
+      local before = image.rating or 0
+      local ok, err = pcall(function() image.rating = rating end)
+      if ok then
+        rated = rated + 1
+        table.insert(per_image, {image_id = tonumber(id), rating_before = before,
+                                 rating_after = rating})
+      else
+        table.insert(missed, tonumber(id))
+        table.insert(per_image, {image_id = tonumber(id), rating_before = before,
+                                 rating_after = before, error = tostring(err)})
+      end
+    end
+  end
+  return {rating = rating, rated = rated, missed = missed, per_image = per_image}
+end
+
+-- Read-only colour-label lookup for a list of image ids (task 10 fix round
+-- 0, controller ruling R12): `export.release`'s finals selection needs to
+-- know which raws carry a colour label. darktable's Lua image object
+-- exposes that as five boolean fields (red/yellow/green/blue/purple)
+-- directly on the same object `image.lookup`/`image.rate` already index via
+-- `dt.database[id]` -- no view switch, no import, no write. Honest misses:
+-- an id `dt.database[id]` does not know about lands in `missing`, exactly
+-- like `image.rate`'s `missed`.
+local COLOR_LABELS = {"red", "yellow", "green", "blue", "purple"}
+methods["image.color_labels"] = function(p)
+  p = p or {}
+  local ids = p.image_ids or {}
+  if #ids == 0 then error("image.color_labels: image_ids required and non-empty") end
+  local missing, per_image = {}, {}
+  for _, id in ipairs(ids) do
+    local numeric_id = tonumber(id)
+    local image = dt.database[numeric_id]
+    if not image then
+      table.insert(missing, numeric_id)
+    else
+      local labels = {}
+      for _, color in ipairs(COLOR_LABELS) do
+        if image[color] then table.insert(labels, color) end
+      end
+      table.insert(per_image, {image_id = numeric_id, labels = labels})
+    end
+  end
+  return {missing = missing, per_image = per_image}
+end
+
 -- Count images that landed anywhere under `source_path`.
 --
 -- Matching is by PREFIX, not equality. Each imported directory becomes its
@@ -754,6 +821,18 @@ local function is_nan(v) return type(v) == "number" and v ~= v end
 -- is supposed to change the view.
 local VIEW_SETTLE_POLL_MS = 50
 local VIEW_SETTLE_BUDGET_MS = 5000
+-- The FIRST entry into the darkroom after a cold start gets its own, larger
+-- budget. Measured on the real host (scouter phase 2 task 14's end-to-end run,
+-- 2026-09-14, darktable 5.4.1): with 30 freshly imported 20 MP ORFs in a
+-- brand-new library, `darkroom.open` raised "view is still lighttable 5000ms
+-- after switching to darkroom" -- darktable was building the pipeline for an
+-- image it had never rendered, and 5s is simply not enough for that. The
+-- mid-bounce return leg keeps the 5s budget: by then the darkroom has already
+-- been entered once and coming back is fast, so a long budget there would only
+-- turn a genuinely stuck bounce into a 20s hang. 20s also stays well
+-- inside the client's own 60s budget for `darkroom.open`: a handler that
+-- outlives its caller cannot report anything.
+local VIEW_ENTER_DARKROOM_BUDGET_MS = 20000
 -- How long to stay in the lighttable mid-bounce. Leaving the darkroom is what
 -- makes darktable flush the pipe's history to the sidecar; task 1's probe used
 -- 500ms and the XMP advanced, so this dwell is deliberate, not a guess.
@@ -783,6 +862,22 @@ local function ids_match(a, b)
   local na, nb = tonumber(a), tonumber(b)
   return na ~= nil and nb ~= nil and na == nb
 end
+
+-- How long to yield-poll for the darkroom to actually be showing the image we
+-- asked for. `display_image` is ASYNCHRONOUS, exactly like
+-- `dt.gui.current_view`: measured on the real host (scouter phase 2 task 14's
+-- live run, 2026-09-14), `darkroom.open` on a 30-frame library came back
+-- "wrong image loaded" because the verification read the loaded image
+-- immediately after the call and still saw the PREVIOUS one. Task 12 already
+-- learned this lesson for the view and fixed it with `wait_for_view`; the
+-- loaded image needs the same treatment, and reading it once was simply a
+-- second instance of the same bug.
+local WAIT_FOR_IMAGE_BUDGET_MS = 15000
+-- How long to give `display_image` alone before falling back to a real view
+-- transition. Short on purpose: task 12 measured a darkroom -> lighttable ->
+-- darkroom bounce at 150 + 50 ms, so waiting long on a call that may simply
+-- not work for this image costs more than just doing the bounce.
+local DISPLAY_IMAGE_BUDGET_MS = 2000
 
 -- Run one dt.gui.action. Returns (value, nan_flag). Raises only when the API
 -- itself is missing or the call blows up -- a nan is data, not an error.
@@ -828,14 +923,27 @@ end
 -- An id is looked up with dt.database[id], which is documented to return the
 -- image or nil -- it does not raise for an unknown id, but it is pcall-guarded
 -- anyway so a future stricter build cannot turn a miss into a bridge error.
-methods["image.lookup"] = function(p)
-  p = p or {}
+--
+-- Ruling R15 (scouter phase 2, task 8's carried follow-up): the LIST form.
+-- `{items = {{path = ...}, {image_id = ...}, ...}}` answers every entry in
+-- ONE call, returning `{results = {<same shape as the single form>, ...}}`
+-- in request order. The single form (`path` / `image_id` at the top level)
+-- is unchanged and still returns the bare record, so every existing caller
+-- and every existing test keeps working.
+--
+-- Why it matters: `find_image_by_path` walks all of dt.database, so
+-- resolving a 300-frame set one call at a time was 300 full library scans
+-- plus 300 bridge round trips. The list form walks the database ONCE,
+-- builds a path -> image map, and answers all 300 out of it.
+local function lookup_record(p, by_path)
   local image = nil
   if p.image_id ~= nil then
     local ok, found = pcall(function() return dt.database[tonumber(p.image_id)] end)
     if ok then image = found end
   end
-  if not image and p.path then image = find_image_by_path(p.path) end
+  if not image and p.path then
+    if by_path then image = by_path[p.path] else image = find_image_by_path(p.path) end
+  end
   if not image then
     return {found = false, image_id = tonumber(p.image_id), path = p.path,
             filename = nil, film = nil, rating = nil}
@@ -848,6 +956,33 @@ methods["image.lookup"] = function(p)
     film = image_film_path(image),
     rating = image.rating or 0,
   }
+end
+
+methods["image.lookup"] = function(p)
+  p = p or {}
+  if p.items == nil then return lookup_record(p, nil) end
+  if type(p.items) ~= "table" then error("image.lookup: items must be a list") end
+  -- One database walk for the whole batch, and only when at least one
+  -- entry actually needs a path match (an all-ids batch needs no map).
+  local by_path = nil
+  for _, item in ipairs(p.items) do
+    if type(item) == "table" and item.path then
+      by_path = {}
+      for _, image in ipairs(dt.database) do
+        local full = _image_full_path(image)
+        if full and by_path[full] == nil then by_path[full] = image end
+      end
+      break
+    end
+  end
+  local results = {}
+  for i, item in ipairs(p.items) do
+    if type(item) ~= "table" then
+      error("image.lookup: items[" .. i .. "] must be a table with path and/or image_id")
+    end
+    table.insert(results, lookup_record(item, by_path))
+  end
+  return {results = results}
 end
 
 -- The image the darkroom currently has loaded, or nil, plus WHERE that
@@ -893,6 +1028,23 @@ end
 local function darkroom_image()
   local image = loaded_darkroom_image()
   return image
+end
+
+-- Yield-poll until the darkroom is showing `image`. Returns true when it
+-- landed. `display_image` is asynchronous, so a single read right after the
+-- call can see the PREVIOUS image -- the same lesson task 12 learned for
+-- `dt.gui.current_view` and fixed with `wait_for_view`.
+local function wait_for_darkroom_image(image, budget_ms)
+  budget_ms = budget_ms or WAIT_FOR_IMAGE_BUDGET_MS
+  local waited = 0
+  while true do
+    local loaded = loaded_darkroom_image()
+    if loaded ~= nil and ids_match(loaded.id, image.id) then return true, waited end
+    if waited >= budget_ms then return false, waited end
+    if not (dt.control and dt.control.sleep) then return false, waited end
+    dt.control.sleep(VIEW_SETTLE_POLL_MS)
+    waited = waited + VIEW_SETTLE_POLL_MS
+  end
 end
 
 -- A read-only snapshot of "what is loaded right now", with NO side effects --
@@ -945,10 +1097,22 @@ local function switch_to_darkroom(image)
   if current_view_name() == "darkroom" then
     if image and type(view.display_image) == "function" then
       local ok = pcall(view.display_image, image)
-      if ok then return true, "display_image" end
+      if ok and wait_for_darkroom_image(image, DISPLAY_IMAGE_BUDGET_MS) then
+        return true, "display_image"
+      end
+      -- `pcall` said ok and the image still did not land. Measured on the
+      -- real host (scouter phase 2 task 14's live run, 2026-09-14): with
+      -- darktable sitting in the darkroom on one image and the target in a
+      -- film roll imported AFTERWARDS, `display_image` returns without error
+      -- and the darkroom keeps showing the old image -- 15s of polling, and
+      -- `darkroom.current` still reported the launch image. So a successful
+      -- `pcall` is not evidence the swap happened, and this falls through to
+      -- the real view transition below instead of reporting a swap that did
+      -- not occur.
     end
-    -- No usable display_image: bounce out to the lighttable so the switch
-    -- back is a real transition rather than another no-op.
+    -- No usable display_image -- or one that did not actually swap: bounce
+    -- out to the lighttable so the switch back is a real transition rather
+    -- than another no-op.
     if not (dt.gui.views and dt.gui.views.lighttable) then
       return false, "dt.gui.views.lighttable missing"
     end
@@ -963,7 +1127,7 @@ local function switch_to_darkroom(image)
 
   local ok, err = pcall(dt.gui.current_view, view)
   if not ok then return false, "view switch failed: " .. tostring(err) end
-  local landed, waited = wait_for_view("darkroom")
+  local landed, waited = wait_for_view("darkroom", VIEW_ENTER_DARKROOM_BUDGET_MS)
   if not landed then
     return false, string.format("view is still %s %dms after switching to darkroom",
                                 current_view_name(), waited)
@@ -1044,11 +1208,17 @@ methods["darkroom.open"] = function(p)
   -- (a no-op when we are already there) so the `already` fast path is held to
   -- the same standard as a real switch.
   wait_for_view("darkroom")
+  -- `display_image` is asynchronous too (see WAIT_FOR_IMAGE_BUDGET_MS): poll
+  -- for the image the caller asked for instead of reading once and calling a
+  -- not-yet-landed swap a wrong image.
+  local matches, image_waited = wait_for_darkroom_image(image, WAIT_FOR_IMAGE_BUDGET_MS)
   local final_image, final_source = loaded_darkroom_image()
-  local matches = final_image ~= nil and ids_match(final_image.id, image.id)
   local final_view = current_view_name()
   if not matches then
-    error("wrong image loaded: " .. tostring(image.id))
+    error(string.format("wrong image loaded: asked for %s, darkroom shows %s after %dms",
+                        tostring(image.id),
+                        final_image and tostring(final_image.id) or "nothing",
+                        image_waited))
   end
   if final_view ~= "darkroom" then
     error("wrong image loaded: " .. tostring(image.id) .. " (view is "
@@ -1285,6 +1455,17 @@ local function sidecar_signature(path)
   return out
 end
 
+-- Bytes at `path`, or 0 when it does not exist. Reuses `sidecar_signature`'s
+-- "<mtime> <size>" form (built from `stat_format_args()`'s STAT_ARGS) rather
+-- than inventing a second, separately-portable `stat` invocation: the size
+-- is always the trailing whitespace-separated token in that signature.
+local function file_size(path)
+  local sig = sidecar_signature(path)
+  if not sig then return 0 end
+  local size = sig:match("(%d+)%s*$")
+  return tonumber(size) or 0
+end
+
 -- Yield-poll until `path`'s signature differs from `before` (nil `before`
 -- means "did not exist"). Returns (changed, waited_ms).
 local function wait_for_sidecar(path, before, budget_ms)
@@ -1338,15 +1519,32 @@ methods["history.commit"] = function(p)
   local sidecar = image_sidecar_path(image)
   local before = sidecar and sidecar_signature(sidecar) or nil
 
+  -- COMMIT_BOUNCE_ATTEMPTS is now the DEFAULT for `attempts`, not a constant.
+  -- A caller who already knows the history may not change (the Python layer's
+  -- no-op pre-check, design section 13) asks for one attempt and pays one
+  -- bounce (~0.78 s) instead of two bounces plus two sidecar waits (~5.5 s,
+  -- phase 1's measured worst case).
+  local attempts = tonumber(p.attempts) or COMMIT_BOUNCE_ATTEMPTS
+  -- Fix round 1 nit: floor BEFORE clamping, so a fractional attempts (JSON
+  -- has no int/float distinction) can't slip an extra partial bounce past
+  -- the `for attempt = 1, attempts do` loop below.
+  attempts = math.floor(attempts)
+  if attempts < 1 then attempts = 1 elseif attempts > 3 then attempts = 3 end
+  local expect_change = p.expect_change
+  if expect_change == nil then expect_change = true end
+  if not expect_change then attempts = 1 end
+
   --
-  -- Up to COMMIT_BOUNCE_ATTEMPTS bounces: the FIRST commit of a session can
-  -- land while darktable is still finishing its initial full-size render, and
-  -- that bounce flushes nothing. A second bounce right after does. This is a
+  -- Up to `attempts` bounces: the FIRST commit of a session can land while
+  -- darktable is still finishing its initial full-size render, and that
+  -- bounce flushes nothing. A second bounce right after does. This is a
   -- bounded retry over a real confirmation (did the sidecar change?), not a
   -- longer blind wait.
   local ok_call, result = true, nil
   local written, write_ms = nil, 0
-  for attempt = 1, COMMIT_BOUNCE_ATTEMPTS do
+  local attempt_count = 0
+  for attempt = 1, attempts do
+    attempt_count = attempt
     ok_call, result = pcall(commit_view_bounce)
     if not ok_call then break end
     if not (result.ok and sidecar) then break end
@@ -1354,7 +1552,7 @@ methods["history.commit"] = function(p)
     written = changed
     write_ms = write_ms + waited
     if changed then break end
-    if attempt < COMMIT_BOUNCE_ATTEMPTS and dt.control and dt.control.sleep then
+    if attempt < attempts and dt.control and dt.control.sleep then
       dt.control.sleep(VIEW_BOUNCE_DWELL_MS)
     end
   end
@@ -1362,7 +1560,7 @@ methods["history.commit"] = function(p)
 
   local detail = result.error
   if detail == nil and written == false then
-    detail = "the view bounce completed " .. COMMIT_BOUNCE_ATTEMPTS
+    detail = "the view bounce completed " .. attempt_count
       .. " time(s) but " .. tostring(sidecar) .. " did not change within "
       .. write_ms .. "ms of waiting -- darktable writes a sidecar only when "
       .. "the history actually changes, so this is expected when the requested "
@@ -1371,8 +1569,11 @@ methods["history.commit"] = function(p)
 
   return {
     strategy_used = "view_bounce",
-    -- ok means "this image's history is now on disk", not "the views moved".
-    ok = result.ok and written ~= false,
+    -- `ok` means "this image's history is now on disk". When the caller said it
+    -- does not expect a change, a bounce that wrote nothing is still a success:
+    -- sidecar_written = false reports the fact, and the Python readback resolves
+    -- whether the requested state is the state on disk.
+    ok = result.ok and (written ~= false or not expect_change),
     detail = detail,
     view_after = result.view,
     cpu_ms = (os.clock() - started) * 1000,
@@ -1381,6 +1582,8 @@ methods["history.commit"] = function(p)
     -- caller can tell "not checked" from "checked and did not change".
     sidecar_written = written,
     sidecar_wait_ms = write_ms,
+    attempts_used = attempt_count,
+    expect_change = expect_change,
   }
 end
 
@@ -1464,6 +1667,178 @@ methods["style.apply"] = function(p)
     end
   end
   return {name = p.name, mode = mode, applied = applied, missed = missed, errors = errors}
+end
+
+-- Fix round 2, item 6: `scouter/core/dtstyle.py`'s writer escapes `&`/`<`/`>`
+-- in `<name>` the same way ElementTree escapes `<description>`, so the raw
+-- regex-extracted text can carry `&amp;`/`&lt;`/`&gt;`/`&quot;`/`&apos;`.
+-- Comparing the ESCAPED form against `s.name` (which darktable stores
+-- unescaped) would silently never match a name containing any of those
+-- characters -- unescape before comparing. `&amp;` last, so `&amp;lt;`
+-- unescapes to `&lt;`, not all the way to `<` (matches every XML unescaper's
+-- ordering, including Python's xml.sax.saxutils.unescape defaults).
+local function xml_unescape(s)
+  if not s then return s end
+  s = s:gsub("&lt;", "<")
+  s = s:gsub("&gt;", ">")
+  s = s:gsub("&quot;", "\"")
+  s = s:gsub("&apos;", "'")
+  s = s:gsub("&amp;", "&")
+  return s
+end
+
+-- The <name> a .dtstyle file will actually import as, read straight off the
+-- file's own <info><name>...</name> (fix round 1, should-fix 9): a caller's
+-- `name` parameter is only ever a HINT (dt.styles.import derives the real
+-- name from the file, not from any parameter), so the collision check below
+-- must compare against what the file itself says, not against the hint --
+-- otherwise a mismatched hint could make the check pass or fail against the
+-- wrong style entirely. A plain string match, not real XML parsing: this is
+-- the same tradeoff `sidecar_signature`/`file_size` already make for a
+-- narrow, well-known field.
+local function dtstyle_file_name(path)
+  local f = io.open(path, "r")
+  if not f then return nil end
+  local content = f:read("*a") or ""
+  f:close()
+  return xml_unescape(content:match("<info>.-<name>(.-)</name>"))
+end
+
+-- Fix round 2, nit: sha256 of the first 4KB, appended to `sidecar_signature`'s
+-- mtime+size -- a filesystem whose mtime resolution is coarser than the
+-- write (already `sidecar_signature`'s own reasoning) could ALSO, in theory,
+-- leave the size unchanged for a same-length rewrite; hashing real content
+-- closes that gap for the specific "did this file's content actually
+-- change" question `style.export_file` answers. `shasum` is not guaranteed
+-- present on every host, so a missing/failed hash degrades to "" (still
+-- combined with the always-available mtime+size signature) rather than
+-- erroring -- this is a strengthened confidence check, not the only signal.
+local function export_signature(path)
+  local sig = sidecar_signature(path)
+  local hash = nil
+  local p = io.popen("head -c 4096 " .. shell_quote(path)
+    .. " 2>/dev/null | shasum -a 256 2>/dev/null | awk '{print $1}'")
+  if p then
+    local out = (p:read("*a") or ""):gsub("%s+$", "")
+    p:close()
+    if out ~= "" then hash = out end
+  end
+  if sig == nil and hash == nil then return nil end
+  return (sig or "") .. "|" .. (hash or "")
+end
+
+-- Export an existing style to a .dtstyle file. Its first job is to PIN the file
+-- format: a style made by style.create_from_current is exported here and the
+-- real file is committed as tests/fixtures/hero.dtstyle, so the writer in
+-- scouter/core/dtstyle.py is asserted against darktable's own output rather
+-- than against an assumption about another project's XML.
+methods["style.export_file"] = function(p)
+  p = p or {}
+  if type(p.name) ~= "string" or p.name == "" then error("style.export_file: name required") end
+  if type(p.dir) ~= "string" or p.dir == "" then error("style.export_file: dir required") end
+  local style = nil
+  for _, s in ipairs(dt.styles) do if s.name == p.name then style = s; break end end
+  if not style then error(string.format("style.export_file: style %q not found", p.name)) end
+  local path = p.dir .. "/" .. p.name .. ".dtstyle"
+  -- fix round 1, should-fix 9: `exported` is only true when the file's own
+  -- signature actually advanced -- a `pcall` returning ok=true proves
+  -- dt.styles.export did not RAISE, not that it wrote anything.
+  local before_sig = export_signature(path)
+  local ok, err = pcall(dt.styles.export, style, p.dir)
+  if not ok then error("style.export_file: " .. tostring(err)) end
+  local after_sig = export_signature(path)
+  local advanced = after_sig ~= nil and after_sig ~= before_sig
+  return {name = p.name, path = path, exported = advanced, bytes = file_size(path)}
+end
+
+methods["style.import_file"] = function(p)
+  p = p or {}
+  if type(p.path) ~= "string" or p.path == "" then error("style.import_file: path required") end
+  -- fix round 1, should-fix 9: the collision check is against the name the
+  -- FILE will actually import as, not the caller's `name` hint.
+  local file_name = dtstyle_file_name(p.path)
+  local name = file_name or p.name
+  local before, existing = 0, nil
+  for _, s in ipairs(dt.styles) do
+    before = before + 1
+    if name and s.name == name then existing = s end
+  end
+  if existing and not p.overwrite then
+    error(string.format("style.import_file: a style named %q already exists; pass "
+          .. "overwrite=true to replace it", name))
+  end
+  local replaced = false
+  if existing and p.overwrite then
+    local ok, err = pcall(dt.styles.delete, existing)
+    if not ok then error("style.import_file: could not delete the existing style: "
+                         .. tostring(err)) end
+    replaced = true
+  end
+  -- fix round 1, should-fix 9: the destructive window is REAL and unavoidable
+  -- with this Lua API (there is no atomic "replace" primitive) -- delete has
+  -- already happened above when `replaced` is true, so an import failure
+  -- from here on cannot be rolled back. Named explicitly in the error rather
+  -- than silently leaving the caller to discover the style is just gone.
+  local ok, err = pcall(dt.styles.import, p.path)
+  if not ok then
+    if replaced then
+      error(string.format(
+        "style.import_file: import of %q failed AFTER the existing style of "
+        .. "the same name was already deleted (destructive window: it cannot "
+        .. "be restored automatically) -- %s", name, tostring(err)))
+    end
+    error("style.import_file: " .. tostring(err))
+  end
+  local after = 0
+  for _ in ipairs(dt.styles) do after = after + 1 end
+  return {name = name, imported = true, replaced = replaced,
+          styles_before = before, styles_after = after}
+end
+
+-- Delete one style by name. Tolerant of "already gone" (existed=false)
+-- rather than erroring, since its main caller is test/probe cleanup
+-- (fix round 1, should-fix 10) where "nothing to clean up" is a normal,
+-- not exceptional, outcome.
+--
+-- Fix round 2, item 5: this deletes real user data with no undo, so it is
+-- gated TWICE, both before the `dt.styles` scan even runs: `prefix`
+-- (defaults to Scouter's own "scouter-", so a typo'd or malicious `name`
+-- cannot reach an arbitrary style someone actually uses) and `confirm=true`
+-- (no default that makes a bare `{name=...}` call ever delete anything).
+methods["style.delete"] = function(p)
+  p = p or {}
+  if type(p.name) ~= "string" or p.name == "" then error("style.delete: name required") end
+  -- Fix round 3, item 4: an OMITTED prefix (nil) defaults to "scouter-", but
+  -- an EXPLICIT empty prefix is refused rather than silently rewritten to
+  -- the same default -- prefix="" would match every style name (an empty
+  -- string is a prefix of everything in Lua's sub(1, 0) == ""), which is
+  -- exactly the safety check this argument exists to prevent bypassing.
+  local prefix = p.prefix
+  if prefix == nil then
+    prefix = "scouter-"
+  elseif type(prefix) ~= "string" or prefix == "" then
+    error("style.delete: prefix must be a non-empty string (omit it to use "
+      .. "the default \"scouter-\"; an explicit empty prefix would match "
+      .. "every style name, defeating the safety check)")
+  end
+  if p.name:sub(1, #prefix) ~= prefix then
+    error(string.format(
+      "style.delete: refusing to delete %q -- it does not start with the "
+      .. "required prefix %q (pass a different `prefix` if this is "
+      .. "intentional; the default only lets Scouter clean up its own "
+      .. "throwaway styles)", p.name, prefix))
+  end
+  if not p.confirm then
+    error(string.format(
+      "style.delete: pass confirm=true to actually delete %q -- this call "
+      .. "never deletes without an explicit confirmation", p.name))
+  end
+  local style = nil
+  for _, s in ipairs(dt.styles) do if s.name == p.name then style = s; break end end
+  if not style then return {name = p.name, deleted = false, existed = false} end
+  local ok, err = pcall(dt.styles.delete, style)
+  if not ok then error("style.delete: " .. tostring(err)) end
+  return {name = p.name, deleted = true, existed = true}
 end
 
 -- ---- Dispatch --------------------------------------------------------------
@@ -1709,19 +2084,18 @@ local SWEEP_INTERVAL_SECONDS = 10
 
 -- INVARIANT: STALE_AGE_SECONDS must stay comfortably GREATER than the largest
 -- per-method client budget in DEFAULT_TIMEOUTS (darktable_mcp/bridge/client.py
--- -- currently 120s for import_batch and apply_preset). Change either number
--- and you must re-check the other; tests/test_lua_dispatcher.py asserts the
--- relation across the two languages.
+-- -- currently 300s for style.apply, task 8's apply_set batching 25 ids per
+-- call). Change either number and you must re-check the other;
+-- tests/test_lua_dispatcher.py asserts the relation across the two languages.
 --
 -- The sweep exists to collect files whose owner is GONE. A request whose
 -- caller is still waiting is not abandoned, and the worker is single-threaded:
--- while it serves one 120s-budget call, later requests sit queued in the cache
--- directory doing nothing wrong. At the old 60s the sweep deleted those queued
--- request-*.json files out from under live callers, who then waited out their
--- full 120s and were told "darktable is not running" -- a bug the sweep itself
--- manufactured. 300s clears the largest budget with margin for the queueing
--- delay ahead of it.
-local STALE_AGE_SECONDS = 300
+-- while it serves one 300s-budget call, later requests sit queued in the cache
+-- directory doing nothing wrong. At the old 300s (equal to the largest budget)
+-- the sweep would have no margin left for the queueing delay ahead of a
+-- request stuck behind it, so task 8 raised it to 600s -- comfortably above
+-- the new largest budget.
+local STALE_AGE_SECONDS = 600
 
 local function worker_loop()
   local dir = cache_dir()
@@ -1778,6 +2152,8 @@ return {
     max_depth = IMPORT_MAX_DEPTH,
   },
   cache_dir = cache_dir,
+  xml_unescape = xml_unescape,
+  dtstyle_file_name = dtstyle_file_name,
   safe_request_id = safe_request_id,
   write_file_atomic = write_file_atomic,
   write_response = write_response,
@@ -1808,9 +2184,13 @@ return {
   switch_to_darkroom = switch_to_darkroom,
   return_to_darkroom = return_to_darkroom,
   wait_for_view = wait_for_view,
+  wait_for_darkroom_image = wait_for_darkroom_image,
   view_settle = {
     poll_ms = VIEW_SETTLE_POLL_MS,
     budget_ms = VIEW_SETTLE_BUDGET_MS,
+    enter_darkroom_budget_ms = VIEW_ENTER_DARKROOM_BUDGET_MS,
+    wait_for_image_budget_ms = WAIT_FOR_IMAGE_BUDGET_MS,
+    display_image_budget_ms = DISPLAY_IMAGE_BUDGET_MS,
     bounce_dwell_ms = VIEW_BOUNCE_DWELL_MS,
   },
   commit_view_bounce = commit_view_bounce,

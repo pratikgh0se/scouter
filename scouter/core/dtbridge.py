@@ -12,12 +12,19 @@ from darktable_mcp.bridge.client import (
     BridgeTimeoutError,
 )
 from scouter.core import xmp
-from scouter.errors import BridgeTimeout, NotInDarkroom, ScouterError, WrongView
+from scouter.errors import BridgeTimeout, NotInDarkroom, ScouterError, UsageError, WrongView
 from scouter.types import ResolvedImage
 
-#: `dt.gui.action` paths for the phase-1 modules. A module/param pair not in
-#: here is still usable -- the path is built as iop/<module>/<param> -- but the
-#: table documents the ones the integration test proves.
+#: `dt.gui.action` paths for the phase-1 modules. This table is a WHITELIST,
+#: not documentation: a pair that is not in here is refused by
+#: `action_path` (task 11 ruling, carried finding 1). Reason, measured on the
+#: real host: `dt.gui.action` on a path darktable 5.4.1 does not recognise
+#: wedges its Lua worker for the REST OF THE SESSION -- every later bridge
+#: call, including an unrelated `view.current`, then times out
+#: (`tests/test_host_phase2.py::PinWbCoefficientSlidersHostTest`,
+#: `docs/measurements.md`). So a guessed `iop/<module>/<param>` fallback does
+#: not cost one failed write, it costs the whole darkroom session. A new pair
+#: is added here only after a host probe answers non-`nan` for it.
 ACTION_PATHS: dict[tuple[str, str], str] = {
     ("exposure", "exposure"): "iop/exposure/exposure",
     ("exposure", "black"): "iop/exposure/black level correction",
@@ -56,8 +63,43 @@ def set_bridge(bridge: Any) -> None:
     _bridge = bridge
 
 
-def action_path(module: str, param: str) -> str:
-    return ACTION_PATHS.get((module, param), f"iop/{module}/{param}")
+def action_path(module: str, param: str, *, probe_unpinned: bool = False) -> str:
+    """The pinned `dt.gui.action` path for one module parameter.
+
+    Refuses an unpinned pair with `usage` rather than guessing
+    `iop/<module>/<param>`: see `ACTION_PATHS` for the measured reason (an
+    unrecognised path wedges darktable's Lua worker for the session).
+
+    `probe_unpinned=True` is the ONE bypass, and it exists for the host
+    probes in `tests/test_host_phase2.py` whose whole job is to find out
+    which candidate paths darktable accepts. No production code path passes
+    it; `tests/test_dtbridge.py` asserts that.
+    """
+    pinned = ACTION_PATHS.get((module, param))
+    if pinned is not None:
+        return pinned
+    if probe_unpinned:
+        return f"iop/{module}/{param}"
+    same_module = sorted(p for (m, p) in ACTION_PATHS if m == module)
+    if same_module:
+        detail_fix = f"pinned parameters for `{module}`: {', '.join(same_module)}"
+    else:
+        modules = sorted({m for (m, _) in ACTION_PATHS})
+        detail_fix = f"no parameter of `{module}` is pinned; pinned modules: {', '.join(modules)}"
+    raise UsageError(
+        f"no pinned darktable action path for {module}.{param}",
+        fix=(
+            f"{detail_fix}. Adding a path is a host-probe job, not a guess: an "
+            "unrecognised `dt.gui.action` path wedges darktable's Lua worker for the "
+            "whole session, so pin it in scouter/core/dtbridge.py's ACTION_PATHS only "
+            "after a probe answers non-nan for it."
+        ),
+        detail={
+            "module": module,
+            "param": param,
+            "pinned_params_for_module": same_module,
+        },
+    )
 
 
 def call(method: str, params: dict | None = None, timeout: float | None = None) -> Any:
@@ -160,6 +202,69 @@ def resolve_image(image: str | int, *, may_import: bool = False) -> ResolvedImag
     path = str(found["path"])
     return ResolvedImage(
         image_id=int(found["image_id"]), path=path, xmp_path=str(xmp.sidecar_path(path))
+    )
+
+
+def _lookup_key(image: str | int) -> dict:
+    """The single `image.lookup` argument for one caller-supplied image."""
+    if isinstance(image, int):
+        return {"image_id": int(image)}
+    if isinstance(image, str) and image.isdigit():
+        return {"image_id": int(image)}
+    return {"path": str(image)}
+
+
+def resolve_images(images: list[str | int]) -> list[ResolvedImage | ScouterError]:
+    """Resolve a whole set in ONE `image.lookup` call (ruling R15).
+
+    Returns one entry per input, in order: a `ResolvedImage`, or the
+    `ImageNotFound` that `resolve_image` would have raised for it. A set
+    resolution must never abort on one bad candidate (a stale entry in a
+    300-file `import.json`), so the miss is returned rather than raised and
+    the caller decides.
+
+    Why the list form exists: the Lua handler's path match walks all of
+    `dt.database`, so resolving 300 frames one call at a time was 300 full
+    library scans plus 300 bridge round trips. The list form walks the
+    database once. There is no `may_import` here -- importing is
+    `darkroom.open`'s job, it moves the darkroom, and doing it implicitly
+    for a whole set is exactly the side effect ruling 4 keeps explicit.
+
+    A plugin too old to know the list form answers without `results`; that
+    is detected and falls back to one call per image, so a stale installed
+    plugin degrades in speed, never in correctness.
+    """
+    if not images:
+        return []
+    reply = call("image.lookup", {"items": [_lookup_key(i) for i in images]})
+    records = reply.get("results") if isinstance(reply, dict) else None
+    if not isinstance(records, list) or len(records) != len(images):
+        return [_resolve_one_safely(i) for i in images]
+    out: list[ResolvedImage | ScouterError] = []
+    for image, record in zip(images, records):
+        out.append(_from_lookup_record(image, record))
+    return out
+
+
+def _resolve_one_safely(image: str | int) -> ResolvedImage | ScouterError:
+    try:
+        return resolve_image(image)
+    except ScouterError as e:
+        return e
+
+
+def _from_lookup_record(image: str | int, record: dict) -> ResolvedImage | ScouterError:
+    if not record.get("found"):
+        key = _lookup_key(image)
+        if "image_id" in key:
+            return ImageNotFound(
+                f"no image with id {key['image_id']} in darktable's library",
+                detail={"image_id": key["image_id"]},
+            )
+        return ImageNotFound(f"{image} is not in darktable's library", detail={"path": str(image)})
+    path = str(record["path"])
+    return ResolvedImage(
+        image_id=int(record["image_id"]), path=path, xmp_path=str(xmp.sidecar_path(path))
     )
 
 

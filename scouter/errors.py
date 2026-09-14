@@ -96,6 +96,99 @@ class CommitTimeout(ScouterError):
     )
 
 
+class BackupNotConfigured(ScouterError):
+    code = "backup_not_configured"
+    fix = (
+        "configure a backup target before importing: run `scouter config init`, then set "
+        "`backup.enabled` and `backup.target` in the config file (the check that failed is "
+        "in `detail.check`)"
+    )
+
+
+class ChecksumMismatch(ScouterError):
+    code = "checksum_mismatch"
+    fix = (
+        "the bytes on disk do not match the recorded sha256; see `detail.expected` and "
+        "`detail.actual`. Re-copy from the source, or check the disk before trusting the job"
+    )
+
+
+class DestinationCollision(ScouterError):
+    code = "destination_collision"
+    fix = (
+        "a different file already occupies that name (see `detail.path`); nothing was "
+        "overwritten. Import with a different --job-slug, or move the existing file aside"
+    )
+
+
+class ExifUnreadable(ScouterError):
+    code = "exif_unreadable"
+    fix = (
+        "pass --camera <slug> for this card, or add the model to `cameras` in the config; "
+        "`detail.magic` shows what the file's TIFF header actually said"
+    )
+
+
+class StyleWriteFailed(ScouterError):
+    code = "style_write_failed"
+    fix = (
+        "darktable refused the .dtstyle at `detail.path`, which is kept for inspection; "
+        "re-run `style extract` with --no-filter for a whole-history style"
+    )
+
+
+class NoSidecar(ScouterError):
+    """`style.extract`'s filtered path needs a real sidecar to read the history
+    from -- a typed refusal (fix round 1, blocker 2), never the raw
+    `FileNotFoundError` `xmp.read_sidecar` raises.
+
+    Deliberately NOT in `ERROR_CLASSES` (spec section 9's darktable failure
+    classes, pinned by `tests/test_paths_errors.py`), same reasoning as
+    `UsageError`: this is Scouter refusing to build a style from a history it
+    cannot read, not one of darktable's own failure modes.
+    """
+
+    code = "no_sidecar"
+    fix = "commit history first (`scouter history commit <image>`), then retry"
+
+
+class EncryptionUnavailable(ScouterError):
+    code = "encryption_unavailable"
+    fix = (
+        "install age (`brew install age`) and set `backup.age_recipient`, or create the "
+        "openssl passfile at `detail.passfile` with mode 0600"
+    )
+
+
+class ManifestUnauthenticated(ScouterError):
+    """`export.verify`'s manifest has no `.sha256` sidecar next to it.
+
+    `export.release` always writes one alongside the manifest -- a missing
+    sidecar means the manifest cannot be trusted before its own contents are
+    used to check anything else, so this is a hard refusal (fix round 1,
+    blocker 3), never a silently-skipped check.
+    """
+
+    code = "manifest_unauthenticated"
+    fix = (
+        "no <manifest>.sha256 next to the manifest: export.release always writes one. "
+        "Restore it, or re-run export.release to produce a fresh, authenticated manifest"
+    )
+
+
+class ExportAllFailed(ScouterError):
+    """Every frame `export.release` tried to render failed.
+
+    A `ReleaseResult` with `exported=0` and `outcome="ok"` would read as
+    success; this is the typed refusal instead (fix round 1, should-fix 7),
+    raised before the manifest is written -- a manifest describing zero
+    exported files is not a release.
+    """
+
+    code = "export_all_failed"
+    fix = "every render failed; see detail.files for the per-image reasons"
+
+
 #: Process exit codes. 0/1/2 follow shell convention; the rest are one per error
 #: class, so a shell script can branch on the failure without parsing JSON.
 EXIT_CODES: dict[str, int] = {
@@ -109,7 +202,20 @@ EXIT_CODES: dict[str, int] = {
     "cli_wrote_nothing": 7,
     "db_locked": 8,
     "style_partial": 9,
+    # `style.apply_set` reports a partial set as a RESULT (outcome="partial") rather
+    # than an exception, so the successes survive; it shares 9 so one shell branch
+    # covers "some of it worked" however it arrived.
+    "partial": 9,
     "commit_timeout": 10,
+    "backup_not_configured": 11,
+    "checksum_mismatch": 12,
+    "destination_collision": 13,
+    "exif_unreadable": 14,
+    "style_write_failed": 15,
+    "encryption_unavailable": 16,
+    "manifest_unauthenticated": 17,
+    "export_all_failed": 18,
+    "no_sidecar": 19,
 }
 
 ERROR_CLASSES: tuple[type[ScouterError], ...] = (
@@ -120,6 +226,14 @@ ERROR_CLASSES: tuple[type[ScouterError], ...] = (
     DbLocked,
     StylePartial,
     CommitTimeout,
+    BackupNotConfigured,
+    ChecksumMismatch,
+    DestinationCollision,
+    ExifUnreadable,
+    StyleWriteFailed,
+    EncryptionUnavailable,
+    ManifestUnauthenticated,
+    ExportAllFailed,
 )
 
 

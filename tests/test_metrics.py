@@ -289,3 +289,79 @@ class WriteVerbSingleEventTest(unittest.TestCase):
             "`.__wrapped__`, when called from another core verb)",
         )
         self.assertEqual(after[-1]["verb"], "darkroom.set")
+
+    def test_the_escalated_set_path_also_emits_exactly_one_event(self) -> None:
+        """Carried finding 7 (task 12): the ESCALATED path, pinned.
+
+        The test above drives the ordinary `commit=True` path, where
+        `_commit` calls `history.commit` once. The mid path is different: it
+        tries `expect_change=False` first, cannot confirm the result, and
+        ESCALATES to a second, `expect_change=True` `history.commit` call --
+        two nested `@instrumented` entries in one top-level verb. Two calls
+        through `__wrapped__` are exactly as easy to get wrong as one, and
+        nothing pinned this branch, so a regression there would have been a
+        silent double-count in every metrics summary.
+        """
+        from scouter.core import darkroom, dtbridge
+
+        text = self.sidecar.read_text()
+        calls = {"n": 0}
+
+        def commit_handler(params: dict) -> dict:
+            calls["n"] += 1
+            if params.get("expect_change") is False:
+                # Nothing flushed, and the sidecar is GONE, so no readback
+                # can confirm the prediction -- this is what forces the
+                # escalation to a real, expect_change=True commit.
+                self.sidecar.unlink(missing_ok=True)
+                return {
+                    "strategy_used": "sidecar_action",
+                    "ok": True,
+                    "sidecar_written": False,
+                    "view_after": "darkroom",
+                    "cpu_ms": 1,
+                }
+            time.sleep(0.01)
+            self.sidecar.write_text(text)
+            return {
+                "strategy_used": "view_bounce",
+                "ok": True,
+                "sidecar_written": True,
+                "view_after": "darkroom",
+                "cpu_ms": 5,
+            }
+
+        dtbridge.set_bridge(
+            FakeBridge(
+                {
+                    "darkroom.current": {
+                        "image_id": 12,
+                        "path": str(self.raw),
+                        "view": "darkroom",
+                        "source": "action_images",
+                    },
+                    "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+                    "darkroom.action": lambda p: {"nan": False, "view": "darkroom", **p},
+                    "module.enable": {"nan": False, "view": "darkroom"},
+                    "history.commit": commit_handler,
+                }
+            )
+        )
+
+        # No watermark at all + a requested value the sidecar already
+        # carries: that is the MID path -- `expect_change=False` first,
+        # because the pre-check matched but nothing yet certifies it.
+        before = len(self.cache.events())
+        result = darkroom.set_param("exposure", "exposure", 1.5500002, commit=True, job="job-test")
+        after = self.cache.events()
+
+        self.assertGreaterEqual(calls["n"], 2, "this test must actually drive the escalation")
+        self.assertEqual(
+            len(after) - before,
+            1,
+            f"the escalated darkroom.set path emitted {len(after) - before} events, "
+            "expected exactly 1 (both history.commit calls must go through "
+            "`.__wrapped__`)",
+        )
+        self.assertEqual(after[-1]["verb"], "darkroom.set")
+        self.assertTrue(result.committed)

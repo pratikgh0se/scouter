@@ -30,7 +30,15 @@ DEFAULT_TIMEOUTS = {
     # Scouter phase 1 darkroom verbs (design section 5.2).
     "view.current": 5.0,
     "image.lookup": 30.0,  # linear scan of dt.database, like view_photos
-    "darkroom.open": 30.0,  # pipeline load for a 20 MP raw
+    # 60s, not 30s: the PLUGIN's own budget for the first darkroom entry on a
+    # cold library is 20s (VIEW_ENTER_DARKROOM_BUDGET_MS), and a client
+    # timeout at or below the plugin's budget turns "the plugin is about to
+    # answer honestly" into "no response at all" -- the client must always
+    # outlast the handler it is waiting for. Measured on the real host
+    # (scouter phase 2 task 14's live run, 2026-09-14): with 30 freshly
+    # imported 20 MP ORFs, `darkroom.open` first hit the plugin's 5s view
+    # budget, and then, once that was raised, the client's own 30s.
+    "darkroom.open": 60.0,
     "darkroom.action": 10.0,
     "darkroom.status": 5.0,
     "module.enable": 10.0,
@@ -39,7 +47,14 @@ DEFAULT_TIMEOUTS = {
     "history.commit": 60.0,  # view_bounce reloads the whole pipe
     "snapshot.take": 15.0,
     "style.create_from_current": 30.0,
-    "style.apply": 60.0,
+    # 300s: apply_set (task 8) batches up to 25 ids per call, each a history
+    # write inside the worker's single-threaded loop.
+    "style.apply": 300.0,
+    "image.rate": 60.0,  # 50 ids per call, each a library write
+    "style.export_file": 30.0,
+    "style.import_file": 60.0,
+    "style.delete": 15.0,
+    "image.color_labels": 30.0,  # read-only, dt.database[id] indexing like image.lookup
 }
 
 
@@ -79,8 +94,34 @@ def _cache_dir() -> Path:
     return Path(base) / "darktable-mcp"
 
 
-def _plugin_path() -> Path:
+#: Env override for the installed plugin's location, honoured the same way
+#: `_cache_dir` honours `XDG_CACHE_HOME`. Two reasons it exists: a user whose
+#: darktable config lives somewhere other than `~/.config/darktable` can point
+#: at it, and the test suite can pin it under a throwaway directory so no
+#: non-host test can see -- or be misled by -- a real installed plugin
+#: (scouter phase 2 task 14 fix round 1, blocker 4).
+PLUGIN_PATH_ENV = "DARKTABLE_MCP_PLUGIN_PATH"
+
+
+def plugin_path() -> Path:
+    """Where the installed Lua plugin lives, honouring `PLUGIN_PATH_ENV`.
+
+    The ONE resolver for this path. `darktable_mcp.cli.install_plugin` writes
+    here and `scouter.cli.main`'s `doctor` reports it, so the installer, the
+    doctor line and the bridge can never disagree about which file matters
+    (fix round 2, item 2: they did -- `doctor` and the installer both
+    recomputed it from `Path.home()` and so ignored the override the bridge
+    honours, which meant `doctor` could report "plugin installed" about a
+    file the bridge was not looking at).
+    """
+    override = os.environ.get(PLUGIN_PATH_ENV)
+    if override:
+        return Path(override)
     return Path.home() / ".config" / "darktable" / "lua" / "darktable_mcp.lua"
+
+
+#: Kept as the old private name so existing call sites keep working.
+_plugin_path = plugin_path
 
 
 class Bridge:

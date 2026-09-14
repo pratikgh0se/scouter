@@ -18,6 +18,22 @@ local function assertTrue(cond, label)
   end
 end
 
+-- Mirrors the real plugin's `xml_unescape` (verified equal via
+-- plugin.xml_unescape's own direct tests below): a stub whose `dt.styles.
+-- import` reads a name off <info><name> must unescape it too, since real
+-- darktable stores the unescaped name -- otherwise the stub and the plugin's
+-- own `dtstyle_file_name`-based collision check would disagree on names
+-- containing an XML entity.
+local function stub_xml_unescape(s)
+  if not s then return s end
+  s = s:gsub("&lt;", "<")
+  s = s:gsub("&gt;", ">")
+  s = s:gsub("&quot;", "\"")
+  s = s:gsub("&apos;", "'")
+  s = s:gsub("&amp;", "&")
+  return s
+end
+
 -- ---- Stub dt table ---------------------------------------------------------
 -- Use ids that DO NOT overlap the iteration array's integer indexes (1..N),
 -- so dt.database[id] always resolves via __index without colliding with
@@ -121,12 +137,67 @@ stub_dt.gui = {
     (view_state.snapshots or 0) + 1 end}},
 }
 
+-- Recorded so the export/import/delete tests can assert what the plugin
+-- actually asked the (stubbed) darktable API to do.
+local styles_exported = {}
+local styles_imported = {}
+local styles_deleted = {}
+-- Scripts a darktable that silently no-ops an export (pcall ok=true, but no
+-- file written / unchanged) -- fix round 1, should-fix 9's mtime-advance test.
+local force_noop_export = false
+
 stub_dt.styles = setmetatable({}, {
   __index = function(t, k)
     if k == "create" then
       return function(image, name, description)
         table.insert(styles_created, {image = image, name = name, description = description})
         table.insert(t, {name = name, description = description})
+      end
+    end
+    if k == "export" then
+      -- Real dt.styles.export(style, dir) writes `<dir>/<style.name>.dtstyle`.
+      -- The stub writes real `<info><name>...</name></info>` content (the
+      -- same shape `dtstyle_file_name` parses in the real plugin) so
+      -- style.export_file's `bytes` field AND style.import_file's
+      -- file-name-based collision check are both exercised against
+      -- something realistic, not an arbitrary marker.
+      return function(style, dir)
+        table.insert(styles_exported, {name = style.name, dir = dir})
+        if force_noop_export then return end
+        local path = dir .. "/" .. style.name .. ".dtstyle"
+        local f = io.open(path, "w")
+        if not f then error("stub export: could not open " .. path) end
+        f:write("<darktable_style><info><name>" .. style.name
+                 .. "</name></info></darktable_style>\n")
+        f:close()
+      end
+    end
+    if k == "import" then
+      -- Real dt.styles.import(path) derives the new style's name from the
+      -- file's own <info><name>. The stub does the same, from whatever
+      -- content is actually on disk (export()'s own write, or a
+      -- caller-supplied fixture) -- never a marker line disconnected from
+      -- what a real .dtstyle looks like.
+      return function(path)
+        table.insert(styles_imported, path)
+        local f = io.open(path, "r")
+        local name = "imported-style"
+        if f then
+          local content = f:read("*a") or ""
+          f:close()
+          local found = stub_xml_unescape(content:match("<info>.-<name>(.-)</name>"))
+          if found then name = found end
+        end
+        table.insert(t, {name = name, description = ""})
+      end
+    end
+    if k == "delete" then
+      return function(style)
+        table.insert(styles_deleted, style.name)
+        for i, s in ipairs(t) do
+          if s.name == style.name then table.remove(t, i); return end
+        end
+        error("stub delete: style not found: " .. tostring(style.name))
       end
     end
     return nil
@@ -211,6 +282,54 @@ do
   assertEq(result.updated, 2, "rate_photos updated count")
   assertEq(images_by_id[101].rating, 1, "rate_photos changed image 101 rating")
   assertEq(images_by_id[102].rating, 1, "rate_photos changed image 102 rating")
+end
+
+-- ---- methods["image.rate"] --------------------------------------------------
+do
+  local result = internals.methods["image.rate"]({image_ids = {"103", "999"}, rating = 2})
+  assertEq(result.rated, 1, "image.rate rated count")
+  assertEq(images_by_id[103].rating, 2, "image.rate changed image 103 rating")
+  assertEq(#result.missed, 1, "image.rate missed count")
+  assertEq(result.missed[1], 999, "image.rate missed unknown id")
+  assertEq(#result.per_image, 1, "image.rate per_image count for rated ids")
+  assertEq(result.per_image[1].image_id, 103, "image.rate per_image id")
+  assertEq(result.per_image[1].rating_before, 4, "image.rate per_image rating_before")
+  assertEq(result.per_image[1].rating_after, 2, "image.rate per_image rating_after")
+
+  local ok_high = pcall(internals.methods["image.rate"], {image_ids = {"103"}, rating = 6})
+  assertTrue(not ok_high, "image.rate rejects a rating above 5")
+  local ok_low = pcall(internals.methods["image.rate"], {image_ids = {"103"}, rating = -2})
+  assertTrue(not ok_low, "image.rate rejects a rating below -1")
+  local ok_empty = pcall(internals.methods["image.rate"], {image_ids = {}, rating = 1})
+  assertTrue(not ok_empty, "image.rate rejects an empty image_ids list")
+end
+
+-- ---- methods["image.color_labels"] ------------------------------------------
+do
+  images_by_id[101].green = true
+  images_by_id[103].red = true
+  images_by_id[103].purple = true
+
+  local result = internals.methods["image.color_labels"](
+    {image_ids = {"101", "102", "103", "999"}})
+  assertEq(#result.missing, 1, "image.color_labels missing count")
+  assertEq(result.missing[1], 999, "image.color_labels missing unknown id")
+  assertEq(#result.per_image, 3, "image.color_labels per_image count")
+
+  local by_id = {}
+  for _, entry in ipairs(result.per_image) do by_id[entry.image_id] = entry end
+  assertEq(#by_id[101].labels, 1, "image.color_labels 101 has one label")
+  assertEq(by_id[101].labels[1], "green", "image.color_labels 101 is green")
+  assertEq(#by_id[102].labels, 0, "image.color_labels 102 has no labels")
+  assertEq(#by_id[103].labels, 2, "image.color_labels 103 has two labels")
+
+  local ok_empty = pcall(internals.methods["image.color_labels"], {image_ids = {}})
+  assertTrue(not ok_empty, "image.color_labels rejects an empty image_ids list")
+
+  -- Cleanup so later tests are not affected by these stub fields.
+  images_by_id[101].green = nil
+  images_by_id[103].red = nil
+  images_by_id[103].purple = nil
 end
 
 -- ---- methods.import_batch --------------------------------------------------
@@ -1387,7 +1506,8 @@ do
     "view.current", "image.lookup", "darkroom.open", "darkroom.current",
     "darkroom.action", "darkroom.status", "module.enable", "module.disable",
     "module.reset", "history.commit", "snapshot.take", "style.create_from_current",
-    "style.apply",
+    "style.apply", "image.rate", "style.export_file", "style.import_file",
+    "style.delete", "image.color_labels",
   }
   for _, name in ipairs(expected_scouter_methods) do
     assertTrue(type(plugin.methods[name]) == "function",
@@ -1601,6 +1721,45 @@ do
   view_state.current = "darkroom"
 end
 
+-- Task 12: `attempts` is clamped to 1..3, and a caller who does not expect a
+-- change gets exactly one bounce with `ok=true` even when nothing was
+-- written -- the Python layer's no-op pre-check relies on this to avoid
+-- paying for two bounces it already knows will find nothing to write. The
+-- default path (no attempts/expect_change given) is unchanged: two attempts,
+-- and `ok=false` for a sidecar that never changed.
+do
+  local tmp = os.tmpname()
+  local f = io.open(tmp, "w"); f:write("before"); f:close()
+  local img = images_by_id[101]
+  img.sidecar = tmp
+  stub_dt.gui.action_images = {img}
+  view_state.current = "darkroom"
+
+  local c_zero = plugin.methods["history.commit"]({strategy = "auto", attempts = 0})
+  assertEq(c_zero.attempts_used, 1, "attempts below 1 clamps to 1")
+
+  local c_big = plugin.methods["history.commit"]({strategy = "auto", attempts = 99})
+  assertEq(c_big.attempts_used, 3, "attempts above 3 clamps to 3")
+
+  local c_noop = plugin.methods["history.commit"](
+    {strategy = "auto", expect_change = false})
+  assertEq(c_noop.attempts_used, 1, "expect_change=false forces one attempt regardless of `attempts`")
+  assertEq(c_noop.sidecar_written, false, "sidecar_written reports the real disk fact")
+  assertEq(c_noop.ok, true, "expect_change=false with nothing written is still ok")
+  assertEq(c_noop.expect_change, false, "expect_change is echoed back")
+
+  local c_default = plugin.methods["history.commit"]({strategy = "auto"})
+  assertEq(c_default.attempts_used, 2, "the default path still spends up to two attempts")
+  assertEq(c_default.expect_change, true, "expect_change defaults to true")
+  assertEq(c_default.sidecar_written, false,
+    "still unwritten (the sidecar never changes in this fixture)")
+  assertEq(c_default.ok, false, "expect_change=true with nothing written is not ok")
+
+  os.remove(tmp)
+  stub_dt.gui.action_images = {}
+  view_state.current = "darkroom"
+end
+
 -- style.create_from_current is honest about the missing module filter, and
 -- about where the "current image" reading came from.
 stub_dt.gui.action_images = {images_by_id[101]}
@@ -1621,6 +1780,190 @@ local ov = plugin.handle({id = "y", method = "style.apply",
   params = {image_ids = {101}, name = "hero", mode = "overwrite"}})
 assertTrue(ov.error ~= nil and ov.error:find("overwrite") ~= nil,
   "overwrite mode refused with an explanation")
+
+-- style.export_file: not-found is a real error, and a successful export
+-- writes a real file whose size file_size() reports honestly.
+local ok_missing, err_missing = pcall(function()
+  return plugin.methods["style.export_file"]({name = "does-not-exist", dir = "/tmp"})
+end)
+assertEq(ok_missing, false, "export_file on an unknown style raises")
+assertTrue(tostring(err_missing):find("not found") ~= nil,
+  "export_file's not-found error names the style")
+
+local export_dir = os.getenv("TMPDIR") or "/tmp"
+local exp = plugin.methods["style.export_file"]({name = "hero", dir = export_dir})
+assertEq(exp.name, "hero", "export_file echoes the style name")
+assertEq(exp.exported, true, "export_file reports exported when the file's signature advanced")
+assertTrue(exp.path:find("hero.dtstyle", 1, true) ~= nil,
+  "export_file returns the .dtstyle path")
+assertTrue(exp.bytes > 0, "export_file reports a real, non-zero file size")
+
+-- fix round 1, should-fix 9: a darktable that silently no-ops (pcall ok=true,
+-- nothing written or changed) must NOT be reported as exported=true.
+force_noop_export = true
+local exp_noop = plugin.methods["style.export_file"]({name = "hero", dir = export_dir})
+assertEq(exp_noop.exported, false,
+  "export_file must not claim success when the file's signature did not advance")
+force_noop_export = false
+
+-- style.import_file: existing name without overwrite is refused BEFORE any
+-- delete or import call.
+local styles_before_refusal = 0
+for _ in ipairs(stub_dt.styles) do styles_before_refusal = styles_before_refusal + 1 end
+local ok_exists, err_exists = pcall(function()
+  return plugin.methods["style.import_file"]({path = exp.path, name = "hero"})
+end)
+assertEq(ok_exists, false, "import_file over an existing name without overwrite raises")
+assertTrue(tostring(err_exists):find("already exists") ~= nil,
+  "import_file's refusal names the collision")
+assertEq(#styles_deleted, 0, "the refusal deletes nothing")
+
+-- fix round 1, should-fix 9: the collision check is against the FILE's own
+-- <info><name> (here "hero", already existing), never the caller's `name`
+-- hint -- a mismatched hint ("hero-2", which does NOT exist) must not let a
+-- real collision slip through.
+local ok_hint_mismatch, err_hint_mismatch = pcall(function()
+  return plugin.methods["style.import_file"]({path = exp.path, name = "hero-2"})
+end)
+assertEq(ok_hint_mismatch, false,
+  "a non-colliding NAME HINT must not bypass a real collision on the file's own name")
+assertTrue(tostring(err_hint_mismatch):find("\"hero\"", 1, true) ~= nil,
+  "the refusal names the FILE's own style name (hero), not the hint (hero-2)")
+
+-- overwrite=true deletes the old style first, then imports -- replaced=true,
+-- and styles_after accounts for delete-then-import (net unchanged count).
+-- The destructive window is real: an import failure here would leave "hero"
+-- gone with no style re-created (covered by the import-failure test below).
+local imp = plugin.methods["style.import_file"]({path = exp.path, name = "hero", overwrite = true})
+assertEq(imp.imported, true, "import_file reports imported")
+assertEq(imp.name, "hero", "import_file's returned name is the FILE's own name")
+assertEq(imp.replaced, true, "import_file reports the delete-then-import replace")
+assertEq(imp.styles_before, styles_before_refusal, "styles_before matches the pre-import count")
+assertEq(imp.styles_after, styles_before_refusal, "styles_after: one deleted, one imported back")
+assertEq(styles_deleted[#styles_deleted], "hero", "the existing style was deleted before re-import")
+assertEq(styles_imported[#styles_imported], exp.path, "the exported path was the one imported")
+
+-- A style whose FILE name genuinely never existed imports cleanly, without
+-- touching delete at all. Written by hand (not via create_from_current +
+-- export, which would already have inserted the name into dt.styles) so
+-- this really is a name dt.styles has never seen.
+local fresh_path = export_dir .. "/hero-fresh-manual.dtstyle"
+do
+  local f = io.open(fresh_path, "w")
+  f:write("<darktable_style><info><name>hero-fresh</name></info></darktable_style>\n")
+  f:close()
+end
+local deletes_before = #styles_deleted
+local imp2 = plugin.methods["style.import_file"]({path = fresh_path, name = "hero-fresh"})
+assertEq(imp2.imported, true, "a genuinely fresh name imports")
+assertEq(imp2.replaced, false, "a fresh name is not reported as replaced")
+assertEq(#styles_deleted, deletes_before, "importing a fresh name deletes nothing")
+
+-- fix round 1, should-fix 9: an import failure AFTER the destructive delete
+-- names that window explicitly, rather than a bare pcall error. "hero-fresh"
+-- now exists (imp2 above), so overwrite=true deletes it before the forced
+-- import failure.
+do
+  -- Setting a real field on stub_dt.styles shadows the metatable's __index
+  -- for "import" specifically (the plugin's own `dt` local IS stub_dt, via
+  -- package.loaded.darktable); setting it back to nil restores the normal
+  -- dynamic dispatch.
+  stub_dt.styles.import = function(path) error("stub-forced import failure") end
+  local ok_destructive, err_destructive = pcall(function()
+    return plugin.methods["style.import_file"]({path = fresh_path, name = "hero-fresh", overwrite = true})
+  end)
+  assertEq(ok_destructive, false, "a forced import failure still raises")
+  assertTrue(tostring(err_destructive):find("destructive window", 1, true) ~= nil,
+    "the error names the destructive window when the delete already happened")
+  stub_dt.styles.import = nil
+end
+
+-- style.delete: fix round 2, item 5 -- gated on BOTH a name prefix (default
+-- "scouter-") and confirm=true, before the dt.styles scan even runs. The
+-- harness's test styles are named "hero"/"hero-fresh" (not "scouter-..."),
+-- so these calls pass an explicit `prefix` matching them.
+local ok_no_prefix, err_no_prefix = pcall(function()
+  return plugin.methods["style.delete"]({name = "hero", confirm = true})
+end)
+assertEq(ok_no_prefix, false,
+  "style.delete refuses a name that does not start with the (default) prefix")
+assertTrue(tostring(err_no_prefix):find("prefix", 1, true) ~= nil,
+  "the refusal names the prefix requirement")
+
+local ok_no_confirm, err_no_confirm = pcall(function()
+  return plugin.methods["style.delete"]({name = "hero", prefix = "hero"})
+end)
+assertEq(ok_no_confirm, false, "style.delete refuses without confirm=true, even with a matching prefix")
+assertTrue(tostring(err_no_confirm):find("confirm", 1, true) ~= nil,
+  "the refusal names the missing confirmation")
+
+-- Tolerant of "already gone" (hero-fresh was just deleted by the
+-- destructive-window test above), real otherwise (against "hero", which
+-- still exists from the overwrite=true re-import earlier).
+local del_missing = plugin.methods["style.delete"](
+  {name = "hero-fresh", prefix = "hero", confirm = true})
+assertEq(del_missing.existed, false, "hero-fresh is already gone (deleted above)")
+assertEq(del_missing.deleted, false, "nothing was deleted")
+local before_delete = 0
+for _ in ipairs(stub_dt.styles) do before_delete = before_delete + 1 end
+local del_real = plugin.methods["style.delete"]({name = "hero", prefix = "hero", confirm = true})
+assertEq(del_real.existed, true, "hero existed")
+assertEq(del_real.deleted, true, "hero was deleted")
+local after_delete = 0
+for _ in ipairs(stub_dt.styles) do after_delete = after_delete + 1 end
+assertEq(after_delete, before_delete - 1, "style.delete actually removed one style")
+
+-- The default prefix really is "scouter-": a name that DOES start with it
+-- is accepted (still needs confirm=true), proving the refusal above was
+-- about the prefix, not some other reason.
+local ok_default_prefix = plugin.methods["style.delete"](
+  {name = "scouter-throwaway-test-style", confirm = true})
+assertEq(ok_default_prefix.existed, false,
+  "a name starting with the default prefix is accepted (just not present)")
+
+-- Fix round 3, item 4: an EXPLICIT empty prefix is refused with a typed
+-- error, never silently rewritten to the "scouter-" default -- prefix=""
+-- would otherwise match every style name (sub(1, 0) == "" for anything).
+local ok_empty_prefix, err_empty_prefix = pcall(function()
+  return plugin.methods["style.delete"]({name = "anything-at-all", prefix = "", confirm = true})
+end)
+assertEq(ok_empty_prefix, false, "an explicit empty prefix is refused, not silently defaulted")
+assertTrue(tostring(err_empty_prefix):find("prefix", 1, true) ~= nil,
+  "the refusal names the prefix requirement")
+assertTrue(tostring(err_empty_prefix):find("non-empty", 1, true) ~= nil,
+  "the refusal explains prefix must be non-empty")
+
+-- xml_unescape: all five entities, and the &amp;lt; ordering case (must not
+-- double-unescape to "<").
+assertEq(plugin.xml_unescape("Tom &amp; Jerry"), "Tom & Jerry", "xml_unescape: &amp;")
+assertEq(plugin.xml_unescape("a &lt;b&gt; c"), "a <b> c", "xml_unescape: &lt; and &gt;")
+assertEq(plugin.xml_unescape('say &quot;hi&quot;'), 'say "hi"', "xml_unescape: &quot;")
+assertEq(plugin.xml_unescape("it&apos;s"), "it's", "xml_unescape: &apos;")
+assertEq(plugin.xml_unescape("&amp;lt;"), "&lt;",
+  "xml_unescape: &amp;lt; unescapes ONE level (to &lt;), not through to <")
+assertEq(plugin.xml_unescape(nil), nil, "xml_unescape: nil in, nil out")
+
+-- <info><name> containing an XML entity (as scouter/core/dtstyle.py's
+-- ElementTree writer would escape a literal "&") is UNESCAPED before the
+-- collision check (fix round 2, item 6): darktable itself stores the
+-- unescaped name, so comparing the raw escaped text would silently never
+-- match a real collision on a name containing any of these characters.
+local escaped_path = export_dir .. "/escaped-name.dtstyle"
+do
+  local f = io.open(escaped_path, "w")
+  f:write("<darktable_style><info><name>Tom &amp; Jerry</name></info></darktable_style>\n")
+  f:close()
+end
+local imp_escaped = plugin.methods["style.import_file"]({path = escaped_path, name = "ignored-hint"})
+assertEq(imp_escaped.name, "Tom & Jerry",
+  "the collision-check name is XML-unescaped from <info><name> (Tom &amp; Jerry -> Tom & Jerry)")
+assertEq(imp_escaped.imported, true, "importing an escaped-name style still succeeds")
+-- A second import of the exact same (still-escaped-on-disk) name is a real
+-- collision once unescaped, proving the name round-trips consistently.
+local ok_escaped_collision = pcall(function()
+  return plugin.methods["style.import_file"]({path = escaped_path, name = "ignored-hint"})
+end)
+assertEq(ok_escaped_collision, false, "the escaped name is still recognised on a second import")
 
 -- darkroom.open selects then switches, and detects an already-open image.
 view_state.current = "lighttable"
@@ -1828,6 +2171,135 @@ do
   view_state.current = "darkroom"
 end
 
+-- Entering the darkroom gets a LARGER budget than the mid-bounce return leg
+-- (scouter phase 2 task 14's live run: with 30 freshly imported 20 MP ORFs in
+-- a brand-new library, the first darkroom entry did not land inside the 5s
+-- view-settle budget -- darktable was building a pipeline for an image it had
+-- never rendered). The bounce keeps the short budget on purpose: by then the
+-- darkroom has been entered once, so a long budget there would only turn a
+-- genuinely stuck bounce into a 30s hang.
+do
+  assertTrue(plugin.view_settle.enter_darkroom_budget_ms > plugin.view_settle.budget_ms,
+    "the first darkroom entry must get more time than a mid-bounce return")
+  assertEq(plugin.view_settle.budget_ms, 5000, "the bounce budget is unchanged")
+
+  -- The budget is actually PASSED, not just exported: a lag longer than the
+  -- short budget but inside the long one must still land.
+  local long_lag = math.floor(plugin.view_settle.budget_ms / plugin.view_settle.poll_ms) + 5
+  view_state.current = "lighttable"
+  view_state.switch_lag_sleeps = long_lag
+  local ok_open, method_open = plugin.switch_to_darkroom(images_by_id[101])
+  assertTrue(ok_open,
+    "switch_to_darkroom must wait past the 5s bounce budget for the first entry")
+  assertEq(method_open, "view_switch", "and it got there by a real view switch")
+  view_state.switch_lag_sleeps = 0
+  view_state.current = "darkroom"
+end
+
+-- darkroom.open yield-polls for the LOADED IMAGE, not just the view.
+--
+-- `display_image` is asynchronous, exactly like `dt.gui.current_view`:
+-- scouter phase 2 task 14's live run had `darkroom.open` fail with "wrong
+-- image loaded" on a 30-frame library because the verification read the
+-- loaded image once, immediately after the call, and still saw the previous
+-- one. Task 12 fixed that class of bug for the view; this is the same bug for
+-- the image. Scripted here by making the selection (which the
+-- action_images fallback reads) lag behind by a few polls.
+do
+  local pending = nil
+  local lag = 0
+  local real_selection = stub_dt.gui.selection
+  stub_dt.gui.selection = function(images)
+    table.insert(selection_log, images)
+    -- Do NOT update action_images yet: land it only after `lag` polls, the
+    -- way the real GUI lands a swap some milliseconds later.
+    pending = images
+    lag = 4
+    return images
+  end
+  local real_sleep = stub_dt.control.sleep
+  stub_dt.control.sleep = function(ms)
+    if lag > 0 then
+      lag = lag - 1
+      if lag == 0 and pending then stub_dt.gui.action_images = pending end
+    end
+    return real_sleep and real_sleep(ms) or nil
+  end
+
+  view_state.current = "darkroom"
+  stub_dt.gui.action_images = {images_by_id[101]}
+  local reply = plugin.methods["darkroom.open"]({image_id = 103})
+  assertEq(reply.image_id, 103,
+    "darkroom.open must wait for the swap to land instead of calling a "
+    .. "not-yet-landed display_image a wrong image")
+  assertTrue(plugin.view_settle.wait_for_image_budget_ms > 0,
+    "the image wait has a real, exported budget")
+
+  stub_dt.gui.selection = real_selection
+  stub_dt.control.sleep = real_sleep
+  lag = 0
+  pending = nil
+  stub_dt.gui.action_images = {}
+  view_state.current = "darkroom"
+end
+
+-- `display_image` that returns ok and does NOT swap must fall through to a
+-- real view transition, not report a swap that never happened.
+--
+-- Measured on the real host (scouter phase 2 task 14's live run, 2026-09-14):
+-- with darktable in the darkroom on one image and the target in a film roll
+-- imported AFTERWARDS, `display_image` returned without error and the
+-- darkroom kept showing the old image for a full 15s of polling. So a
+-- successful pcall is not evidence of a swap.
+do
+  local lying_calls = 0
+  views.darkroom.display_image = function(image)
+    if image == nil then return nil end
+    lying_calls = lying_calls + 1
+    return image  -- says yes, changes nothing
+  end
+  -- Inside the DARKROOM the host's `dt.gui.action_images` reports the image
+  -- being edited, not the lighttable selection, so selecting does not move
+  -- it. The default stub's selection-updates-action_images shortcut is right
+  -- for the lighttable and wrong here, and the shortcut is exactly what hid
+  -- this bug: with it, `display_image` looks like it worked.
+  local real_selection = stub_dt.gui.selection
+  stub_dt.gui.selection = function(images)
+    table.insert(selection_log, images)
+    return images
+  end
+  -- ...except once a REAL view transition happens, which is what actually
+  -- loads the selected image on the host.
+  local real_current_view = stub_dt.gui.current_view
+  stub_dt.gui.current_view = function(v)
+    local result = real_current_view(v)
+    if v ~= nil and v.id == "darkroom" then
+      stub_dt.gui.action_images = {images_by_id[103]}
+    end
+    return result
+  end
+  view_state.current = "darkroom"
+  stub_dt.gui.action_images = {images_by_id[101]}
+
+  local switched, method = plugin.switch_to_darkroom(images_by_id[103])
+
+  assertTrue(switched, "switch_to_darkroom still succeeds, by the other route")
+  assertEq(method, "view_switch",
+    "a display_image that did not actually swap must NOT be reported as the "
+    .. "mechanism that worked")
+  assertTrue(lying_calls >= 1, "display_image was tried first, as the cheap path")
+  assertTrue(plugin.view_settle.display_image_budget_ms
+    < plugin.view_settle.wait_for_image_budget_ms,
+    "the display_image attempt gets a SHORT budget: the bounce fallback is "
+    .. "cheaper than waiting on a call that may simply not work here")
+
+  views.darkroom.display_image = nil
+  stub_dt.gui.selection = real_selection
+  stub_dt.gui.current_view = real_current_view
+  stub_dt.gui.action_images = {}
+  view_state.current = "darkroom"
+end
+
 -- wait_for_view gives up at its budget rather than spinning forever, and
 -- reports having done so.
 do
@@ -1896,6 +2368,53 @@ do
   assertEq(#action_log, actions_before, "image.lookup issues no dt.gui.action")
   assertEq(#selection_log, selections_before, "image.lookup never selects an image")
   assertEq(view_state.current, view_before, "image.lookup never switches the view")
+end
+
+-- image.lookup LIST form (ruling R15, scouter phase 2 task 14). One call
+-- answers a whole set, in request order, mixing paths and ids, and it must
+-- touch no GUI state either.
+do
+  local actions_before = #action_log
+  local selections_before = #selection_log
+  local view_before = view_state.current
+  local batch = plugin.methods["image.lookup"]({items = {
+    {path = "/photos/DSC_0001.NEF"},
+    {image_id = 102},
+    {path = "/photos/nope.NEF"},
+    {image_id = 9999},
+    {path = "/photos/OTHER.NEF"},
+  }})
+  assertTrue(type(batch.results) == "table", "the list form answers with a results list")
+  assertEq(#batch.results, 5, "one result per requested item")
+  assertEq(batch.results[1].found, true, "list form resolves by path")
+  assertEq(batch.results[1].image_id, 101, "list form returns the resolved id")
+  assertEq(batch.results[2].found, true, "list form resolves by id")
+  assertEq(batch.results[2].path, "/photos/DSC_0002.NEF", "list form returns the full path")
+  assertEq(batch.results[3].found, false, "an unknown path is found=false, not an error")
+  assertEq(batch.results[3].path, "/photos/nope.NEF", "and echoes the path asked for")
+  assertEq(batch.results[4].found, false, "an unknown id is found=false, not an error")
+  assertEq(batch.results[4].image_id, 9999, "and echoes the id asked for")
+  assertEq(batch.results[5].image_id, 103, "results stay in request order")
+  assertEq(#action_log, actions_before, "the list form issues no dt.gui.action")
+  assertEq(#selection_log, selections_before, "the list form never selects an image")
+  assertEq(view_state.current, view_before, "the list form never switches the view")
+
+  -- The single form is untouched: no `results` wrapper, bare record.
+  local single = plugin.methods["image.lookup"]({path = "/photos/DSC_0001.NEF"})
+  assertEq(single.results, nil, "the single form still returns a bare record")
+  assertEq(single.image_id, 101, "the single form still resolves")
+
+  -- An empty list is an empty answer, not an error and not a full-database dump.
+  local empty = plugin.methods["image.lookup"]({items = {}})
+  assertEq(#empty.results, 0, "an empty items list answers with zero results")
+
+  -- Malformed items are refused by name rather than silently skipped.
+  local ok_items = pcall(function() return plugin.methods["image.lookup"]({items = "nope"}) end)
+  assertEq(ok_items, false, "items must be a list")
+  local ok_entry = pcall(function()
+    return plugin.methods["image.lookup"]({items = {"/photos/DSC_0001.NEF"}})
+  end)
+  assertEq(ok_entry, false, "a bare string item is refused, not guessed at")
 end
 
 -- snapshot.take prefers the documented lib API.

@@ -198,9 +198,32 @@ TOOL_SPECS: list[dict] = [
                     "description": "commit trigger; auto picks the cheapest "
                     "that works on this build",
                 },
+                "attempts": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3,
+                    "default": 2,
+                    "description": "view-bounce attempts, clamped to 1..3; a caller "
+                    "sure this is a no-op should pass 1",
+                },
+                "expect_change": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "False forces attempts=1 and reports a confirmed "
+                    "no-op as ok/changed=false instead of raising commit_timeout",
+                },
             },
             [],
         ),
+    },
+    {
+        "name": "history_changed",
+        "description": "Whether an image's XMP sidecar is still the one Scouter last "
+        "committed (a watermark comparison, not a bounce). A pure read: "
+        "no darkroom action, no history.commit. Call this before a "
+        "repeat set to skip a bounce it already knows will find nothing "
+        "to write.",
+        "inputSchema": _schema({"image": IMAGE}, ["image"]),
     },
     {
         "name": "scout_stats",
@@ -242,9 +265,15 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "style_extract",
-        "description": "Save the darkroom image's current history as a darktable style. "
-        "NOTE: darktable's Lua API cannot filter a style by module, so "
-        "`modules` is recorded but the style carries the whole history. "
+        "description": "Save the image's history as a darktable style, filtered to `modules` "
+        "by writing a .dtstyle from the XMP (no darkroom needed). "
+        "`no_filter=true` also reads the sidecar and requires a committed "
+        "history: it ignores `modules` as a restriction and keeps every "
+        "active operation instead (native darkroom path when nothing is "
+        "forbidden), but still excludes cfg.style.never_include -- crop, "
+        "retouch, spot white balance, ... -- either way. `modules` naming a "
+        "forbidden op is always refused, even with no_filter=true -- an "
+        "explicit request wins over no_filter's 'ignore modules' meaning. "
         "Requires confirm=true when a style of that name already exists.",
         "inputSchema": _schema(
             {
@@ -253,7 +282,7 @@ TOOL_SPECS: list[dict] = [
                 "modules": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "modules the caller wants (recorded only)",
+                    "description": "modules to keep -- filtered for real by default",
                 },
                 "description": {
                     "type": "string",
@@ -265,6 +294,14 @@ TOOL_SPECS: list[dict] = [
                     "type": "boolean",
                     "default": False,
                     "description": "required to replace an existing style",
+                },
+                "no_filter": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "reads the sidecar and requires a committed history, "
+                    "same as the default path; ignores `modules` and keeps every "
+                    "active operation instead (never_include is still excluded "
+                    "either way -- naming a forbidden op in `modules` is still refused)",
                 },
             },
             ["image", "name", "modules"],
@@ -292,6 +329,104 @@ TOOL_SPECS: list[dict] = [
         ),
     },
     {
+        "name": "outliers_list",
+        "description": "Flag frames whose rendered exposure, white balance or clipping drift "
+        "too far from the reference (hero) frame -- ev_proxy vs "
+        "tolerances.exposure_ev, Kelvin (or, with no calibration table, the "
+        "wb_ratio_rg/bg fallback) vs tolerances.temperature_k / wb_ratio, and "
+        "clipped_high_pct vs tolerances.clipped_high_pct. Read-only: one "
+        "metrics event, scout.stats_many and the XMP sidecars only, no "
+        "bridge writes. The reference is excluded from its own comparison. "
+        "A frame whose stats failed to render is reported in `failed`, never "
+        "counted as within tolerance.",
+        "inputSchema": _schema(
+            {
+                "reference": IMAGE,
+                "job_slug": {
+                    "type": "string",
+                    "description": "job slug; frames come from its import.json",
+                },
+                "images": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "description": "explicit image list, instead of (or alongside) "
+                    "job_slug (the reference is excluded from its own comparison either way)",
+                },
+                "px": {
+                    "type": "integer",
+                    "description": "stats render size (default: stats.set_px)",
+                },
+                "workers": {
+                    "type": "integer",
+                    "description": "thread pool size (default: stats.workers)",
+                },
+            },
+            ["reference"],
+        ),
+    },
+    {
+        "name": "style_apply_set",
+        "description": "Apply one style to a whole set, batched through the bridge, "
+        "keeping per-image results. Always requires confirm=true (a set apply is "
+        "always a bulk write). outcome=partial (exit 9) when some images applied "
+        "and some did not, or any id came back unknown (a bridge timeout, or an "
+        "unconfirmed sidecar the idempotency guard could not verify) -- the "
+        "successes are kept, never discarded. A target Scouter's own ledger "
+        "(job/.scouter/styles-applied.json) says already carries this style is "
+        "skipped by default (image:apply_style always appends, so re-applying "
+        "would stack a second copy); force=true applies anyway. mode=overwrite "
+        "is refused with unsupported_mode; the only place overwrite exists at "
+        "all is the render-only `export.release --overwrite-style`.",
+        "inputSchema": _schema(
+            {
+                "name": {"type": "string", "description": "style name"},
+                "job_slug": {
+                    "type": "string",
+                    "description": "job whose import.json lists the set "
+                    "(used when images is not given)",
+                },
+                "images": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "description": "paths or image ids; defaults to every file "
+                    "in job_slug's import.json",
+                },
+                "exclude": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "description": "paths or image ids to leave out of the set",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["append", "overwrite"],
+                    "default": "append",
+                    "description": "append adds to history; overwrite is refused "
+                    "(unsupported_mode)",
+                },
+                "batch": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 25,
+                    "description": "how many image ids per bridge call",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: applying to a set is always gated",
+                },
+                "dry_run": DRY_RUN,
+                "force": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "apply even to images Scouter's own ledger says "
+                    "already carry this style (job/.scouter/styles-applied.json)",
+                },
+            },
+            ["name"],
+        ),
+    },
+    {
         "name": "export_run",
         "description": "Export images through a preset. client-final is a full-size "
         "sRGB JPEG; preview is a 1024 px PNG. Requires confirm=true for "
@@ -306,7 +441,7 @@ TOOL_SPECS: list[dict] = [
                 },
                 "preset": {
                     "type": "string",
-                    "enum": ["client-final", "preview"],
+                    "enum": ["preview", "client-proof", "client-final", "print-tiff"],
                     "description": "export preset",
                 },
                 "out_dir": {"type": "string", "description": "destination directory"},
@@ -318,6 +453,317 @@ TOOL_SPECS: list[dict] = [
                 },
             },
             ["images", "preset", "out_dir"],
+        ),
+    },
+    {
+        "name": "export_release",
+        "description": "Export a job's selected frames through a preset, with a checksum "
+        "manifest. Selection is --images if given, else every raw in "
+        "import.json whose rating >= min_rating (client-proof/preview) "
+        "or that carries the configured colour label "
+        "(client-final/print-tiff). Requires confirm=true to overwrite "
+        "an existing preset output.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {"type": "string", "description": "job slug to release"},
+                "preset": {
+                    "type": "string",
+                    "enum": ["preview", "client-proof", "client-final", "print-tiff"],
+                    "description": "export preset",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "disambiguate when the slug matches more than one job",
+                },
+                "min_rating": {
+                    "type": "integer",
+                    "description": "override export.min_rating for rating-based presets",
+                },
+                "images": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "description": "explicit image list, overriding the selection rule",
+                },
+                "style": {
+                    "type": "string",
+                    "description": "apply this style at render time only; nothing in the "
+                    "library changes",
+                },
+                "overwrite_style": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "pass --style-overwrite to darktable-cli (render-only)",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required to overwrite an existing preset output",
+                },
+            },
+            ["job_slug", "preset"],
+        ),
+    },
+    {
+        "name": "export_verify",
+        "description": "Re-hash a release manifest's outputs against it. The manifest's own "
+        ".sha256 sidecar is required, not optional -- a missing sidecar is "
+        "manifest_unauthenticated. Read-only.",
+        "inputSchema": _schema(
+            {
+                "manifest": {
+                    "type": "string",
+                    "description": "path to a manifest-<preset>-<ts>.json written by "
+                    "export.release",
+                },
+                "root": {
+                    "type": "string",
+                    "description": "directory files[].output resolves against; default is "
+                    "the manifest's own <job>/.scouter/ parent. Pass this to verify a "
+                    "manifest shipped beside its exports/ folder instead",
+                },
+            },
+            ["manifest"],
+        ),
+    },
+    {
+        "name": "library_import",
+        "description": "Copy, checksum, rename and register a memory card into the library. "
+        "Refuses with backup_not_configured before reading a single file "
+        "unless the backup gate passes (config.show reports its verdict). "
+        "Always requires confirm=true: an import is always more than one "
+        "file. Originals are copied read-only (chmod 0444) and verified "
+        "with two independent sha256 passes; a darktable that is not "
+        "running does not fail the import (film_roll_registered: false, "
+        "retry with library.register).",
+        "inputSchema": _schema(
+            {
+                "source": {"type": "string", "description": "the card's mount point"},
+                "job_slug": {
+                    "type": "string",
+                    "description": "job directory slug, e.g. harbour-wedding",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "YYYY-MM-DD; default: the earliest capture time",
+                },
+                "camera": {
+                    "type": "string",
+                    "description": "camera slug override; required for a mixed-camera card",
+                },
+                "extensions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "override import.extensions, e.g. ORF,ARW",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: an import always touches more than one file",
+                },
+            },
+            ["source", "job_slug"],
+        ),
+    },
+    {
+        "name": "library_verify",
+        "description": "Re-hash raw/ against the job's .scouter/checksums.sha256 manifest. "
+        "Read-only. `.xmp` sidecars are excluded by suffix, not by silence.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {"type": "string", "description": "job slug to verify"},
+                "date": {
+                    "type": "string",
+                    "description": "disambiguate when the slug matches more than one job",
+                },
+            },
+            ["job_slug"],
+        ),
+    },
+    {
+        "name": "library_register",
+        "description": "Re-register a job's film roll with darktable (e.g. after importing "
+        "with darktable closed). Requires confirm=true: it writes to "
+        "darktable's own library.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {"type": "string", "description": "job slug to register"},
+                "date": {
+                    "type": "string",
+                    "description": "disambiguate when the slug matches more than one job",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: writes to darktable's library",
+                },
+            },
+            ["job_slug"],
+        ),
+    },
+    {
+        "name": "library_jobs",
+        "description": "List every job under the library root: frame count, bytes, a "
+        "ratings histogram from the XMPs' xmp:Rating, and which .scouter "
+        "manifests exist. Read-only.",
+        "inputSchema": _schema({}, []),
+    },
+    {
+        "name": "library_relocate",
+        "description": "Move the library to a new root: rewrite library_root in the config "
+        "(every other key survives untouched) and re-verify every job's "
+        "checksums there. Requires confirm=true: it rewrites the config "
+        "file and its dry run reports which jobs already exist at the "
+        "new root. Never edits darktable's library.db -- darktable's film "
+        "rolls keep pointing at the old paths, so re-import "
+        "<new_root>/<job>/raw for each job afterwards (the result's "
+        "next_step says so).",
+        "inputSchema": _schema(
+            {
+                "new_root": {
+                    "type": "string",
+                    "description": "new library root (must already exist)",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: rewrites the config and writes outside the library",
+                },
+            },
+            ["new_root"],
+        ),
+    },
+    {
+        "name": "cull_propose",
+        "description": "Propose a rating for every frame in a job (or an explicit image "
+        "list), grouped into bursts by capture time and camera. Never "
+        "proposes rating 0 or reject -- stats cannot see eyes, "
+        "expression or a deliberate motion blur, so a flagged frame "
+        "gets rating 1 with its numbers and the human decides. Every "
+        "reason names the numbers behind it. Read-only: writes no "
+        "rating and calls the bridge only for the read-only "
+        "image.lookup behind image resolution.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {
+                    "type": "string",
+                    "description": "job slug; frames come from its import.json",
+                },
+                "images": {
+                    "type": "array",
+                    "items": IMAGE,
+                    "description": "explicit image list, instead of (or alongside) " "--job-slug",
+                },
+                "px": {
+                    "type": "integer",
+                    "description": "stats render size (default: stats.set_px)",
+                },
+                "workers": {
+                    "type": "integer",
+                    "description": "thread pool size (default: stats.workers)",
+                },
+            },
+            [],
+        ),
+    },
+    {
+        "name": "cull_apply",
+        "description": "Apply a cull.propose proposal's ratings via the image.rate bridge "
+        "verb, in batches of 50, verified by polling each changed "
+        "frame's XMP sidecar. Refuses (usage) if any frame's sidecar "
+        "changed since the proposal was written. Requires confirm=true: "
+        "a cull touches many images.",
+        "inputSchema": _schema(
+            {
+                "job_slug": {
+                    "type": "string",
+                    "description": "job slug; loads the newest cull-*.json unless "
+                    "proposal is given",
+                },
+                "proposal": {
+                    "type": "string",
+                    "description": "path to a specific cull-<ts>.json",
+                },
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: writes ratings via image.rate",
+                },
+            },
+            [],
+        ),
+    },
+    {
+        "name": "config_init",
+        "description": "Write the starter Scouter config file (~/.config/scouter/config.json "
+        "by default). backup.enabled is false in the starter file, so the "
+        "first import fails loudly until a target is set. Requires "
+        "confirm=true to write, or to replace an existing file.",
+        "inputSchema": _schema(
+            {
+                "path": {"type": "string", "description": "override the config path"},
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required to write, or to replace an existing file",
+                },
+            },
+            [],
+        ),
+    },
+    {
+        "name": "config_show",
+        "description": "Show the loaded Scouter config and whether the backup gate "
+        "currently passes -- the one call that answers 'will an import "
+        "work right now?' without attempting one.",
+        "inputSchema": _schema(
+            {"path": {"type": "string", "description": "override the config path"}}, []
+        ),
+    },
+    {
+        "name": "backup_run",
+        "description": "Tar the small-and-precious set (XMPs, .scouter/, config, "
+        "metrics.db, events.jsonl), hash and encrypt it (age if configured, "
+        "else openssl enc), rsync the raws, write a manifest, and prune old "
+        "archives beyond keep_archives (never the newest two). Refuses when "
+        "the backup gate is not satisfied. Requires confirm=true: it writes "
+        "outside the library and deletes old archives.",
+        "inputSchema": _schema(
+            {
+                "dry_run": DRY_RUN,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: writes outside the library and prunes old archives",
+                },
+            },
+            [],
+        ),
+    },
+    {
+        "name": "backup_verify",
+        "description": "Decrypt the newest archive (or --archive TS) to a temp "
+        "directory, compare the ciphertext and plaintext sha256 against the "
+        "manifest, re-hash a sample of members and of the rsynced raws. "
+        "Read-only; writes nothing outside its own temp directory.",
+        "inputSchema": _schema(
+            {
+                "archive": {
+                    "type": "string",
+                    "description": "archive timestamp to verify (default: newest)",
+                },
+                "sample": {
+                    "type": "integer",
+                    "default": 10,
+                    "description": "how many members/raws to re-hash",
+                },
+            },
+            [],
         ),
     },
     {
@@ -333,6 +779,59 @@ TOOL_SPECS: list[dict] = [
                 }
             },
             [],
+        ),
+    },
+    {
+        "name": "wb_kelvin",
+        "description": "Invert an image's committed `temperature` coefficients to Kelvin "
+        "against its camera's measured calibration table (scouter wb calibrate). "
+        "No table -> kelvin: null, reason names `scouter wb calibrate`. Outside "
+        "the calibrated range -> kelvin: null, reason names the range -- never "
+        "an extrapolated guess.",
+        "inputSchema": _schema({"image": IMAGE}, ["image"]),
+    },
+    {
+        "name": "wb_calibrate",
+        "description": "Sweep the darkroom's Kelvin slider from k_from to k_to and write "
+        "the measured per-camera table `~/.config/scouter/wb/<camera>.json`, "
+        "which wb.kelvin and outliers.list's temperature_k_delta then use. "
+        "Costs ~1.8s per point and adds one history item per point, so it "
+        "refuses inside a job's raw/ unless allow_in_job=true -- run it on a "
+        "scratch copy. Refuses (usage error) rather than write a table whose "
+        "r/b coefficient ratio is not strictly increasing in Kelvin. "
+        "Requires confirm=true to run at all (never overwrites an existing "
+        "table otherwise).",
+        "inputSchema": _schema(
+            {
+                "image": IMAGE,
+                "k_from": {
+                    "type": "integer",
+                    "default": 2000,
+                    "description": "first Kelvin point",
+                },
+                "k_to": {
+                    "type": "integer",
+                    "default": 12000,
+                    "description": "last Kelvin point",
+                },
+                "step": {
+                    "type": "integer",
+                    "default": 500,
+                    "description": "Kelvin step between points",
+                },
+                "allow_in_job": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required: image is inside a job's raw/",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "required to run at all (never overwrites without it)",
+                },
+                "dry_run": DRY_RUN,
+            },
+            ["image"],
         ),
     },
 ]

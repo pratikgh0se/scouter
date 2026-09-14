@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import math
 import re
 import struct
 import xml.etree.ElementTree as ET
@@ -190,6 +191,14 @@ def _entry_from_attrs(attrs: dict[str, str], history_end: int) -> HistoryEntry:
         params_hex=raw_params,
         decoded=decoded,
         reason=reason,
+        # Task 7: verbatim, never decoded -- the `.dtstyle` writer copies
+        # these two attributes character for character, the same way it
+        # copies `params_hex` (pinned against every real entry in
+        # tests/fixtures/P6281348.ORF.xmp, e.g. num 11's
+        # blendop_version="14").
+        blendop_params_hex=attrs.get("blendop_params", ""),
+        blendop_version=int(attrs.get("blendop_version", "0") or 0),
+        multi_name_hand_edited=attrs.get("multi_name_hand_edited", "0") == "1",
     )
 
 
@@ -242,6 +251,91 @@ def parse(text: str) -> ParsedXmp:
         entries=entries,
         well_formed=well_formed,
     )
+
+
+def active_entries(parsed: ParsedXmp) -> list[HistoryEntry]:
+    """Entries with num < history_end, newest-wins per (operation, multi_priority).
+
+    history_end is darktable's cut: everything at or past it is a redo-able
+    tail and is not part of the image's current look, so it must never ride
+    into a style.
+
+    Task 7: this used to be a plain `num < history_end` filter with no
+    dedup, which was correct for reporting (every step darktable wrote is
+    worth showing) but wrong for a style -- a slider touched twice (e.g.
+    exposure at num 8 then again at num 11) must contribute ONE `<plugin>`
+    element, the newest, not two competing ones. `enabled` stays on each
+    entry as its own field (ruling: enabled surfaced), never folded into the
+    filter, because "in the active history" and "the module's own on/off
+    toggle" are different questions.
+    """
+    active = [entry for entry in parsed.entries if entry.active]
+    newest_num: dict[tuple[str, int], int] = {}
+    for entry in active:
+        key = (entry.operation, entry.multi_priority)
+        if key not in newest_num or entry.num > newest_num[key]:
+            newest_num[key] = entry.num
+    return [
+        entry
+        for entry in active
+        if entry.num == newest_num[(entry.operation, entry.multi_priority)]
+    ]
+
+
+def _json_safe(value):
+    """`nan`/`inf` -> `None` (phase 1's rule, `types._clean`'s sibling): JSON has
+    no literal for either, and a caller comparing two `None`s (both "not a
+    finite number") is exactly the "both non-finite" equality task 11's
+    undo needs for `temperature`'s `coeff_g2 = inf` -- comparing raw floats
+    would make `inf != inf` look like a broken restore."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def latest_params(parsed: ParsedXmp, operation: str, instance: int = 0) -> dict | None:
+    """The active, decoded param dict for one module, PLUS `params_hex`
+    (design 11.2 / ruling R9), newest entry wins.
+
+    Same newest-active-entry search as `latest_value`, but returns the whole
+    decoded dict instead of a single field -- for callers (task 9's WB delta,
+    task 11's journalled coefficient vector) that need more than one slot out
+    of the same module. Every value that is `nan`/`inf` in the decoded dict
+    comes back as `None` (`_json_safe`), same as every other result Scouter
+    hands back. Returns None when the module is absent, inactive, or its
+    params could not be decoded (an unknown module stays opaque hex, per the
+    honesty rule); never a guessed or partial dict.
+    """
+    for entry in sorted(parsed.entries, key=lambda e: e.num, reverse=True):
+        if entry.operation != operation or not entry.active:
+            continue
+        if entry.multi_priority != instance:
+            continue
+        if entry.decoded is None:
+            return None
+        return {
+            **{k: _json_safe(v) for k, v in entry.decoded.items()},
+            "params_hex": entry.params_hex,
+        }
+    return None
+
+
+_RATING_RE = re.compile(r'xmp:Rating="(-?\d+)"')
+
+
+def rating(raw_path: str | Path) -> int | None:
+    """The sidecar's xmp:Rating, or None when there is no sidecar / no attribute.
+
+    A regex, not a parse: this is called for 300 sidecars in a cull and it reads
+    one attribute out of the rdf:Description header. Verified present in
+    Pratik's real sidecar (xmp:Rating="1", 2026-09-14).
+    """
+    sidecar = sidecar_path(raw_path)
+    if not sidecar.exists():
+        return None
+    text = sidecar.read_text(encoding="utf-8", errors="replace")
+    match = _RATING_RE.search(text)
+    return int(match.group(1)) if match else None
 
 
 def latest_value(parsed: ParsedXmp, operation: str, param: str, instance: int = 0) -> float | None:

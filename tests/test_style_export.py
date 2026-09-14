@@ -5,7 +5,13 @@ from pathlib import Path
 from scouter.core import dtbridge, export, style
 from scouter.core.style import UnsupportedMode
 from scouter.errors import NotInDarkroom, StylePartial
-from tests.scouter_fakes import FAKE_CLI_WRITES_PPM, FakeBridge, TempCache, fake_cli_script
+from tests.scouter_fakes import (
+    FAKE_CLI_WRITES_PPM,
+    FakeBridge,
+    TempCache,
+    fake_cli_script,
+    write_minimal_style_sidecar,
+)
 
 
 class StyleTest(unittest.TestCase):
@@ -14,6 +20,13 @@ class StyleTest(unittest.TestCase):
         self.root = self.cache.start()
         self.raw = self.root / "hero.ORF"
         self.raw.write_bytes(b"raw")
+        # Fix round 2, blocker 1: `no_filter=True` now ALSO reads the sidecar
+        # (to enforce cfg.style.never_include against the whole active
+        # history, not just a caller-requested `modules` list); these tests
+        # exercise phase 1's native `style.create_from_current` path
+        # specifically, which only runs when nothing is forbidden, so the
+        # shared sidecar (one plain `exposure` entry) keeps that true.
+        write_minimal_style_sidecar(self.raw)
         self.bridge = FakeBridge(
             {
                 "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
@@ -56,22 +69,26 @@ class StyleTest(unittest.TestCase):
         self.cache.stop()
 
     def test_extract_is_honest_about_the_missing_module_filter(self) -> None:
-        result = style.extract(image=str(self.raw), name="hero", modules=["exposure", "sigmoid"])
+        result = style.extract(
+            image=str(self.raw), name="hero", modules=["exposure", "sigmoid"], no_filter=True
+        )
         self.assertTrue(result.created)
         self.assertFalse(result.modules_honoured)
         self.assertEqual(result.modules_requested, ["exposure", "sigmoid"])
         self.assertTrue(any("module filter" in w for w in result.warnings))
 
     def test_extract_over_an_existing_name_needs_confirm(self) -> None:
-        result = style.extract(image=str(self.raw), name="old-look", modules=[])
+        result = style.extract(image=str(self.raw), name="old-look", modules=[], no_filter=True)
         self.assertEqual(result.outcome, "dry_run")
         self.assertIn("already exists", result.reason or "")
         self.assertNotIn("style.create_from_current", self.bridge.methods_called())
-        confirmed = style.extract(image=str(self.raw), name="old-look", modules=[], confirm=True)
+        confirmed = style.extract(
+            image=str(self.raw), name="old-look", modules=[], confirm=True, no_filter=True
+        )
         self.assertEqual(confirmed.outcome, "ok")
 
     def test_extract_keeps_the_lua_reported_source(self) -> None:
-        result = style.extract(image=str(self.raw), name="hero", modules=[])
+        result = style.extract(image=str(self.raw), name="hero", modules=[], no_filter=True)
         self.assertEqual(result.source, "action_images")
 
     def test_extract_refuses_when_the_darkroom_shows_another_image(self) -> None:
@@ -92,18 +109,18 @@ class StyleTest(unittest.TestCase):
         }
         before = len(self.bridge.calls)
         with self.assertRaises(NotInDarkroom) as ctx:
-            style.extract(image=str(self.raw), name="hero", modules=[])
+            style.extract(image=str(self.raw), name="hero", modules=[], no_filter=True)
         self.assertIn("darkroom shows 999, requested 12", str(ctx.exception))
         self.assertNotIn("style.create_from_current", self.bridge.methods_called()[before:])
 
     def test_extract_proceeds_when_the_darkroom_matches(self) -> None:
-        result = style.extract(image=str(self.raw), name="hero", modules=[])
+        result = style.extract(image=str(self.raw), name="hero", modules=[], no_filter=True)
         self.assertEqual(result.outcome, "ok")
         self.assertIn("darkroom.current", self.bridge.methods_called())
         self.assertIn("style.create_from_current", self.bridge.methods_called())
 
     def test_extract_dry_run_does_not_call_darkroom_current(self) -> None:
-        result = style.extract(image=str(self.raw), name="old-look", modules=[])
+        result = style.extract(image=str(self.raw), name="old-look", modules=[], no_filter=True)
         self.assertEqual(result.outcome, "dry_run")
         self.assertNotIn("darkroom.current", self.bridge.methods_called())
 
@@ -203,4 +220,4 @@ class ExportTest(unittest.TestCase):
 
     def test_unknown_preset_is_a_value_error(self) -> None:
         with self.assertRaises(ValueError):
-            export.run(images=[str(self.raw)], preset="print-tiff", out_dir=str(self.out))
+            export.run(images=[str(self.raw)], preset="bogus-preset", out_dir=str(self.out))

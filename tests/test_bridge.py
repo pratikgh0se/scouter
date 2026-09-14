@@ -60,12 +60,21 @@ class FakePlugin:
 
 @pytest.fixture
 def fake_plugin_lua_file(tmp_path, monkeypatch):
-    """Make plugin-installed detection succeed by faking the install location."""
+    """Make plugin-installed detection succeed by faking the install location.
+
+    `DARKTABLE_MCP_PLUGIN_PATH` as well as `HOME`: `tests/conftest.py` pins
+    that env var at a path under the session temp dir that never exists, so no
+    unit test can see the REAL installed plugin (fix round 1, blocker 4).
+    Faking `HOME` alone no longer changes where the bridge looks, so this
+    fixture has to say where its fake plugin is.
+    """
     fake_home = tmp_path / "home"
     plugin_dir = fake_home / ".config" / "darktable" / "lua"
     plugin_dir.mkdir(parents=True)
-    (plugin_dir / "darktable_mcp.lua").write_text("-- fake")
+    plugin = plugin_dir / "darktable_mcp.lua"
+    plugin.write_text("-- fake")
     monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("DARKTABLE_MCP_PLUGIN_PATH", str(plugin))
     return fake_home
 
 
@@ -263,3 +272,90 @@ def test_concurrent_calls_get_correct_results(cache_dir, fake_plugin_lua_file):
             assert results[label] == {"label": label}
     finally:
         plugin.stop()
+
+
+def test_darkroom_open_client_timeout_outlasts_the_plugins_own_budget():
+    """The client must always outlast the handler it is waiting for.
+
+    Measured on the real host (scouter phase 2 task 14's live run,
+    2026-09-14): with 30 freshly imported 20 MP ORFs in a brand-new library,
+    the first darkroom entry needed more than the plugin's original 5s view
+    budget; raising that to 20s then ran straight into the CLIENT's own 30s
+    timeout, which turns "the plugin is about to answer honestly" into "no
+    response at all". The two budgets are in different files, so this pins the
+    relationship between them rather than either number alone.
+    """
+    from pathlib import Path
+
+    from darktable_mcp.bridge.client import resolve_timeout
+
+    plugin = (
+        Path(__file__).resolve().parent.parent / "darktable_mcp" / "lua" / "darktable_mcp.lua"
+    ).read_text(encoding="utf-8")
+    line = next(
+        ln for ln in plugin.splitlines() if ln.startswith("local VIEW_ENTER_DARKROOM_BUDGET_MS")
+    )
+    plugin_budget_s = int(line.split("=")[1].strip()) / 1000.0
+    client_budget_s = resolve_timeout("darkroom.open")
+    assert client_budget_s > plugin_budget_s, (
+        f"the client gives up after {client_budget_s}s but the plugin may still be "
+        f"working for {plugin_budget_s}s -- raise the client timeout"
+    )
+
+
+def test_the_unit_suite_never_creates_the_real_bridge_spool():
+    """Fix round 1, blocker 4: the non-host suite must not be able to reach
+    the user's own bridge spool or their installed Lua plugin.
+
+    The failure mode this closes is not hypothetical. `Bridge()` with no
+    arguments resolves its spool from `$XDG_CACHE_HOME` (default
+    `~/.cache/darktable-mcp`) and its plugin from `~/.config/darktable/lua`,
+    and it CREATES the spool directory on first use. A unit test that forgot
+    its FakeBridge therefore wrote a request file into the real spool -- and
+    if a darktable happened to be running with the plugin installed, the
+    plugin answered it: a "unit" test driving the user's live darkroom.
+
+    `tests/conftest.py` pins both paths under the session temp dir for every
+    non-host run. This asserts the consequence rather than the mechanism: the
+    real paths are still where they were, and the real spool was not created.
+    On a `SCOUTER_HOST_TESTS=1` run the pins are deliberately lifted (a host
+    test talks to a real darktable), so the assertion only applies when they
+    are in force.
+    """
+    import os
+    from pathlib import Path
+
+    from darktable_mcp.bridge.client import _cache_dir, _plugin_path
+    from tests import conftest
+
+    if os.environ.get("SCOUTER_HOST_TESTS") == "1":
+        pytest.skip("host runs deliberately use the real spool and the real plugin")
+
+    resolved_spool = str(_cache_dir())
+    resolved_plugin = str(_plugin_path())
+
+    assert resolved_spool != conftest.REAL_BRIDGE_SPOOL, (
+        "the bridge would use the REAL spool: conftest's XDG_CACHE_HOME pin is " "not in force"
+    )
+    assert resolved_plugin != conftest.REAL_PLUGIN_PATH, (
+        "the bridge would look for the REAL installed plugin: conftest's "
+        "DARKTABLE_MCP_PLUGIN_PATH pin is not in force"
+    )
+    # Both pinned paths must be inside the session temp dir, not merely
+    # different from the real ones.
+    for path in (resolved_spool, resolved_plugin):
+        assert path.startswith(
+            conftest._SESSION_TMP
+        ), f"{path} is neither the real path nor under the session temp dir"
+    # And the real spool must not have been created by this run. It may exist
+    # from a genuine host run or from normal use of the tool -- what must be
+    # true is that the SUITE is not what creates it, so this asserts absence
+    # only when it is absent, and otherwise asserts the suite never wrote into
+    # it (no request file younger than the session).
+    real = Path(conftest.REAL_BRIDGE_SPOOL)
+    if real.is_dir():
+        session_started = os.path.getmtime(conftest._SESSION_TMP)
+        fresh = [
+            p.name for p in real.iterdir() if p.is_file() and p.stat().st_mtime >= session_started
+        ]
+        assert fresh == [], f"the unit suite wrote into the real bridge spool: {fresh}"
