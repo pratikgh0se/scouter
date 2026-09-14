@@ -37,9 +37,11 @@ library.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
+import struct
 import subprocess
 import tempfile
 import time
@@ -870,6 +872,628 @@ class PinWbCoefficientSlidersHostTest(unittest.TestCase):
         # all ten, are both valid, honest outcomes; neither is a test
         # failure. Only a probe that recorded nothing at all is a bug.
         self.assertTrue(results, "the probe recorded no results at all")
+
+
+# ---------------------------------------------------------------------------
+# Task 14 step 5: the 30-frame synthetic job, end to end.
+# ---------------------------------------------------------------------------
+
+E2E_JOB = "phase2-e2e"
+E2E_SLUG = "phase2-e2e"
+SYNTHETIC_ROOT = SCRATCH_DIR / "synthetic"
+
+
+def _jpeg_longest_edge(path: Path) -> int:
+    """The longest edge of a JPEG, read from its SOF marker with `struct`.
+
+    No Pillow (stdlib-only, constraint 5). JPEG structure: 0xFFD8, then a
+    chain of markers, each 0xFF <code> <2-byte length including itself>.
+    Any SOF marker (0xC0-0xCF except the non-frame C4/C8/CC) carries
+    `precision, height, width` as `>BHH` right after the length.
+    """
+    data = path.read_bytes()
+    if data[:2] != b"\xff\xd8":
+        raise ValueError(f"{path} is not a JPEG")
+    i = 2
+    while i + 4 <= len(data):
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        marker = data[i + 1]
+        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+            i += 2
+            continue
+        (seg_len,) = struct.unpack_from(">H", data, i + 2)
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            _precision, height, width = struct.unpack_from(">BHH", data, i + 4)
+            return max(height, width)
+        i += 2 + seg_len
+    raise ValueError(f"{path}: no SOF marker found")
+
+
+@unittest.skipUnless(not _MISSING, SKIP_REASON)
+class Phase2EndToEndTest(unittest.TestCase):
+    """E1-E9 plus the metrics check, in ONE darktable session, in order.
+
+    The exit criterion for phase 2 that CI can actually assert (the real one,
+    E12, is Pratik's own 300-frame job). The card is built by
+    `tests/make_synthetic_job.py` from the four EditingTrial ORFs; everything
+    Scouter writes goes into a throwaway tree (`SCOUTER_CACHE`,
+    `SCOUTER_CONFIG`, the library root, the backup target and
+    `OBSIDIAN_VAULT_PATH` are all pointed at it) -- **the real vault is never
+    written by a test**, which is `tests/conftest.py`'s whole reason for
+    existing and is re-asserted here because a host run sets these itself.
+
+    Method names are numbered because unittest runs them alphabetically and
+    these stages genuinely depend on each other: there is one import, and
+    everything after it reads what it produced. A failure therefore cascades,
+    which is the honest shape for an end-to-end test -- `cull apply` has
+    nothing to say about a job that never imported.
+    """
+
+    maxDiff = None
+    proc: subprocess.Popen[bytes] | None = None
+
+    _plugin_existed_before: bool = False
+    _plugin_backup: bytes | None = None
+    _luarc_existed_before: bool = False
+    _luarc_line_added: bool = False
+    _luarc_path: Path | None = None
+    _env_before: dict[str, str | None] = {}
+    _tmp: str | None = None
+    #: Per-stage wall times, written to `docs/measurements-generated.md` in
+    #: `tearDownClass` and copied into `docs/measurements.md` BY HAND
+    #: (phase 1's convention: the test no longer rewrites the reviewed record).
+    timings: dict[str, float] = {}
+    facts: list[str] = []
+    hero: str | None = None
+    style_name: str = ""
+
+    # -- lifecycle ----------------------------------------------------------
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.timings = {}
+        cls.facts = []
+        cls._tmp = tempfile.mkdtemp(prefix="scouter-e2e-")
+        tmp = Path(cls._tmp)
+        cls.library_root = tmp / "library"
+        cls.backup_target = tmp / "backup"
+        cls.vault = tmp / "vault"
+        cls.cache = tmp / "cache"
+        cls.config_path = tmp / "config.json"
+        cls.passfile = tmp / "backup.pass"
+        for d in (cls.library_root, cls.backup_target, cls.vault, cls.cache):
+            d.mkdir(parents=True, exist_ok=True)
+        cls.passfile.write_text("e2e-not-a-real-secret\n")
+        cls.passfile.chmod(0o600)
+
+        cls._env_before = {
+            k: os.environ.get(k)
+            for k in (
+                "SCOUTER_JOB",
+                "SCOUTER_CACHE",
+                "SCOUTER_CONFIG",
+                "OBSIDIAN_VAULT_PATH",
+            )
+        }
+        os.environ["SCOUTER_JOB"] = E2E_JOB
+        os.environ["SCOUTER_CACHE"] = str(cls.cache)
+        os.environ["SCOUTER_CONFIG"] = str(cls.config_path)
+        os.environ["OBSIDIAN_VAULT_PATH"] = str(cls.vault)
+
+        # E1 needs the gate DISARMED, so the first config written has
+        # `backup.enabled: false`; `test_00` flips it once it has proved the
+        # refusal.
+        cls._write_config(backup_enabled=False)
+
+        started = time.monotonic()
+        from tests import make_synthetic_job
+
+        SYNTHETIC_ROOT.mkdir(parents=True, exist_ok=True)
+        cls.manifest = make_synthetic_job.build(SYNTHETIC_ROOT)
+        cls.card = Path(cls.manifest["card"])
+        cls.timings["build_synthetic_card_s"] = time.monotonic() - started
+
+        cls._install_plugin()
+        try:
+            cls._launch_and_wait()
+        except BaseException:
+            if cls.proc is not None:
+                _quit(cls.proc)
+            cls._cleanup_plugin_install()
+            cls._restore_env()
+            raise
+
+    @classmethod
+    def _write_config(cls, *, backup_enabled: bool) -> None:
+        cls.config_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "library_root": str(cls.library_root),
+                    "backup": {
+                        "enabled": backup_enabled,
+                        "target": str(cls.backup_target),
+                        "encryption": "openssl",
+                        "openssl_passfile": str(cls.passfile),
+                    },
+                    "vault": {"jobs_dir": "Projects/Photo jobs"},
+                },
+                indent=2,
+            )
+        )
+
+    @classmethod
+    def _install_plugin(cls) -> None:
+        try:
+            INSTALLED_PLUGIN.parent.mkdir(parents=True, exist_ok=True)
+            cls._plugin_existed_before = INSTALLED_PLUGIN.exists()
+            if cls._plugin_existed_before:
+                cls._plugin_backup = INSTALLED_PLUGIN.read_bytes()
+            shutil.copy(PLUGIN_SRC, INSTALLED_PLUGIN)
+
+            luarc = INSTALLED_PLUGIN.parent.parent / "luarc"
+            cls._luarc_path = luarc
+            line = 'require "darktable_mcp"\n'
+            cls._luarc_existed_before = luarc.exists()
+            if not luarc.exists() or line not in luarc.read_text():
+                cls._luarc_line_added = True
+                with luarc.open("a") as fh:
+                    fh.write(line)
+        except BaseException:
+            cls._cleanup_plugin_install()
+            raise
+
+    @classmethod
+    def _cleanup_plugin_install(cls) -> None:
+        if cls._luarc_line_added and cls._luarc_path is not None:
+            line = 'require "darktable_mcp"\n'
+            if cls._luarc_existed_before:
+                text = cls._luarc_path.read_text()
+                cls._luarc_path.write_text(text.replace(line, "", 1))
+            else:
+                cls._luarc_path.unlink(missing_ok=True)
+        if cls._plugin_existed_before and cls._plugin_backup is not None:
+            INSTALLED_PLUGIN.write_bytes(cls._plugin_backup)
+        elif not cls._plugin_existed_before:
+            INSTALLED_PLUGIN.unlink(missing_ok=True)
+
+    @classmethod
+    def _restore_env(cls) -> None:
+        for key, value in cls._env_before.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    @classmethod
+    def _launch_and_wait(cls) -> None:
+        from scouter.core import dtbridge
+
+        started = time.monotonic()
+        cls.proc = subprocess.Popen(
+            [str(DARKTABLE)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        deadline = time.monotonic() + 120
+        last = "never answered"
+        while time.monotonic() < deadline:
+            try:
+                last = dtbridge.current_view()
+            except Exception as e:  # bridge not up yet
+                last = str(e)
+            else:
+                cls.timings["darktable_launch_to_bridge_s"] = time.monotonic() - started
+                return
+            time.sleep(1.0)
+        raise unittest.SkipTest(f"the bridge never answered within 120s (last: {last})")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        try:
+            if cls.proc is not None and cls.proc.poll() is None and cls.hero:
+                # Ruling 16: commit before quitting, so darktable is never
+                # killed holding history it has not flushed.
+                try:
+                    from scouter import registry
+
+                    registry.call("history.commit", "cli", image=cls.hero, timeout_s=10.0)
+                except Exception:
+                    pass
+            if cls.proc is not None:
+                _quit(cls.proc)
+            assert (
+                subprocess.run(["pgrep", "-f", "MacOS/darktable"], capture_output=True).returncode
+                != 0
+            ), "darktable is still running after _quit's full escalation"
+        finally:
+            cls._write_measurements()
+            cls._cleanup_plugin_install()
+            cls._restore_env()
+            if not os.environ.get("SCOUTER_KEEP_SYNTHETIC") == "1":
+                shutil.rmtree(SYNTHETIC_ROOT, ignore_errors=True)
+                if cls._tmp:
+                    shutil.rmtree(cls._tmp, ignore_errors=True)
+
+    @classmethod
+    def _write_measurements(cls) -> None:
+        if not cls.timings:
+            return
+        lines = [
+            "",
+            f"## Phase 2 end-to-end, 30 synthetic frames (task 14, {time.strftime('%Y-%m-%d')}, "
+            "darktable 5.4.1, real host, MacBook)",
+            "",
+            "| stage | wall seconds |",
+            "|---|---|",
+        ]
+        for key, value in cls.timings.items():
+            lines.append(f"| `{key}` | {value:.2f} |")
+        if cls.facts:
+            lines.extend(["", "New darktable facts observed in this run:", ""])
+            lines.extend(f"- {fact}" for fact in cls.facts)
+        lines.append("")
+        MEASUREMENTS_GENERATED.parent.mkdir(parents=True, exist_ok=True)
+        with MEASUREMENTS_GENERATED.open("a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        print("\n".join(lines))
+
+    # -- helpers ------------------------------------------------------------
+
+    def _call(self, verb: str, **kwargs):
+        from scouter import registry
+
+        return registry.call(verb, "cli", **kwargs)
+
+    def _ok(self, verb: str, **kwargs):
+        envelope = self._call(verb, **kwargs)
+        self.assertTrue(
+            envelope.ok, f"{verb} failed: {envelope.outcome} {envelope.error or envelope.data}"
+        )
+        return envelope.data
+
+    def _job_dir(self) -> Path:
+        from scouter import config as config_module
+
+        return config_module.find_job(config_module.load(), E2E_SLUG)
+
+    def _raws(self) -> list[Path]:
+        return sorted(
+            p
+            for p in (self._job_dir() / "raw").iterdir()
+            if p.is_file() and p.suffix.lower() != ".xmp"
+        )
+
+    # -- E1 -----------------------------------------------------------------
+
+    def test_00_gate_refuses_first(self) -> None:
+        """E1: with `backup.enabled: false`, `library import` exits 11 and
+        NOTHING was created -- the gate runs before the card is read."""
+        from scouter.errors import exit_code_for
+
+        envelope = self._call(
+            "library.import", source=str(self.card), job_slug=E2E_SLUG, confirm=True
+        )
+        self.assertFalse(envelope.ok)
+        self.assertEqual(envelope.outcome, "error:backup_not_configured")
+        self.assertEqual(exit_code_for(envelope.outcome), 11)
+        self.assertIn("enabled", envelope.error["message"])
+        self.assertEqual(
+            sorted(p.name for p in self.library_root.iterdir()),
+            [],
+            "the refused import created something under the library root",
+        )
+        # Arm the gate for every stage after this one.
+        type(self)._write_config(backup_enabled=True)
+        self.assertEqual(self._ok("config.show")["config"]["backup"]["enabled"], True)
+
+    # -- E2 -----------------------------------------------------------------
+
+    def test_01_import_30_frames(self) -> None:
+        """E2: 30 files in `raw/`, all 0444, `library verify` clean,
+        `import.json` + `checksums.sha256` present, the film roll registered,
+        and the TEMP vault note written with `ai-first: true`."""
+        started = time.monotonic()
+        data = self._ok("library.import", source=str(self.card), job_slug=E2E_SLUG, confirm=True)
+        elapsed = time.monotonic() - started
+        type(self).timings["library_import_30_frames_s"] = elapsed
+        type(self).timings["library_import_bytes"] = float(data["totals"]["bytes"])
+
+        self.assertEqual(data["totals"]["copied"], 30)
+        raws = self._raws()
+        self.assertEqual(len(raws), 30)
+        for raw in raws:
+            self.assertEqual(
+                oct(raw.stat().st_mode & 0o777), "0o444", f"{raw.name} is not read-only"
+            )
+        scouter_d = self._job_dir() / ".scouter"
+        self.assertTrue((scouter_d / "import.json").is_file())
+        self.assertTrue((scouter_d / "checksums.sha256").is_file())
+
+        verify = self._ok("library.verify", job_slug=E2E_SLUG)
+        self.assertTrue(verify["ok"], verify)
+        self.assertEqual(verify["checked"], 30)
+
+        self.assertTrue(
+            data.get("film_roll_registered"),
+            f"the film roll was not registered: {data.get('warnings')}",
+        )
+        type(self).facts.append(
+            f"library.import registered a film roll of {data.get('imported')} images for "
+            f"a 30-frame folder (import_batch, recursive=false)"
+        )
+
+        notes = sorted((self.vault / "Projects" / "Photo jobs").glob("*.md"))
+        self.assertEqual(len(notes), 1, f"expected one vault job note, got {notes}")
+        note = notes[0].read_text()
+        self.assertIn("ai-first: true", note)
+        self.assertIn("## For future agent", note)
+        # The REAL vault must be untouched: this note is in the temp tree.
+        self.assertTrue(str(notes[0]).startswith(str(self.vault)))
+
+    # -- E3 -----------------------------------------------------------------
+
+    def test_02_cull(self) -> None:
+        """E3: `cull propose` finds 6 bursts and proposes 6 picks with
+        `tie_broken_by == "seq"`; `cull apply --yes` writes the ratings and
+        reports `verified + unverified == changed`."""
+        started = time.monotonic()
+        proposal = self._ok("cull.propose", job_slug=E2E_SLUG)
+        type(self).timings["cull_propose_30_frames_s"] = time.monotonic() - started
+        type(self).timings["cull_propose_stats_ms"] = float(proposal["stats"]["ms"])
+
+        real_bursts = [g for g in proposal["groups"] if g["burst_id"] != "no-time"]
+        self.assertEqual(len(real_bursts), 6, [g["burst_id"] for g in proposal["groups"]])
+        self.assertEqual(sorted(len(g["frames"]) for g in real_bursts), [5, 5, 5, 5, 5, 5])
+        picks = [p for p in proposal["proposals"] if p["rating_proposed"] == 2]
+        self.assertEqual(len(picks), 6, "exactly one pick per burst")
+        # The synthetic set's stated limitation: identical pixels tie, so the
+        # assertion is that the tie was broken by `seq` and SAID so -- never
+        # which frame won.
+        self.assertTrue(
+            all(g["tie_broken_by"] == "seq" for g in real_bursts),
+            [g["tie_broken_by"] for g in real_bursts],
+        )
+        for p in proposal["proposals"]:
+            self.assertTrue(p["reasons"], f"frame {p['seq']} has no reason")
+
+        started = time.monotonic()
+        applied = self._ok("cull.apply", job_slug=E2E_SLUG, confirm=True)
+        type(self).timings["cull_apply_30_frames_s"] = time.monotonic() - started
+
+        changed = applied["would_change"]
+        self.assertGreater(changed, 0)
+        self.assertEqual(
+            applied["verified"] + applied["unverified"],
+            changed,
+            "every changed frame must be accounted for as verified or unverified",
+        )
+        type(self).facts.append(
+            f"cull.apply: {applied['verified']} of {changed} ratings were visible in the "
+            f"XMP within the {2.0:.1f}s poll window ({applied['unverified']} not yet)"
+        )
+
+    # -- E8 -----------------------------------------------------------------
+
+    def test_03_hero_edit_and_repeat_set(self) -> None:
+        """E8: open the hero, set exposure and sigmoid contrast, then repeat
+        `exposure 0.6` twice. Both repeats < 1.5 s, and `noop is True` on at
+        least the second."""
+        hero = str(self._raws()[0])
+        type(self).hero = hero
+        self._ok("darkroom.open", image=hero)
+
+        self._ok("darkroom.set", module="exposure", param="exposure", value=0.6)
+        self._ok("darkroom.set", module="sigmoid", param="contrast", value=1.3)
+
+        repeats = []
+        for _ in range(2):
+            started = time.monotonic()
+            result = self._ok("darkroom.set", module="exposure", param="exposure", value=0.6)
+            repeats.append((time.monotonic() - started, bool(result["noop"])))
+
+        type(self).timings["repeat_set_first_s"] = repeats[0][0]
+        type(self).timings["repeat_set_second_s"] = repeats[1][0]
+        for index, (seconds, _noop) in enumerate(repeats, start=1):
+            self.assertLess(
+                seconds, 1.5, f"repeat set #{index} cost {seconds:.2f}s (phase 1 was 5.5s)"
+            )
+        self.assertTrue(repeats[-1][1], f"the second repeat must be a no-op, got {repeats}")
+        type(self).facts.append(
+            f"repeat darkroom.set: {repeats[0][0]:.2f}s then {repeats[1][0]:.2f}s "
+            f"(noop={repeats[0][1]}/{repeats[1][1]}); phase 1 measured 5.5-5.7s"
+        )
+
+    # -- E4 -----------------------------------------------------------------
+
+    def test_04_style_extract_filtered(self) -> None:
+        """E4: `--modules exposure,sigmoid` writes a `.dtstyle` holding
+        exactly two operations, `modules_honoured is True`, and darktable's
+        own `list_styles` shows it."""
+        from scouter.core import dtbridge
+
+        name = f"e2e-hero-{int(time.time())}"
+        type(self).style_name = name
+        started = time.monotonic()
+        data = self._ok(
+            "style.extract",
+            image=self.hero,
+            name=name,
+            modules=["exposure", "sigmoid"],
+            confirm=True,
+        )
+        type(self).timings["style_extract_s"] = time.monotonic() - started
+
+        self.assertTrue(data["modules_honoured"], data)
+        self.assertEqual(sorted(data["operations_included"]), ["exposure", "sigmoid"])
+        dtstyle = Path(data["dtstyle_path"])
+        self.assertTrue(dtstyle.is_file())
+        root = ET.fromstring(dtstyle.read_text())
+        operations = sorted(el.text for el in root.iter("operation"))
+        self.assertEqual(operations, ["exposure", "sigmoid"], operations)
+
+        styles = dtbridge.call("list_styles", {})
+        self.assertIn(name, [s["name"] for s in styles["styles"]])
+
+    # -- E5 -----------------------------------------------------------------
+
+    def test_05_style_apply_set(self) -> None:
+        """E5: 29 frames (every raw but the hero), `failed == 0`, `per_image`
+        has 29 rows."""
+        started = time.monotonic()
+        data = self._ok(
+            "style.apply_set",
+            name=self.style_name,
+            job_slug=E2E_SLUG,
+            exclude=[self.hero],
+            confirm=True,
+        )
+        elapsed = time.monotonic() - started
+        type(self).timings["style_apply_set_29_frames_s"] = elapsed
+
+        self.assertEqual(data["failed"], 0, data)
+        self.assertEqual(len(data["per_image"]), 29, len(data["per_image"]))
+        self.assertEqual(data["applied"], 29, data)
+        type(self).facts.append(
+            f"style.apply_set: 29 frames in {elapsed:.2f}s "
+            f"({elapsed / 29 * 1000:.0f} ms/frame, batched at 25 ids per bridge call)"
+        )
+
+    # -- E6 -----------------------------------------------------------------
+
+    def test_06_outliers(self) -> None:
+        """E6: against the hero; every row carries `ev_proxy_delta` and the
+        tolerances used; `checked == 29`."""
+        started = time.monotonic()
+        data = self._ok("outliers.list", reference=self.hero, job_slug=E2E_SLUG)
+        type(self).timings["outliers_list_29_frames_s"] = time.monotonic() - started
+
+        self.assertEqual(data["checked"], 29, data)
+        self.assertIn(data["wb_test"], ("kelvin", "ratio"))
+        self.assertTrue(data["tolerances"])
+        self.assertEqual(
+            data["within_tolerance"] + len(data["outliers"]) + len(data["failed"]),
+            29,
+            "every checked frame must land in exactly one bucket",
+        )
+        for row in data["outliers"]:
+            self.assertIn("ev_proxy_delta", row, row)
+            self.assertIn("reasons", row, row)
+        for key in ("exposure_ev", "clipped_high_pct"):
+            self.assertIn(key, data["tolerances"], data["tolerances"])
+        type(self).facts.append(
+            f"outliers.list over 29 post-style frames: wb_test={data['wb_test']}, "
+            f"{len(data['outliers'])} outside tolerance, {data['within_tolerance']} within"
+        )
+
+    # -- E7 -----------------------------------------------------------------
+
+    def test_07_release(self) -> None:
+        """E7: `--preset client-proof --min-rating 1 --yes`; every JPEG's
+        longest edge is 2048, read from the SOF header; `export verify`
+        clean."""
+        started = time.monotonic()
+        data = self._ok(
+            "export.release",
+            job_slug=E2E_SLUG,
+            preset="client-proof",
+            min_rating=1,
+            confirm=True,
+        )
+        elapsed = time.monotonic() - started
+        type(self).timings["export_release_client_proof_s"] = elapsed
+        type(self).timings["export_release_frames"] = float(data["exported"])
+
+        self.assertEqual(data["failed"], 0, data)
+        self.assertGreater(data["exported"], 0, data)
+        outputs = sorted(Path(data["out_dir"]).glob("*.jpg"))
+        self.assertEqual(len(outputs), data["exported"])
+        for out in outputs:
+            self.assertEqual(
+                _jpeg_longest_edge(out), 2048, f"{out.name} is not 2048 px on its longest edge"
+            )
+
+        verified = self._ok("export.verify", manifest=data["manifest_path"])
+        self.assertTrue(verified["ok"], verified)
+        self.assertEqual(verified["checked"], data["exported"])
+        type(self).facts.append(
+            f"export.release client-proof: {data['exported']} frames in {elapsed:.2f}s "
+            f"({elapsed / max(data['exported'], 1):.2f} s/frame at 2048 px, q90 sRGB)"
+        )
+
+    # -- E9 -----------------------------------------------------------------
+
+    def test_08_backup(self) -> None:
+        """E9: `backup run --yes` then `backup verify` -> `verified is True`,
+        every check named."""
+        started = time.monotonic()
+        run = self._ok("backup.run", confirm=True)
+        type(self).timings["backup_run_s"] = time.monotonic() - started
+
+        started = time.monotonic()
+        # `archive` is the archive's timestamp DIRECTORY name, not a file
+        # path; omitted, `backup.verify` picks the newest, which is the one
+        # this run just wrote.
+        verified = self._ok("backup.verify")
+        type(self).timings["backup_verify_s"] = time.monotonic() - started
+
+        self.assertTrue(verified["verified"], verified)
+        self.assertTrue(verified["checks"], verified)
+        for check in verified["checks"]:
+            self.assertIn("name", check)
+            self.assertTrue(check["ok"], f"check {check['name']} failed: {check}")
+        type(self).timings["backup_plaintext_bytes"] = float(run["plaintext_bytes"])
+        type(self).timings["backup_ciphertext_bytes"] = float(run["ciphertext_bytes"])
+        type(self).timings["backup_ms_tar"] = float(run["ms_tar"])
+        type(self).timings["backup_ms_encrypt"] = float(run["ms_encrypt"])
+        type(self).timings["backup_ms_rsync"] = float(run["ms_rsync"] or 0)
+        type(self).facts.append(
+            f"backup.run wrote {run['archive_dir']} "
+            f"({run['plaintext_bytes']} plaintext -> {run['ciphertext_bytes']} ciphertext "
+            f"bytes, encryption={run['encryption']}, rsync_ran={run['rsync_ran']}); "
+            f"backup.verify ran {len(verified['checks'])} named checks, "
+            f"archive={verified['archive']}"
+        )
+
+    # -- metrics ------------------------------------------------------------
+
+    def test_09_metrics(self) -> None:
+        """One event per verb invoked, `phase == 2`, and no `error:` outcome
+        other than `test_00`'s deliberate gate refusal."""
+        data = self._ok("metrics.summary", since="1d")
+        by_verb = {row["verb"]: row for row in data["verbs"]}
+
+        for verb in (
+            "library.import",
+            "library.verify",
+            "cull.propose",
+            "cull.apply",
+            "darkroom.set",
+            "style.extract",
+            "style.apply_set",
+            "outliers.list",
+            "export.release",
+            "export.verify",
+            "backup.run",
+            "backup.verify",
+        ):
+            self.assertIn(verb, by_verb, f"{verb} emitted no metrics event")
+
+        # library.import ran exactly twice: the refused one and the real one.
+        self.assertEqual(by_verb["library.import"]["calls"], 2, by_verb["library.import"])
+        self.assertEqual(by_verb["library.import"]["errors"], 1, "only test_00 may have errored")
+        for verb, row in by_verb.items():
+            if verb == "library.import":
+                continue
+            self.assertEqual(row["errors"], 0, f"{verb} recorded an error: {row}")
+
+        from scouter import paths
+
+        audit = paths.audit_path(E2E_JOB)
+        self.assertTrue(audit.is_file(), f"no audit trail at {audit}")
+        events = [json.loads(line) for line in audit.read_text().splitlines() if line.strip()]
+        self.assertTrue(events)
+        self.assertTrue(all(e.get("phase") == 2 for e in events), "every event must say phase 2")
 
 
 if __name__ == "__main__":
