@@ -253,6 +253,10 @@ def _stats_cache_path(raw_path: str, px: int) -> Path:
     which is what makes "stats before the style, stats after the style"
     affordable over 300 frames.
     """
+    # Local import (see `stats_many`): `scouter/__init__.py` is cheap, but
+    # importing it at module scope here is the same cycle risk, and keeping
+    # both local imports in this module consistent is worth more than one
+    # saved line.
     from scouter import __version__
 
     mtime = xmp.sidecar_path(raw_path)
@@ -307,6 +311,13 @@ def stats_many(
     {"path": ..., "error": {"code", "message"}} and the caller reports `failed`.
     """
     workers = max(1, min(workers, os.cpu_count() or 2))
+    # Local import, deliberately (carried finding 8, task 5's nit: the same
+    # import here and in `_cache_path` had no comment explaining itself, so
+    # it read like an oversight): `scouter.config` imports `scouter.paths`
+    # and is imported by `scouter.core.library`, which imports this module.
+    # A module-level `from scouter.config import load` would close that
+    # cycle at import time. Aliased `_load_config` so the name cannot be
+    # mistaken for one of this module's own helpers.
     from scouter.config import load as _load_config
 
     cfg = _load_config()

@@ -192,6 +192,12 @@ class ChangedResult(Payload):
     fresh: bool = False
     watermark: dict | None = None
     sidecar: dict | None = None
+    #: Carried finding 7 (task 12): `"<module>.<param>"` for every write
+    #: Scouter journalled with `commit=False` for this image. Non-empty
+    #: forces `fresh=False`: the sidecar's bytes can be identical to the
+    #: watermark while darktable's live history has already moved on, and a
+    #: file signature cannot see that -- the journal can.
+    pending_uncommitted: list = field(default_factory=list)
 
 
 @dataclass

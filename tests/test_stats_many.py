@@ -102,7 +102,17 @@ class StatsManyTest(unittest.TestCase):
         ok = [r for r in results if "error" not in r]
         self.assertEqual(len(ok), 4)
 
-    def test_workers_do_not_share_a_configdir(self) -> None:
+    def test_render_configdir_is_unique_per_call_across_worker_threads(self) -> None:
+        """Carried finding 8 (task 5's nit): the old name,
+        `test_workers_do_not_share_a_configdir`, promised more than this
+        test delivers. It patches `scout.render` OUT, so what it actually
+        proves is narrower and worth stating: `_render_configdir()` hands
+        every caller a distinct directory even when four worker threads call
+        it at once. That the REAL `render` uses that directory and deletes
+        it afterwards is pinned separately, by
+        `tests/test_scout_core.py::test_two_renders_use_different_configdirs`
+        and `::test_render_configdir_is_removed_after_the_call`.
+        """
         raws = [self._raw(f"w{i}.ORF") for i in range(4)]
         recorded: list[str] = []
         lock = threading.Lock()

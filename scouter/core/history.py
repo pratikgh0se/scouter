@@ -324,6 +324,39 @@ def _darkroom_image() -> int:
     return int(image_id)
 
 
+def pending_uncommitted_keys(job: str, image_id: int) -> list[str]:
+    """`"<module>.<param>"` (plus `[instance]` when non-zero) for every key
+    whose NEWEST landed journal entry for this image was written with
+    `commit=False` -- i.e. every write darktable has applied in memory but
+    has not been asked to flush to the sidecar.
+
+    Carried finding 7 (task 12). The per-key decision is delegated to
+    `darkroom._last_journal_write`, which already knows the rules that
+    matter (an undone or failed write never landed; a landed `module.reset`
+    invalidates everything journalled for that module before it) -- copying
+    them here would be a second, drifting implementation of the same
+    question.
+    """
+    from scouter.core import darkroom, journal
+
+    keys: list[tuple[str, str, int]] = []
+    seen: set[tuple[str, str, int]] = set()
+    for entry in journal.read_all(job):
+        if entry.image_id != image_id or entry.module is None or entry.param is None:
+            continue
+        key = (entry.module, entry.param, entry.instance)
+        if key not in seen:
+            seen.add(key)
+            keys.append(key)
+
+    pending: list[str] = []
+    for module, param, instance in keys:
+        last = darkroom._last_journal_write(job, image_id, module, param, instance)
+        if last is not None and last.commit is False:
+            pending.append(f"{module}.{param}" + (f"[{instance}]" if instance else ""))
+    return pending
+
+
 @metrics.instrumented("history.changed")
 def changed(image: str | int, *, job: str | None = None) -> ChangedResult:
     """Is this image's sidecar the one Scouter last committed?
@@ -338,12 +371,33 @@ def changed(image: str | int, *, job: str | None = None) -> ChangedResult:
     state = paths.job_state_read(job)
     watermark = (state.get("watermarks") or {}).get(str(resolved.image_id))
     sidecar = _signature(resolved.xmp_path)
+
+    # Carried finding 7 (task 12): fold `pending_uncommitted` in. The
+    # watermark is a pure FILE signature, so a Scouter write journalled with
+    # `commit=False` leaves the sidecar byte-identical and this verb
+    # answered `fresh=True` -- while darktable's live history had already
+    # diverged from disk in a way the JOURNAL knows about. `darkroom.set`
+    # has always consulted the journal for exactly this (fix round 1,
+    # blocker 1); a caller asking "is the sidecar what Scouter last
+    # committed?" before deciding whether to spend a bounce needs the same
+    # answer, or the cheap read sends it down the expensive-path-avoiding
+    # branch precisely when the expensive path is the correct one.
+    pending = pending_uncommitted_keys(job, resolved.image_id)
+    if pending:
+        fresh = False
+        pending_reason = (
+            f"Scouter has {len(pending)} uncommitted write(s) for this image "
+            f"({', '.join(pending)}): darktable's live history differs from the "
+            "sidecar, which a file signature cannot see. Run `history commit` first"
+        )
+        reason = f"{reason}; {pending_reason}" if reason else pending_reason
     return ChangedResult(
         image_id=resolved.image_id,
         path=resolved.path,
         fresh=fresh,
         watermark=watermark,
         sidecar=sidecar,
+        pending_uncommitted=pending,
         reason=reason,
     )
 

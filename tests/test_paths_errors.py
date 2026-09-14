@@ -117,6 +117,73 @@ class JobStateTest(unittest.TestCase):
             )
 
 
+class JobStateMultiProcessLockTest(unittest.TestCase):
+    """Carried finding 7 (task 12): the same no-lost-update property, across
+    PROCESSES.
+
+    `test_concurrent_writers_never_lose_an_update` races threads, which is
+    the weaker test: threads share one process, so an implementation that
+    guarded the read-modify-write with a `threading.Lock` (or that simply
+    got lucky on the GIL) would pass it while a second Scouter process --
+    `darkroom.set` in one shell, `scouter metrics summary` in another, the
+    launchd job alongside either -- still clobbered its update. `flock` is
+    per-open-file-description, so only separate processes actually exercise
+    it.
+    """
+
+    def setUp(self) -> None:
+        self._env = dict(os.environ)
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ["SCOUTER_CACHE"] = self._tmp.name
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._env)
+        self._tmp.cleanup()
+
+    def test_concurrent_processes_never_lose_an_update(self) -> None:
+        import subprocess
+        import sys
+
+        job = "job-multiproc"
+        n_procs = 6
+        n_writes_each = 20
+        repo_root = Path(paths.__file__).resolve().parent.parent
+        script = (
+            "import os, sys, time\n"
+            "sys.path.insert(0, sys.argv[3])\n"
+            "from scouter import paths\n"
+            "key, n = sys.argv[1], int(sys.argv[2])\n"
+            "def mutate(state):\n"
+            "    counters = state.setdefault('counters', {})\n"
+            "    counters[key] = counters.get(key, 0) + 1\n"
+            "for _ in range(n):\n"
+            f"    paths.job_state_update({job!r}, mutate)\n"
+            "    time.sleep(0.001)\n"
+        )
+        procs = [
+            subprocess.Popen(
+                [sys.executable, "-c", script, f"p{i}", str(n_writes_each), str(repo_root)],
+                env={**os.environ, "SCOUTER_CACHE": self._tmp.name},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            for i in range(n_procs)
+        ]
+        for proc in procs:
+            out, err = proc.communicate(timeout=120)
+            self.assertEqual(proc.returncode, 0, err.decode())
+
+        counters = paths.job_state_read(job).get("counters", {})
+        self.assertEqual(len(counters), n_procs, f"a whole process's key vanished: {counters}")
+        for i in range(n_procs):
+            self.assertEqual(
+                counters.get(f"p{i}"),
+                n_writes_each,
+                f"process p{i} lost at least one update: {counters}",
+            )
+
+
 class JobValidationTest(unittest.TestCase):
     """B3: a job id becomes a file name, so traversal must be impossible."""
 

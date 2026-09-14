@@ -262,6 +262,76 @@ class HistoryChangedTest(unittest.TestCase):
         self.assertEqual(self.bridge.count("darkroom.action"), 1, "the write must still bounce")
         self.assertGreaterEqual(self.bridge.count("history.commit"), 1, "and still commit")
 
+    def test_changed_reports_pending_uncommitted_and_is_never_fresh_with_one(self) -> None:
+        """Carried finding 7 (task 12): `history.changed` folds
+        `pending_uncommitted` in.
+
+        The watermark is a pure FILE signature, so a Scouter write
+        journalled with `commit=False` leaves the sidecar byte-identical and
+        this verb used to answer `fresh=True` -- exactly when darktable's
+        live history had already diverged from disk. A script calls
+        `history.changed` to decide whether it can skip a bounce; answering
+        "fresh" here sends it down the skip branch precisely when the bounce
+        is the correct move.
+        """
+        warm = darkroom.set_param(
+            module="exposure", param="exposure", value=FIXTURE_EXPOSURE_VALUE, job="job-test"
+        )
+        self.assertTrue(warm.committed)
+        self.assertTrue(history.changed(str(self.raw), job="job-test").fresh)
+
+        darkroom.set_param(
+            module="exposure", param="exposure", value=4.25, commit=False, job="job-test"
+        )
+
+        result = history.changed(str(self.raw), job="job-test")
+        self.assertEqual(result.pending_uncommitted, ["exposure.exposure"])
+        self.assertFalse(result.fresh, "an uncommitted write can never read as fresh")
+        self.assertIn("uncommitted", result.reason)
+        self.assertIn("history commit", result.reason)
+        # Still a pure read: the fold costs a journal read, not a bridge
+        # call -- `image.lookup` remains the only method this verb calls.
+        self.bridge.calls.clear()
+        history.changed(str(self.raw), job="job-test")
+        self.assertEqual(self.bridge.methods_called(), ["image.lookup"])
+
+    def test_changed_stays_fresh_once_the_pending_write_is_committed(self) -> None:
+        darkroom.set_param(
+            module="exposure", param="exposure", value=4.25, commit=False, job="job-test"
+        )
+        self.assertFalse(history.changed(str(self.raw), job="job-test").fresh)
+
+        committed = darkroom.set_param(
+            module="exposure", param="exposure", value=4.25, commit=True, job="job-test"
+        )
+        self.assertTrue(committed.committed)
+        result = history.changed(str(self.raw), job="job-test")
+        self.assertEqual(result.pending_uncommitted, [])
+        self.assertTrue(result.fresh)
+
+    def test_changed_is_unaffected_by_another_images_pending_write(self) -> None:
+        """The fold is per-image: a pending write on image 99 says nothing
+        about image 12."""
+        darkroom.set_param(
+            module="exposure", param="exposure", value=FIXTURE_EXPOSURE_VALUE, job="job-test"
+        )
+        from scouter.core import journal
+
+        journal.begin(
+            "job-test",
+            verb="darkroom.set",
+            image_id=99,
+            path="/elsewhere/other.ORF",
+            module="exposure",
+            param="exposure",
+            instance=0,
+            before={},
+            commit=False,
+        )
+        result = history.changed(str(self.raw), job="job-test")
+        self.assertEqual(result.pending_uncommitted, [])
+        self.assertTrue(result.fresh)
+
     # -- blocker 2: expect_change=False never certifies freshness on its own -
 
     def test_expect_change_false_unconfirmed_stamps_no_watermark(self) -> None:
