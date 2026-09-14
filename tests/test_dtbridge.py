@@ -1,9 +1,10 @@
 import os
 import unittest
+from pathlib import Path
 
 from darktable_mcp.bridge.client import BridgeError, BridgeTimeoutError
 from scouter.core import dtbridge
-from scouter.errors import BridgeTimeout, DbLocked, NotInDarkroom, WrongView
+from scouter.errors import BridgeTimeout, DbLocked, NotInDarkroom, UsageError, WrongView
 from tests.scouter_fakes import (
     FAKE_CLI_WRITES_PPM,
     FakeBridge,
@@ -61,10 +62,49 @@ class ClassificationTest(unittest.TestCase):
         self.assertIn("wrong image loaded", str(ctx.exception))
         self.assertIn("expected 12, got 7", str(ctx.exception))
 
-    def test_action_path_table_and_fallback(self) -> None:
+    def test_action_path_returns_the_pinned_path(self) -> None:
         self.assertEqual(dtbridge.action_path("exposure", "exposure"), "iop/exposure/exposure")
         self.assertEqual(dtbridge.action_path("sigmoid", "contrast"), "iop/sigmoid/contrast")
-        self.assertEqual(dtbridge.action_path("newmod", "newparam"), "iop/newmod/newparam")
+        self.assertEqual(
+            dtbridge.action_path("exposure", "black"), "iop/exposure/black level correction"
+        )
+
+    def test_action_path_refuses_an_unpinned_pair(self) -> None:
+        """Carried finding 1: the guessed `iop/<module>/<param>` fallback is
+        gone, because an unrecognised path wedges darktable's Lua worker for
+        the whole session."""
+        with self.assertRaises(UsageError) as ctx:
+            dtbridge.action_path("newmod", "newparam")
+        self.assertEqual(ctx.exception.code, "usage")
+        self.assertIn("newmod.newparam", ctx.exception.message)
+        self.assertIn("no parameter of `newmod` is pinned", ctx.exception.fix)
+        self.assertIn("exposure", ctx.exception.fix)
+        self.assertEqual(ctx.exception.detail["pinned_params_for_module"], [])
+
+    def test_action_path_names_the_modules_pinned_params(self) -> None:
+        with self.assertRaises(UsageError) as ctx:
+            dtbridge.action_path("exposure", "nosuchparam")
+        self.assertIn("pinned parameters for `exposure`", ctx.exception.fix)
+        self.assertEqual(ctx.exception.detail["pinned_params_for_module"], ["black", "exposure"])
+        self.assertIn("wedges", ctx.exception.fix)
+
+    def test_probe_bypass_is_explicit_and_test_only(self) -> None:
+        """The ONE bypass, for the host probes that must try unpinned paths.
+
+        The second half of this test is the guard that keeps it test-only:
+        no module under `scouter/` may pass `probe_unpinned`.
+        """
+        self.assertEqual(
+            dtbridge.action_path("newmod", "newparam", probe_unpinned=True),
+            "iop/newmod/newparam",
+        )
+        root = Path(dtbridge.__file__).resolve().parent.parent
+        offenders = [
+            str(p.relative_to(root.parent))
+            for p in sorted(root.rglob("*.py"))
+            if "probe_unpinned" in p.read_text(encoding="utf-8") and p.name != "dtbridge.py"
+        ]
+        self.assertEqual(offenders, [], "production code must never bypass the wedge guard")
 
     def test_resolve_image_accepts_a_path_and_an_id(self) -> None:
         bridge = FakeBridge(

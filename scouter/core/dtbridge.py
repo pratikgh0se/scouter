@@ -12,12 +12,19 @@ from darktable_mcp.bridge.client import (
     BridgeTimeoutError,
 )
 from scouter.core import xmp
-from scouter.errors import BridgeTimeout, NotInDarkroom, ScouterError, WrongView
+from scouter.errors import BridgeTimeout, NotInDarkroom, ScouterError, UsageError, WrongView
 from scouter.types import ResolvedImage
 
-#: `dt.gui.action` paths for the phase-1 modules. A module/param pair not in
-#: here is still usable -- the path is built as iop/<module>/<param> -- but the
-#: table documents the ones the integration test proves.
+#: `dt.gui.action` paths for the phase-1 modules. This table is a WHITELIST,
+#: not documentation: a pair that is not in here is refused by
+#: `action_path` (task 11 ruling, carried finding 1). Reason, measured on the
+#: real host: `dt.gui.action` on a path darktable 5.4.1 does not recognise
+#: wedges its Lua worker for the REST OF THE SESSION -- every later bridge
+#: call, including an unrelated `view.current`, then times out
+#: (`tests/test_host_phase2.py::PinWbCoefficientSlidersHostTest`,
+#: `docs/measurements.md`). So a guessed `iop/<module>/<param>` fallback does
+#: not cost one failed write, it costs the whole darkroom session. A new pair
+#: is added here only after a host probe answers non-`nan` for it.
 ACTION_PATHS: dict[tuple[str, str], str] = {
     ("exposure", "exposure"): "iop/exposure/exposure",
     ("exposure", "black"): "iop/exposure/black level correction",
@@ -56,8 +63,43 @@ def set_bridge(bridge: Any) -> None:
     _bridge = bridge
 
 
-def action_path(module: str, param: str) -> str:
-    return ACTION_PATHS.get((module, param), f"iop/{module}/{param}")
+def action_path(module: str, param: str, *, probe_unpinned: bool = False) -> str:
+    """The pinned `dt.gui.action` path for one module parameter.
+
+    Refuses an unpinned pair with `usage` rather than guessing
+    `iop/<module>/<param>`: see `ACTION_PATHS` for the measured reason (an
+    unrecognised path wedges darktable's Lua worker for the session).
+
+    `probe_unpinned=True` is the ONE bypass, and it exists for the host
+    probes in `tests/test_host_phase2.py` whose whole job is to find out
+    which candidate paths darktable accepts. No production code path passes
+    it; `tests/test_dtbridge.py` asserts that.
+    """
+    pinned = ACTION_PATHS.get((module, param))
+    if pinned is not None:
+        return pinned
+    if probe_unpinned:
+        return f"iop/{module}/{param}"
+    same_module = sorted(p for (m, p) in ACTION_PATHS if m == module)
+    if same_module:
+        detail_fix = f"pinned parameters for `{module}`: {', '.join(same_module)}"
+    else:
+        modules = sorted({m for (m, _) in ACTION_PATHS})
+        detail_fix = f"no parameter of `{module}` is pinned; pinned modules: {', '.join(modules)}"
+    raise UsageError(
+        f"no pinned darktable action path for {module}.{param}",
+        fix=(
+            f"{detail_fix}. Adding a path is a host-probe job, not a guess: an "
+            "unrecognised `dt.gui.action` path wedges darktable's Lua worker for the "
+            "whole session, so pin it in scouter/core/dtbridge.py's ACTION_PATHS only "
+            "after a probe answers non-nan for it."
+        ),
+        detail={
+            "module": module,
+            "param": param,
+            "pinned_params_for_module": same_module,
+        },
+    )
 
 
 def call(method: str, params: dict | None = None, timeout: float | None = None) -> Any:
