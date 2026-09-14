@@ -1416,15 +1416,32 @@ methods["history.commit"] = function(p)
   local sidecar = image_sidecar_path(image)
   local before = sidecar and sidecar_signature(sidecar) or nil
 
+  -- COMMIT_BOUNCE_ATTEMPTS is now the DEFAULT for `attempts`, not a constant.
+  -- A caller who already knows the history may not change (the Python layer's
+  -- no-op pre-check, design section 13) asks for one attempt and pays one
+  -- bounce (~0.78 s) instead of two bounces plus two sidecar waits (~5.5 s,
+  -- phase 1's measured worst case).
+  local attempts = tonumber(p.attempts) or COMMIT_BOUNCE_ATTEMPTS
+  -- Fix round 1 nit: floor BEFORE clamping, so a fractional attempts (JSON
+  -- has no int/float distinction) can't slip an extra partial bounce past
+  -- the `for attempt = 1, attempts do` loop below.
+  attempts = math.floor(attempts)
+  if attempts < 1 then attempts = 1 elseif attempts > 3 then attempts = 3 end
+  local expect_change = p.expect_change
+  if expect_change == nil then expect_change = true end
+  if not expect_change then attempts = 1 end
+
   --
-  -- Up to COMMIT_BOUNCE_ATTEMPTS bounces: the FIRST commit of a session can
-  -- land while darktable is still finishing its initial full-size render, and
-  -- that bounce flushes nothing. A second bounce right after does. This is a
+  -- Up to `attempts` bounces: the FIRST commit of a session can land while
+  -- darktable is still finishing its initial full-size render, and that
+  -- bounce flushes nothing. A second bounce right after does. This is a
   -- bounded retry over a real confirmation (did the sidecar change?), not a
   -- longer blind wait.
   local ok_call, result = true, nil
   local written, write_ms = nil, 0
-  for attempt = 1, COMMIT_BOUNCE_ATTEMPTS do
+  local attempt_count = 0
+  for attempt = 1, attempts do
+    attempt_count = attempt
     ok_call, result = pcall(commit_view_bounce)
     if not ok_call then break end
     if not (result.ok and sidecar) then break end
@@ -1432,7 +1449,7 @@ methods["history.commit"] = function(p)
     written = changed
     write_ms = write_ms + waited
     if changed then break end
-    if attempt < COMMIT_BOUNCE_ATTEMPTS and dt.control and dt.control.sleep then
+    if attempt < attempts and dt.control and dt.control.sleep then
       dt.control.sleep(VIEW_BOUNCE_DWELL_MS)
     end
   end
@@ -1440,7 +1457,7 @@ methods["history.commit"] = function(p)
 
   local detail = result.error
   if detail == nil and written == false then
-    detail = "the view bounce completed " .. COMMIT_BOUNCE_ATTEMPTS
+    detail = "the view bounce completed " .. attempt_count
       .. " time(s) but " .. tostring(sidecar) .. " did not change within "
       .. write_ms .. "ms of waiting -- darktable writes a sidecar only when "
       .. "the history actually changes, so this is expected when the requested "
@@ -1449,8 +1466,11 @@ methods["history.commit"] = function(p)
 
   return {
     strategy_used = "view_bounce",
-    -- ok means "this image's history is now on disk", not "the views moved".
-    ok = result.ok and written ~= false,
+    -- `ok` means "this image's history is now on disk". When the caller said it
+    -- does not expect a change, a bounce that wrote nothing is still a success:
+    -- sidecar_written = false reports the fact, and the Python readback resolves
+    -- whether the requested state is the state on disk.
+    ok = result.ok and (written ~= false or not expect_change),
     detail = detail,
     view_after = result.view,
     cpu_ms = (os.clock() - started) * 1000,
@@ -1459,6 +1479,8 @@ methods["history.commit"] = function(p)
     -- caller can tell "not checked" from "checked and did not change".
     sidecar_written = written,
     sidecar_wait_ms = write_ms,
+    attempts_used = attempt_count,
+    expect_change = expect_change,
   }
 end
 

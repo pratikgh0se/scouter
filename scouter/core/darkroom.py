@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import math
-import os
-import tempfile
 import time
 from collections.abc import Callable
 
@@ -70,35 +67,21 @@ def _require_finite(name: str, value: float) -> float:
     return number
 
 
-def _job_state_write(job: str, state: dict) -> None:
-    """Replace this job's state file atomically. Best-effort by design."""
-    path = paths.ensure(paths.job_state_path(job))
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".state-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(state, fh, sort_keys=True)
-        os.replace(tmp_name, path)
-    except OSError:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-
-
-def _job_state_read(job: str) -> dict:
-    path = paths.job_state_path(job)
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
 def _record_opened_image(job: str, image_id: int, path: str) -> None:
-    """Remember which image THIS job opened (ruling 30)."""
-    _job_state_write(job, {"opened_image_id": int(image_id), "opened_path": path})
+    """Remember which image THIS job opened (ruling 30).
+
+    Read-modify-write under a lock, not a blind overwrite (task 12 fix round
+    1, should-fix 5): `scouter.core.history` writes the same per-job state
+    file (a `watermarks` key) from a possibly-concurrent writer, and
+    `paths.job_state_update` is the one seam both modules go through so
+    neither can silently clobber the other's key.
+    """
+
+    def _mutate(state: dict) -> None:
+        state["opened_image_id"] = int(image_id)
+        state["opened_path"] = path
+
+    paths.job_state_update(job, _mutate)
 
 
 def _require_job_image(job: str, loaded_image_id: int) -> None:
@@ -112,7 +95,7 @@ def _require_job_image(job: str, loaded_image_id: int) -> None:
     ids. A job that has never opened anything has nothing to compare against
     and is left alone.
     """
-    expected = _job_state_read(job).get("opened_image_id")
+    expected = paths.job_state_read(job).get("opened_image_id")
     if expected is None or int(expected) == int(loaded_image_id):
         return
     raise NotInDarkroom(
@@ -127,7 +110,13 @@ def _require_job_image(job: str, loaded_image_id: int) -> None:
 
 
 def _commit_with_readback(
-    job: str, image_id: int, *, confirm: Callable[[], bool], what: str, strategy: str = "auto"
+    job: str,
+    image_id: int,
+    *,
+    xmp_path: str,
+    confirm: Callable[[], bool],
+    what: str,
+    strategy: str = "auto",
 ) -> tuple[bool, list[str]]:
     """`_commit`, with a commit timeout resolved by reading the XMP back.
 
@@ -140,12 +129,26 @@ def _commit_with_readback(
     was asked for, the request is satisfied and says so in a warning. If it
     does not, the timeout is re-raised untouched -- a write that never landed
     is never reported as committed.
+
+    `xmp_path` (fix round 1, should-fix 3): the CALLER's already-resolved
+    sidecar path, so watermarking a readback-resolved commit costs no extra
+    `darkroom.current` round-trip -- every caller already has this path from
+    resolving its own image.
     """
     try:
         result = _commit(job, image_id, strategy=strategy)
     except CommitTimeout:
         if not confirm():
             raise
+        # Task 12, step 2: a readback-resolved commit still means the sidecar
+        # on disk is now the state Scouter believes it committed, so the
+        # watermark is recorded here too -- `history.commit`'s own success
+        # path never ran (it raised), so nothing else would record it. This
+        # branch's own `confirm()` already IS the readback confirmation
+        # blocker 2 (fix round 1) requires, so watermarking here is safe.
+        from scouter.core import history
+
+        history.watermark_write(job, image_id, xmp_path)
         return True, [
             f"darktable wrote no new sidecar for {what}: the state requested is the "
             "one the XMP already carried, so there was no history change to write. "
@@ -154,7 +157,14 @@ def _commit_with_readback(
     return result.committed, list(result.warnings)
 
 
-def _commit(job: str, image_id: int, *, strategy: str = "auto") -> CommitResult:
+def _commit(
+    job: str,
+    image_id: int,
+    *,
+    strategy: str = "auto",
+    attempts: int | None = None,
+    expect_change: bool = True,
+) -> CommitResult:
     """Every write's post-action commit, routed through one seam (ruling 21).
 
     Imports `scouter.core.history` lazily so `darkroom.py` stays importable
@@ -164,11 +174,23 @@ def _commit(job: str, image_id: int, *, strategy: str = "auto") -> CommitResult:
     two -- `history.commit` is itself `@instrumented`. Falls back to the
     wrapped function if `__wrapped__` is ever absent, so this never breaks
     outright if that decorator detail changes.
+
+    `attempts`/`expect_change` (task 12): forwarded straight to
+    `history.commit`, whose docstring covers the no-op-pre-check use case.
+    `attempts=None` lets `history.commit` supply its own default.
     """
     from scouter.core import history
 
     commit_fn = getattr(history.commit, "__wrapped__", history.commit)
-    return commit_fn(image_id, timeout_s=5.0, strategy=strategy, job=job)
+    kwargs: dict = {
+        "timeout_s": 5.0,
+        "strategy": strategy,
+        "expect_change": expect_change,
+        "job": job,
+    }
+    if attempts is not None:
+        kwargs["attempts"] = attempts
+    return commit_fn(image_id, **kwargs)
 
 
 def _close(a: float | None, b: float | None, tol: float = 1e-4) -> bool:
@@ -279,13 +301,34 @@ def _last_journal_write(
     return None
 
 
-def _before_state(
+def _raw_and_before_state(
     job: str, image_id: int, path: str, module: str, param: str, instance: int
-) -> dict:
-    """The `before` state for a new write on this slider.
+) -> tuple[dict, dict, bool]:
+    """Returns `(raw_state, before_state, pending_uncommitted)`.
 
-    Ordinarily this is whatever the XMP currently shows. But when the last
-    (live, landed) write to this exact (image, module, param, instance) used
+    `raw_state` is EXACTLY what the sidecar shows on disk right now -- the
+    only state the no-op shortcut and the stale-but-matching mid path may
+    ever compare a requested value against (task 12 fix round 1, blocker 1).
+    `before_state` additionally applies the journal `commit=False` fallback
+    below, for callers (the journal entry's `before=`, `SetResult.previous`,
+    `undo_last`) that want the logical "current value" INCLUDING an
+    uncommitted write Scouter itself made -- a fallback that is exactly
+    wrong for the no-op decision, which must never trust anything but the
+    bytes actually on disk.
+
+    `pending_uncommitted` is True when the last landed write for this exact
+    (image, module, param, instance) has `commit=False`: darktable's live
+    history already differs from the sidecar in a way the journal knows
+    about but the sidecar cannot show yet. Neither the shortcut nor the mid
+    path may fire in that case -- not even when `raw_state` happens to
+    coincidentally equal the requested value, because sending the SAME value
+    Scouter set last time is what would silently re-confirm a stale-on-disk
+    edit without ever flushing it (the reviewer's repro: set 4.25 with
+    `commit=False`, then set 4.25 again -- the second call must still bounce
+    and commit).
+
+    Ordinarily `before_state`'s fallback value is whatever the XMP currently
+    shows. But when the last (live, landed) write to this exact key used
     `commit=False`, darktable has not written the sidecar for it yet -- the
     XMP still shows whatever was true before THAT write, not Scouter's own
     true current value, so the journal's own `after` is used instead. This
@@ -295,11 +338,76 @@ def _before_state(
     `commit=True` write's own `history.commit` call already waited for the
     XMP to advance, so its value is trustworthy and no fallback is needed.
     """
-    state = _read_state(path, module, param, instance)
+    raw_state = _read_state(path, module, param, instance)
     last = _last_journal_write(job, image_id, module, param, instance)
-    if last is not None and last.commit is False:
-        state = {**state, "value": last.after["value"]}
-    return state
+    pending_uncommitted = last is not None and last.commit is False
+    before_state = {**raw_state, "value": last.after["value"]} if pending_uncommitted else raw_state
+    return raw_state, before_state, pending_uncommitted
+
+
+def _noop_shortcut(
+    job: str,
+    resolved: dtbridge.ResolvedImage,
+    module: str,
+    param: str,
+    instance: int,
+    target: float | None,
+    raw_state: dict,
+    *,
+    requested: float | None,
+) -> SetResult | None:
+    """The zero-bounce, zero-bridge-write path (task 12).
+
+    `target` is the absolute value this write would end up at, known BEFORE
+    sending anything: `set`'s own requested value, or (for `nudge`) its own
+    current value when `steps=0` asks for no movement at all. `None` means
+    either the caller cannot know the target without sending the action
+    first (a nonzero-step nudge), or (fix round 1, blocker 1) there is a
+    pending `commit=False` write for this key that disqualifies ANY
+    comparison against the sidecar -- either way, there is nothing to
+    short-circuit.
+
+    `raw_state` must be the sidecar EXACTLY as it reads on disk right now
+    (never the journal-adjusted `before_state`): a value that matches only
+    because of that fallback is proof of an unflushed edit sitting in
+    darktable, not proof there is nothing to write.
+
+    When the target already matches the module's raw on-disk value, the
+    module is enabled, AND the watermark proves that value is still fresh
+    (not stale from an uncommitted edit), there is nothing to send: darktable
+    only writes the sidecar when the history actually CHANGES (phase 1 live
+    finding 4), so a repeat of the same value would otherwise cost a full
+    commit to discover it had nothing to write -- ~5.5s in the worst case,
+    two bounces and two sidecar waits. Returns `None` (not a shortcut) when
+    the watermark is missing or stale, or the value or `enabled` disagrees --
+    the caller falls through to the normal write-and-commit path.
+    """
+    if target is None:
+        return None
+    from scouter.core import history
+
+    fresh, _why = history.watermark_fresh(job, resolved.image_id, resolved.xmp_path)
+    if not (
+        fresh and raw_state.get("enabled") is not False and _close(target, raw_state.get("value"))
+    ):
+        return None
+    return SetResult(
+        image_id=resolved.image_id,
+        path=resolved.path,
+        module=module,
+        param=param,
+        instance=instance,
+        requested=requested,
+        applied=raw_state.get("value"),
+        previous=raw_state.get("value"),
+        committed=True,
+        noop=True,
+        source="xmp",
+        warnings=[
+            f"no-op: {module}.{param} is already {raw_state.get('value')} in the sidecar, "
+            "which Scouter last committed; nothing was sent to darktable"
+        ],
+    )
 
 
 def _current_image() -> dtbridge.ResolvedImage:
@@ -383,7 +491,35 @@ def set_param(
     resolved = _current_image()
     _require_job_image(job, resolved.image_id)
     dtbridge.require_darkroom()
-    before_state = _before_state(job, resolved.image_id, resolved.path, module, param, instance)
+    raw_state, before_state, pending_uncommitted = _raw_and_before_state(
+        job, resolved.image_id, resolved.path, module, param, instance
+    )
+    shortcut = _noop_shortcut(
+        job,
+        resolved,
+        module,
+        param,
+        instance,
+        None if pending_uncommitted else value,
+        raw_state,
+        requested=value,
+    )
+    if shortcut is not None:
+        return shortcut
+    # The pre-check matched the RAW on-disk value but the watermark was stale
+    # (or absent), so the write below is genuinely sent -- but a real change
+    # is still the unlikely outcome here: the XMP already says `value`, just
+    # not provably freshly. `expect_change=False, attempts=1` tells the
+    # commit to spend one bounce, not two (task 12). Never predicted when
+    # `pending_uncommitted` (blocker 1, fix round 1): a value that matches
+    # the sidecar only by coincidence, while a real unflushed edit is
+    # sitting in darktable, is not a no-op -- it can be a real change that
+    # must still be sent and committed for real (`expect_change=True`).
+    predicted_noop = (
+        not pending_uncommitted
+        and raw_state.get("enabled") is not False
+        and _close(value, raw_state.get("value"))
+    )
     entry = journal.begin(
         job,
         verb="darkroom.set",
@@ -423,26 +559,72 @@ def set_param(
         # The timeout is still raised when the readback does NOT confirm the
         # value -- a write that genuinely never landed must never be reported
         # as committed.
-        commit_result = None
+        def _try_commit(expect_change: bool, attempts: int | None) -> CommitResult | None:
+            nonlocal commit_error
+            try:
+                return _commit(
+                    job,
+                    resolved.image_id,
+                    strategy="auto",
+                    expect_change=expect_change,
+                    attempts=attempts,
+                )
+            except CommitTimeout as e:
+                commit_error = e
+                return None
+
         commit_error: CommitTimeout | None = None
-        try:
-            commit_result = _commit(job, resolved.image_id, strategy="auto")
-        except CommitTimeout as e:
-            commit_error = e
-        applied = _read_value(resolved.path, module, param, instance)
-        if commit_result is not None:
-            committed = commit_result.committed
-            warnings.extend(commit_result.warnings)
-        elif _close(applied, value):
-            committed = True
-            warnings.append(
-                f"darktable wrote no new sidecar for {module}.{param}: the value requested "
-                f"({value:g}) is the one the XMP already carried, so there was no history "
-                "change to write. Confirmed by reading the value back from the sidecar."
-            )
+        if predicted_noop:
+            commit_result = _try_commit(False, 1)
         else:
-            assert commit_error is not None
-            raise commit_error
+            commit_result = _try_commit(True, None)
+
+        if commit_result is not None and not commit_result.committed:
+            # `expect_change=False` (fix round 1, blocker 2): the bridge's own
+            # `sidecar_written=False` is NOT proof nothing changed -- only proof
+            # that this ONE bounce found nothing to flush. `history.commit`
+            # never stamps a watermark on this path for exactly that reason
+            # (`CommitResult.confirmed=False`); only an independent readback
+            # against the REQUESTED value earns one. A mismatch means the
+            # one-bounce prediction was wrong -- a real, unflushed change is
+            # pending -- so this escalates to a genuine `expect_change=True`
+            # commit rather than ever certifying a stale sidecar as fresh.
+            applied = _read_value(resolved.path, module, param, instance)
+            if _close(applied, value):
+                from scouter.core import history as _history
+
+                _history.watermark_write(job, resolved.image_id, resolved.xmp_path)
+                committed = True
+                warnings.extend(commit_result.warnings)
+                warnings.append(
+                    f"readback confirmed {module}.{param} already carries {value:g}: "
+                    "the watermark was recorded now, from this confirmation, not from "
+                    "the bridge's own (unconfirmed) report."
+                )
+            else:
+                commit_result = _try_commit(True, None)
+                applied = None
+
+        if not committed:
+            if commit_result is not None and commit_result.committed:
+                committed = True
+                warnings.extend(commit_result.warnings)
+            else:
+                if applied is None:
+                    applied = _read_value(resolved.path, module, param, instance)
+                if _close(applied, value):
+                    committed = True
+                    warnings.append(
+                        f"darktable wrote no new sidecar for {module}.{param}: the value "
+                        f"requested ({value:g}) is the one the XMP already carried, so "
+                        "there was no history change to write. Confirmed by reading the "
+                        "value back from the sidecar."
+                    )
+                else:
+                    assert commit_error is not None
+                    raise commit_error
+        if applied is None:
+            applied = _read_value(resolved.path, module, param, instance)
         if applied is None:
             warnings.append(
                 f"{module}.{param} committed but could not be decoded from the XMP; "
@@ -513,7 +695,29 @@ def nudge(
     resolved = _current_image()
     _require_job_image(job, resolved.image_id)
     dtbridge.require_darkroom()
-    before_state = _before_state(job, resolved.image_id, resolved.path, module, param, instance)
+    raw_state, before_state, pending_uncommitted = _raw_and_before_state(
+        job, resolved.image_id, resolved.path, module, param, instance
+    )
+    # `nudge` computes its absolute target BEFORE writing only in the trivial
+    # case: `steps=0` asks for no movement at all, so the target is simply
+    # the module's own RAW on-disk value (task 12). A nonzero-step nudge
+    # cannot know its landing value without sending the action -- darktable,
+    # not Scouter, owns the step size -- so there is nothing to short-circuit
+    # there; `_noop_shortcut` returns `None` and the nudge proceeds normally.
+    # `pending_uncommitted` (fix round 1, blocker 1) disqualifies the
+    # shortcut the same way it does for `set`.
+    shortcut = _noop_shortcut(
+        job,
+        resolved,
+        module,
+        param,
+        instance,
+        raw_state.get("value") if (steps == 0 and not pending_uncommitted) else None,
+        raw_state,
+        requested=None,
+    )
+    if shortcut is not None:
+        return shortcut
     entry = journal.begin(
         job,
         verb="darkroom.nudge",
@@ -565,6 +769,7 @@ def nudge(
         committed, warnings = _commit_with_readback(
             job,
             resolved.image_id,
+            xmp_path=resolved.xmp_path,
             confirm=_confirm_nudge,
             what=f"{module}.{param}",
         )
@@ -647,6 +852,7 @@ def _do_module_action(
     committed, warnings = _commit_with_readback(
         job,
         resolved.image_id,
+        xmp_path=resolved.xmp_path,
         confirm=_confirm_module,
         what=f"{module} ({action_name})",
     )
@@ -814,6 +1020,7 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             committed, warnings = _commit_with_readback(
                 job,
                 entry.image_id,
+                xmp_path=str(xmp.sidecar_path(entry.path)),
                 confirm=lambda: _module_enabled(entry.path, entry.module, entry.instance) is False,
                 what=f"{entry.module} (disable)",
             )
@@ -848,6 +1055,7 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
         committed, warnings = _commit_with_readback(
             job,
             entry.image_id,
+            xmp_path=str(xmp.sidecar_path(entry.path)),
             confirm=lambda: _close(
                 _read_value(entry.path, entry.module, entry.param, entry.instance), float(previous)
             ),

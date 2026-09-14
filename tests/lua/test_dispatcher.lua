@@ -1721,6 +1721,45 @@ do
   view_state.current = "darkroom"
 end
 
+-- Task 12: `attempts` is clamped to 1..3, and a caller who does not expect a
+-- change gets exactly one bounce with `ok=true` even when nothing was
+-- written -- the Python layer's no-op pre-check relies on this to avoid
+-- paying for two bounces it already knows will find nothing to write. The
+-- default path (no attempts/expect_change given) is unchanged: two attempts,
+-- and `ok=false` for a sidecar that never changed.
+do
+  local tmp = os.tmpname()
+  local f = io.open(tmp, "w"); f:write("before"); f:close()
+  local img = images_by_id[101]
+  img.sidecar = tmp
+  stub_dt.gui.action_images = {img}
+  view_state.current = "darkroom"
+
+  local c_zero = plugin.methods["history.commit"]({strategy = "auto", attempts = 0})
+  assertEq(c_zero.attempts_used, 1, "attempts below 1 clamps to 1")
+
+  local c_big = plugin.methods["history.commit"]({strategy = "auto", attempts = 99})
+  assertEq(c_big.attempts_used, 3, "attempts above 3 clamps to 3")
+
+  local c_noop = plugin.methods["history.commit"](
+    {strategy = "auto", expect_change = false})
+  assertEq(c_noop.attempts_used, 1, "expect_change=false forces one attempt regardless of `attempts`")
+  assertEq(c_noop.sidecar_written, false, "sidecar_written reports the real disk fact")
+  assertEq(c_noop.ok, true, "expect_change=false with nothing written is still ok")
+  assertEq(c_noop.expect_change, false, "expect_change is echoed back")
+
+  local c_default = plugin.methods["history.commit"]({strategy = "auto"})
+  assertEq(c_default.attempts_used, 2, "the default path still spends up to two attempts")
+  assertEq(c_default.expect_change, true, "expect_change defaults to true")
+  assertEq(c_default.sidecar_written, false,
+    "still unwritten (the sidecar never changes in this fixture)")
+  assertEq(c_default.ok, false, "expect_change=true with nothing written is not ok")
+
+  os.remove(tmp)
+  stub_dt.gui.action_images = {}
+  view_state.current = "darkroom"
+end
+
 -- style.create_from_current is honest about the missing module filter, and
 -- about where the "current image" reading came from.
 stub_dt.gui.action_images = {images_by_id[101]}
