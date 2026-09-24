@@ -19,8 +19,19 @@ NON_REGISTRY_COMMANDS = ("doctor",)
 
 _TYPES = {"str": str, "int": int, "float": float, "image": str}
 
+#: verb id -> the required-positional arg name the README / phase 2 spec
+#: also document as an option (E12 D2: `style apply-set --name ..`,
+#: `export release --job-slug ..`, `export verify --manifest ..` all exited 2
+#: because only the positional form was ever wired up). Both forms are
+#: accepted; the positional wins if a caller somehow passes both.
+_DUAL_MODE_POSITIONALS = {
+    "style.apply_set": "name",
+    "export.release": "job_slug",
+    "export.verify": "manifest",
+}
 
-def _add_arg(parser: argparse.ArgumentParser, spec) -> None:
+
+def _add_arg(parser: argparse.ArgumentParser, spec, verb_id: str | None = None) -> None:
     kwargs: dict = {"help": spec.help}
     if spec.choices:
         kwargs["choices"] = list(spec.choices)
@@ -62,7 +73,21 @@ def _add_arg(parser: argparse.ArgumentParser, spec) -> None:
         if not spec.required:
             kwargs["nargs"] = "?"
             kwargs["default"] = spec.default
-        parser.add_argument(spec.name, **kwargs)
+            parser.add_argument(spec.name, **kwargs)
+        elif _DUAL_MODE_POSITIONALS.get(verb_id) == spec.name:
+            # Accept it positionally (README's original form) OR as
+            # --<name> (the form README/spec also show): the positional
+            # becomes optional here and an aliased option is added; main()
+            # merges the two and raises usage if neither was given.
+            parser.add_argument(spec.name, nargs="?", default=None, **kwargs)
+            parser.add_argument(
+                f"--{spec.name.replace('_', '-')}",
+                dest=f"_dual_{spec.name}",
+                default=None,
+                **kwargs,
+            )
+        else:
+            parser.add_argument(spec.name, **kwargs)
     else:
         parser.add_argument(
             f"--{spec.name.replace('_', '-')}",
@@ -105,7 +130,16 @@ def build_parser() -> argparse.ArgumentParser:
             sub = commands.add_parser(verb.cli_command, help=verb.summary, description=verb.summary)
             sub.set_defaults(_verb=verb.id, _args=[a.name for a in verb.args])
             for spec in verb.args:
-                _add_arg(sub, spec)
+                _add_arg(sub, spec, verb.id)
+            # `--pretty` (and `--job`) are documented as belonging to `scouter`
+            # itself, "before the group and command" -- but the README's own
+            # phase 2 examples put `--pretty` AFTER the group/verb too (E12
+            # D2: `cull propose --job-slug .. --pretty`, `outliers list ..
+            # --pretty`). argparse subparsers don't inherit the parent's
+            # optionals, so both positions are wired here; `default=SUPPRESS`
+            # means "not given here" leaves whatever the top-level parser
+            # already put in the namespace alone.
+            sub.add_argument("--pretty", dest="pretty", action="store_true", default=argparse.SUPPRESS)
 
     doctor = groups.add_parser(
         "doctor",
@@ -284,6 +318,14 @@ def main(argv: list[str] | None = None) -> int:
         return emit(report, code)
 
     verb_id = namespace._verb
+    dual_name = _DUAL_MODE_POSITIONALS.get(verb_id)
+    if dual_name is not None:
+        positional_val = getattr(namespace, dual_name, None)
+        option_val = getattr(namespace, f"_dual_{dual_name}", None)
+        if positional_val is None and option_val is not None:
+            setattr(namespace, dual_name, option_val)
+        elif positional_val is None and option_val is None:
+            parser.error(f"the following arguments are required: {dual_name}")
     kwargs = {
         name: getattr(namespace, name)
         for name in namespace._args

@@ -195,7 +195,9 @@ scouter --pretty history read ~/Pictures/EditingTrial/P6281348.ORF
 
 `--pretty` and `--job` belong to `scouter` itself, so they go **before** the
 group and command (`scouter --pretty scout stats ...`); per-verb flags such as
-`--px`, `--dry-run` and `--yes` go after it.
+`--px`, `--dry-run` and `--yes` go after it. `--pretty` is also accepted
+*after* the group/command (`scouter cull propose --job-slug .. --pretty`, as
+the phase 2 examples below show) — both positions work the same way.
 
 Every write is one darktable history item you can see and undo yourself.
 `undo-last` sets the parameter back to its previous value, which adds a history
