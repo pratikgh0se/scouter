@@ -838,6 +838,10 @@ def _do_module_action(
     job: str | None,
 ) -> ModuleResult:
     job = job or current_job()
+    # Row 408, B6/B8: refused BEFORE any bridge call, journal entry or XMP
+    # read -- an unrecognised module wedges darktable's Lua worker for the
+    # rest of the session, so it must never even reach a dry-run plan.
+    dtbridge.require_known_module(module)
     gated = action_name == "reset"
     plan = [{"action": f"module.{action_name}", "module": module, "instance": instance}]
     if dry_run or (gated and not confirm):

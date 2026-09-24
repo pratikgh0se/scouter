@@ -506,6 +506,14 @@ These are load-bearing. Read them before scripting against phase 2.
   `outcome: "noop"` (exit `23`) for a real call with nothing to undo; a
   true dry run still reports `dry_run` as before (row 408 B2, editor
   benchmark).
+- **`darkroom enable`/`darkroom reset` refuse an unpinned module before any
+  bridge call.** They used to send `iop/<module>` for any string; an
+  unrecognised path wedges darktable's Lua worker for the rest of the
+  session, the same measured risk `ACTION_PATHS` exists for on the SET side.
+  `dtbridge.MODULE_WHITELIST` (every `ACTION_PATHS` module, plus `lens`,
+  `sharpen` and `denoiseprofile`, which the editor benchmark exercised
+  successfully) is checked first, before `darkroom.current`, `journal.begin`
+  or any other bridge round trip (row 408 B6/B8).
 
 ### Phase 2 exit criteria
 

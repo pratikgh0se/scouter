@@ -67,3 +67,8 @@ vault; decision row 407).
   editor benchmark): it now reports a new "noop" outcome (exit 23), which
   `ok = outcome in ("ok", "dry_run")` correctly excludes from success. A
   genuine dry run is unaffected.
+- `darkroom enable`/`darkroom reset` now refuse an unpinned module (row 408
+  B6) before any bridge call, journal entry or XMP read: a new
+  `dtbridge.MODULE_WHITELIST`/`require_known_module` mirrors `ACTION_PATHS`'
+  reasoning -- an unrecognised `iop/<module>` wedges darktable's Lua worker
+  for the whole session.

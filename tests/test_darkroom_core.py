@@ -345,6 +345,30 @@ class DarkroomCoreTest(_DarkroomFixture):
         self.assertEqual(len(self.commit_calls), 1)
         self.assertEqual(self.commit_calls[0][2], "auto")
 
+    def test_enable_refuses_an_unpinned_module_before_any_bridge_call(self) -> None:
+        """Row 408, B6: `darkroom.enable`/`darkroom.reset` used to send
+        `iop/<module>` for ANY string -- an agent that mistypes a module
+        name (e.g. "denoise" instead of "denoiseprofile") risks wedging
+        darktable's Lua worker for the whole session. The refusal must land
+        before `darkroom.current`/`journal.begin`, not just before
+        `module.enable` itself."""
+        with self.assertRaises(UsageError) as ctx:
+            darkroom.enable(module="denoise")
+        self.assertEqual(ctx.exception.code, "usage")
+        self.assertIn("denoiseprofile", ctx.exception.fix)
+        self.assertEqual(self.bridge.calls, [], "no bridge call for an unpinned module")
+
+    def test_reset_refuses_an_unpinned_module_before_any_bridge_call(self) -> None:
+        with self.assertRaises(UsageError):
+            darkroom.reset(module="bogus-module", confirm=True)
+        self.assertEqual(self.bridge.calls, [])
+
+    def test_enable_accepts_every_whitelisted_module(self) -> None:
+        for module in dtbridge.MODULE_WHITELIST:
+            with self.subTest(module=module):
+                result = darkroom.enable(module=module)
+                self.assertNotEqual(result.outcome, "error:usage")
+
     def test_enable_has_no_confirm_kwarg(self) -> None:
         """Ruling 9: `darkroom.enable` is not gated and takes no `confirm`."""
         with self.assertRaises(TypeError):

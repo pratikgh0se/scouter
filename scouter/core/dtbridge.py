@@ -130,6 +130,36 @@ def action_path(module: str, param: str, *, probe_unpinned: bool = False) -> str
     )
 
 
+#: Row 408, B6: modules `darkroom.enable`/`darkroom.reset` may target.
+#: Separate from `ACTION_PATHS` (which pins (module, param) SET targets,
+#: not whole-module enable/reset) but the SAME reasoning: `_do_module_action`
+#: used to send `iop/<module>` for any string, and an unrecognised path
+#: wedges darktable's Lua worker for the rest of the session (same measured
+#: cause `ACTION_PATHS` exists for). Every `ACTION_PATHS` module, plus the
+#: three the editor benchmark exercised successfully via `enable` (`lens`,
+#: `sharpen`, `denoiseprofile` -- L1/L2/S1/S2, all pass).
+MODULE_WHITELIST: frozenset[str] = frozenset(
+    {m for (m, _p) in ACTION_PATHS} | {"lens", "sharpen", "denoiseprofile"}
+)
+
+
+def require_known_module(module: str) -> None:
+    """Refuse an unpinned module BEFORE any bridge call (row 408 B6/B8):
+    the wedge risk `ACTION_PATHS`/`action_path` exists for applies here too,
+    and the refusal must land before `journal.begin` or a bridge round trip,
+    never after."""
+    if module not in MODULE_WHITELIST:
+        raise UsageError(
+            f"no pinned module {module!r} for darkroom.enable/darkroom.reset",
+            fix=(
+                f"pinned modules: {', '.join(sorted(MODULE_WHITELIST))}. Adding one "
+                "is a host-probe job, not a guess -- an unrecognised module wedges "
+                "darktable's Lua worker for the whole session."
+            ),
+            detail={"module": module, "pinned_modules": sorted(MODULE_WHITELIST)},
+        )
+
+
 def call(method: str, params: dict | None = None, timeout: float | None = None) -> Any:
     """One bridge call, with the bridge's own failures mapped to error classes."""
     try:
