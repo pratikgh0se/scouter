@@ -232,7 +232,12 @@ These are load-bearing, not incidental — read them before scripting against Sc
   sidecar only when the history actually changed, so a write asking for the
   value the image already has produces no write; Scouter resolves that by
   reading the value back and says so in a warning, and still reports
-  `commit_timeout` when the value genuinely is not there.
+  `commit_timeout` when the value genuinely is not there. The editor
+  benchmark (row 408 B1) measured the FIRST `history commit`/view-bounce
+  after a fresh darktable launch intermittently wedging the bridge outright
+  (5 of 13 sessions: no MCP answer in 30s, then `view.current` itself dead)
+  -- not isolated to a specific cause yet, and not fixed here; it needs a
+  darktable-launch-state isolation harness this branch does not have.
 - **`darkroom status` reports slider *positions*, not values.** `dt.gui.action`'s
   read-back is a normalised 0..1 position in the slider's visible range, and
   phase 1 has no verified position→value table for every slider — use
@@ -452,6 +457,20 @@ These are load-bearing. Read them before scripting against phase 2.
 - **`style apply-set --mode overwrite` is still refused.** The Lua API only
   appends. The one place overwrite exists is render-only:
   `export release --overwrite-style`.
+- **`style apply-set` returns before darktable has necessarily written every
+  sidecar.** The Lua `style.apply` handler applies via `image:apply_style`
+  directly against `dt.database` and returns as soon as that call returns --
+  darktable then writes each XMP on its own internal schedule, not
+  synchronously, and there is no bridge-side "sidecar written" signal to
+  wait on (unlike `darkroom.set`'s commit, which has the view-bounce trick
+  to confirm against). The editor benchmark measured 0.9-1.35s of lag: an
+  immediate `history_read` or `outliers list` right after `style apply-set`
+  can still see the PRE-style state (row 408 B7). `apply_set`'s own
+  idempotency ledger (`history_end_before`/`history_end_after`) already
+  tracks this per image for its OWN re-run safety, but that is a different
+  question from "has this specific caller's next read landed after the
+  write" -- if you read a frame's history right after applying a style,
+  either poll `history read` until it changes or add a short pause first.
 - **A job's state lock now fails fast instead of blocking for minutes
   (D3, row 407).** `~/.cache/scouter/state/<job>.json.lock` guards
   `darkroom.open`'s and `history.commit`'s read-modify-write of a job's small

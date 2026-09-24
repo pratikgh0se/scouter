@@ -76,3 +76,11 @@ vault; decision row 407).
   bridge call too (row 408 B8): `action_path` is computed once, up front,
   instead of only inside the real `darkroom.action` call after
   `darkroom.current`, `view.current` and an XMP read had already run.
+- Documented, not fixed (row 408, no code change): `style apply-set` can
+  return before darktable has written every sidecar (B7, 0.9-1.35s
+  measured lag, no bridge-side completion signal exists to poll on) and
+  the first `history commit` after a fresh darktable launch can wedge the
+  bridge outright (B1, 5/13 sessions). Both are now README honest limits;
+  neither is in scope here (B7 needs a real bridge signal that does not
+  exist, B1 needs a launch-state isolation harness this branch does not
+  have).
