@@ -509,6 +509,11 @@ def set_param(
     """
     job = job or current_job()
     value = _require_finite("value", value)
+    # Row 408, B8: computed ONCE, up front, before EITHER branch does
+    # anything else -- an unpinned (module, param) is refused before
+    # `_current_image`/`require_darkroom` (bridge round trips) or
+    # `journal.begin`, not just before the `darkroom.action` call itself.
+    path_ = dtbridge.action_path(module, param)
     if dry_run:
         return SetResult(
             outcome="dry_run",
@@ -519,7 +524,7 @@ def set_param(
             plan=[
                 {
                     "action": "darkroom.set",
-                    "path": dtbridge.action_path(module, param),
+                    "path": path_,
                     "effect": "set",
                     "value": value,
                     "instance": instance,
@@ -572,7 +577,7 @@ def set_param(
     )
     try:
         dtbridge.action(
-            dtbridge.action_path(module, param),
+            path_,
             instance=instance,
             element="value",
             effect="set",

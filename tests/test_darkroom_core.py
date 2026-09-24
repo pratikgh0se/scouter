@@ -160,6 +160,24 @@ class DarkroomCoreTest(_DarkroomFixture):
         self.assertEqual(result.plan[0]["value"], 2.0)
         self.assertIn("no darktable calls", result.reason or "")
 
+    def test_unpinned_pair_refuses_before_any_bridge_call(self) -> None:
+        """Row 408, B8: `action_path(module, param)` used to be evaluated
+        only inside the `darkroom.action` call, AFTER `_current_image`,
+        `require_darkroom` and the XMP reads -- so an agent's guessed
+        (module, param) cost a `darkroom.current` round trip, a
+        `view.current` round trip and an XMP read before it was refused. It
+        is now computed once, up front, before either the dry-run or the
+        real path does anything else."""
+        with self.assertRaises(UsageError) as ctx:
+            darkroom.set_param(module="colorzones", param="green_hue", value=0.1)
+        self.assertEqual(ctx.exception.code, "usage")
+        self.assertEqual(self.bridge.calls, [], "no bridge call for an unpinned pair")
+
+    def test_unpinned_pair_refuses_on_a_dry_run_too(self) -> None:
+        with self.assertRaises(UsageError):
+            darkroom.set_param(module="colorzones", param="green_hue", value=0.1, dry_run=True)
+        self.assertEqual(self.bridge.calls, [])
+
     def test_wrong_view_is_raised_before_any_action(self) -> None:
         self.bridge.responses["view.current"] = {"view": "lighttable"}
         with self.assertRaises(WrongView):

@@ -514,6 +514,12 @@ These are load-bearing. Read them before scripting against phase 2.
   `sharpen` and `denoiseprofile`, which the editor benchmark exercised
   successfully) is checked first, before `darkroom.current`, `journal.begin`
   or any other bridge round trip (row 408 B6/B8).
+- **`darkroom set` also refuses an unpinned `(module, param)` before any
+  bridge call.** `action_path` used to be evaluated only inside the real
+  `darkroom.action` call, after `darkroom.current`, `view.current` and an
+  XMP read had already happened -- an agent's guessed pair cost all three
+  before it was refused. It is now computed once, up front, before either
+  the dry-run or the real path does anything else (row 408 B8).
 
 ### Phase 2 exit criteria
 

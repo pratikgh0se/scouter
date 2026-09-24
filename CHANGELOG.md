@@ -72,3 +72,7 @@ vault; decision row 407).
   `dtbridge.MODULE_WHITELIST`/`require_known_module` mirrors `ACTION_PATHS`'
   reasoning -- an unrecognised `iop/<module>` wedges darktable's Lua worker
   for the whole session.
+- `darkroom set` now refuses an unpinned `(module, param)` before any
+  bridge call too (row 408 B8): `action_path` is computed once, up front,
+  instead of only inside the real `darkroom.action` call after
+  `darkroom.current`, `view.current` and an XMP read had already run.
