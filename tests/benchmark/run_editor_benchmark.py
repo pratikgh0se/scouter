@@ -1065,7 +1065,9 @@ class BenchRun:
         sessions: list[str] | None = None,
         settle_poll_s: float = 0.5,
         plan_version: str = "v1",
+        relaunch_on_hang: bool = True,
     ) -> None:
+        self.relaunch_on_hang = relaunch_on_hang
         if plan_version not in PLAN_VERSIONS:
             raise ValueError(f"unknown plan version {plan_version!r}")
         self.plan_version = plan_version
@@ -1259,6 +1261,13 @@ class BenchRun:
             "settle": settle,
         }
 
+    def _setup_hung(self, setup: list[dict]) -> bool:
+        for rec in setup:
+            code = ((rec.get("envelope") or {}).get("error") or {}).get("code")
+            if rec.get("transport_error") or code in ("bridge_timeout", "commit_timeout"):
+                return not self.host.alive()
+        return False
+
     def _session_blocked(self, task_result: dict) -> bool:
         for c in task_result.get("calls") or []:
             code = ((c.get("envelope") or {}).get("error") or {}).get("code")
@@ -1302,6 +1311,32 @@ class BenchRun:
             try:
                 if not blocked:
                     srec["setup"] = self._run_steps(session.get("setup") or [], stop_on_error=False)
+                    if self._setup_hung(srec["setup"]) and self.relaunch_on_hang:
+                        # Known B1: the first history_commit after a launch can
+                        # wedge the bridge. Quit, relaunch ONCE, redo the setup
+                        # steps that did not answer ok, and record it.
+                        self.log(f"[{self.body}] {session['id']}: setup hung, relaunch once")
+                        first = {"setup": srec["setup"], "quit": self.host.quit()}
+                        launch = self.host.launch(Path(self.ctx[f"frame:{session['role']}"]))
+                        first["relaunch"] = launch
+                        srec["hung_first_launch"] = first
+                        blocked = not launch.get("ok")
+                        if not blocked:
+                            redo = [
+                                st
+                                for st, rec in zip(session.get("setup") or [], srec["setup"])
+                                if (rec.get("envelope") or {}).get("ok") is not True
+                            ]
+                            again = self._run_steps(redo, stop_on_error=False)
+                            kept = [
+                                rec
+                                for rec in srec["setup"]
+                                if (rec.get("envelope") or {}).get("ok") is True
+                            ]
+                            srec["setup"] = kept + again
+                            if self._setup_hung(again):
+                                blocked = True
+                                srec["hung_again"] = True
                     for rec in srec["setup"]:
                         if rec["tool"] == "library_import" and self.job_frames:
                             self.ctx.update(self.job_frames(rec.get("envelope") or {}))

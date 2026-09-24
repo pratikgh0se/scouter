@@ -748,3 +748,41 @@ def test_compare_marks_revised_tasks_not_comparable(monkeypatch):
     out = rb.compare(old, new)
     assert "| E2 |" in out and "not comparable (task revised)" in out
     assert "| category | tasks | before | after |" in out
+
+
+def test_a_hung_setup_is_relaunched_once_and_recorded(monkeypatch):
+    monkeypatch.setattr(rb, "git_info", lambda: {"sha": "0" * 40, "branch": "t", "dirty": False})
+    doc = _fast(rb.load_tasks())
+
+    class HangOnce(FakeMcp):
+        hung = False
+
+        def call_tool(self, name, args, timeout):
+            if name == "history_commit" and not HangOnce.hung:
+                HangOnce.hung = True
+                raise TimeoutError("history_commit did not answer")
+            if name == "history_commit":
+                return {"ok": True, "outcome": "ok", "data": {}}
+            return super().call_tool(name, args, timeout)
+
+    class Host(FakeHost):
+        def alive(self):
+            return HangOnce.hung is False or len(self.launched) > 1
+
+    host = Host()
+    result = rb.BenchRun(
+        doc,
+        "sony",
+        run_id="t",
+        label="f",
+        mcp=HangOnce({}),
+        host=host,
+        snapshot=lambda p: _snap(),
+        paths=_ctx("sony"),
+        log=lambda *_: None,
+        sessions=["A"],
+    ).run()
+    ses = result["sessions"][0]
+    assert "hung_first_launch" in ses and len(host.launched) == 2
+    assert ses["setup"][0]["envelope"]["ok"] is True
+    assert {r["outcome"] for r in result["tasks"]} != {"blocked"}
