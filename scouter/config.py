@@ -24,6 +24,9 @@ from scouter.types import ConfigResult
 
 CONFIG_VERSION = 1
 
+#: Row 346: the educative mode's three levels (design §7.1).
+EDUCATIVE_LEVELS: tuple[str, ...] = ("off", "brief", "full")
+
 
 @dataclass(frozen=True)
 class ImportConfig:
@@ -113,6 +116,7 @@ class Config:
     style: StyleConfig = field(default_factory=StyleConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
     stats: StatsConfig = field(default_factory=StatsConfig)
+    educative: str = "brief"
 
     def camera_map(self) -> dict[str, str]:
         return dict(self.cameras)
@@ -136,7 +140,7 @@ SECTIONS = {
     "export": ("export", ExportConfig),
     "stats": ("stats", StatsConfig),
 }
-TOP_KEYS = {"version", "library_root", "cameras", "_comment", *SECTIONS}
+TOP_KEYS = {"version", "library_root", "cameras", "educative", "_comment", *SECTIONS}
 
 
 def _reject_unknown(where: str, given: set[str], known: set[str]) -> None:
@@ -185,6 +189,14 @@ def load(path: str | None = None) -> Config:
         kwargs["cameras"] = tuple(
             (str(k), paths.validate_slug(str(v))) for k, v in sorted(cameras.items())
         )
+    if "educative" in raw:
+        level = raw["educative"]
+        if level not in EDUCATIVE_LEVELS:
+            raise UsageError(
+                f"`educative` must be one of {', '.join(EDUCATIVE_LEVELS)}, got {level!r}",
+                detail={"config": str(cfg_path), "educative": level},
+            )
+        kwargs["educative"] = level
     for name, (attr, klass) in SECTIONS.items():
         if name not in raw:
             continue
@@ -327,10 +339,13 @@ def init(
     has_age = bool(shutil.which("age"))
     starter = {
         "_comment": "Scouter config. Docs: docs/superpowers/specs/"
-        "2026-09-14-scouter-phase2-design.md section 4",
+        "2026-09-14-scouter-phase2-design.md section 4. `educative` (added phase 3, "
+        "design section 7.1) controls how much explanation write verbs add to their "
+        "summaries: off, brief, full",
         "version": CONFIG_VERSION,
         "library_root": str(Path.home() / "Pictures" / "EditingTrial-library"),
         "cameras": {"E-M10 Mark III": "em10iii", "ILCE-7": "a7"},
+        "educative": "brief",
         "backup": {
             "_comment": "library.import REFUSES until enabled is true and target passes the gate",
             "enabled": False,

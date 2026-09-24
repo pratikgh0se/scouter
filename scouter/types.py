@@ -75,6 +75,10 @@ class UndoResult(Payload):
     undone: dict | None = None
     seq: int | None = None
     committed: bool = False
+    #: Phase 3 §6.4: every journal entry undone as part of the same move group
+    #: as `undone` (e.g. `darkroom.say`'s moves), so a caller sees the whole
+    #: group revert rather than only its last entry.
+    undone_group: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -496,6 +500,87 @@ class CullApplyResult(Payload):
     verified: int = 0
     unverified: int = 0
     per_image: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class VocabResult(Payload):
+    rows: list[dict] = field(default_factory=list)
+    counts: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class ResolveResult(Payload):
+    phrase: str = ""
+    normalised: str = ""
+    key: str = ""
+    intensity: float = 1.0
+    explicit: bool = False
+    moves: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class ValueResult(Payload):
+    module: str = ""
+    param: str = ""
+    instance: int = 0
+    value: float | None = None
+    display_value: float | None = None
+    unit: str = ""
+    source: str | None = None
+    enabled: bool | None = None
+    fresh: bool = False
+    status: str = ""
+
+
+@dataclass
+class AdjustResult(Payload):
+    module: str = ""
+    param: str = ""
+    instance: int = 0
+    unit: str = ""
+    delta: float | None = None
+    previous: float | None = None
+    target: float | None = None
+    applied: float | None = None
+    clamped: bool = False
+    source: str | None = None
+    committed: bool = False
+    noop: bool = False
+    summary: str = ""
+    explain: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SayResult(Payload):
+    phrase: str = ""
+    key: str = ""
+    intensity: float = 1.0
+    group: str | None = None
+    moves: list[dict] = field(default_factory=list)
+    refused: list[dict] = field(default_factory=list)
+    summary: str = ""
+    explain: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PresetResult(Payload):
+    name: str = ""
+    action: str = ""  # "save" | "apply"
+    modules: list[str] = field(default_factory=list)
+    dtstyle_path: str | None = None
+    memory_path: str | None = None
+    replaced: bool = False
+    applied_to: str | None = None  # "darkroom" | "library"
+    history_end_before: int | None = None
+    history_end_after: int | None = None
+    explain: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PresetListResult(Payload):
+    presets: list[dict] = field(default_factory=list)
+    darktable_only: list[str] = field(default_factory=list)
+    missing_in_darktable: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -16,6 +16,7 @@ outcome recorded honestly" apart from "attempted and this is what happened."
 
 from __future__ import annotations
 
+import contextvars
 import json
 import os
 import tempfile
@@ -24,6 +25,10 @@ from datetime import datetime, timezone
 
 from scouter import paths
 from scouter.errors import ScouterError
+
+#: Phase 3 §6.4: the move group every journal entry begun inside it belongs to.
+#: `darkroom.say` sets it around its moves; no write verb's signature changes.
+GROUP: contextvars.ContextVar[str | None] = contextvars.ContextVar("scouter_move_group", default=None)
 
 
 class JournalCorrupt(ScouterError):
@@ -61,6 +66,10 @@ class Entry:
     #: behalf, e.g. marking an unsupported-undo entry `undone` so an older
     #: write stays reachable (fix round 2, should-fix 5). `None` normally.
     note: str | None = None
+    #: Phase 3 §6.4: the move group this entry belongs to, stamped from
+    #: `GROUP.get()` at `begin`. `None` for an entry begun outside any group,
+    #: and for every entry written before this field existed.
+    group: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -192,6 +201,7 @@ def begin(
             before=before,
             after=None,
             commit=commit,
+            group=GROUP.get(),
         ),
     )
 
