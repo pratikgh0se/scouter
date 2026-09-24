@@ -13,7 +13,7 @@
     {
       "revision": 2,
       "date": "2026-09-24",
-      "change": "E2 ('The sky's blown out') moves from the EXIF-chosen 'bright' frame (rendered clipping 0.0% on both bodies in run 1, so E2's premise was refuted) to a new 'blown' role chosen by rendered clipped-highlight percentage (darktable-cli default pipeline, 512 px, the same render and ppm.stats scout_stats uses; full scan in frames.<body>.clip_scan). Session B stays on 'bright' with no tasks so F7's frame is still imported in an earlier darktable session, exactly as in revision 1; E2 runs in the new session B2. Adds an optional 'plan_v2' per task (phase 3 verbs); plan v1 is unchanged and still runnable with --plan v1.",
+      "change": "E2 ('The sky's blown out') moves from the EXIF-chosen 'bright' frame (rendered clipping 0.0% on both bodies in run 1, so E2's premise was refuted) to a new 'blown' role chosen by rendered clipped-highlight percentage (darktable-cli default pipeline, 512 px, the same render and ppm.stats scout_stats uses; full scan in frames.<body>.clip_scan). Session B stays on 'bright' with no tasks so F7's frame is still imported in an earlier darktable session, exactly as in revision 1; E2 runs in the new session B2. Adds an optional 'plan_v2' per task (phase 3 verbs); plan v1 is unchanged and still runnable with --plan v1. plan_v2 rationale updated for main 719f2fa (task 10: 22 rows live).",
       "invalidates": [
         "E2"
       ],
@@ -638,7 +638,7 @@
       },
       "revised_in": 2,
       "plan_v2": {
-        "why": "the highlight phrases (tame the highlights = colorbalancergb highlights luminance) are candidates that refuse not_pinned until task 10, so the reachable move is still -0.7 EV, now as a phrase with the histogram checked before and after.",
+        "why": "E2's assertions define the move as -0.7 EV exposure with clipping checked before and after, so plan v2 keeps that move, as the phrase 'darker by 0.7 ev'. (Since task 10, 'tame the highlights' is live, but it moves colour balance rgb highlights luminance, which E2's fixed exposure-delta assertion would not see; switching would change the task.)",
         "steps": [
           {
             "tool": "scout_stats",
@@ -978,7 +978,7 @@
       },
       "plan_v2": {
         "same_as_v1": true,
-        "why": "tint is absolute_only (no readable value source), so 'more magenta' as a phrase would refuse value_unknown; the absolute set is still the competent move."
+        "why": "tint is still absolute_only (no readable value source), so 'more magenta' as a phrase would refuse value_unknown; the absolute set is still the competent move."
       }
     },
     {
@@ -1330,7 +1330,7 @@
       },
       "plan_v2": {
         "same_as_v1": true,
-        "why": "'try 0.2' is an absolute value, and sigmoid skew is absolute_only."
+        "why": "'try 0.2' is an absolute value; sigmoid skew is live since task 10, and darkroom_set is still the call for an absolute target."
       }
     },
     {
@@ -1406,8 +1406,23 @@
         ]
       },
       "plan_v2": {
-        "same_as_v1": true,
-        "why": "global_saturation is absolute_only (its XMP slot is not pinned), so 'more saturation' would refuse value_unknown; enable + absolute set stays the competent plan."
+        "why": "global_saturation is live since task 10 (slot pinned), so the sentence is one phrase: 'more saturation by 20%' (v1's 0.2 from the neutral 0). data.moves.0.applied is the phrase's read-back of the value v1 read at data.applied.",
+        "steps": [
+          {
+            "tool": "darkroom_say",
+            "args": {
+              "phrase": "more saturation by 20%"
+            }
+          }
+        ],
+        "step_map": {
+          "1": 0
+        },
+        "assertion_overrides": {
+          "readback": {
+            "path": "data.moves.0.applied"
+          }
+        }
       }
     },
     {
@@ -1480,7 +1495,7 @@
         ]
       },
       "plan_v2": {
-        "why": "the more_vibrance phrase with v1's magnitude (15 % from the neutral 0 = 0.15); global_vibrance is a candidate row, so phase 3 is expected to refuse not_pinned before any bridge call until task 10 pins it.",
+        "why": "the more_vibrance phrase with v1's magnitude (15 % from the neutral 0 = 0.15); global_vibrance is live since task 10.",
         "steps": [
           {
             "tool": "darkroom_say",
@@ -1659,7 +1674,7 @@
       },
       "plan_v2": {
         "same_as_v1": true,
-        "why": "no phrase says 'warm the shadows, cool the highlights' (the table has the opposite pair and teal-and-orange); the hue/chroma rows are candidates, so the explicit sets are kept and refuse."
+        "why": "no phrase says 'warm the shadows, cool the highlights' (the table has the opposite pair, cool_shadows / warm_highlights, and teal-and-orange); the hue/chroma rows are live since task 10, so v1's four explicit absolute sets are what a competent agent sends."
       }
     },
     {
