@@ -52,13 +52,19 @@ def _readme_commands() -> tuple[list[str], list[tuple[str, str]]]:
     bare: list[tuple[str, str]] = []
     for fence in re.findall(r"```sh\n(.*?)```", README, re.DOTALL):
         for raw in fence.splitlines():
-            line = raw.split("#", 1)[0].strip()
-            if not line.startswith("scouter "):
-                continue
-            line = _PLACEHOLDER.sub("X", line)
-            first, more_bare = _expand(line)
-            full.append(first)
-            bare.extend(more_bare)
+            stripped = raw.split("#", 1)[0].strip()
+            # Phase 3's README shows a shell one-liner chaining two
+            # commands with `&&` (e.g. `preset save ... && preset
+            # apply-job ...`); each half is its own real `scouter ...`
+            # invocation, not doc shorthand like `_expand`'s `|`, so split
+            # on it before the `startswith("scouter ")` check below.
+            for line in (part.strip() for part in stripped.split("&&")):
+                if not line.startswith("scouter "):
+                    continue
+                line = _PLACEHOLDER.sub("X", line)
+                first, more_bare = _expand(line)
+                full.append(first)
+                bare.extend(more_bare)
     return full, bare
 
 
