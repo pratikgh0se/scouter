@@ -1594,13 +1594,18 @@ for _verb in (
                 "str",
                 help="YYYY-MM-DD; default: the earliest capture time, unless it is "
                 "more than 30 days from the card's median capture time (one bad "
-                "clock), in which case the median is used instead, with a warning",
+                "clock), in which case the median is used instead, with a warning. "
+                "Derived from the WHOLE card before --camera filters it, so "
+                "--camera nex5n on a mixed card still takes its date from the "
+                "other body's files too",
             ),
             ArgSpec(
                 "camera",
                 "str",
                 help="import only this body's files from a mixed card; the rest are "
-                "skipped and reported (every file is always labelled from its own EXIF)",
+                "skipped and reported (every file is always labelled from its own "
+                "EXIF). The job's date is still derived from the whole card, "
+                "before this filter -- see --date",
             ),
             ArgSpec(
                 "extensions",

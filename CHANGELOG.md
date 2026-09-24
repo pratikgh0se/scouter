@@ -153,3 +153,9 @@ vault; decision row 407).
   reasons already did -- at `.2f`, real ORF/ARW renders (0.003-0.04)
   printed as "0.02 vs 0.02", indistinguishable even when the burst's pick
   won by a real margin.
+- **Nit:** the CLI/MCP `date`/`camera` help text for `library import` now
+  says the job's date is derived from the WHOLE card before `--camera`
+  filters it -- `--camera nex5n` on a mixed A7+NEX-5N card still takes its
+  date from the A7 files too. Acceptable behaviour (a legitimate multi-day
+  trip now gets the median date with a warning, per D6), just undocumented
+  before this. Regenerated the golden MCP contract snapshot.
