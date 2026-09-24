@@ -34,6 +34,27 @@ ACTION_PATHS: dict[tuple[str, str], str] = {
     ("temperature", "tint"): "iop/temperature/tint",
     ("colorbalancergb", "contrast"): "iop/colorbalancergb/contrast",
     ("colorbalancergb", "global_saturation"): "iop/colorbalancergb/global saturation",
+    # phase 3 task 10 host probe, 2026-09-24: answered non-nan, worker alive after
+    # (one darktable 5.4.1 launch per candidate, 20 s settle + control path;
+    # docs/measurements.md "Phase 3 host run").
+    ("colorbalancergb", "global_vibrance"): "iop/colorbalancergb/global vibrance",
+    ("colorbalancergb", "global_chroma"): "iop/colorbalancergb/global chroma",
+    ("colorbalancergb", "midtones_luminance"): "iop/colorbalancergb/power/luminance",
+    ("colorbalancergb", "midtones_hue"): "iop/colorbalancergb/power/hue",
+    ("colorbalancergb", "midtones_chroma"): "iop/colorbalancergb/power/chroma",
+    ("filmicrgb", "white_relative_exposure"): "iop/filmicrgb/white relative exposure",
+    ("filmicrgb", "black_relative_exposure"): "iop/filmicrgb/black relative exposure",
+    ("filmicrgb", "contrast"): "iop/filmicrgb/contrast",
+    ("colorzones", "strength"): "iop/colorzones/mix",
+    # phase 3 task 10 host probe (second pass), 2026-09-24: answered non-nan,
+    # worker alive after. The spec's `shadows lift/<x>` / `highlights gain/<x>`
+    # and flat spellings answered nan; darktable uses the short section word.
+    ("colorbalancergb", "shadows_luminance"): "iop/colorbalancergb/lift/luminance",
+    ("colorbalancergb", "shadows_hue"): "iop/colorbalancergb/lift/hue",
+    ("colorbalancergb", "shadows_chroma"): "iop/colorbalancergb/lift/chroma",
+    ("colorbalancergb", "highlights_luminance"): "iop/colorbalancergb/gain/luminance",
+    ("colorbalancergb", "highlights_hue"): "iop/colorbalancergb/gain/hue",
+    ("colorbalancergb", "highlights_chroma"): "iop/colorbalancergb/gain/chroma",
 }
 
 _DB_LOCKED_RE = re.compile(r"database is locked|could not get lock|another instance", re.I)

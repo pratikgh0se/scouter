@@ -79,21 +79,26 @@ def _cb(param: str, ui: str, unit: str, lo: float, hi: float, step: float, conce
     )
 
 
-def _zone(zone: str, section: str, label: str) -> tuple[ParamSpec, ParamSpec, ParamSpec]:
+def _zone(zone: str, section: str, label: str,
+          short: str | None = None) -> tuple[ParamSpec, ParamSpec, ParamSpec]:
     base = f"iop/colorbalancergb/{section}"
     flat = f"iop/colorbalancergb/{label}"
+    # Task 10 host probe: `power/<x>` answered but `shadows lift/<x>` and
+    # `highlights gain/<x>` (and the flat forms) answered nan, so the short
+    # section word (`lift`, `gain`) is tried first for those two zones.
+    lead = (f"iop/colorbalancergb/{short}",) if short else ()
     return (
         _cb(f"{zone}_luminance", f"4 ways › {section} › luminance", "%", -0.25, 0.25, 0.02,
             "color_balance", f"lifts or lowers only the {label}",
             "noise in the darkest areas" if zone == "shadows" else
             ("clipping in the brightest areas" if zone == "highlights" else "skin"),
-            (f"{base}/luminance", f"{flat} luminance")),
+            (*(f"{b}/luminance" for b in lead), f"{base}/luminance", f"{flat} luminance")),
         _cb(f"{zone}_hue", f"4 ways › {section} › hue", "°", 0.0, 360.0, 10.0,
             "grading", f"picks the tint colour for the {label}",
-            "neutral greys in that range", (f"{base}/hue", f"{flat} hue"), wraps=True),
+            "neutral greys in that range", (*(f"{b}/hue" for b in lead), f"{base}/hue", f"{flat} hue"), wraps=True),
         _cb(f"{zone}_chroma", f"4 ways › {section} › chroma", "%", 0.0, 0.3, 0.02,
             "grading", f"sets how strong the {label} tint is",
-            "greys in that range turning coloured", (f"{base}/chroma", f"{flat} chroma")),
+            "greys in that range turning coloured", (*(f"{b}/chroma" for b in lead), f"{base}/chroma", f"{flat} chroma")),
     )
 
 
@@ -135,9 +140,9 @@ PARAMS: tuple[ParamSpec, ...] = (
     _cb("global_chroma", "master › global chroma", "%", -0.5, 0.5, 0.05,
         "chroma_saturation", "changes colourfulness at constant brightness",
         "bright saturated colours going neon", ("iop/colorbalancergb/global chroma",)),
-    *_zone("shadows", "shadows lift", "shadows"),
+    *_zone("shadows", "shadows lift", "shadows", "lift"),
     *_zone("midtones", "power", "midtones"),
-    *_zone("highlights", "highlights gain", "highlights"),
+    *_zone("highlights", "highlights gain", "highlights", "gain"),
     ParamSpec("filmicrgb", "white_relative_exposure", "filmic rgb › scene › white relative exposure",
               "EV", 1.0, 2.0, 10.0, 0.25, "xmp", None, False, "tone_mapper",
               "sets which scene brightness maps to pure white", "clipped highlights",

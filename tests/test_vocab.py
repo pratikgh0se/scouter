@@ -52,28 +52,35 @@ class VocabShapeTest(unittest.TestCase):
                     self.assertTrue(s.candidate_paths, "an unpinned reachable row needs candidates")
                 self.assertEqual(s.display_scale, 100.0 if s.unit == "%" else 1.0)
 
-    def test_initial_statuses_match_the_spec_table(self) -> None:
-        live = {f"{s.module}.{s.param}" for s in vocab.PARAMS if vocab.status(s) == "live"}
-        self.assertEqual(live, {
-            "exposure.exposure", "exposure.black", "sigmoid.contrast",
-            "temperature.temperature", "colorbalancergb.contrast",
-        })
-        absolute = {f"{s.module}.{s.param}" for s in vocab.PARAMS if vocab.status(s) == "absolute_only"}
-        self.assertEqual(absolute, {
-            "sigmoid.skew", "temperature.tint", "colorbalancergb.global_saturation",
-        })
-        self.assertEqual(vocab.status(vocab.spec("colorzones", "curves")), "unreachable")
+    def test_statuses_after_the_task_10_host_run(self) -> None:
+        # Task 10 (2026-09-24 host run) pinned all 15 candidate paths and
+        # every XMP slot the sentinel method found, so only tint (no value
+        # source) stays absolute_only and colorzones.curves unreachable.
+        by = {}
+        for s in vocab.PARAMS:
+            by.setdefault(vocab.status(s), set()).add(f"{s.module}.{s.param}")
+        self.assertEqual(by.get("absolute_only"), {"temperature.tint"})
+        self.assertEqual(by.get("unreachable"), {"colorzones.curves"})
+        self.assertNotIn("candidate", by)
+        self.assertEqual(len(by["live"]), 22)
+        for row in ("colorbalancergb.shadows_hue", "colorbalancergb.highlights_chroma",
+                    "sigmoid.skew", "filmicrgb.contrast", "colorzones.strength"):
+            self.assertIn(row, by["live"])
 
     def test_status_follows_a_new_path_pin_then_a_slot_pin(self) -> None:
+        # Unpin global_vibrance's path and slot, then put them back one by one.
         s = vocab.spec("colorbalancergb", "global_vibrance")
-        self.assertEqual(vocab.status(s), "candidate")
-        with mock.patch.dict(dtbridge.ACTION_PATHS,
-                             {("colorbalancergb", "global_vibrance"): "iop/colorbalancergb/global vibrance"}):
+        layout = dict(xmp.LAYOUTS[("colorbalancergb", 5)])
+        layout["named_slots"] = {i: n for i, n in layout["named_slots"].items()
+                                 if n != "global_vibrance"}
+        with mock.patch.dict(dtbridge.ACTION_PATHS), \
+             mock.patch.dict(xmp.LAYOUTS, {("colorbalancergb", 5): layout}):
+            path = dtbridge.ACTION_PATHS.pop(("colorbalancergb", "global_vibrance"))
+            self.assertEqual(vocab.status(s), "candidate")
+            dtbridge.ACTION_PATHS[("colorbalancergb", "global_vibrance")] = path
             self.assertEqual(vocab.status(s), "absolute_only")
-            layout = dict(xmp.LAYOUTS[("colorbalancergb", 5)])
-            layout["named_slots"] = {**layout["named_slots"], 7: "global_vibrance"}
-            with mock.patch.dict(xmp.LAYOUTS, {("colorbalancergb", 5): layout}):
-                self.assertEqual(vocab.status(s), "live")
+            layout["named_slots"][29] = "global_vibrance"
+            self.assertEqual(vocab.status(s), "live")
 
     def test_clamp_and_wrap(self) -> None:
         exp = vocab.spec("exposure", "exposure")

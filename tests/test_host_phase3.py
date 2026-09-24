@@ -63,19 +63,45 @@ def probe_verdict(call: Call, path: str) -> tuple[str, int]:
     return verdict, ms
 
 
+#: A path pinned since phase 1: the per-launch positive control.
+CONTROL_PATH = "iop/exposure/exposure"
+#: Host finding (2026-09-24 task 10 run): `wait_ready` returns ~2 s after
+#: launch, while darktable is still loading the darkroom pipeline; any
+#: `darkroom.status`/`darkroom.action` sent then got no answer within 10 s --
+#: INCLUDING the already-pinned `iop/colorbalancergb/global saturation`. After
+#: a 20 s settle the same call answers non-nan in ~110 ms.
+SETTLE_S = 20.0
+
+
+def settle(call: Call, sleep: Callable[[float], None] = time.sleep) -> bool:
+    """Wait out the pipeline load, then prove the worker answers a KNOWN path.
+
+    False means this launch cannot judge a candidate at all (recorded as
+    `error`, never as a verdict on the candidate)."""
+    sleep(SETTLE_S)
+    try:
+        r = call("darkroom.status", {"path": CONTROL_PATH, "instance": 0}, timeout=30.0)
+    except Exception:  # noqa: BLE001
+        return False
+    return not r.get("nan")
+
+
 def sentinel_for(spec: Any, k: int) -> float:
     """A distinct, in-range sentinel for the k-th row of a module (§10.2).
 
     Rows of one module accumulate in ONE history entry, so each gets its own
-    value or the second row would find two matching slots. Three decimals at
-    most, so darktable's slider rounding cannot move it.
+    value or the second row would find two matching slots. Two decimals at
+    most: the 2026-09-24 host run showed darktable rounds a `set` to the
+    slider's displayed precision (sigmoid skew 0.173 -> 0.17, filmic black
+    relative exposure -9.917 -> -9.92, color zones mix 0.173 -> 0.17), so a
+    three-decimal sentinel matched no slot at all.
     """
     if spec.wraps:
         return 37.0 + k
-    value = round(0.173 - 0.004 * k, 3)
+    value = round(0.17 - 0.01 * k, 2)
     if spec.lo <= value <= spec.hi:
         return value
-    return round(spec.lo + (spec.hi - spec.lo) * 0.37 + 0.013 * k, 3)
+    return round(spec.lo + (spec.hi - spec.lo) * 0.37 + 0.01 * k, 2)
 
 
 def sentinel_slots(floats: list[float], sentinel: float, tol: float = 1e-4) -> list[int]:
@@ -126,6 +152,18 @@ class PinningHelpersTest(unittest.TestCase):
         call, _ = self._fake({"nan": False}, view=TimeoutError("worker gone"))
         self.assertEqual(probe_verdict(call, "iop/x/y")[0], "wedges")
 
+    def test_settle_waits_then_requires_the_control_path_to_answer(self) -> None:
+        slept: list[float] = []
+        call, calls = self._fake({"nan": False, "position": 0.4})
+        self.assertTrue(settle(call, sleep=slept.append))
+        self.assertEqual(slept, [SETTLE_S])
+        self.assertEqual(calls[0][:2], ("darkroom.status", {"path": CONTROL_PATH, "instance": 0}))
+
+    def test_a_silent_or_nan_control_means_the_launch_cannot_judge(self) -> None:
+        for status in (TimeoutError("busy"), {"nan": True}):
+            call, _ = self._fake(status)
+            self.assertFalse(settle(call, sleep=lambda s: None))
+
     def test_sentinels_are_distinct_and_in_range(self) -> None:
         from scouter.core import vocab
 
@@ -139,12 +177,12 @@ class PinningHelpersTest(unittest.TestCase):
                     self.assertTrue(0.0 <= v < 360.0)
                 elif s.reachable:
                     self.assertTrue(s.lo <= v <= s.hi, v)
-                self.assertEqual(v, round(v, 3))
+                self.assertEqual(v, round(v, 2))
         for module, values in by_module.items():
             self.assertEqual(len(values), len(set(values)), module)
 
     def test_exactly_one_slot_is_found_and_a_collision_is_visible(self) -> None:
-        self.assertEqual(sentinel_slots([0.0, 0.17300001, 1.0], 0.173), [1])
+        self.assertEqual(sentinel_slots([0.0, 0.17000001, 1.0], 0.17), [1])
         self.assertEqual(sentinel_slots([0.173, 0.173], 0.173), [0, 1])
         self.assertEqual(sentinel_slots([0.0, 1.0], 0.173), [])
 
@@ -190,7 +228,10 @@ class ProbeCandidatePathsHostTest(unittest.TestCase):
                     verdict, ms = "error", 0
                     try:
                         hs.wait_ready()
-                        verdict, ms = probe_verdict(dtbridge.call, path)
+                        if settle(dtbridge.call):
+                            verdict, ms = probe_verdict(dtbridge.call, path)
+                        else:
+                            verdict = "error (control path did not answer)"
                     except Exception as e:  # noqa: BLE001 -- recorded, next launch
                         verdict = f"error ({type(e).__name__})"
                     finally:
@@ -228,6 +269,9 @@ class Phase3LiveHostTest(unittest.TestCase):
         cls.proc = hs.launch(SCRATCH)
         try:
             hs.wait_ready()
+            from scouter.core import dtbridge
+            if not settle(dtbridge.call):
+                raise RuntimeError(f"control path {CONTROL_PATH} did not answer after settle")
         except BaseException:
             hs.quit_darktable(cls.proc)
             cls.install.restore()
@@ -262,6 +306,13 @@ class Phase3LiveHostTest(unittest.TestCase):
             en = registry.call("darkroom.enable", "cli", module=s.module)
             r = registry.call("darkroom.set", "cli", module=s.module, param=s.param,
                               value=sentinel)
+            if not r.ok and (r.error or {}).get("code") == "commit_timeout":
+                # The slot already held this value (an earlier run's rounded
+                # sentinel): darktable writes no sidecar for a no-change set.
+                # One retry with a shifted sentinel.
+                sentinel = sentinel + 0.5 if s.wraps else round(sentinel - 0.01, 2)
+                r = registry.call("darkroom.set", "cli", module=s.module, param=s.param,
+                                  value=sentinel)
             if not r.ok:
                 _record(f"slot {s.module}.{s.param}: set {sentinel} FAILED enable_ok={en.ok} "
                         f"error={r.error}")
@@ -360,6 +411,15 @@ class Phase3LiveHostTest(unittest.TestCase):
             r = registry.call("darkroom.say", "cli", phrase=phrase)
             times.append(time.monotonic() - t0)
             self.assertTrue(r.ok, (r.data, r.error))
+            _record(f"  say {phrase!r}: {times[-1]:.2f} s, verb ms {r.ms}, "
+                    f"plan {r.data.get('plan')}")
         _record(f"darkroom.say wall times (s): {[round(t, 2) for t in times]}, "
                 f"median {statistics.median(times):.2f}")
+        trusted = []
+        for phrase in ("brighter", "darker", "brighter", "darker", "less contrast"):
+            t0 = time.monotonic()
+            r = registry.call("darkroom.say", "cli", phrase=phrase, trust_sidecar=True)
+            trusted.append(time.monotonic() - t0)
+        _record(f"darkroom.say trust_sidecar=True (no pre-commit bounce) wall times (s): "
+                f"{[round(t, 2) for t in trusted]}, median {statistics.median(trusted):.2f}")
         self.assertLess(statistics.median(times), 3.5)

@@ -362,3 +362,114 @@ a library directory that had been deleted and rebuilt. The test now carries
 its process id in the job slug so two runs never share a library path; any
 script that re-imports to the same path should expect darktable's own
 remembered metadata, not a clean slate.
+
+## Phase 3 host run (2026-09-24+)
+
+darktable 5.4.1 on Pratik's Mac. A scratch copy of the hero ORF
+(`~/Pictures/ScouterScratch/phase3-probe.ORF`) was used. The plugin was
+installed through `tests/host_support.PluginInstall` (plugin file + luarc
+only, P3-R18) and restored after every class. Raw lines are in
+`docs/measurements-generated.md`.
+
+### Probe method finding: settle before probing
+
+The first probe pass marked every candidate `wedges`: no answer in 10 s. A
+control launch showed the cause. The already-pinned
+`iop/colorbalancergb/global saturation` got no answer either when the probe
+fired about 2 s after `view.current` first answered, while darktable was
+still loading the darkroom pipeline. After a 20 s settle, `darkroom.status`
+answered it non-nan in 111 ms. The probe now waits `SETTLE_S = 20`, then
+requires the proven `iop/exposure/exposure` to answer (a per-launch
+positive control) before it judges a candidate. The invalid first pass is
+kept, and marked, in the generated file. An unknown path now answers `nan`
+in about 110 ms rather than wedging, once darktable has settled.
+
+### Candidate paths (one launch per candidate, 20 s settle + control)
+
+| module.param | path | verdict | ms |
+|---|---|---|---|
+| colorbalancergb.global_vibrance | `iop/colorbalancergb/global vibrance` | pinned | 113 |
+| colorbalancergb.global_chroma | `iop/colorbalancergb/global chroma` | pinned | 111 |
+| colorbalancergb.shadows_luminance | `iop/colorbalancergb/shadows lift/luminance` | absent | 120 |
+| colorbalancergb.shadows_luminance | `iop/colorbalancergb/shadows luminance` | absent | 118 |
+| colorbalancergb.shadows_luminance | `iop/colorbalancergb/lift/luminance` | pinned | 120 |
+| colorbalancergb.shadows_hue | `iop/colorbalancergb/shadows lift/hue` | absent | 106 |
+| colorbalancergb.shadows_hue | `iop/colorbalancergb/shadows hue` | absent | 170 |
+| colorbalancergb.shadows_hue | `iop/colorbalancergb/lift/hue` | pinned | 111 |
+| colorbalancergb.shadows_chroma | `iop/colorbalancergb/shadows lift/chroma` | absent | 108 |
+| colorbalancergb.shadows_chroma | `iop/colorbalancergb/shadows chroma` | absent | 110 |
+| colorbalancergb.shadows_chroma | `iop/colorbalancergb/lift/chroma` | pinned | 168 |
+| colorbalancergb.midtones_luminance | `iop/colorbalancergb/power/luminance` | pinned | 178 |
+| colorbalancergb.midtones_hue | `iop/colorbalancergb/power/hue` | pinned | 120 |
+| colorbalancergb.midtones_chroma | `iop/colorbalancergb/power/chroma` | pinned | 112 |
+| colorbalancergb.highlights_luminance | `iop/colorbalancergb/highlights gain/luminance` | absent | 113 |
+| colorbalancergb.highlights_luminance | `iop/colorbalancergb/highlights luminance` | absent | 114 |
+| colorbalancergb.highlights_luminance | `iop/colorbalancergb/gain/luminance` | pinned | 110 |
+| colorbalancergb.highlights_hue | `iop/colorbalancergb/highlights gain/hue` | absent | 163 |
+| colorbalancergb.highlights_hue | `iop/colorbalancergb/highlights hue` | absent | 117 |
+| colorbalancergb.highlights_hue | `iop/colorbalancergb/gain/hue` | pinned | 108 |
+| colorbalancergb.highlights_chroma | `iop/colorbalancergb/highlights gain/chroma` | absent | 120 |
+| colorbalancergb.highlights_chroma | `iop/colorbalancergb/highlights chroma` | absent | 115 |
+| colorbalancergb.highlights_chroma | `iop/colorbalancergb/gain/chroma` | pinned | 154 |
+| filmicrgb.white_relative_exposure | `iop/filmicrgb/white relative exposure` | pinned | 121 |
+| filmicrgb.black_relative_exposure | `iop/filmicrgb/black relative exposure` | pinned | 111 |
+| filmicrgb.contrast | `iop/filmicrgb/contrast` | pinned | 174 |
+| colorzones.strength | `iop/colorzones/mix` | pinned | 174 |
+
+The spec's `shadows lift/<x>` and `highlights gain/<x>` spellings, and the
+flat forms, answered nan. The `lift/<x>` and `gain/<x>` spellings were added
+as first candidates after the `power/<x>` rows answered, and were probed in
+a second pass. **15 pinned** (every candidate row). No candidate wedged.
+
+### XMP slots (sentinel method)
+
+Sentinels have at most two decimals. The first run showed darktable rounds a
+`set` to the slider's displayed precision: skew 0.173 was stored as 0.17,
+filmic black -9.917 as -9.92, and color zones mix 0.173 as 0.17. So a
+three-decimal sentinel matched no slot.
+
+| module v | param | sentinel | slot | floats |
+|---|---|---|---|---|
+| colorbalancergb 5 | shadows_luminance / chroma / hue | 0.161 / 0.153 / 41 | 0 / 1 / 2 | 33 |
+| colorbalancergb 5 | midtones_luminance / chroma / hue | 0.149 / 0.141 / 44 | 3 / 4 / 5 | 33 |
+| colorbalancergb 5 | highlights_luminance / chroma / hue | 0.137 / 0.129 / 47 | 6 / 7 / 8 | 33 |
+| colorbalancergb 5 | global_chroma / global_saturation / global_vibrance | 0.165 / 0.173 / 0.169 | 17 / 19 / 29 | 33 |
+| sigmoid 3 | skew | 0.16 | 1 | 14 |
+| filmicrgb 6 | white_relative_exposure / contrast | 4.96 / 1.451 | 2 / 14 | 29 (116 B) |
+| filmicrgb 6 | black_relative_exposure | -9.94 | 1 | 29 |
+| colorzones 5 | strength (mix) | 0.16 | 127 | 130 (520 B) |
+
+Each sentinel appeared at exactly one slot. The colour balance rgb slots,
+global saturation f19 and sigmoid skew f1 agree with the editor benchmark.
+Hue values are stored in degrees, and a freshly enabled module holds 0° (the
+default the hue rows now declare). Fixture: `tests/fixtures/phase3-host.xmp`.
+
+### Signs (scout.stats, 512 px)
+
+| move | measured | expected | verdict |
+|---|---|---|---|
+| exposure.black +0.01 | luminance mean 118.2 → 108.4 | down | ok |
+| temperature.tint set 0.9 | r/b 1.906 → 1.833 | down | ok |
+| "warm the highlights" (hue 60°, chroma +1 notch) | r/b 1.907 → 2.158 | up | ok |
+
+No phrase was flipped. (Whole-frame r/b means stand in for the spec's
+brightest-decile r/b; `scout.stats` has no per-decile channel means.)
+
+### Preset round trip
+
+`darkroom say "warmer"` → `preset save scouter-probe-<pid>` → `preset list`
+shows it → `darkroom say "cooler"` → `preset apply` on the open image
+(history_end 80 → 84) → `style.delete` (deleted: true) → the memory copy was
+removed. Passed on all three live runs.
+
+### Conversation timing (five one-move `darkroom say` calls)
+
+| mode | wall times (s) | median | target |
+|---|---|---|---|
+| default (pre-commit bounce) | 4.01, 4.17, 4.11, 4.12, 4.15 | **4.12** | < 3.5 — **missed** |
+| `trust_sidecar=True` | 1.37, 1.75, 1.27, 1.93, 1.26 | 1.37 | < 3.5 |
+
+The earlier run's default medians were 4.03 and 4.02, with some calls at
+2.1 s. The pre-commit bounce (P3-R3) costs about 2.7 s per phrase.
+`test_4_conversation_timing` keeps its 3.5 s assertion and fails on the
+host. This is an open finding, not a code defect hidden by the test.
