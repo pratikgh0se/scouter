@@ -195,7 +195,9 @@ scouter --pretty history read ~/Pictures/EditingTrial/P6281348.ORF
 
 `--pretty` and `--job` belong to `scouter` itself, so they go **before** the
 group and command (`scouter --pretty scout stats ...`); per-verb flags such as
-`--px`, `--dry-run` and `--yes` go after it.
+`--px`, `--dry-run` and `--yes` go after it. `--pretty` is also accepted
+*after* the group/command (`scouter cull propose --job-slug .. --pretty`, as
+the phase 2 examples below show) — both positions work the same way.
 
 Every write is one darktable history item you can see and undo yourself.
 `undo-last` sets the parameter back to its previous value, which adds a history
@@ -230,7 +232,12 @@ These are load-bearing, not incidental — read them before scripting against Sc
   sidecar only when the history actually changed, so a write asking for the
   value the image already has produces no write; Scouter resolves that by
   reading the value back and says so in a warning, and still reports
-  `commit_timeout` when the value genuinely is not there.
+  `commit_timeout` when the value genuinely is not there. The editor
+  benchmark (row 408 B1) measured the FIRST `history commit`/view-bounce
+  after a fresh darktable launch intermittently wedging the bridge outright
+  (5 of 13 sessions: no MCP answer in 30s, then `view.current` itself dead)
+  -- not isolated to a specific cause yet, and not fixed here; it needs a
+  darktable-launch-state isolation harness this branch does not have.
 - **`darkroom status` reports slider *positions*, not values.** `dt.gui.action`'s
   read-back is a normalised 0..1 position in the slider's visible range, and
   phase 1 has no verified position→value table for every slider — use
@@ -261,8 +268,13 @@ scouter --pretty metrics summary --since 7d
 
 `0` ok · `1` error · `2` usage · `3` bridge_timeout · `4` wrong_view ·
 `5` confirmation required (a dry run was printed) · `6` not_in_darkroom ·
-`7` cli_wrote_nothing · `8` db_locked · `9` style_partial · `10` commit_timeout ·
-`20` value_unknown · `21` not_pinned
+`7` cli_wrote_nothing · `8` db_locked · `9` style_partial / partial ·
+`10` commit_timeout · `11` backup_not_configured · `12` checksum_mismatch ·
+`13` destination_collision · `14` exif_unreadable · `15` style_write_failed ·
+`16` encryption_unavailable · `17` manifest_unauthenticated ·
+`18` export_all_failed · `19` no_sidecar · `20` value_unknown ·
+`21` not_pinned · `22` state_locked · `23` noop
+(`darkroom undo-last` with nothing to undo, on a real, non-dry call)
 
 ### Tests
 
@@ -415,9 +427,18 @@ These are load-bearing. Read them before scripting against phase 2.
   sidecar alone, and Scouter does not pretend there is: `wb kelvin` returns
   `kelvin: null` with a reason naming `scouter wb calibrate` when the camera has
   no table, and `null` with the measured range when a value falls outside it —
-  never an extrapolated guess. `outliers list` says which test actually ran
-  (`wb_test: "kelvin" | "ratio"`) and falls back to the always-available
-  coefficient ratio.
+  never an extrapolated guess. When the image has no committed `temperature`
+  module at all (so there are no coefficients to invert in the first place),
+  the reason names *that*, and — if the camera also has no calibration table
+  — says so in the same reason too, exactly like the no-table case does on
+  its own: neither fact is allowed to hide the other (E12 row 407). `outliers
+  list` says which test actually ran (`wb_test: "kelvin" | "ratio"`) and
+  falls back to the always-available coefficient ratio. A table only ever
+  reaches `<config_dir>/wb/<camera>.json` two ways: `scouter wb calibrate`
+  writes it there itself, or you copy one there by hand (E12 D9) --
+  `config init` does not install any table, including the repo's own
+  committed fixtures, so a camera you have already calibrated once still
+  needs its table copied into every new config directory.
 - **Scouter cannot move darktable's darkroom onto a frame imported in the same
   session.** Measured five times on darktable 5.4.1 (`docs/measurements.md`,
   phase 2 fact 4): `display_image` returns without error and the darkroom
@@ -427,7 +448,14 @@ These are load-bearing. Read them before scripting against phase 2.
   image that never loaded. **So the workflow is: pick the frame in
   darktable, and Scouter edits what is loaded.** No set-wide verb is affected
   -- `cull.*`, `style.*`, `outliers list` and `export.*` all work off the XMP
-  and `darktable-cli` and never touch the darkroom.
+  and `darktable-cli` and never touch the darkroom. This refusal is
+  `not_in_darkroom` (exit 6), with a fix naming the real cause -- "open it in
+  darktable yourself (double-click it in the lighttable) or relaunch
+  darktable on it" -- never `bridge_timeout` (exit 3, "start darktable"):
+  darktable IS running, it is just showing a different frame (E12 D4, row
+  407). The Lua plugin's own `error()` calls prepend a `source:line:`
+  position to the message before Scouter ever sees it; the classifier
+  matches the phrase wherever that prefix put it, not just at the start.
 - **Hand darktable RESOLVED paths.** `/var` is a symlink to `/private/var` on
   macOS and darktable records the resolved film path, so a `library_root`
   reached through a symlink makes every `image.lookup` miss and every film
@@ -439,6 +467,130 @@ These are load-bearing. Read them before scripting against phase 2.
 - **`style apply-set --mode overwrite` is still refused.** The Lua API only
   appends. The one place overwrite exists is render-only:
   `export release --overwrite-style`.
+- **`style apply-set` returns before darktable has necessarily written every
+  sidecar.** The Lua `style.apply` handler applies via `image:apply_style`
+  directly against `dt.database` and returns as soon as that call returns --
+  darktable then writes each XMP on its own internal schedule, not
+  synchronously, and there is no bridge-side "sidecar written" signal to
+  wait on (unlike `darkroom.set`'s commit, which has the view-bounce trick
+  to confirm against). The editor benchmark measured 0.9-1.35s of lag: an
+  immediate `history_read` or `outliers list` right after `style apply-set`
+  can still see the PRE-style state (row 408 B7). `apply_set`'s own
+  idempotency ledger (`history_end_before`/`history_end_after`) already
+  tracks this per image for its OWN re-run safety, but that is a different
+  question from "has this specific caller's next read landed after the
+  write" -- if you read a frame's history right after applying a style,
+  either poll `history read` until it changes or add a short pause first.
+- **A job's state lock now fails fast instead of blocking for minutes --
+  hardening, not a fix for D3 (row 407, still open).**
+  `~/.cache/scouter/state/<job>.json.lock` guards `darkroom.open`'s and
+  `history.commit`'s read-modify-write of a job's small state file. A
+  caller now waits at most `cache.lock_wait_s` (default 30s) before failing
+  with `state_locked` (exit `22`), naming the pid that holds it and since
+  when, instead of blocking forever. This is general hardening against
+  lock contention, **not** the fix for the E12 live run's own two 15-18
+  minute stalls: the evidence shows both happened BEFORE the verb was ever
+  reached (`darkroom open`'s stall was inside the bridge call, before this
+  lock is even taken; `outliers list`'s verb never takes this lock at
+  all), and each lock hold here is microsecond-scale, never
+  multi-minute. **D3's root cause is still open.** `metrics.instrumented`
+  now records `startup_ms` (time from process start to a verb's own start)
+  in every event line, so the next such stall is attributable.
+- **`cull propose`'s sharpness gate is relative to the job, not an absolute
+  number.** A singleton frame is proposed `pick_rating` when its sharpness is
+  in the sharpest `cull.sharpness_keep_top_pct` fraction of THAT job's own
+  frames (default keeps the top 60%), never against a fixed number tuned on
+  one fixture -- real ORF/ARW renders measured 0.003-0.04 in the E12 live
+  run, well under the old fixed `cull.sharpness_floor` of 0.20, so nothing
+  was ever picked on its own merits. `sharpness_floor` still exists in the
+  config and in every proposal's `tolerances_used`, but only as a diagnostic
+  field now; it gates nothing. A frame whose stats render FAILED, or that
+  has no capture time, is excluded from the percentile itself (review round
+  1 blocker: left in, a job with enough failed renders collapsed the
+  threshold toward 0.0, which a failed frame's own 0.0 stand-in then also
+  cleared -- proposing a pick on numbers Scouter never measured); a failed
+  frame is never proposed `pick_rating` regardless.
+
+  `cull propose` also renders every frame from a sidecar-less scratch copy,
+  so it always scores the frame as imported, never its current edited
+  history -- editing a hero no longer moves its burst's pick to a different
+  frame on the next `cull propose`.
+
+  **The percentile is relative, so it cannot detect a BAD job** (review
+  round 1, should-fix): in a uniformly soft or blurry job, the sharpest 60%
+  are still proposed a pick -- there is no absolute floor left to warn
+  that the whole job is soft. In a uniformly sharp job, the softest 40% of
+  singletons still get `keep_rating` (1), never rejected -- a burst's
+  runner-up is not a bad frame, just not the pick. The percentile is
+  computed over EVERY frame that has a real sharpness number, burst
+  members included, not only singletons. When the job's own p10-p90
+  sharpness spread is small (either case above), `cull propose` adds a
+  warning saying so, so the split is worth a second look by eye rather
+  than trusted outright.
+- **`library import` labels a mixed-body card from each file's own EXIF, and
+  `--camera` filters rather than refuses.** A card holding more than one
+  camera body used to be refused outright ("pass --camera to choose one"),
+  and once `--camera` was given every file was stamped with that ONE slug --
+  including the other body's, with `camera_model` cleared to `null` for all
+  of them. Every file is now always named from its own EXIF body; `--camera
+  X` imports only that body's files and the result's `skipped_other_camera`
+  lists the rest (`{"source_name", "camera"}` per file), never silently
+  drops them. `import.json`'s top-level `camera`/`cameras`/`camera_model`/
+  `totals` describe the WHOLE job (every import it has ever had), not just
+  the run that just finished -- an appending import used to overwrite these
+  with only its own numbers even though `files` already held every prior
+  import's frames too. A file with NO camera model in its EXIF at all never
+  fails the whole card either (review round 1, ruling 2): with an explicit
+  `--camera X`, it is imported under X and listed in `assumed_camera`
+  (`{"source_name", "camera"}`); without one, it is skipped and listed in
+  `skipped_no_body` (`{"source_name"}`), and the rest of the card still
+  imports. A card where NOT A SINGLE file has a camera model, imported
+  without `--camera`, still refuses outright (fix round 2) -- naming every
+  file and pointing at `--camera X` -- rather than silently succeeding
+  with an empty job directory.
+- **`library import`'s auto-derived date no longer trusts a single
+  outlier.** A card's date used to default to the EARLIEST capture time,
+  full stop -- so one file with an unset clock (the E12 Sony card's own
+  DSC01425, defaulting to 2013-01-01) set the whole job's date. The
+  earliest time is still used when it is within 30 days of the card's
+  median capture time (a normal midnight-spanning card is unaffected); an
+  earlier outlier past that falls back to the median instead, with a
+  warning naming the outlier so the camera clock gets checked (D6, row
+  407).
+- **`cull apply` no longer refuses the whole job over one stale frame.**
+  Merely opening a frame in darktable rewrites its XMP, which used to make
+  `cull apply` refuse the ENTIRE proposal the moment any one frame's
+  sidecar had moved since `cull propose` wrote it. The stale frame(s) are
+  now skipped and named in `result.stale`/a warning; every other frame in
+  the proposal is still applied as planned (D7, row 407).
+- **`darkroom undo-last` never reports a real no-op as `ok`.** A REAL
+  (non-dry) call on an empty journal used to report `outcome: dry_run`
+  unconditionally -- `ok = outcome in ("ok", "dry_run")` counted it as a
+  success indistinguishable from a genuine preview. It now reports
+  `outcome: "noop"` (exit `23`) for a real call with nothing to undo; a
+  true dry run still reports `dry_run` as before (row 408 B2, editor
+  benchmark). The reason names the real cause, not just the symptom: each
+  call gets a fresh job unless `$SCOUTER_JOB` (CLI) or `job=` (MCP/Python)
+  is pinned across calls, so a fresh call's `undo_last` looks at an empty
+  journal by default; the MCP server already pins one for you (phase 3
+  task 9's session job), so this now only bites a bare CLI/Python call
+  that never pins one. A "noop" also carries a structured
+  `error.fix` over every layer (review round 1) -- it is a RESULT, not a
+  raised error, so it would otherwise have had nowhere else to put one.
+- **`darkroom enable`/`darkroom reset` refuse an unpinned module before any
+  bridge call.** They used to send `iop/<module>` for any string; an
+  unrecognised path wedges darktable's Lua worker for the rest of the
+  session, the same measured risk `ACTION_PATHS` exists for on the SET side.
+  `dtbridge.MODULE_WHITELIST` (every `ACTION_PATHS` module, plus `lens`,
+  `sharpen` and `denoiseprofile`, which the editor benchmark exercised
+  successfully) is checked first, before `darkroom.current`, `journal.begin`
+  or any other bridge round trip (row 408 B6/B8).
+- **`darkroom set` also refuses an unpinned `(module, param)` before any
+  bridge call.** `action_path` used to be evaluated only inside the real
+  `darkroom.action` call, after `darkroom.current`, `view.current` and an
+  XMP read had already happened -- an agent's guessed pair cost all three
+  before it was refused. It is now computed once, up front, before either
+  the dry-run or the real path does anything else (row 408 B8).
 
 ### Phase 2 exit criteria
 

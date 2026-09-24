@@ -60,7 +60,18 @@ class Tolerances:
 @dataclass(frozen=True)
 class CullConfig:
     burst_gap_s: float = 2.0
+    #: E12 D1: real ORF/ARW renders came back 0.003-0.04, against this fixed
+    #: floor tuned on the synthetic fixture -- so nothing but noise ever
+    #: cleared it. Kept ONLY as a diagnostic field on the proposal now (row
+    #: 407 call 2); `sharpness_keep_top_pct` is what actually gates a
+    #: singleton frame, computed fresh from each job's own distribution.
     sharpness_floor: float = 0.20
+    #: The fraction of a job's frames (by sharpness) a singleton must be in
+    #: to be proposed `pick_rating` -- e.g. 0.6 keeps the sharpest 60%, so
+    #: the gate is `sharpness >= the job's own (1 - 0.6) = 40th percentile`.
+    #: Relative to the job, never an absolute number: a dim interior job and
+    #: a bright daylight job render completely different sharpness scales.
+    sharpness_keep_top_pct: float = 0.6
     luminance_low: int = 25
     luminance_high: int = 230
     clipped_flag_pct: float = 5.0
@@ -102,6 +113,18 @@ class VaultConfig:
 
 
 @dataclass(frozen=True)
+class CacheConfig:
+    #: E12 D3, row 407: `state/<job>.json.lock`'s exclusive `flock` used to
+    #: block with no timeout at all. A caller now waits at most this long
+    #: before failing with `state_locked` and who (as far as the lock file
+    #: itself records) is holding it -- general hardening against lock
+    #: contention, NOT a fix for the E12 live run's own two 15-18 minute
+    #: stalls (review round 1: those happened before the verb, and this
+    #: lock, were ever reached; D3's root cause is still open).
+    lock_wait_s: float = 30.0
+
+
+@dataclass(frozen=True)
 class Config:
     version: int = CONFIG_VERSION
     library_root: str | None = None
@@ -117,6 +140,7 @@ class Config:
     export: ExportConfig = field(default_factory=ExportConfig)
     stats: StatsConfig = field(default_factory=StatsConfig)
     educative: str = "brief"
+    cache: CacheConfig = field(default_factory=CacheConfig)
 
     def camera_map(self) -> dict[str, str]:
         return dict(self.cameras)
@@ -139,6 +163,7 @@ SECTIONS = {
     "style": ("style", StyleConfig),
     "export": ("export", ExportConfig),
     "stats": ("stats", StatsConfig),
+    "cache": ("cache", CacheConfig),
 }
 TOP_KEYS = {"version", "library_root", "cameras", "educative", "_comment", *SECTIONS}
 

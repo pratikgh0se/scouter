@@ -35,6 +35,7 @@ from scouter.errors import (
     BridgeTimeout,
     ChecksumMismatch,
     DestinationCollision,
+    ExifUnreadable,
     ScouterError,
     UsageError,
 )
@@ -82,6 +83,18 @@ class _Plan:
     #: many candidate files `_plan` hashed, and how many bytes that read.
     hashed_files: int = 0
     hashed_bytes: int = 0
+    #: D5, row 407 call 1: files `--camera` excluded because their own EXIF
+    #: names a different body -- `{"source_name", "camera"}` per file, never
+    #: silently dropped.
+    skipped_other_camera: list[dict] = dataclasses.field(default_factory=list)
+    #: Review round 1, ruling 2: a file with NO EXIF body at all, imported
+    #: under an explicit `--camera X` anyway -- `{"source_name", "camera"}`
+    #: per file, so the assumption is visible, never silent.
+    assumed_camera: list[dict] = dataclasses.field(default_factory=list)
+    #: Review round 1, ruling 2: a file with no EXIF body, skipped because
+    #: there was no `--camera` to fall back on -- `{"source_name"}` per
+    #: file. The card never fails over this one file.
+    skipped_no_body: list[dict] = dataclasses.field(default_factory=list)
 
 
 class ManifestCorrupt(UsageError):
@@ -534,15 +547,40 @@ def _plan(
                 },
             )
 
+    plan_warnings: list[str] = []
     if date is None:
-        times = [t.captured_at for _, t in tagged if t.captured_at]
+        times = sorted(t.captured_at for _, t in tagged if t.captured_at)
         if not times:
             raise UsageError(
                 "no capture time could be read from any file in this card; pass "
                 "--date explicitly",
                 detail={"files": len(files)},
             )
-        date = min(times)[:10]
+        # E12 D6, row 407: the earliest capture time still wins normally (a
+        # card spanning midnight must still get the day the shoot started
+        # on) -- but one bad clock (an unset RTC defaulting to 2013-01-01,
+        # the E12 Sony card's own DSC01425) used to drag the WHOLE job's
+        # date down to it, because it was always the earliest, no matter how
+        # far from every other frame on the card. The median is robust to a
+        # single such outlier; the earliest is only trusted when it is
+        # within 30 days of the median, and the fallback is a warning, never
+        # a silent switch.
+        earliest, median = times[0], times[len(times) // 2]
+        delta_days = abs(
+            (
+                datetime.strptime(earliest[:10], "%Y-%m-%d")
+                - datetime.strptime(median[:10], "%Y-%m-%d")
+            ).days
+        )
+        if delta_days > 30:
+            date = median[:10]
+            plan_warnings.append(
+                f"the earliest capture time ({earliest}) is {delta_days} days from "
+                f"the job's median date ({date}); used the median instead -- check "
+                "that file's camera clock"
+            )
+        else:
+            date = earliest[:10]
 
     # Needs `date` (just resolved above) and `job_slug`; a plain read (even
     # the raw-dir fallback tier only hashes files already on disk, not the
@@ -552,7 +590,6 @@ def _plan(
     existing_files = _recover_existing_files(
         config.scouter_dir(job_path), config.raw_dir(job_path), date, job_slug
     )
-    plan_warnings: list[str] = []
 
     # Fix round 4, item 4: a `seq` recovered from `checksums.sha256` can be
     # `None` (a destination name Scouter didn't write, or one this job's
@@ -621,18 +658,80 @@ def _plan(
             by_sha_unknown_source.setdefault(e["sha256"], []).append(e)
     known_source_names = {e["source_name"] for e in existing_files}
 
-    if camera is None:
-        slugs = {exif.camera_slug(t, cfg) for _, t in tagged}
-        if len(slugs) > 1:
-            raise UsageError(
-                f"this card holds {len(slugs)} distinct cameras "
-                f"({', '.join(sorted(slugs))}); pass --camera to choose one",
-                detail={"cameras": sorted(slugs)},
-            )
-        camera = next(iter(slugs))
-    else:
+    # E12 D5, row 407 call 1: a card is never assumed to hold one body. Every
+    # file is slugged from its OWN EXIF here, always -- `--camera` is a
+    # FILTER (import only that body's files, report the rest as skipped),
+    # never a label stamped onto files it does not belong to. The old
+    # behaviour refused a mixed card outright, then (once `--camera` was
+    # given to get past the refusal) mislabelled every OTHER body's files
+    # with the chosen slug and cleared their `camera_model`.
+    if camera is not None:
         camera = paths.validate_slug(camera)
 
+    # Review round 1, ruling 2: `exif.camera_slug` raises `ExifUnreadable`
+    # for a file with NO camera model in its EXIF at all -- this used to
+    # abort the WHOLE card over that one file, and the raised message ("no
+    # camera model ... and no --camera was given") was false the moment
+    # `--camera` WAS given, since the old code never even reached this far
+    # with one. An explicit `--camera X` is also a label for such a file
+    # (imported under X, listed in `assumed_camera`); without one, the file
+    # is skipped (`skipped_no_body`) and the rest of the card still imports.
+    slug_by_path: dict[Path, str] = {}
+    assumed_camera: list[dict] = []
+    skipped_no_body: list[dict] = []
+    readable_tagged: list[tuple[Path, exif.ExifTags]] = []
+    for path, t in tagged:
+        try:
+            slug_by_path[path] = exif.camera_slug(t, cfg)
+            readable_tagged.append((path, t))
+        except ExifUnreadable:
+            if camera is not None:
+                slug_by_path[path] = camera
+                assumed_camera.append({"source_name": path.name, "camera": camera})
+                readable_tagged.append((path, t))
+            else:
+                skipped_no_body.append({"source_name": path.name})
+    tagged = readable_tagged
+
+    # Fix round 2: round 1 made a no-body FILE never fail the whole card
+    # (skipped, listed in `skipped_no_body`, the rest still imports) -- but
+    # a card where NOT A SINGLE file has a camera model, imported without
+    # `--camera`, must still refuse rather than silently succeed with an
+    # empty job directory. A card with SOME bodies present keeps round 1's
+    # behaviour untouched (this only fires when nothing at all is left).
+    if camera is None and not tagged and skipped_no_body:
+        names = ", ".join(e["source_name"] for e in skipped_no_body)
+        raise UsageError(
+            f"no camera model in any file's EXIF on this card ({names}); "
+            "nothing to import",
+            fix="pass --camera X to import them all under one explicit body",
+            detail={"skipped_no_body": skipped_no_body},
+        )
+
+    skipped_other_camera: list[dict] = []
+    if camera is not None:
+        matching = [(p, t) for p, t in tagged if slug_by_path[p] == camera]
+        skipped_other_camera = [
+            {"source_name": p.name, "camera": slug_by_path[p]}
+            for p, t in tagged
+            if slug_by_path[p] != camera
+        ]
+        if not matching:
+            other = sorted({slug_by_path[p] for p, _ in tagged})
+            raise UsageError(
+                f"no files on this card belong to camera {camera!r}; this card "
+                f"holds {', '.join(other)}",
+                fix=f"drop --camera to import every body, or pass one of: {', '.join(other)}",
+                detail={"camera": camera, "cameras_present": other},
+            )
+        tagged = matching
+
+    slugs_in_plan = sorted({slug_by_path[p] for p, _ in tagged})
+    # `camera`/`camera_model`/`camera_make` describe THIS run's plan for the
+    # dry-run preview and `import.json`'s per-run `meta` -- "mixed" (never a
+    # silently wrong single slug) when more than one body is actually
+    # included; the per-file truth is `plan[i]["camera"]`, always.
+    camera = camera or (slugs_in_plan[0] if len(slugs_in_plan) == 1 else "mixed")
     models = {t.model for _, t in tagged if t.model}
     makes = {t.make for _, t in tagged if t.make}
     camera_model = next(iter(models)) if len(models) == 1 else None
@@ -685,7 +784,10 @@ def _plan(
                 next_seq += 1
             seq = stem_seq[stem]
             ext = path.suffix.lower()
-            dest_name = f"{date}_{job_slug}_{camera}_{seq:0{seq_digits}d}{ext}"
+            # This file's OWN slug, never the run-level `camera` summary
+            # (which is "mixed" for a card with more than one body) -- D5's
+            # whole point.
+            dest_name = f"{date}_{job_slug}_{slug_by_path[path]}_{seq:0{seq_digits}d}{ext}"
         if dest_name in dest_sources:
             # Fix round 1, should-fix 3: two source files from different card
             # subdirectories sharing a stem+ext (the same camera filename
@@ -715,6 +817,12 @@ def _plan(
                 "exposure_time": tags.exposure_time,
                 "iso": tags.iso,
                 "f_number": tags.f_number,
+                # This file's own body (D5): what `dest_name` was actually
+                # built from, carried through to `files_out` so
+                # `import.json` never disagrees with the filenames it wrote.
+                "camera": slug_by_path[path],
+                "camera_model": tags.model,
+                "camera_make": tags.make,
             }
         )
     return _Plan(
@@ -728,6 +836,9 @@ def _plan(
         warnings=plan_warnings,
         hashed_files=hashed_files,
         hashed_bytes=hashed_bytes,
+        skipped_other_camera=skipped_other_camera,
+        assumed_camera=assumed_camera,
+        skipped_no_body=skipped_no_body,
     )
 
 
@@ -781,6 +892,26 @@ def import_card(
     existing_files = resolved.existing_files
     pre_existing_stems = resolved.pre_existing_stems
     warnings: list[str] = list(resolved.warnings)
+    if resolved.skipped_other_camera:
+        skipped_names = ", ".join(
+            f"{e['source_name']} ({e['camera']})" for e in resolved.skipped_other_camera
+        )
+        warnings.append(
+            f"--camera {camera!r} matched {len(planned)} file(s); skipped "
+            f"{len(resolved.skipped_other_camera)} from other bodies: {skipped_names}"
+        )
+    if resolved.assumed_camera:
+        names = ", ".join(e["source_name"] for e in resolved.assumed_camera)
+        warnings.append(
+            f"{len(resolved.assumed_camera)} file(s) had no camera model in their EXIF; "
+            f"imported under --camera {camera!r} anyway (see assumed_camera): {names}"
+        )
+    if resolved.skipped_no_body:
+        names = ", ".join(e["source_name"] for e in resolved.skipped_no_body)
+        warnings.append(
+            f"{len(resolved.skipped_no_body)} file(s) had no camera model in their EXIF "
+            f"and no --camera was given; skipped (see skipped_no_body): {names}"
+        )
 
     plan_view = [
         {
@@ -788,7 +919,7 @@ def import_card(
             "source": str(p["source"]),
             "dest": f"raw/{p['dest_name']}",
             "bytes": p["bytes"],
-            "camera": resolved_camera,
+            "camera": p["camera"],
             "captured_at": p["captured_at"],
         }
         for p in planned
@@ -820,6 +951,9 @@ def import_card(
             camera_model=camera_model,
             camera_make=camera_make,
             source_root=str(source_path),
+            skipped_other_camera=resolved.skipped_other_camera,
+            assumed_camera=resolved.assumed_camera,
+            skipped_no_body=resolved.skipped_no_body,
             plan=plan_view,
             warnings=warnings,
             reason=(
@@ -979,6 +1113,11 @@ def import_card(
                     "iso": p["iso"],
                     "f_number": p["f_number"],
                     "status": status,
+                    # D5: this file's OWN body, exactly what `dest_name` was
+                    # built from -- never the job-level `camera` summary.
+                    "camera": p["camera"],
+                    "camera_model": p["camera_model"],
+                    "camera_make": p["camera_make"],
                 }
             )
     except BaseException as e:
@@ -1035,6 +1174,42 @@ def import_card(
         "plan_hashed_bytes": resolved.hashed_bytes,
         "duplicate_pairs": len(duplicates),
     }
+
+    # D8, row 407: `totals`/`camera`/`camera_model`/`source_root` used to be
+    # THIS run's numbers only, silently overwriting an earlier import's on
+    # every appending run -- `files` had all 14 frames of a two-body job, but
+    # `totals`/`camera` described only the 6 imported last. Computed from the
+    # MERGED set (every import this job has ever done), not just this run's.
+    merged_preview = _merge_manifest_files(existing_files, files_out)
+    job_cameras = sorted({f["camera"] for f in merged_preview if f.get("camera")})
+    job_models = sorted({f["camera_model"] for f in merged_preview if f.get("camera_model")})
+    job_makes = sorted({f["camera_make"] for f in merged_preview if f.get("camera_make")})
+    # Review round 1 nit: no try/except here -- `_plan()` already read (and
+    # would have raised `ManifestCorrupt` on) this same `import.json`
+    # earlier in this run, via `_recover_existing_files`. Catching it again
+    # here was dead code on the normal path, and on the vanishingly narrow
+    # race where the file changed under us in between, swallowing it would
+    # have silently dropped `source_roots` rather than surfacing the real
+    # problem.
+    prior_manifest = _read_manifest(scouter_d / "import.json")
+    prior_roots = (prior_manifest or {}).get("source_roots") or (
+        [prior_manifest["source_root"]] if (prior_manifest or {}).get("source_root") else []
+    )
+    source_roots = sorted(set(prior_roots) | {str(source_path)})
+    totals["job_files"] = len(merged_preview)
+    # Recovered entries (`_synthesize_from_checksums`) may carry `bytes: None`
+    # -- an honest gap, not a zero -- so it is never allowed to poison the sum.
+    totals["job_bytes"] = sum(f.get("bytes") or 0 for f in merged_preview)
+
+    meta = {
+        **meta,
+        "camera": job_cameras[0] if len(job_cameras) == 1 else ("mixed" if job_cameras else None),
+        "cameras": job_cameras,
+        "camera_model": job_models[0] if len(job_models) == 1 else None,
+        "camera_models": job_models,
+        "camera_make": job_makes[0] if len(job_makes) == 1 else None,
+        "source_roots": source_roots,
+    }
     manifest = {**meta, "totals": totals, "duplicates": duplicates}
     merged_files = _persist_manifest(scouter_d, manifest, existing_files, files_out)
 
@@ -1086,12 +1261,20 @@ def import_card(
         duplicates=duplicates,
         job_slug=job_slug,
         date=resolved_date,
-        camera=resolved_camera,
-        camera_model=camera_model,
-        camera_make=camera_make,
+        # Job-wide now (D8), not just this run's plan: `meta` was recomputed
+        # from `merged_preview` above.
+        camera=meta["camera"] or "",
+        camera_model=meta["camera_model"],
+        camera_make=meta["camera_make"],
+        cameras=job_cameras,
+        camera_models=job_models,
         source_root=str(source_path),
+        source_roots=source_roots,
         files=merged_files,
         totals=totals,
+        skipped_other_camera=resolved.skipped_other_camera,
+        assumed_camera=resolved.assumed_camera,
+        skipped_no_body=resolved.skipped_no_body,
         film_roll_registered=film_roll_registered,
         imported=imported_count,
         scan_incomplete=scan_incomplete,
@@ -1421,8 +1604,24 @@ for _verb in (
             ArgSpec(
                 "job_slug", "str", required=True, help="job directory slug, e.g. harbour-wedding"
             ),
-            ArgSpec("date", "str", help="YYYY-MM-DD; default: the earliest capture time"),
-            ArgSpec("camera", "str", help="camera slug override; required for a mixed-camera card"),
+            ArgSpec(
+                "date",
+                "str",
+                help="YYYY-MM-DD; default: the earliest capture time, unless it is "
+                "more than 30 days from the card's median capture time (one bad "
+                "clock), in which case the median is used instead, with a warning. "
+                "Derived from the WHOLE card before --camera filters it, so "
+                "--camera nex5n on a mixed card still takes its date from the "
+                "other body's files too",
+            ),
+            ArgSpec(
+                "camera",
+                "str",
+                help="import only this body's files from a mixed card; the rest are "
+                "skipped and reported (every file is always labelled from its own "
+                "EXIF). The job's date is still derived from the whole card, "
+                "before this filter -- see --date",
+            ),
             ArgSpec(
                 "extensions",
                 "list[str]",

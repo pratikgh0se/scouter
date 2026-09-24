@@ -160,6 +160,24 @@ class DarkroomCoreTest(_DarkroomFixture):
         self.assertEqual(result.plan[0]["value"], 2.0)
         self.assertIn("no darktable calls", result.reason or "")
 
+    def test_unpinned_pair_refuses_before_any_bridge_call(self) -> None:
+        """Row 408, B8: `action_path(module, param)` used to be evaluated
+        only inside the `darkroom.action` call, AFTER `_current_image`,
+        `require_darkroom` and the XMP reads -- so an agent's guessed
+        (module, param) cost a `darkroom.current` round trip, a
+        `view.current` round trip and an XMP read before it was refused. It
+        is now computed once, up front, before either the dry-run or the
+        real path does anything else."""
+        with self.assertRaises(UsageError) as ctx:
+            darkroom.set_param(module="colorzones", param="green_hue", value=0.1)
+        self.assertEqual(ctx.exception.code, "usage")
+        self.assertEqual(self.bridge.calls, [], "no bridge call for an unpinned pair")
+
+    def test_unpinned_pair_refuses_on_a_dry_run_too(self) -> None:
+        with self.assertRaises(UsageError):
+            darkroom.set_param(module="colorzones", param="green_hue", value=0.1, dry_run=True)
+        self.assertEqual(self.bridge.calls, [])
+
     def test_wrong_view_is_raised_before_any_action(self) -> None:
         self.bridge.responses["view.current"] = {"view": "lighttable"}
         with self.assertRaises(WrongView):
@@ -345,6 +363,30 @@ class DarkroomCoreTest(_DarkroomFixture):
         self.assertEqual(len(self.commit_calls), 1)
         self.assertEqual(self.commit_calls[0][2], "auto")
 
+    def test_enable_refuses_an_unpinned_module_before_any_bridge_call(self) -> None:
+        """Row 408, B6: `darkroom.enable`/`darkroom.reset` used to send
+        `iop/<module>` for ANY string -- an agent that mistypes a module
+        name (e.g. "denoise" instead of "denoiseprofile") risks wedging
+        darktable's Lua worker for the whole session. The refusal must land
+        before `darkroom.current`/`journal.begin`, not just before
+        `module.enable` itself."""
+        with self.assertRaises(UsageError) as ctx:
+            darkroom.enable(module="denoise")
+        self.assertEqual(ctx.exception.code, "usage")
+        self.assertIn("denoiseprofile", ctx.exception.fix)
+        self.assertEqual(self.bridge.calls, [], "no bridge call for an unpinned module")
+
+    def test_reset_refuses_an_unpinned_module_before_any_bridge_call(self) -> None:
+        with self.assertRaises(UsageError):
+            darkroom.reset(module="bogus-module", confirm=True)
+        self.assertEqual(self.bridge.calls, [])
+
+    def test_enable_accepts_every_whitelisted_module(self) -> None:
+        for module in dtbridge.MODULE_WHITELIST:
+            with self.subTest(module=module):
+                result = darkroom.enable(module=module)
+                self.assertNotEqual(result.outcome, "error:usage")
+
     def test_enable_has_no_confirm_kwarg(self) -> None:
         """Ruling 9: `darkroom.enable` is not gated and takes no `confirm`."""
         with self.assertRaises(TypeError):
@@ -495,10 +537,52 @@ class DarkroomCoreTest(_DarkroomFixture):
         assert result.undone is not None
         self.assertEqual(result.undone["verb"], "darkroom.set")
 
-    def test_undo_last_on_an_empty_journal_is_a_dry_run_not_a_crash(self) -> None:
+    def test_undo_last_on_an_empty_journal_is_a_noop_not_a_crash(self) -> None:
+        """Row 408, B2: a REAL (non-dry) call with nothing to undo used to
+        report `outcome: dry_run` unconditionally -- indistinguishable from
+        a genuine preview, and `ok = outcome in ("ok", "dry_run")` counted
+        it as success. It is now "noop" (never "ok", never "dry_run") for a
+        real call, and still "dry_run" for an actual dry run."""
         result = darkroom.undo_last()
-        self.assertEqual(result.outcome, "dry_run")
+        self.assertEqual(result.outcome, "noop")
         self.assertIn("nothing to undo", result.reason or "")
+        # Review round 1, should-fix (row 408 B2): the reason names the
+        # REAL cause (a fresh job id per call), not just the symptom.
+        self.assertIn("SCOUTER_JOB", result.reason or "")
+        self.assertIn("phase 3", result.reason or "")
+
+        dry_result = darkroom.undo_last(dry_run=True)
+        self.assertEqual(dry_result.outcome, "dry_run")
+
+    def test_a_real_noop_undo_is_never_reported_ok_by_the_registry(self) -> None:
+        from scouter import registry
+
+        envelope = registry.call("darkroom.undo_last", "cli", job="job-test")
+        self.assertEqual(envelope.outcome, "noop")
+        self.assertFalse(envelope.ok, "a noop undo must never be reported ok")
+        from scouter.errors import exit_code_for
+
+        self.assertNotIn(exit_code_for(envelope.outcome), (0, 5))
+        # Review round 1, should-fix: a "noop" RESULT (not a raised
+        # ScouterError) still gets a structured error.fix over every
+        # layer -- MCP has nowhere else to surface an actionable hint.
+        self.assertIsNotNone(envelope.error)
+        self.assertEqual(envelope.error["code"], "noop")
+        self.assertTrue(envelope.error["fix"])
+        self.assertIn("SCOUTER_JOB", envelope.error["fix"])
+
+    def test_mcp_layer_also_gets_the_noop_error_fix(self) -> None:
+        import json
+
+        from scouter.mcp.server import ScouterServer
+
+        payload = json.loads(
+            ScouterServer().call("darkroom_undo_last", {"job": "job-test"})
+        )
+        self.assertEqual(payload["outcome"], "noop")
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "noop")
+        self.assertTrue(payload["error"]["fix"])
 
     def test_undo_last_names_the_failed_entry_when_that_is_all_there_is(self) -> None:
         """Should-fix 4: a journal that is not empty, but whose only entry

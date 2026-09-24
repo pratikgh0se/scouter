@@ -509,6 +509,11 @@ def set_param(
     """
     job = job or current_job()
     value = _require_finite("value", value)
+    # Row 408, B8: computed ONCE, up front, before EITHER branch does
+    # anything else -- an unpinned (module, param) is refused before
+    # `_current_image`/`require_darkroom` (bridge round trips) or
+    # `journal.begin`, not just before the `darkroom.action` call itself.
+    path_ = dtbridge.action_path(module, param)
     if dry_run:
         return SetResult(
             outcome="dry_run",
@@ -519,7 +524,7 @@ def set_param(
             plan=[
                 {
                     "action": "darkroom.set",
-                    "path": dtbridge.action_path(module, param),
+                    "path": path_,
                     "effect": "set",
                     "value": value,
                     "instance": instance,
@@ -572,7 +577,7 @@ def set_param(
     )
     try:
         dtbridge.action(
-            dtbridge.action_path(module, param),
+            path_,
             instance=instance,
             element="value",
             effect="set",
@@ -838,6 +843,10 @@ def _do_module_action(
     job: str | None,
 ) -> ModuleResult:
     job = job or current_job()
+    # Row 408, B6/B8: refused BEFORE any bridge call, journal entry or XMP
+    # read -- an unrecognised module wedges darktable's Lua worker for the
+    # rest of the session, so it must never even reach a dry-run plan.
+    dtbridge.require_known_module(module)
     gated = action_name == "reset"
     plan = [{"action": f"module.{action_name}", "module": module, "instance": instance}]
     if dry_run or (gated and not confirm):
@@ -1248,9 +1257,32 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
                     "and never took effect"
                 ),
             )
+        # Row 408, B2: this used to be unconditionally "dry_run" -- so a
+        # REAL (non-dry) undo call with an empty journal reported
+        # `outcome: dry_run` / `ok: true`, indistinguishable from a genuine
+        # preview. `registry.call` counts both "ok" and "dry_run" as
+        # success, so a real call that changed nothing looked identical to
+        # one that worked. Mirrors the `failed` branch just above: "dry_run"
+        # only when this call actually WAS a dry run; a real call gets
+        # "noop", which `ok = outcome in ("ok", "dry_run")` correctly
+        # excludes from success.
+        # Review round 1, should-fix (row 408 B2): named the REAL cause, not
+        # just the symptom -- every MCP call got its own job id
+        # (`paths.current_job()`: `job-<UTC second>-<pid>`) unless the
+        # caller pinned one, so the journal a fresh call's undo_last looked
+        # at was always empty. Phase 3 task 9's MCP session job
+        # (`scouter/mcp/server.py::_pin_session_job`) closes that for good
+        # by pinning `SCOUTER_JOB` once per server process, so this now
+        # only fires for a bare CLI/Python call that never pins
+        # `SCOUTER_JOB`/`job=` across calls, or a genuinely empty journal.
         return UndoResult(
-            outcome="dry_run",
-            reason=f"nothing to undo: journal for {job} is empty",
+            outcome="dry_run" if dry_run else "noop",
+            reason=(
+                f"nothing to undo: journal for {job} is empty -- a bare CLI/Python "
+                "call gets a fresh job per call unless $SCOUTER_JOB (CLI) or job= "
+                "(MCP/Python) is pinned across calls; the MCP server already pins "
+                "one for you (phase 3 task 9's session job)"
+            ),
         )
 
     # Blocker 6 / fix round 3, item 1: a `module.reset` entry can never be

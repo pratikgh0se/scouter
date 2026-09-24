@@ -133,7 +133,82 @@ def _group_bursts(frames: list[dict], gap_s: float) -> list[dict]:
     return groups
 
 
-def _propose_one(frame: dict, burst: dict, best_seq: int, cfg) -> tuple[int, list[str]]:
+def _percentile(values: list[float], q: float) -> float:
+    """Linear-interpolated percentile, `q` in `[0, 1]` (same convention as
+    `numpy.percentile`'s default `linear` method) -- stdlib only, no numpy
+    dependency for one number."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    idx = q * (len(ordered) - 1)
+    lo = int(idx)
+    hi = min(lo + 1, len(ordered) - 1)
+    return ordered[lo] + (ordered[hi] - ordered[lo]) * (idx - lo)
+
+
+def _job_sharpness_threshold(frames: list[dict], cfg) -> float:
+    """The job-relative sharpness gate for a singleton frame (E12 D1, row 407
+    call 2): the value at the `(1 - sharpness_keep_top_pct)` percentile of
+    THIS job's own sharpness numbers, so a singleton clears it exactly when
+    it is in the sharpest `sharpness_keep_top_pct` fraction of the job --
+    never an absolute number tuned on a different set of frames.
+
+    Review round 1 blocker: `stats_error` frames carry the neutral stand-in
+    `sharpness = 0.0` (never a real measurement -- propose()'s own comment),
+    and a frame with no capture time is never proposed a rating change at
+    all (`_build_proposals`'s no-time branch). Both are excluded from the
+    distribution here: probed with 4/10 real renders failed, the un-excluded
+    version proposed ALL 6 real frames pick_rating (100%, not the configured
+    60%); with 5/10 or all 10 failed, the threshold collapsed to 0.0 and
+    every frame -- including the failed ones -- was proposed pick_rating 2.
+    """
+    values = [
+        f["sharpness"]
+        for f in frames
+        if "sharpness" in f and "stats_error" not in f and f.get("captured_at")
+    ]
+    keep_top_pct = min(max(cfg.cull.sharpness_keep_top_pct, 0.0), 1.0)
+    return _percentile(values, 1.0 - keep_top_pct)
+
+
+def _sharpness_spread_warning(frames: list[dict], cfg) -> str | None:
+    """Review round 1, should-fix: the percentile gate is relative, so it
+    cannot detect a BAD job -- a uniformly soft/blurry job still proposes
+    its top `sharpness_keep_top_pct` a pick, same as a uniformly sharp one
+    holds back its bottom `1 - sharpness_keep_top_pct`, never rejecting any
+    of them either. Both are silent unless the spread itself is flagged:
+    when the job's own p10-p90 sharpness spread is small, the percentile is
+    unlikely to be distinguishing anything real, and the split is worth a
+    second look by eye rather than trusting the numbers.
+    """
+    values = [
+        f["sharpness"]
+        for f in frames
+        if "sharpness" in f and "stats_error" not in f and f.get("captured_at")
+    ]
+    if len(values) < 2:
+        return None
+    p10, p90 = _percentile(values, 0.10), _percentile(values, 0.90)
+    if p90 <= 0:
+        return (
+            "every frame in this job measured sharpness 0.0 (or its render failed); "
+            "the percentile gate has nothing to distinguish frames by"
+        )
+    ratio = (p90 / p10) if p10 > 0 else float("inf")
+    if ratio < 1.2:
+        return (
+            f"this job's sharpness spread is small (p10 {p10:.4f}, p90 {p90:.4f}); "
+            "the percentile gate may not be meaningfully distinguishing frames here -- "
+            "review the picks by eye rather than trusting the split"
+        )
+    return None
+
+
+def _propose_one(
+    frame: dict, burst: dict, best_seq: int, cfg, sharpness_threshold: float
+) -> tuple[int, list[str]]:
     """One frame's proposed rating and the reasons behind it, per design 8.2's
     table. `burst["members"]` (this frame's whole burst, itself included) is
     what lets the sharpness reasons name the runner-up's number."""
@@ -176,33 +251,50 @@ def _propose_one(frame: dict, burst: dict, best_seq: int, cfg) -> tuple[int, lis
         if frame["seq"] == best_seq:
             candidate = cfg.cull.pick_rating
             reasons.append(
+                # Review round 1 nit: `.4f` like the singleton reasons --
+                # real ORF/ARW renders (0.003-0.04) printed as "0.02 vs
+                # 0.02" at `.2f`, indistinguishable even when the burst's
+                # pick won by real margin.
                 f"sharpest of {len(members)} in burst {burst['burst_id']} "
-                f"({frame['sharpness']:.2f} vs {second['sharpness']:.2f} next)"
+                f"({frame['sharpness']:.4f} vs {second['sharpness']:.4f} next)"
             )
         else:
             candidate = cfg.cull.keep_rating
             reasons.append(
                 f"softer than the pick of burst {burst['burst_id']} "
-                f"({frame['sharpness']:.2f} vs {best['sharpness']:.2f})"
+                f"({frame['sharpness']:.4f} vs {best['sharpness']:.4f})"
             )
     else:
-        if frame["sharpness"] >= cfg.cull.sharpness_floor:
+        pct = cfg.cull.sharpness_keep_top_pct
+        if frame["sharpness"] >= sharpness_threshold:
             candidate = cfg.cull.pick_rating
             reasons.append(
-                f"singleton, sharpness {frame['sharpness']:.2f} >= "
-                f"floor {cfg.cull.sharpness_floor:.2f}"
+                f"singleton, sharpness {frame['sharpness']:.4f} >= this job's top "
+                f"{pct:.0%} threshold {sharpness_threshold:.4f}"
             )
         else:
             candidate = cfg.cull.keep_rating
             reasons.append(
-                f"singleton, sharpness {frame['sharpness']:.2f} < "
-                f"floor {cfg.cull.sharpness_floor:.2f}"
+                f"singleton, sharpness {frame['sharpness']:.4f} < this job's top "
+                f"{pct:.0%} threshold {sharpness_threshold:.4f} "
+                f"(absolute floor {cfg.cull.sharpness_floor:.2f} is a diagnostic only)"
             )
 
     # No frame is ever proposed rating 0 or reject (design 8.2, spec 4.8/13.4):
     # a flagged frame is capped here, never lowered below `keep_rating` --
     # there is nothing below it to fall to.
     if flagged:
+        candidate = min(candidate, cfg.cull.keep_rating)
+
+    # Review round 1 blocker: `sharpness` on a `stats_error` frame is the
+    # neutral stand-in 0.0 (propose()'s own comment: "never a guess dressed
+    # up as a measurement"), never a real number -- so it must never win a
+    # burst comparison or clear the singleton threshold either, no matter
+    # what the threshold collapsed to (`_job_sharpness_threshold` excludes
+    # these frames from the percentile now, but this is the hard guarantee:
+    # even a 0.0 threshold, or a burst where every OTHER member also
+    # failed, can never raise this frame to `pick_rating`).
+    if "stats_error" in frame:
         candidate = min(candidate, cfg.cull.keep_rating)
 
     if frame["rating_now"] > candidate:
@@ -212,15 +304,18 @@ def _propose_one(frame: dict, burst: dict, best_seq: int, cfg) -> tuple[int, lis
     return candidate, reasons
 
 
-def _build_proposals(frames: list[dict], cfg) -> tuple[list[dict], list[dict]]:
+def _build_proposals(frames: list[dict], cfg) -> tuple[list[dict], list[dict], float]:
     """Group `frames` into bursts and propose a rating for every one of them.
 
     Each frame dict needs `seq`, `path`, `image_id`, `captured_at`, `subsec`,
     `camera`, `sharpness`, `clipped_high_pct`, `luminance_mean`, `rating_now`.
-    Returns `(proposals, groups)`, both sorted/ordered deterministically.
+    Returns `(proposals, groups, sharpness_threshold)`, the first two
+    sorted/ordered deterministically; `sharpness_threshold` is the job-
+    relative singleton gate `_propose_one` used (row 407 call 2).
     """
     groups = _group_bursts(frames, cfg.cull.burst_gap_s)
     by_seq = {f["seq"]: f for f in frames}
+    sharpness_threshold = _job_sharpness_threshold(frames, cfg)
     proposals: list[dict] = []
 
     for group in groups:
@@ -257,7 +352,7 @@ def _build_proposals(frames: list[dict], cfg) -> tuple[list[dict], list[dict]]:
             best_seq = members[0]["seq"]
 
         for f in members:
-            proposed, reasons = _propose_one(f, burst, best_seq, cfg)
+            proposed, reasons = _propose_one(f, burst, best_seq, cfg, sharpness_threshold)
             proposals.append(
                 {
                     "image_id": f.get("image_id"),
@@ -274,7 +369,7 @@ def _build_proposals(frames: list[dict], cfg) -> tuple[list[dict], list[dict]]:
             )
 
     proposals.sort(key=lambda p: p["seq"])
-    return proposals, groups
+    return proposals, groups, sharpness_threshold
 
 
 def _counts(proposals: list[dict], groups: list[dict], cfg) -> dict[str, int]:
@@ -364,14 +459,24 @@ def propose(
                     "image_id": resolved.image_id,
                     "captured_at": f.get("captured_at"),
                     "subsec": f.get("subsec") or 0,
-                    "camera": manifest.get("camera", ""),
+                    # This file's OWN body when import.json recorded one
+                    # (E12 D5): a mixed-body job must still burst-group
+                    # correctly, which needs the real per-file camera, not
+                    # the job-level summary (`"mixed"` for such a job).
+                    "camera": f.get("camera") or manifest.get("camera", ""),
                 }
             )
 
     stats_started = time.monotonic()
     paths_in = [f["path"] for f in raw_frames]
     stats_job_dir = config.scouter_dir(job_path) if job_path is not None else None
-    stats_results = scout.stats_many(paths_in, px=px, workers=workers, job_dir=stats_job_dir)
+    # `unedited=True` (E12 D1): the cull must score the frame as imported,
+    # never its current edited history -- otherwise editing the hero moves
+    # the burst's pick out from under the photographer, as it did in the
+    # live E12 run.
+    stats_results = scout.stats_many(
+        paths_in, px=px, workers=workers, job_dir=stats_job_dir, unedited=True
+    )
     stats_ms = int((time.monotonic() - stats_started) * 1000)
 
     cached = computed = failed = 0
@@ -399,7 +504,7 @@ def propose(
                 computed += 1
         frames.append(merged)
 
-    proposals, groups = _build_proposals(frames, cfg)
+    proposals, groups, sharpness_threshold = _build_proposals(frames, cfg)
     counts = _counts(proposals, groups, cfg)
 
     warnings: list[str] = []
@@ -409,6 +514,9 @@ def propose(
             f"stats failed for {len(failed_paths)} frame(s); they were not flagged or "
             "picked on numbers Scouter could not compute -- see each frame's own reason"
         )
+    spread_warning = _sharpness_spread_warning(frames, cfg)
+    if spread_warning:
+        warnings.append(spread_warning)
 
     proposal_path = ""
     if job_path is not None:
@@ -428,6 +536,11 @@ def propose(
             .replace("+00:00", "Z"),
             "px": px,
             "tolerances_used": asdict(cfg.cull),
+            # The job-relative gate `_propose_one` actually used, computed
+            # from THIS job's sharpness numbers (row 407 call 2).
+            # `tolerances_used.sharpness_floor` is the old absolute number,
+            # kept only as a diagnostic -- it gates nothing here.
+            "sharpness_threshold": sharpness_threshold,
             "frames": proposals,
             "groups": groups,
             "xmp_mtimes": xmp_mtimes,
@@ -448,7 +561,14 @@ def propose(
         groups=groups,
         proposals=proposals,
         counts=counts,
-        stats={"cached": cached, "computed": computed, "failed": failed, "ms": stats_ms},
+        stats={
+            "cached": cached,
+            "computed": computed,
+            "failed": failed,
+            "ms": stats_ms,
+            "sharpness_threshold": sharpness_threshold,
+            "sharpness_floor_diagnostic": cfg.cull.sharpness_floor,
+        },
         path=str(job_path) if job_path is not None else None,
         warnings=warnings,
     )
@@ -523,10 +643,18 @@ def apply(
     frames = data.get("frames", [])
     recorded_mtimes = data.get("xmp_mtimes", {})
 
-    # The proposal is stale the moment any recorded frame's sidecar mtime has
-    # moved: the numbers Pratik read are no longer the numbers on disk, and
-    # `cull.apply` must not silently re-derive new ones (design 8.3).
+    # A frame is stale the moment its recorded sidecar mtime has moved: the
+    # number Pratik read for THAT frame is no longer the number on disk, and
+    # `cull.apply` must not silently re-derive a new one for it (design 8.3).
+    #
+    # E12 D7, row 407: this used to refuse the WHOLE proposal the moment any
+    # ONE frame went stale (opening the hero in darktable was enough --
+    # merely LOOKING at a frame rewrites its XMP). The rest of the job's
+    # frames are unaffected by one frame's edit, so they are applied as
+    # planned; only the stale ones are skipped, and named, never silently
+    # dropped.
     stale: list[str] = []
+    fresh_frames: list[dict] = []
     for f in frames:
         path = f["path"]
         recorded = recorded_mtimes.get(path)
@@ -534,13 +662,18 @@ def apply(
         current = sidecar.stat().st_mtime_ns if sidecar.exists() else None
         if recorded != current:
             stale.append(path)
+        else:
+            fresh_frames.append(f)
+
+    stale_warnings: list[str] = []
     if stale:
-        raise UsageError(
+        stale_warnings.append(
             f"{len(stale)} frame(s) changed since this proposal was written "
             f"({', '.join(Path(p).name for p in stale[:5])}"
-            f"{', ...' if len(stale) > 5 else ''}); re-run `cull propose` for fresh numbers",
-            detail={"proposal": str(proposal_path), "stale_frames": stale},
+            f"{', ...' if len(stale) > 5 else ''}); skipped -- re-run `cull propose` "
+            "for fresh numbers on those"
         )
+    frames = fresh_frames
 
     to_change = [f for f in frames if f["rating_proposed"] != f["rating_now"]]
     unchanged = len(frames) - len(to_change)
@@ -560,6 +693,8 @@ def apply(
             would_change=len(to_change),
             unchanged=unchanged,
             plan=plan,
+            stale=stale,
+            warnings=stale_warnings,
             reason=(
                 "dry run: no ratings were written"
                 if dry_run
@@ -622,7 +757,7 @@ def apply(
         )
 
     applied = len(to_change) - len(missed_ids)
-    warnings: list[str] = []
+    warnings: list[str] = list(stale_warnings)
     if unverified_count:
         warnings.append(
             f"{unverified_count} rating(s) landed in darktable's database but the XMP "
@@ -657,6 +792,7 @@ def apply(
         verified=verified_count,
         unverified=unverified_count,
         per_image=per_image,
+        stale=stale,
         warnings=warnings,
     )
 

@@ -40,19 +40,40 @@ _DB_LOCKED_RE = re.compile(r"database is locked|could not get lock|another insta
 
 #: Lua fix round 2: a `darkroom.open` call for an image other than the one
 #: darktable actually loaded no longer comes back as `{opened: False, error:
-#: ...}` -- it is a JSON-RPC error whose message starts with this prefix, and
+#: ...}` -- it is a JSON-RPC error whose message CONTAINS this phrase, and
 #: `Bridge.call` raises a plain `BridgeError` for it. There is no `WrongImage`
 #: class in `scouter.errors` (spec section 9's table), so this is classified as
 #: `not_in_darkroom` with the plugin's own message preserved verbatim, per the
 #: controller's ruling -- never folded into the generic `bridge_timeout` catch-all.
 #:
-#: Phase 3 task 8: on the real bridge this message never starts the string --
-#: `Bridge.call` (darktable_mcp/bridge/client.py) wraps a Lua `error()` as
-#: `"handler raised: <file>:<line>: wrong image loaded: ..."`, so a `^`
-#: anchor would never match a real refusal, only the fabricated strings this
-#: codebase's own fakes used to hand-craft. Unanchored, `.search` still finds
-#: it after that prefix.
+#: Phase 3 task 8 / E12 D4 row 407: this used to be anchored
+#: (`^wrong image loaded:`), which assumed the message started with those
+#: exact words. `Bridge.call` (darktable_mcp/bridge/client.py) wraps a Lua
+#: `error()` as `"handler raised: <file>:<line>: wrong image loaded: ..."` --
+#: `darktable_mcp.lua`'s `error(...)` calls (lines ~1218/1224) pass no
+#: explicit level, so Lua's OWN `error()` prepends `"<source>:<line>: "` to
+#: the message, e.g. `"darktable_mcp.lua:1218: wrong image loaded: asked for
+#: 113, darkroom shows 92 after 15000ms"`. A `^` anchor never matched that,
+#: only the fabricated strings this codebase's own fakes used to hand-craft,
+#: so it fell through to the generic `raise BridgeTimeout(...)` below: a
+#: same-session import (R20, honest limit: darktable cannot load a frame
+#: this job imported into the SAME running session) was misreported as
+#: `bridge_timeout` with the fix text "start darktable ... restart
+#: darktable" -- wrong, because darktable is running, and costs the 15s
+#: `WAIT_FOR_IMAGE_BUDGET_MS` timeout on top. `search`, not `match`/`^`, so
+#: the phrase is found wherever Lua's own position prefix put it.
 _WRONG_IMAGE_RE = re.compile(r"wrong image loaded:", re.I)
+
+#: The actionable fix for a wrong-image refusal specifically (E12 D4): never
+#: the generic `NotInDarkroom.fix` (written for a nan *action*, i.e. a
+#: module not in the pipeline), and never `BridgeTimeout.fix` ("start
+#: darktable ... restart darktable") -- darktable IS running, it is just
+#: showing a different frame than the one asked for.
+_WRONG_IMAGE_FIX = (
+    "darktable did not load the frame you asked for -- open it in darktable "
+    "yourself (double-click it in the lighttable) or relaunch darktable on "
+    "it, then retry"
+)
 
 _bridge: Bridge | None = None
 
@@ -109,6 +130,36 @@ def action_path(module: str, param: str, *, probe_unpinned: bool = False) -> str
     )
 
 
+#: Row 408, B6: modules `darkroom.enable`/`darkroom.reset` may target.
+#: Separate from `ACTION_PATHS` (which pins (module, param) SET targets,
+#: not whole-module enable/reset) but the SAME reasoning: `_do_module_action`
+#: used to send `iop/<module>` for any string, and an unrecognised path
+#: wedges darktable's Lua worker for the rest of the session (same measured
+#: cause `ACTION_PATHS` exists for). Every `ACTION_PATHS` module, plus the
+#: three the editor benchmark exercised successfully via `enable` (`lens`,
+#: `sharpen`, `denoiseprofile` -- L1/L2/S1/S2, all pass).
+MODULE_WHITELIST: frozenset[str] = frozenset(
+    {m for (m, _p) in ACTION_PATHS} | {"lens", "sharpen", "denoiseprofile"}
+)
+
+
+def require_known_module(module: str) -> None:
+    """Refuse an unpinned module BEFORE any bridge call (row 408 B6/B8):
+    the wedge risk `ACTION_PATHS`/`action_path` exists for applies here too,
+    and the refusal must land before `journal.begin` or a bridge round trip,
+    never after."""
+    if module not in MODULE_WHITELIST:
+        raise UsageError(
+            f"no pinned module {module!r} for darkroom.enable/darkroom.reset",
+            fix=(
+                f"pinned modules: {', '.join(sorted(MODULE_WHITELIST))}. Adding one "
+                "is a host-probe job, not a guess -- an unrecognised module wedges "
+                "darktable's Lua worker for the whole session."
+            ),
+            detail={"module": module, "pinned_modules": sorted(MODULE_WHITELIST)},
+        )
+
+
 def call(method: str, params: dict | None = None, timeout: float | None = None) -> Any:
     """One bridge call, with the bridge's own failures mapped to error classes."""
     try:
@@ -118,7 +169,7 @@ def call(method: str, params: dict | None = None, timeout: float | None = None) 
     except BridgeError as e:
         message = str(e)
         if _WRONG_IMAGE_RE.search(message):
-            raise NotInDarkroom(message, detail={"method": method}) from e
+            raise NotInDarkroom(message, fix=_WRONG_IMAGE_FIX, detail={"method": method}) from e
         if _DB_LOCKED_RE.search(message):
             from scouter.errors import DbLocked
 

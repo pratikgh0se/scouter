@@ -13,7 +13,6 @@ from unittest import mock
 from scouter.cli import tables
 from scouter.config import Config
 from scouter.core import cull, dtbridge, xmp
-from scouter.errors import UsageError
 from tests.scouter_fakes import FakeBridge, TempCache
 
 
@@ -87,7 +86,7 @@ class BurstGroupingTest(unittest.TestCase):
                 frames.append(_frame(seq, captured_at=captured_at, sharpness=sharpness))
                 seq += 1
 
-        proposals, groups = cull._build_proposals(frames, self.cfg)
+        proposals, groups, _threshold = cull._build_proposals(frames, self.cfg)
         bursts = [g for g in groups if g["burst_id"] != "no-time"]
         self.assertEqual(len(bursts), 6)
         for g in bursts:
@@ -102,7 +101,7 @@ class BurstGroupingTest(unittest.TestCase):
             _frame(2, captured_at="2026-01-01 10:00:01", sharpness=0.4),
             _frame(3, captured_at="2026-01-01 10:00:02", sharpness=0.2),
         ]
-        proposals, groups = cull._build_proposals(frames, self.cfg)
+        proposals, groups, _threshold = cull._build_proposals(frames, self.cfg)
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0]["tie_broken_by"], "seq")
 
@@ -115,7 +114,7 @@ class BurstGroupingTest(unittest.TestCase):
             _frame(1, captured_at=None, rating_now=1, sharpness=0.9),
             _frame(2, captured_at=None, rating_now=0, sharpness=0.1),
         ]
-        proposals, groups = cull._build_proposals(frames, self.cfg)
+        proposals, groups, _threshold = cull._build_proposals(frames, self.cfg)
         no_time_groups = [g for g in groups if g["burst_id"] == "no-time"]
         self.assertEqual(len(no_time_groups), 1)
         self.assertEqual(no_time_groups[0]["frames"], [1, 2])
@@ -139,7 +138,7 @@ class BurstGroupingTest(unittest.TestCase):
             ),
             _frame(5, captured_at="2026-01-01 12:00:00", sharpness=0.9, rating_now=3),
         ]
-        proposals, _groups = cull._build_proposals(frames, self.cfg)
+        proposals, _groups, _threshold = cull._build_proposals(frames, self.cfg)
         self.assertTrue(proposals)
         for p in proposals:
             self.assertTrue(p["reasons"])
@@ -159,7 +158,9 @@ class ProposeOneTest(unittest.TestCase):
         # the floor under a proposed rating is still `keep_rating`, never 0.
         frame = _frame(1, sharpness=0.05, clipped=10.0, luminance=10.0, rating_now=0)
         burst = {"burst_id": "b1", "members": [frame]}
-        rating, reasons = cull._propose_one(frame, burst, best_seq=1, cfg=self.cfg)
+        rating, reasons = cull._propose_one(
+            frame, burst, best_seq=1, cfg=self.cfg, sharpness_threshold=0.05
+        )
         self.assertEqual(rating, self.cfg.cull.keep_rating)
         self.assertGreater(rating, 0)
         self.assertEqual(len(reasons), 3, reasons)
@@ -167,7 +168,9 @@ class ProposeOneTest(unittest.TestCase):
     def test_existing_higher_rating_kept(self) -> None:
         frame = _frame(1, sharpness=0.5, rating_now=3)
         burst = {"burst_id": "b1", "members": [frame]}
-        rating, reasons = cull._propose_one(frame, burst, best_seq=1, cfg=self.cfg)
+        rating, reasons = cull._propose_one(
+            frame, burst, best_seq=1, cfg=self.cfg, sharpness_threshold=0.5
+        )
         self.assertEqual(rating, 3)
         self.assertTrue(any("keeping your existing rating 3" in r for r in reasons))
 
@@ -243,7 +246,11 @@ class CullApplyTest(unittest.TestCase):
         path.write_text(json.dumps(document), encoding="utf-8")
         return path
 
-    def test_apply_refuses_stale_proposal(self) -> None:
+    def test_apply_skips_the_stale_frame_and_applies_the_rest(self) -> None:
+        """E12 D7, row 407: one frame going stale (its sidecar changed since
+        the proposal was written -- merely opening it in darktable is
+        enough) used to refuse the WHOLE proposal. It is now skipped and
+        named; every other frame is still applied."""
         raw_a = str(self.tmp / "a.orf")
         raw_b = str(self.tmp / "b.orf")
         sidecar_a = xmp.sidecar_path(raw_a)
@@ -263,11 +270,49 @@ class CullApplyTest(unittest.TestCase):
         future = time.time() + 5
         os.utime(sidecar_a, (future, future))
 
-        with self.assertRaises(UsageError) as ctx:
-            cull.apply(proposal=str(proposal_path), confirm=True)
-        self.assertEqual(ctx.exception.code, "usage")
-        self.assertIn(raw_a, ctx.exception.detail["stale_frames"])
-        self.assertNotIn(raw_b, ctx.exception.detail["stale_frames"])
+        def rate(params: dict) -> dict:
+            return {
+                "per_image": [
+                    {"image_id": i, "rating_before": 0, "rating_after": params["rating"]}
+                    for i in params["image_ids"]
+                ],
+                "missed": [],
+            }
+
+        dtbridge.set_bridge(FakeBridge({"image.rate": rate}))
+
+        result = cull.apply(proposal=str(proposal_path), confirm=True)
+        self.assertEqual(result.stale, [raw_a])
+        self.assertEqual(result.applied, 1, "the fresh frame (b) is still applied")
+        self.assertTrue(any("changed since this proposal" in w for w in result.warnings))
+        # Only frame b's image_id (2) was ever sent to the bridge -- the
+        # stale frame's rating was never touched.
+        applied_ids = {row["image_id"] for row in result.per_image}
+        self.assertEqual(applied_ids, {2})
+
+    def test_apply_dry_run_reports_stale_without_refusing(self) -> None:
+        raw_a = str(self.tmp / "a.orf")
+        raw_b = str(self.tmp / "b.orf")
+        sidecar_a = xmp.sidecar_path(raw_a)
+        sidecar_b = xmp.sidecar_path(raw_b)
+        sidecar_a.write_text('<x xmp:Rating="0"/>', encoding="utf-8")
+        sidecar_b.write_text('<x xmp:Rating="0"/>', encoding="utf-8")
+        frames = [
+            {"path": raw_a, "image_id": 1, "seq": 1, "rating_now": 0, "rating_proposed": 2},
+            {"path": raw_b, "image_id": 2, "seq": 2, "rating_now": 0, "rating_proposed": 2},
+        ]
+        xmp_mtimes = {
+            raw_a: sidecar_a.stat().st_mtime_ns,
+            raw_b: sidecar_b.stat().st_mtime_ns,
+        }
+        proposal_path = self._write_proposal(frames, xmp_mtimes)
+        future = time.time() + 5
+        os.utime(sidecar_a, (future, future))
+
+        result = cull.apply(proposal=str(proposal_path), dry_run=True)
+        self.assertEqual(result.outcome, "dry_run")
+        self.assertEqual(result.stale, [raw_a])
+        self.assertEqual(result.would_change, 1)
 
     def test_apply_batches_at_fifty(self) -> None:
         frames = [
@@ -401,7 +446,7 @@ class RejectedFrameTest(unittest.TestCase):
             _frame(1, captured_at="2026-01-01 10:00:00", sharpness=0.9, rating_now=-1),
             _frame(2, captured_at="2026-01-01 10:00:01", sharpness=0.3),
         ]
-        proposals, _ = cull._build_proposals(frames, self.cfg)
+        proposals, _, _threshold = cull._build_proposals(frames, self.cfg)
         by_seq = {p["seq"]: p for p in proposals}
 
         self.assertEqual(by_seq[1]["rating_proposed"], -1, "a reject must never be raised")
@@ -412,12 +457,12 @@ class RejectedFrameTest(unittest.TestCase):
     def test_a_rejected_flagged_singleton_is_not_promoted_to_keep(self) -> None:
         """The exact path the clamp opened: flagged -> min(candidate, 1) -> 1."""
         frames = [_frame(1, sharpness=0.9, clipped=40.0, rating_now=-1)]
-        proposals, _ = cull._build_proposals(frames, self.cfg)
+        proposals, _, _threshold = cull._build_proposals(frames, self.cfg)
         self.assertEqual(proposals[0]["rating_proposed"], -1)
 
     def test_a_rejected_frame_counts_as_unchanged_and_apply_skips_it(self) -> None:
         frames = [_frame(1, sharpness=0.9, rating_now=-1)]
-        proposals, groups = cull._build_proposals(frames, self.cfg)
+        proposals, groups, _threshold = cull._build_proposals(frames, self.cfg)
         counts = cull._counts(proposals, groups, self.cfg)
         self.assertEqual(counts["unchanged"], 1)
         self.assertEqual(counts["pick"], 0)

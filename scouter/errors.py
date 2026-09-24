@@ -176,6 +176,31 @@ class ManifestUnauthenticated(ScouterError):
     )
 
 
+class StateLocked(ScouterError):
+    """A job's `state/<job>.json.lock` (E12 D3, row 407) stayed held by
+    another process for longer than `cache.lock_wait_s`, with no bound at
+    all on the old blocking `flock`.
+
+    Review round 1, should-fix: this bounded wait is HARDENING against lock
+    contention in general -- it is not a fix for the E12 live run's own two
+    15-18 minute stalls. Those stalls happened BEFORE the verb (and this
+    lock, when the verb even takes it) was ever reached: run 036
+    (`darkroom open`) failed inside `dtbridge.call`, before
+    `_record_opened_image`'s lock; run 042 (`outliers list`) never takes
+    this lock at all. D3's actual root cause is still open; `metrics.
+    instrumented`'s new `startup_ms` (review round 1) is the follow-up that
+    makes the NEXT such stall attributable. `detail.pid`/`detail.since` are
+    the holder's own pid and when it took the lock, when the lock file
+    recorded them."""
+
+    code = "state_locked"
+    fix = (
+        "another Scouter process is holding this job's lock (see `detail.pid` "
+        "and `detail.since`); wait for it to finish, or raise `cache.lock_wait_s` "
+        "in the config if 30s is routinely too short for this machine"
+    )
+
+
 class ExportAllFailed(ScouterError):
     """Every frame `export.release` tried to render failed.
 
@@ -241,6 +266,16 @@ EXIT_CODES: dict[str, int] = {
     "no_sidecar": 19,
     "value_unknown": 20,
     "not_pinned": 21,
+    # Fix branch (E12 D3) originally claimed 20; renumbered to the next free
+    # value once phase 3 landed "value_unknown"/"not_pinned" at 20/21.
+    "state_locked": 22,
+    # Row 408, B2: `darkroom.undo_last` on an empty journal, called for REAL
+    # (not a dry run) -- distinct from both "ok" (0) and "dry_run" (5), so a
+    # shell script (or `ok = outcome in ("ok", "dry_run")`) never mistakes
+    # "there was nothing to undo" for "the undo happened". Fix branch
+    # originally claimed 21; renumbered to the next free value after
+    # "state_locked" took 22.
+    "noop": 23,
 }
 
 ERROR_CLASSES: tuple[type[ScouterError], ...] = (
@@ -261,6 +296,7 @@ ERROR_CLASSES: tuple[type[ScouterError], ...] = (
     ExportAllFailed,
     ValueUnknown,
     NotPinned,
+    StateLocked,
 )
 
 

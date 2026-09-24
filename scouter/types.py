@@ -361,7 +361,25 @@ class ImportResult(Payload):
     camera: str = ""
     camera_model: str | None = None
     camera_make: str | None = None
+    #: E12 D5/D8, row 407: every distinct body/model actually present across
+    #: the WHOLE job (every import it has ever had), not just this run's --
+    #: `camera`/`camera_model` above are `"mixed"`/`None` when this list has
+    #: more than one entry.
+    cameras: list[str] = field(default_factory=list)
+    camera_models: list[str] = field(default_factory=list)
+    #: Files this run's `--camera` filter excluded because their own EXIF
+    #: names a different body (D5): `{"source_name", "camera"}` per file.
+    skipped_other_camera: list[dict] = field(default_factory=list)
+    #: A file with NO camera model in its EXIF at all, imported under an
+    #: explicit `--camera X` anyway (review round 1, ruling 2):
+    #: `{"source_name", "camera"}` per file.
+    assumed_camera: list[dict] = field(default_factory=list)
+    #: A file with no camera model in its EXIF, skipped because there was no
+    #: `--camera` to fall back on (review round 1, ruling 2): `{"source_name"}`
+    #: per file. The card never fails over this one file.
+    skipped_no_body: list[dict] = field(default_factory=list)
     source_root: str = ""
+    source_roots: list[str] = field(default_factory=list)
     files: list[dict] = field(default_factory=list)
     totals: dict[str, int] = field(default_factory=dict)
     film_roll_registered: bool = False
@@ -500,6 +518,11 @@ class CullApplyResult(Payload):
     verified: int = 0
     unverified: int = 0
     per_image: list[dict] = field(default_factory=list)
+    #: E12 D7, row 407: frames whose sidecar changed since the proposal was
+    #: written -- skipped, never applied on stale numbers, but no longer a
+    #: reason to refuse the rest of the job (paths, not just names, so a
+    #: caller can act on them directly).
+    stale: list[str] = field(default_factory=list)
 
 
 @dataclass

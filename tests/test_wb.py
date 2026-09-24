@@ -798,6 +798,72 @@ class WbKelvinVerbTest(_ConfigDirFixture):
         self.assertEqual(envelope.data["camera"], self.camera)
 
 
+class NoTemperatureEntryRefusalNamesTheMissingTableTest(_ConfigDirFixture):
+    """E12 A7 case (row 407): the NEX-5N's refusal named its missing table
+    and `scouter wb calibrate` outright; the A7's refusal (no active
+    `temperature` XMP entry, and ALSO no calibration table) used to say only
+    the first fact, leaving the second -- equally actionable -- unsaid."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.cache = TempCache()
+        root = self.cache.start()
+        self.raw = root / "a7.ARW"
+        self.raw.write_bytes(_build_tiff_header(model="ILCE-7", make="SONY"))
+
+        from scouter.config import load as load_config
+        from scouter.core import exif
+
+        tags = exif.read_tags(self.raw)
+        self.camera = exif.camera_slug(tags, load_config())
+
+        self.bridge = FakeBridge(
+            {"image.lookup": {"found": True, "image_id": 3, "path": str(self.raw)}}
+        )
+        dtbridge.set_bridge(self.bridge)
+
+    def tearDown(self) -> None:
+        dtbridge.set_bridge(None)
+        self.cache.stop()
+        super().tearDown()
+
+    def test_no_sidecar_and_no_table_names_both(self) -> None:
+        # No `.xmp` at all -- committed history exists nowhere yet.
+        result = wb.kelvin(image=str(self.raw))
+        self.assertIsNone(result["kelvin"])
+        self.assertIn(self.camera, result["reason"])
+        self.assertIn("no wb calibration table", result["reason"])
+        self.assertIn("scouter wb calibrate", result["reason"])
+
+    def test_sidecar_with_no_active_temperature_and_no_table_names_both(self) -> None:
+        Path(str(self.raw) + ".xmp").write_text(
+            _temperature_sidecar((1.0, 1.0, 1.0, 1.0), num=0, history_end=0),
+            encoding="utf-8",
+        )
+        result = wb.kelvin(image=str(self.raw))
+        self.assertIsNone(result["kelvin"])
+        self.assertIn("no active temperature entry", result["reason"])
+        self.assertIn("no wb calibration table", result["reason"])
+        self.assertIn("scouter wb calibrate", result["reason"])
+
+    def test_missing_temperature_entry_with_a_real_table_does_not_claim_no_table(self) -> None:
+        """The A7 fix must not go too far the other way: a camera that DOES
+        have a table must never be told it has none."""
+        wb_dir = self.tmp / "wb"
+        wb_dir.mkdir(parents=True)
+        (wb_dir / f"{self.camera}.json").write_text(
+            REAL_TABLE.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        Path(str(self.raw) + ".xmp").write_text(
+            _temperature_sidecar((1.0, 1.0, 1.0, 1.0), num=0, history_end=0),
+            encoding="utf-8",
+        )
+        result = wb.kelvin(image=str(self.raw))
+        self.assertIsNone(result["kelvin"])
+        self.assertIn("no active temperature entry", result["reason"])
+        self.assertNotIn("no wb calibration table", result["reason"])
+
+
 class RefusalCarriesCoefficientsTest(unittest.TestCase):
     """Tier 4: no pinned sliders, no calibration table -- the refusal hands
     over all four journalled coefficients, a (best-effort, here unavailable)

@@ -738,7 +738,7 @@
       "additionalProperties": false,
       "properties": {
         "camera": {
-          "description": "camera slug override; required for a mixed-camera card",
+          "description": "import only this body's files from a mixed card; the rest are skipped and reported (every file is always labelled from its own EXIF). The job's date is still derived from the whole card, before this filter -- see date",
           "type": "string"
         },
         "confirm": {
@@ -747,7 +747,7 @@
           "type": "boolean"
         },
         "date": {
-          "description": "YYYY-MM-DD; default: the earliest capture time",
+          "description": "YYYY-MM-DD; default: the earliest capture time, unless it is more than 30 days from the card's median capture time (one bad clock), in which case the median is used instead, with a warning. Derived from the WHOLE card before camera filters it, so camera=nex5n on a mixed card still takes its date from the other body's files too",
           "type": "string"
         },
         "dry_run": {

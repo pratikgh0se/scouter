@@ -160,6 +160,26 @@ def call(verb_id: str, layer: str, **kwargs: Any) -> Envelope:
     # A verb's own result can carry outcome "dry_run" (ConfirmationRequired) as
     # well as "ok"; only those two count as success, everything else — an
     # "error:<code>" string a core function returned instead of raising — does not.
+    error = None
+    # Review round 1, should-fix (row 408 B2): `darkroom.undo_last`'s "noop"
+    # outcome is a RESULT, not a raised ScouterError, so it never got an
+    # `error` key at all -- an agent (especially over MCP, which has no
+    # other structured place to look) saw only `data.reason`'s prose. Scoped
+    # to this one verb+outcome pair deliberately: "noop" has exactly one
+    # producer today, and a future one would need its own fix text, not
+    # this one borrowed wholesale.
+    if verb_id == "darkroom.undo_last" and outcome == "noop":
+        error = {
+            "code": "noop",
+            "message": data.get("reason") or "nothing to undo",
+            "fix": (
+                "pin a job across calls ($SCOUTER_JOB for the CLI, job= for "
+                "MCP/Python) so undo_last sees the same journal the earlier write "
+                "landed in; the MCP server already does this for you (phase 3 task "
+                "9's session job pins $SCOUTER_JOB once per server process), so "
+                "this now only bites a bare CLI/Python call that never pins one"
+            ),
+        }
     return Envelope(
         verb=verb_id,
         layer=layer,
@@ -168,4 +188,5 @@ def call(verb_id: str, layer: str, **kwargs: Any) -> Envelope:
         outcome=outcome,
         ms=metrics.last_ms(),
         data=data,
+        error=error,
     )

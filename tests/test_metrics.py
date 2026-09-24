@@ -41,6 +41,34 @@ class EmitTest(unittest.TestCase):
         audit = self.cache.audit()
         self.assertEqual(len(audit), 1)
         self.assertEqual(audit[0]["args"]["value"], 3)
+        # Review round 1, should-fix (D3, row 407): "startup_ms" -- time
+        # from process start to THIS call's verb start -- attributes a
+        # future stall that happens before a verb's body runs, which `ms`
+        # itself cannot see. Not in EVENT_KEYS/the sqlite schema on
+        # purpose (no metrics.db migration path exists yet), so it is
+        # checked in events.jsonl and the audit line specifically, not in
+        # the loop above.
+        self.assertIn("startup_ms", event)
+        self.assertIsInstance(event["startup_ms"], int)
+        self.assertGreaterEqual(event["startup_ms"], 0)
+        self.assertIn("startup_ms", audit[0])
+
+    def test_startup_ms_grows_with_process_age(self) -> None:
+        """Pinned against the real mechanism, not just the key's presence:
+        moving the recorded process-start further into the past must move
+        `startup_ms` up by roughly the same amount."""
+        from scouter.types import Payload
+
+        @metrics.instrumented("test.verb")
+        def verb(*, job: str | None = None) -> Payload:
+            return Payload()
+
+        import scouter
+
+        with mock.patch.object(scouter, "_PROCESS_STARTED_MONOTONIC", time.monotonic() - 5.0):
+            verb()
+        event = self.cache.events()[0]
+        self.assertGreaterEqual(event["startup_ms"], 4900)
 
     def test_args_digest_excludes_job_and_is_stable(self) -> None:
         a = metrics.args_digest({"module": "exposure", "job": "job-1"})

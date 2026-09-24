@@ -353,6 +353,27 @@ def _invert(samples: list[dict], ratio: float) -> tuple[float | None, dict]:
     raise AssertionError(f"{ratio!r} in range but no bracket found -- table not sorted?")
 
 
+def _reason_with_table_context(camera: str, reason: str) -> str:
+    """E12 A7 case (row 407): when `coeffs` could not even be read (no
+    committed `temperature` module in the XMP), the reason returned used to
+    be ONLY that fact -- so a camera that also has no calibration table
+    (the A7's actual state in the E12 run) never got told so, unlike the
+    NEX-5N's refusal, which names its missing table outright. Appends the
+    same missing-table fact, with the same `wb calibrate` pointer, whenever
+    it is also true.
+    """
+    try:
+        table = load_table(camera)
+    except ValueError:
+        table = None
+    if not table:
+        return (
+            f"{reason}; {camera} also has no wb calibration table -- "
+            "run scouter wb calibrate"
+        )
+    return reason
+
+
 def _no_table_result(camera: str, reason: str | None = None) -> dict:
     return {
         "kelvin": None,
@@ -428,7 +449,7 @@ def kelvin(
             )
         coeffs, camera, reason = _coeffs_and_camera_from_image(image)
         if coeffs is None:
-            return _no_table_result(camera, reason)
+            return _no_table_result(camera, _reason_with_table_context(camera, reason))
     elif coeffs is None or camera is None:
         raise UsageError(
             "wb.kelvin needs image=..., or both coeffs and camera",

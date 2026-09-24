@@ -184,6 +184,86 @@ class JobStateMultiProcessLockTest(unittest.TestCase):
             )
 
 
+class LockTimeoutTest(unittest.TestCase):
+    """E12 D3, row 407: `state/<job>.json.lock`'s exclusive `flock` used to
+    block forever -- the E12 live run stalled 15-18 minutes on it, twice.
+    `job_state_read`/`job_state_update` now bound the wait (`cache.lock_wait_s`,
+    default 30s, overridable per call via `wait_s` for tests) and fail fast
+    with `state_locked`, naming who holds it."""
+
+    def setUp(self) -> None:
+        self._env = dict(os.environ)
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ["SCOUTER_CACHE"] = self._tmp.name
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._env)
+        self._tmp.cleanup()
+
+    def _hold_the_lock(self, job: str, pid: int, since: str):
+        """Simulate another process already holding this job's lock,
+        exactly like `_locked_job_state` itself would: an exclusive `flock`
+        on the sibling `.lock` file, with a holder record written into it.
+        Returns the open file handle -- the caller must keep it open (and
+        close it to release) for the lock to mean anything."""
+        import fcntl
+
+        lock_path = paths.ensure(paths._job_state_lock_path(job))
+        fh = open(lock_path, "a+")
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        fh.seek(0)
+        fh.truncate()
+        fh.write(json.dumps({"pid": pid, "since": since}))
+        fh.flush()
+        return fh
+
+    def test_a_held_lock_fails_fast_with_the_holder_named(self) -> None:
+        import time
+
+        holder_fh = self._hold_the_lock("job-locked", pid=99999, since="2026-09-24T03:00:00+00:00")
+        try:
+            started = time.monotonic()
+            with self.assertRaises(errors.StateLocked) as ctx:
+                paths.job_state_read("job-locked", wait_s=0.3)
+            elapsed = time.monotonic() - started
+        finally:
+            holder_fh.close()
+
+        # Bounded: nowhere near the old unbounded block, and not much more
+        # than the wait_s asked for.
+        self.assertLess(elapsed, 2.0, "must fail fast, not block for minutes")
+        self.assertEqual(ctx.exception.code, "state_locked")
+        self.assertEqual(errors.exit_code_for("error:state_locked"), 22)
+        self.assertIn("99999", str(ctx.exception))
+        self.assertIn("2026-09-24T03:00:00", str(ctx.exception))
+        self.assertEqual(ctx.exception.detail["pid"], 99999)
+        self.assertEqual(ctx.exception.detail["job"], "job-locked")
+
+    def test_a_lock_released_before_the_deadline_succeeds(self) -> None:
+        import threading
+        import time
+
+        job = "job-released-in-time"
+        holder_fh = self._hold_the_lock(job, pid=os.getpid(), since="now")
+
+        def release_soon() -> None:
+            time.sleep(0.1)
+            holder_fh.close()
+
+        threading.Thread(target=release_soon).start()
+        # Long enough to outlast the 0.1s release, short enough the test
+        # doesn't hang if this regresses.
+        result = paths.job_state_update(job, lambda s: s.update({"ok": True}), wait_s=3.0)
+        self.assertEqual(result["ok"], True)
+
+    def test_default_wait_budget_comes_from_config(self) -> None:
+        self.assertEqual(paths.DEFAULT_LOCK_WAIT_S, 30.0)
+        from scouter.config import Config
+
+        self.assertEqual(Config().cache.lock_wait_s, 30.0)
+
+
 class JobValidationTest(unittest.TestCase):
     """B3: a job id becomes a file name, so traversal must be impossible."""
 
@@ -272,6 +352,7 @@ class ErrorsTest(unittest.TestCase):
             "export_all_failed",
             "value_unknown",
             "not_pinned",
+            "state_locked",
         }
         codes = {cls.code for cls in errors.ERROR_CLASSES}
         self.assertEqual(codes, expected)
