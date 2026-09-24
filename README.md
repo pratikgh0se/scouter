@@ -510,6 +510,18 @@ These are load-bearing. Read them before scripting against phase 2.
   so it always scores the frame as imported, never its current edited
   history -- editing a hero no longer moves its burst's pick to a different
   frame on the next `cull propose`.
+
+  **The percentile is relative, so it cannot detect a BAD job** (review
+  round 1, should-fix): in a uniformly soft or blurry job, the sharpest 60%
+  are still proposed a pick -- there is no absolute floor left to warn
+  that the whole job is soft. In a uniformly sharp job, the softest 40% of
+  singletons still get `keep_rating` (1), never rejected -- a burst's
+  runner-up is not a bad frame, just not the pick. The percentile is
+  computed over EVERY frame that has a real sharpness number, burst
+  members included, not only singletons. When the job's own p10-p90
+  sharpness spread is small (either case above), `cull propose` adds a
+  warning saying so, so the split is worth a second look by eye rather
+  than trusted outright.
 - **`library import` labels a mixed-body card from each file's own EXIF, and
   `--camera` filters rather than refuses.** A card holding more than one
   camera body used to be refused outright ("pass --camera to choose one"),

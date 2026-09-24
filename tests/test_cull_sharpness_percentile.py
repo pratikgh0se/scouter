@@ -192,5 +192,56 @@ class StatsErrorExclusionTest(unittest.TestCase):
             )
 
 
+class SharpnessSpreadWarningTest(unittest.TestCase):
+    """Review round 1, should-fix: the percentile gate cannot detect a BAD
+    job -- a uniformly soft/blurry job still proposes its top 60% a pick,
+    and a uniformly sharp job still holds back its bottom 40%, neither ever
+    rejected. `_sharpness_spread_warning` flags both by their tiny p10-p90
+    spread."""
+
+    def setUp(self) -> None:
+        self.cfg = Config()
+
+    def test_uniformly_soft_job_warns(self) -> None:
+        frames = _singleton_frames([0.021, 0.019, 0.020, 0.0205, 0.0195, 0.02])
+        warning = cull._sharpness_spread_warning(frames, self.cfg)
+        self.assertIsNotNone(warning)
+        self.assertIn("spread is small", warning)
+
+    def test_uniformly_sharp_job_warns_too(self) -> None:
+        frames = _singleton_frames([0.5, 0.49, 0.51, 0.505, 0.495, 0.5])
+        warning = cull._sharpness_spread_warning(frames, self.cfg)
+        self.assertIsNotNone(warning)
+
+    def test_all_zero_job_warns(self) -> None:
+        frames = _singleton_frames([0.0] * 6)
+        warning = cull._sharpness_spread_warning(frames, self.cfg)
+        self.assertIsNotNone(warning)
+        self.assertIn("nothing to distinguish", warning)
+
+    def test_e12_shaped_job_does_not_warn(self) -> None:
+        """The real E12 distribution (0.003-0.04, an order of magnitude
+        spread) must NOT trip this -- it is a legitimately wide relative
+        spread even though the absolute numbers are tiny."""
+        values = [0.003 + i * (0.04 - 0.003) / 9 for i in range(10)]
+        frames = _singleton_frames(values)
+        warning = cull._sharpness_spread_warning(frames, self.cfg)
+        self.assertIsNone(warning)
+
+    def test_failed_and_no_time_frames_are_excluded_from_the_spread_too(self) -> None:
+        """Consistent with the threshold itself (the blocker fix): a
+        stats_error stand-in or a no-time frame must not corrupt the spread
+        computation either."""
+        real = _singleton_frames([0.003 + i * (0.04 - 0.003) / 9 for i in range(10)])
+        failed = _singleton_frames([0.9] * 3, failed_indices={0, 1, 2})
+        no_time = [dict(f, captured_at=None) for f in _singleton_frames([0.9])]
+        warning = cull._sharpness_spread_warning(real + failed + no_time, self.cfg)
+        self.assertIsNone(warning, "the real E12-shaped spread must still be seen")
+
+    def test_fewer_than_two_real_values_is_silent(self) -> None:
+        self.assertIsNone(cull._sharpness_spread_warning(_singleton_frames([0.5]), self.cfg))
+        self.assertIsNone(cull._sharpness_spread_warning([], self.cfg))
+
+
 if __name__ == "__main__":
     unittest.main()

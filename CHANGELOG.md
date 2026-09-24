@@ -128,3 +128,10 @@ vault; decision row 407).
   earliest capture time") -- agent-facing parity drift against the CLI
   help text, which D5/D6 already updated. Copied the new wording to both
   layers and regenerated `tests/fixtures/scouter_mcp_golden.json`.
+- **Should-fix:** documented the percentile gate's two edge cases (README
+  honest limits) -- a uniformly soft job still picks its top 60% (the gate
+  cannot detect a bad job), a uniformly sharp job never rejects its
+  softest 40% (a burst runner-up is not a bad frame). `cull propose` now
+  adds a warning to the proposal when the job's p10-p90 sharpness spread is
+  small, in either case; a `stats_error`/no-capture-time frame is excluded
+  from the spread computation too, consistent with the blocker fix.

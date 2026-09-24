@@ -173,6 +173,39 @@ def _job_sharpness_threshold(frames: list[dict], cfg) -> float:
     return _percentile(values, 1.0 - keep_top_pct)
 
 
+def _sharpness_spread_warning(frames: list[dict], cfg) -> str | None:
+    """Review round 1, should-fix: the percentile gate is relative, so it
+    cannot detect a BAD job -- a uniformly soft/blurry job still proposes
+    its top `sharpness_keep_top_pct` a pick, same as a uniformly sharp one
+    holds back its bottom `1 - sharpness_keep_top_pct`, never rejecting any
+    of them either. Both are silent unless the spread itself is flagged:
+    when the job's own p10-p90 sharpness spread is small, the percentile is
+    unlikely to be distinguishing anything real, and the split is worth a
+    second look by eye rather than trusting the numbers.
+    """
+    values = [
+        f["sharpness"]
+        for f in frames
+        if "sharpness" in f and "stats_error" not in f and f.get("captured_at")
+    ]
+    if len(values) < 2:
+        return None
+    p10, p90 = _percentile(values, 0.10), _percentile(values, 0.90)
+    if p90 <= 0:
+        return (
+            "every frame in this job measured sharpness 0.0 (or its render failed); "
+            "the percentile gate has nothing to distinguish frames by"
+        )
+    ratio = (p90 / p10) if p10 > 0 else float("inf")
+    if ratio < 1.2:
+        return (
+            f"this job's sharpness spread is small (p10 {p10:.4f}, p90 {p90:.4f}); "
+            "the percentile gate may not be meaningfully distinguishing frames here -- "
+            "review the picks by eye rather than trusting the split"
+        )
+    return None
+
+
 def _propose_one(
     frame: dict, burst: dict, best_seq: int, cfg, sharpness_threshold: float
 ) -> tuple[int, list[str]]:
@@ -477,6 +510,9 @@ def propose(
             f"stats failed for {len(failed_paths)} frame(s); they were not flagged or "
             "picked on numbers Scouter could not compute -- see each frame's own reason"
         )
+    spread_warning = _sharpness_spread_warning(frames, cfg)
+    if spread_warning:
+        warnings.append(spread_warning)
 
     proposal_path = ""
     if job_path is not None:
