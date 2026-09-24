@@ -111,6 +111,17 @@ class JournalTest(unittest.TestCase):
         with self.assertRaises(journal.JournalCorrupt):
             journal.fail("job-test", 99, outcome="error:wrong_view")
 
+    def test_set_before_neutral_patches_value_and_source(self) -> None:
+        entry = self._record(0.05, None)
+        journal.set_before_neutral("job-test", entry.seq, value=0.0)
+        saved = journal.read_all("job-test")[0]
+        self.assertEqual(saved.before.get("value"), 0.0)
+        self.assertEqual(saved.before.get("source"), "neutral")
+
+    def test_set_before_neutral_on_an_unknown_seq_raises_journal_corrupt(self) -> None:
+        with self.assertRaises(journal.JournalCorrupt):
+            journal.set_before_neutral("job-test", 99, value=0.0)
+
     def test_append_creates_the_journal_file_and_its_parent_directory(self) -> None:
         """Fix round 3, nit 4a: `append` fsyncs the parent directory too, the
         first time it creates the journal file. Not directly observable from

@@ -35,6 +35,11 @@ class SayTest(_MovesFixture):
             moves.say.__wrapped__("teal and orange", job="job-test")
         self.assertEqual(len(cm.exception.detail["refused"]), 4)
         self.assertEqual(self.sets(), [], "nothing may land before the pre-validation")
+        # Fix round 1, important: the whole phrase's moves here are all
+        # non-@tone, so the controller ruling (refuse before touching the
+        # bridge) must mean literally ZERO bridge calls -- not even the
+        # `darkroom.current` lookup `_current_image()` would otherwise make.
+        self.assertEqual(self.bridge.calls, [])
 
     def test_absolute_only_phrase_is_value_unknown(self) -> None:
         with self.assertRaises(ValueUnknown):
@@ -121,7 +126,6 @@ class GroupUndoTest(_MovesFixture):
         outcome=partial the first time a member is still open after its
         own _undo_one call."""
         self._two_moves()
-        real_undo_one = darkroom._undo_one
 
         def stuck(*, dry_run, job):
             # Never marks the newest (sigmoid) entry undone, simulating an
@@ -139,3 +143,26 @@ class GroupUndoTest(_MovesFixture):
             r = darkroom.undo_last.__wrapped__(job="job-test")
         self.assertEqual(r.outcome, "partial")
         self.assertEqual([e.undone for e in journal.read_all("job-test")], [False, False])
+
+    def test_stronger_grade_group_undo_restores_every_neutral_sourced_member(self) -> None:
+        # Fix round 1, controller ruling: every move of "stronger grade"
+        # reads its previous value from colorbalancergb's declared neutral
+        # (the fixture's XMP has no colorbalancergb history at all) -- the
+        # group undo must be able to restore all three, not raise "the
+        # previous value ... was never readable from the XMP" the moment
+        # `undo_last` reaches one.
+        with mock.patch.dict(dtbridge.ACTION_PATHS, {
+            ("colorbalancergb", "shadows_chroma"): "iop/colorbalancergb/shadows lift/chroma",
+            ("colorbalancergb", "midtones_chroma"): "iop/colorbalancergb/power/chroma",
+            ("colorbalancergb", "highlights_chroma"): "iop/colorbalancergb/highlights gain/chroma",
+        }), mock.patch("scouter.core.vocab.xmp_named", return_value=True):
+            r = moves.say.__wrapped__("stronger grade", commit=False, job="job-test")
+            self.assertEqual(r.outcome, "ok")
+            self.assertEqual(len(r.moves), 3)
+            for entry in journal.read_all("job-test"):
+                self.assertEqual(entry.before.get("source"), "neutral")
+                self.assertEqual(entry.before.get("value"), 0.0)
+            result = darkroom.undo_last.__wrapped__(job="job-test")
+        self.assertEqual(result.outcome, "ok")
+        self.assertEqual(len(result.undone_group), 3)
+        self.assertTrue(all(e.undone for e in journal.read_all("job-test")))

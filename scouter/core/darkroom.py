@@ -1491,7 +1491,13 @@ def undo_last(*, single: bool = False, dry_run: bool = False, job: str | None = 
                 raise
             return UndoResult(
                 outcome="partial", image_id=newest.image_id, path=newest.path, seq=newest.seq,
-                undone=results[0].get("undone"), undone_group=results, committed=False,
+                undone=results[0].get("undone"), undone_group=results,
+                # Fix round 1, controller ruling: report what the members
+                # that DID undo actually committed/warned, the same as the
+                # success path -- not a hard-coded `False`/`[]` that throws
+                # away real information about the partial success.
+                committed=all(r.get("committed") for r in results),
+                warnings=[w for r in results for w in r.get("warnings", [])],
                 reason=f"undid {len(results)} of move {group}, then failed: {e.code}: {e.message}",
             )
         results.append(result.to_dict())
@@ -1505,7 +1511,9 @@ def undo_last(*, single: bool = False, dry_run: bool = False, job: str | None = 
         if still_open:
             return UndoResult(
                 outcome="partial", image_id=newest.image_id, path=newest.path, seq=newest.seq,
-                undone=results[0].get("undone"), undone_group=results, committed=False,
+                undone=results[0].get("undone"), undone_group=results,
+                committed=all(r.get("committed") for r in results),
+                warnings=[w for r in results for w in r.get("warnings", [])],
                 reason=(f"undid {len(results)} of move {group}, then seq {member.seq} "
                         f"({member.module}.{member.param}) stayed open after its own undo"),
             )
@@ -1692,7 +1700,7 @@ for verb in (
         ),
         writes=True,
         gated=False,
-        summary="Revert the newest Scouter write in this job.",
+        summary="Revert the newest Scouter move in this job (a darkroom_say phrase is one move).",
     ),
     Verb(
         id="darkroom.status",

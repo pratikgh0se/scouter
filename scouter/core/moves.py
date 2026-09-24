@@ -190,6 +190,15 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
     set_fn = getattr(darkroom.set_param, "__wrapped__", darkroom.set_param)
     t1 = time.monotonic()
     result = set_fn(module, param, target, instance=instance, commit=commit, job=job)
+    if source == "neutral" and not result.noop:
+        # Fix round 1, controller ruling, load-bearing: `set_param`'s own
+        # `before_state` never heard about the neutral fallback (it reads
+        # only the XMP/journal) and journalled `before.value: None` for
+        # this move -- undoable. Patch the entry it just landed to record
+        # the neutral it actually started from. `result.noop` is excluded:
+        # the zero-bridge-write shortcut never calls `journal.begin` at
+        # all, so there is no entry here to patch.
+        journal.set_before_neutral(job, journal.next_seq(job) - 1, value=previous)
     applied = result.applied
     if s.value_source == "wb_table":
         applied, _, _ = read_current(resolved, s, instance, job) if commit else (None, "", None)

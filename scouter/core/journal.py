@@ -301,6 +301,32 @@ def latest_failed(job: str) -> Entry | None:
     return None
 
 
+def set_before_neutral(job: str, seq: int, *, value: float) -> None:
+    """Patch a landed entry's `before` to record the declared NEUTRAL its
+    move actually started from (phase 3 task 6 fix round 1, controller
+    ruling).
+
+    `moves.read_current`'s "neutral" fallback (spec §6.1 row 4) answers a
+    value the sidecar itself never carried -- the module simply has no
+    active history entry yet. `darkroom.set_param`'s own `before_state` is
+    built purely from the XMP/journal (`_raw_and_before_state`), which has
+    no way to know a neutral was used, so it journals `before.value: None`
+    for that very first move. Without this patch, `undo_last` can never
+    restore it: "the previous value ... was never readable from the XMP".
+
+    Called only from `scouter.core.moves._adjust_core`, only when
+    `read_current` itself reported source `"neutral"` -- every other
+    source's `before` is already correct and this is never reached for it.
+    Raises `JournalCorrupt` on an unknown `seq`, the same as `complete`.
+    """
+    entries = read_all(job)
+    _find_or_raise(entries, job, seq)
+    for entry in entries:
+        if entry.seq == seq:
+            entry.before = {**entry.before, "value": value, "source": "neutral"}
+    _write_all(job, entries)
+
+
 def mark_undone(job: str, seq: int, *, note: str | None = None) -> None:
     """Rewrite the journal with `seq` marked undone.
 

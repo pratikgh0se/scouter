@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scouter.core import dtbridge, moves
+from scouter.core import darkroom, dtbridge, journal, moves
 from scouter.errors import NotPinned, UsageError, ValueUnknown
 from scouter.types import CommitResult
 from tests.scouter_fakes import FakeBridge, TempCache
@@ -116,6 +116,24 @@ class AdjustTest(_MovesFixture):
                                      job="job-test")
         self.assertEqual((r.previous, r.source), (0.0, "neutral"))
         self.assertIn("+5% (0% → 5%)", r.summary)
+
+    def test_a_neutral_sourced_move_is_undoable(self) -> None:
+        # Fix round 1, controller ruling, load-bearing: `set_param`'s own
+        # `before_state` is built purely from the XMP/journal and has no
+        # idea `read_current` fell back to the declared neutral, so
+        # WITHOUT `journal.set_before_neutral` this journals
+        # `before.value: None` -- the very first move on a fresh module
+        # could never be undone. Assert the journal entry carries the
+        # neutral, and that `undo_last` sends the neutral back rather than
+        # raising "the previous value ... was never readable from the XMP".
+        moves.adjust.__wrapped__("colorbalancergb", "contrast", 0.05, commit=False,
+                                 job="job-test")
+        entry = journal.read_all("job-test")[-1]
+        self.assertEqual(entry.before.get("value"), 0.0)
+        self.assertEqual(entry.before.get("source"), "neutral")
+        darkroom.undo_last.__wrapped__(job="job-test")
+        self.assertAlmostEqual(self.sets()[-1]["value"], 0.0)
+        self.assertTrue(journal.read_all("job-test")[-1].undone)
 
     def test_no_sidecar_refuses_value_unknown_not_neutral(self) -> None:
         # Fix round 1, important: `_module_state`'s `enabled: None` is
