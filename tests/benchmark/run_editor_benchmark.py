@@ -1344,6 +1344,43 @@ def compare(old: dict, new: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def merge(
+    base: dict, *overrides: dict, label: str | None = None, only: set[str] | None = None
+) -> dict:
+    """Replace `base`'s task results by id with the ones from `overrides`
+    (a re-run of one session), recompute the summary, and say where each task
+    came from. The base's own record of the replaced tasks is kept under
+    `replaced`, so nothing measured is thrown away."""
+    by_id = {r["id"]: r for r in base["tasks"]}
+    source = {r["id"]: base["run_id"] for r in base["tasks"]}
+    replaced = []
+    for o in overrides:
+        if o["body"] != base["body"]:
+            raise ValueError(f"cannot merge {o['body']} into {base['body']}")
+        for r in o["tasks"]:
+            if only and r["id"] not in only:
+                continue
+            if r["id"] in by_id:
+                replaced.append(by_id[r["id"]] | {"from_run": source[r["id"]]})
+            by_id[r["id"]] = r
+            source[r["id"]] = o["run_id"]
+    order = [r["id"] for r in base["tasks"]]
+    tasks = [by_id[i] | {"from_run": source[i]} for i in order]
+    out = dict(base)
+    out["label"] = label or f"{base['label']}+merged"
+    out["tasks"] = tasks
+    out["replaced"] = replaced
+    out["merged_from"] = [base["run_id"], *[o["run_id"] for o in overrides]]
+    out["sessions"] = list(base["sessions"]) + [
+        s | {"from_run": o["run_id"]}
+        for o in overrides
+        for s in o["sessions"]
+        if not only or set(s.get("tasks") or []) & only
+    ]
+    out["summary"] = summarise(tasks)
+    return out
+
+
 def write_results(doc: dict, out_dir: Path, stamp: str) -> tuple[Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     jpath = out_dir / f"{stamp}-{doc['body']}.json"
@@ -1441,9 +1478,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--compare", nargs=2, type=Path, metavar=("OLD", "NEW"))
     p.add_argument("--validate", action="store_true", help="validate the task file and exit")
+    p.add_argument(
+        "--merge",
+        nargs="+",
+        metavar="JSON",
+        help="BASE.json then re-run files whose tasks replace it",
+    )
+    p.add_argument("--merge-tasks", help="with --merge: only take these task ids from the re-runs")
     p.add_argument("--sessions", help="comma-separated session ids to run (default: all)")
     args = p.parse_args(argv)
 
+    if args.merge:
+        docs = [json.loads(Path(x).read_text()) for x in args.merge]
+        only = set(args.merge_tasks.split(",")) if args.merge_tasks else None
+        merged = merge(docs[0], *docs[1:], label=args.label, only=only)
+        j, m = write_results(merged, args.out, f"{docs[0]['run_id']}-merged")
+        print(j)
+        print(m)
+        return 0
     if args.compare:
         print(
             compare(

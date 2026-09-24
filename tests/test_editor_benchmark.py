@@ -574,3 +574,34 @@ def test_session_filter_runs_only_named_sessions(monkeypatch):
     result = run.run()
     assert [t["id"] for t in result["tasks"]] == ["E1", "T4", "S2"]
     assert len(host.launched) == 1
+
+
+def test_merge_replaces_by_id_and_keeps_the_replaced(monkeypatch):
+    monkeypatch.setattr(rb, "git_info", lambda: {"sha": "0" * 40, "branch": "t", "dirty": False})
+    doc = _fast(rb.load_tasks())
+
+    class DeadHost(FakeHost):
+        def launch(self, frame):
+            return {"ok": False, "error": "x"}
+
+    base = rb.BenchRun(
+        doc,
+        "sony",
+        run_id="a",
+        label="l",
+        mcp=FakeMcp({}),
+        host=DeadHost(),
+        snapshot=lambda p: _snap(),
+        paths=_ctx("sony"),
+        log=lambda *_: None,
+    ).run()
+    over = {
+        "run_id": "b",
+        "body": "sony",
+        "sessions": [],
+        "tasks": [dict(base["tasks"][0], score="pass", outcome="verified")],
+    }
+    merged = rb.merge(base, over, label="m")
+    assert merged["tasks"][0]["from_run"] == "b" and merged["tasks"][1]["from_run"] == "a"
+    assert merged["summary"]["counts"]["pass"] == 1 and len(merged["replaced"]) == 1
+    assert rb.validate_result(merged) == []
