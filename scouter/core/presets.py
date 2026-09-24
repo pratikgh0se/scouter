@@ -13,6 +13,7 @@ anything is flushed/committed (controller ruling): an existing name with no
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import os
@@ -24,10 +25,10 @@ from scouter import __version__, config, metrics, paths
 from scouter.core import darkroom, dtbridge, explain, journal, style
 from scouter.core.moves import EDUCATIVE_ARG
 from scouter.core.style import _now_z
-from scouter.errors import ScouterError, UsageError
+from scouter.errors import CommitTimeout, ScouterError, UsageError
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
-from scouter.types import PresetListResult, PresetResult
+from scouter.types import PresetListResult, PresetResult, StyleSetResult
 
 INDEX = "presets.json"
 
@@ -202,6 +203,78 @@ def list_presets(*, job: str | None = None) -> PresetListResult:
                             missing_in_darktable=missing, warnings=warnings)
 
 
+def _history_end(path: str) -> int | None:
+    parsed = darkroom._read_sidecar_parsed(path)
+    return None if parsed is None else int(parsed.history_end)
+
+
+def _require_style(name: str) -> None:
+    existing = style._existing_styles()
+    if name not in existing:
+        suggestions = difflib.get_close_matches(name, existing, n=3, cutoff=0.6)
+        raise UsageError(f"no darktable style named {name!r}",
+                         fix="`scouter preset list` shows every preset",
+                         detail={"name": name, "suggestions": suggestions})
+
+
+@metrics.instrumented("preset.apply")
+def apply(name: str, image: str | int | None = None, *, educative: str | None = None,
+          dry_run: bool = False, job: str | None = None) -> PresetResult:
+    """Apply a preset to the open image (through a bounce, §8.3) or to another
+    image (the library path, phase 2's `style.apply`)."""
+    job = job or current_job()
+    paths.validate_style_name(name)
+    level = explain.resolve_level(educative)
+    if dry_run:
+        return PresetResult(outcome="dry_run", name=name, action="apply",
+                            plan=[{"action": "preset.apply", "name": name, "image": image}],
+                            reason="dry run: no darktable calls were made")
+    _require_style(name)
+    current = darkroom._current_image()
+    target_is_open = image is None or str(image) in (str(current.image_id), current.path)
+    if not target_is_open:
+        applied = getattr(style.apply, "__wrapped__", style.apply)(image, name, job=job)
+        return PresetResult(image_id=applied.image_id, path=applied.path, name=name,
+                            action="apply", applied_to="library", warnings=applied.warnings,
+                            explain=explain.preset_lines("apply", name, [], applied.applied,
+                                                         level=level, job=job))
+    darkroom._require_job_image(job, current.image_id)
+    dtbridge.require_darkroom()
+    before = _history_end(current.path)
+    entry = journal.begin(job, verb="preset.apply", image_id=current.image_id, path=current.path,
+                          module="", param="", instance=0, before={"history_end": before})
+    try:
+        dtbridge.call("darkroom.apply_style", {"image_id": current.image_id, "name": name})
+        darkroom._commit(job, current.image_id, strategy="auto", expect_change=True)
+    except ScouterError as e:
+        journal.fail(job, entry.seq, outcome=f"error:{e.code}")
+        raise
+    after = _history_end(current.path)
+    if before is None or after is None or after <= before:
+        journal.fail(job, entry.seq, outcome="error:commit_timeout")
+        raise CommitTimeout(
+            f"style {name!r} was sent but the sidecar's history did not advance",
+            detail={"before": before, "after": after, "name": name},
+        )
+    journal.complete(job, entry.seq, after={"history_end": after, "style": name})
+    return PresetResult(
+        image_id=current.image_id, path=current.path, name=name, action="apply",
+        applied_to="darkroom", history_end_before=before, history_end_after=after,
+        explain=explain.preset_lines("apply", name, [], after - before, level=level, job=job),
+    )
+
+
+@metrics.instrumented("preset.apply_job")
+def apply_job(name: str, *, job_slug: str, exclude: list[str] | None = None, force: bool = False,
+              confirm: bool = False, dry_run: bool = False,
+              job: str | None = None) -> StyleSetResult:
+    """A thin, always-gated delegate to `style.apply_set` (design §8.5)."""
+    job = job or current_job()
+    fn = getattr(style.apply_set, "__wrapped__", style.apply_set)
+    return fn(name, job_slug=job_slug, exclude=exclude, force=force, confirm=confirm,
+              dry_run=dry_run, job=job)
+
+
 PRESET_NAME_ARG = ArgSpec("name", "str", required=True, positional=True,
                           help="preset (darktable style) name")
 
@@ -232,6 +305,34 @@ for verb in (
         writes=False,
         gated=False,
         summary="List presets: darktable's styles merged with Scouter's index.",
+    ),
+    Verb(
+        id="preset.apply",
+        group="preset",
+        fn=apply,
+        args=(PRESET_NAME_ARG,
+              ArgSpec("image", "image", positional=True,
+                      help="path or image id; default: the image open in the darkroom"),
+              EDUCATIVE_ARG,
+              ArgSpec("dry_run", "bool", default=False, help="plan only, send nothing")),
+        writes=True,
+        gated=False,
+        summary="Apply a preset to the open image (live, via a bounce) or to another image.",
+    ),
+    Verb(
+        id="preset.apply_job",
+        group="preset",
+        fn=apply_job,
+        args=(PRESET_NAME_ARG,
+              ArgSpec("job_slug", "str", required=True, help="job whose frames get the preset"),
+              ArgSpec("exclude", "list[str]", default=None, help="paths or ids to leave out"),
+              ArgSpec("force", "bool", default=False,
+                      help="apply even where Scouter's ledger says it is already applied"),
+              ArgSpec("confirm", "bool", default=False, help="required: a set write is gated"),
+              ArgSpec("dry_run", "bool", default=False, help="plan only")),
+        writes=True,
+        gated=True,
+        summary="Apply a preset to every frame of a job (batched, gated).",
     ),
 ):
     register(verb)

@@ -960,6 +960,38 @@ TOOL_SPECS: list[dict] = [
         "index, flagging any deleted in darktable.",
         "inputSchema": _schema({}, []),
     },
+    {
+        "name": "preset_apply",
+        "description": "Apply a preset to the image open in the darkroom (via a quick view "
+        "bounce, visible live) or to another image by path/id. Always appends to history; "
+        "cannot be undone by Scouter (use darktable's history panel).",
+        "inputSchema": _schema(
+            {"name": PRESET_NAME,
+             "image": IMAGE,
+             "educative": EDUCATIVE,
+             "dry_run": DRY_RUN},
+            ["name"],
+        ),
+    },
+    {
+        "name": "preset_apply_job",
+        "description": "Apply a preset to every frame of a job, in batches, with per-image "
+        "results and Scouter's idempotency ledger. Always gated: confirm=true.",
+        "inputSchema": _schema(
+            {"name": PRESET_NAME,
+             "job_slug": {"type": "string", "description": "job whose frames get the preset"},
+             "exclude": {"type": "array", "items": {"type": "string"},
+                         "description": "paths or ids to leave out"},
+             "force": {"type": "boolean", "default": False,
+                       "description": "apply even where Scouter's ledger says it is already "
+                       "applied"},
+             "confirm": {"type": "boolean", "default": False,
+                         "description": "required: authorises a batched write to every frame "
+                         "of the job"},
+             "dry_run": DRY_RUN},
+            ["name", "job_slug"],
+        ),
+    },
 ]
 
 

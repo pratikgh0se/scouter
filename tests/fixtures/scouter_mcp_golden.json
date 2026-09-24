@@ -928,6 +928,88 @@
     "name": "outliers_list"
   },
   {
+    "description": "Apply a preset to the image open in the darkroom (via a quick view bounce, visible live) or to another image by path/id. Always appends to history; cannot be undone by Scouter (use darktable's history panel).",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "educative": {
+          "description": "explanation level for this call; omit to use the config's `educative` (default brief)",
+          "enum": [
+            "off",
+            "brief",
+            "full"
+          ],
+          "type": "string"
+        },
+        "image": {
+          "description": "absolute path to the raw file, or a darktable image id",
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "name": {
+          "description": "preset (darktable style) name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "preset_apply"
+  },
+  {
+    "description": "Apply a preset to every frame of a job, in batches, with per-image results and Scouter's idempotency ledger. Always gated: confirm=true.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "default": false,
+          "description": "required: authorises a batched write to every frame of the job",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "exclude": {
+          "description": "paths or ids to leave out",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "force": {
+          "default": false,
+          "description": "apply even where Scouter's ledger says it is already applied",
+          "type": "boolean"
+        },
+        "job_slug": {
+          "description": "job whose frames get the preset",
+          "type": "string"
+        },
+        "name": {
+          "description": "preset (darktable style) name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "job_slug"
+      ],
+      "type": "object"
+    },
+    "name": "preset_apply_job"
+  },
+  {
     "description": "List presets: darktable's styles merged with Scouter's saved-preset index, flagging any deleted in darktable.",
     "inputSchema": {
       "additionalProperties": false,

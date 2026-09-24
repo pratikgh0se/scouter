@@ -55,6 +55,10 @@ DEFAULT_TIMEOUTS = {
     "style.import_file": 60.0,
     "style.delete": 15.0,
     "image.color_labels": 30.0,  # read-only, dt.database[id] indexing like image.lookup
+    # Phase 3 task 8: a full bounce (leave darkroom, apply in the lighttable,
+    # return) plus the sidecar-write wait -- the same shape as history.commit,
+    # not a plain single-leg action.
+    "darkroom.apply_style": 30.0,
 }
 
 

@@ -1781,6 +1781,41 @@ local ov = plugin.handle({id = "y", method = "style.apply",
 assertTrue(ov.error ~= nil and ov.error:find("overwrite") ~= nil,
   "overwrite mode refused with an explanation")
 
+-- Phase 3 task 8: darkroom.apply_style applies INSIDE the bounce (the
+-- lighttable leg, via commit_view_bounce's `between` callback), then
+-- reports the darkroom the session really ended in. A mismatched image_id
+-- refuses with "wrong image loaded:" -- the same string dtbridge's
+-- `_WRONG_IMAGE_RE` classifies as not_in_darkroom.
+do
+  local order = {}
+  table.insert(stub_dt.styles, {name = "harbour-warm"})
+  local image = {id = 12, apply_style = function(self, s)
+    table.insert(order, "apply:" .. s.name .. "@" .. view_state.current)
+  end}
+  stub_dt.gui.action_images = {image}
+  view_state.current = "darkroom"
+
+  local r = plugin.methods["darkroom.apply_style"]({image_id = 12, name = "harbour-warm"})
+  assertEq(r.applied, true, "applied")
+  assertEq(order[1], "apply:harbour-warm@lighttable",
+    "applied in the lighttable, got " .. tostring(order[1]))
+  assertEq(r.view, "darkroom", "returned to the darkroom")
+  assertEq(view_state.current, "darkroom", "the session is genuinely back in the darkroom")
+
+  local ok, err = pcall(plugin.methods["darkroom.apply_style"], {image_id = 99, name = "harbour-warm"})
+  assertEq(ok, false, "refuses another image")
+  assertTrue(tostring(err):find("wrong image loaded:") ~= nil,
+    "refuses another image: " .. tostring(err))
+
+  local ok_missing, err_missing = pcall(
+    plugin.methods["darkroom.apply_style"], {image_id = 12, name = "does-not-exist"})
+  assertEq(ok_missing, false, "an unknown style raises")
+  assertTrue(tostring(err_missing):find("not found") ~= nil,
+    "unknown style names itself: " .. tostring(err_missing))
+
+  stub_dt.gui.action_images = {}
+end
+
 -- style.export_file: not-found is a real error, and a successful export
 -- writes a real file whose size file_size() reports honestly.
 local ok_missing, err_missing = pcall(function()

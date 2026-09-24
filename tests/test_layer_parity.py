@@ -52,6 +52,8 @@ EXPECTED_VERBS = {
     "vocab.resolve",
     "preset.save",
     "preset.list",
+    "preset.apply",
+    "preset.apply_job",
 }
 
 

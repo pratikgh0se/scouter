@@ -1276,6 +1276,39 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
         journal.mark_undone(job, entry.seq, note="skipped: reset is not undoable")
         raise _UnsupportedUndo(reason, detail={"seq": entry.seq, "module": entry.module})
 
+    # Phase 3 task 8 (design §8.4): a `preset.apply` entry can never be
+    # undone either -- it is a history APPEND (darktable's Lua API has no
+    # way to remove history items), the same honest limit as `module.reset`
+    # above, and refused the same way: marked undone with a note on a real
+    # call (so this refusal fires once per application and the write
+    # underneath it stays reachable), never mutated on a dry run.
+    if entry.verb == "preset.apply":
+        before_end = entry.before.get("history_end")
+        after_end = (entry.after or {}).get("history_end")
+        items = (
+            after_end - before_end
+            if isinstance(before_end, int) and isinstance(after_end, int)
+            else "some"
+        )
+        reason = (
+            f"cannot undo preset '{(entry.after or {}).get('style', '?')}': a style application "
+            f"appended {items} history item(s), and darktable's Lua API cannot remove history "
+            "items. In darktable, click the history item just below the style's first item and "
+            "compress history, or press Ctrl-Z"
+        )
+        if dry_run:
+            return UndoResult(
+                outcome="dry_run",
+                image_id=entry.image_id,
+                path=entry.path,
+                seq=entry.seq,
+                reason=f"{reason} (this entry would be skipped, not undone)",
+            )
+        journal.mark_undone(job, entry.seq, note="skipped: a style application is not undoable")
+        raise _UnsupportedUndo(
+            reason, detail={"seq": entry.seq, "style": (entry.after or {}).get("style")}
+        )
+
     plan_entry = {
         "action": "darkroom.undo_last",
         "seq": entry.seq,

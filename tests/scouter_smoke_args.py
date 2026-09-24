@@ -118,6 +118,8 @@ SMOKE_ARGS: dict[str, dict] = {
     "vocab.resolve": {"phrase": "warmer"},
     "preset.save": {"name": "smoke", "dry_run": True},
     "preset.list": {},
+    "preset.apply": {"name": "smoke", "dry_run": True},
+    "preset.apply_job": {"name": "smoke", "job_slug": "smoke-job"},
 }
 
 

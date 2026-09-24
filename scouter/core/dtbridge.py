@@ -45,7 +45,14 @@ _DB_LOCKED_RE = re.compile(r"database is locked|could not get lock|another insta
 #: class in `scouter.errors` (spec section 9's table), so this is classified as
 #: `not_in_darkroom` with the plugin's own message preserved verbatim, per the
 #: controller's ruling -- never folded into the generic `bridge_timeout` catch-all.
-_WRONG_IMAGE_RE = re.compile(r"^wrong image loaded:", re.I)
+#:
+#: Phase 3 task 8: on the real bridge this message never starts the string --
+#: `Bridge.call` (darktable_mcp/bridge/client.py) wraps a Lua `error()` as
+#: `"handler raised: <file>:<line>: wrong image loaded: ..."`, so a `^`
+#: anchor would never match a real refusal, only the fabricated strings this
+#: codebase's own fakes used to hand-craft. Unanchored, `.search` still finds
+#: it after that prefix.
+_WRONG_IMAGE_RE = re.compile(r"wrong image loaded:", re.I)
 
 _bridge: Bridge | None = None
 
