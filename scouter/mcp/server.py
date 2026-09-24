@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
+from collections.abc import MutableMapping
+from datetime import datetime, timezone
 from typing import Any
 
 from mcp.server import Server, ServerRequestContext
@@ -135,8 +138,26 @@ class ScouterServer:
             await self.app.run(read, write, self.app.create_initialization_options())
 
 
+def _pin_session_job(environ: MutableMapping[str, str]) -> str:
+    """One MCP server process = one Scouter session (phase 3 §11.1).
+
+    Without this, `paths.current_job()` derives `job-<UTC second>-<pid>` per
+    call, so two tool calls a second apart write different journals and
+    `darkroom_undo_last` finds nothing. An explicit SCOUTER_JOB wins.
+    """
+    existing = environ.get("SCOUTER_JOB")
+    if existing:
+        return paths.validate_job(existing)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    job = paths.validate_job(f"mcp-{stamp}-{os.getpid()}")
+    environ["SCOUTER_JOB"] = job
+    return job
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)
+    job = _pin_session_job(os.environ)
+    logger.info("scouter-mcp session job: %s", job)
     asyncio.run(ScouterServer().run())
     return 0
 

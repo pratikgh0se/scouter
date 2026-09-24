@@ -144,6 +144,63 @@
     "name": "cull_propose"
   },
   {
+    "description": "Change one module parameter by a relative delta in internal units (EV for exposure, K for temperature, fractions for color balance rgb: 0.05 means 5 %). Reads the current value first (one view bounce to flush unsaved slider moves unless trust_sidecar), clamps to Scouter's safe range, sets it, and returns previous/target/applied plus a one-line summary.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "default": true,
+          "description": "commit history to the XMP after the write",
+          "type": "boolean"
+        },
+        "delta": {
+          "description": "relative change, internal units, non-zero",
+          "type": "number"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "educative": {
+          "description": "explanation level for this call; omit to use the config's `educative` (default brief)",
+          "enum": [
+            "off",
+            "brief",
+            "full"
+          ],
+          "type": "string"
+        },
+        "instance": {
+          "default": 0,
+          "description": "module instance (darktable's multi_priority)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "module": {
+          "description": "darktable module, e.g. exposure",
+          "type": "string"
+        },
+        "param": {
+          "description": "parameter, e.g. exposure",
+          "type": "string"
+        },
+        "trust_sidecar": {
+          "default": false,
+          "description": "skip the pre-read commit bounce",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "module",
+        "param",
+        "delta"
+      ],
+      "type": "object"
+    },
+    "name": "darkroom_adjust"
+  },
+  {
     "description": "The darkroom image's committed history: every module, whether it is active, and its decoded parameters where a verified layout exists (otherwise opaque hex plus the module version).",
     "inputSchema": {
       "additionalProperties": false,
@@ -188,6 +245,34 @@
       "type": "object"
     },
     "name": "darkroom_enable"
+  },
+  {
+    "description": "Read one parameter's current VALUE from the image's XMP sidecar (or Kelvin via the camera's measured table). Never moves the view; `fresh: false` means darktable may hold newer, uncommitted changes.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "instance": {
+          "default": 0,
+          "description": "module instance (darktable's multi_priority)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "module": {
+          "description": "darktable module, e.g. sigmoid",
+          "type": "string"
+        },
+        "param": {
+          "description": "parameter, e.g. contrast",
+          "type": "string"
+        }
+      },
+      "required": [
+        "module",
+        "param"
+      ],
+      "type": "object"
+    },
+    "name": "darkroom_get"
   },
   {
     "description": "Move a slider by darktable's own default step, up (positive steps) or down (negative). Use when the user says 'a bit more'.",
@@ -286,6 +371,55 @@
     "name": "darkroom_reset"
   },
   {
+    "description": "Edit the image open in darktable's darkroom by a plain-words phrase ('warmer', 'less contrast', 'lift the shadows', 'stronger colour grade'). Each move reads the current value, applies one step (scaled by 'slightly'/'much' or `amount`) and is visible live in darktable. All moves of one phrase are undone together by darkroom_undo_last. Refuses the whole phrase if any move is not reachable yet (not_pinned) or its current value cannot be read (value_unknown). Prefer this for conversational editing; use darkroom_adjust for an exact delta.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "description": "multiplier on the phrase's default step (1 = one notch); replaces words like 'slightly'",
+          "exclusiveMinimum": 0,
+          "maximum": 5,
+          "type": "number"
+        },
+        "commit": {
+          "default": true,
+          "description": "commit history to the XMP after the write",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "educative": {
+          "description": "explanation level for this call; omit to use the config's `educative` (default brief)",
+          "enum": [
+            "off",
+            "brief",
+            "full"
+          ],
+          "type": "string"
+        },
+        "phrase": {
+          "description": "what to change, in plain words, e.g. 'warmer', 'a touch less contrast', 'lift the shadows', 'cooler by 300k'; call vocab_list for every phrase",
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "trust_sidecar": {
+          "default": false,
+          "description": "skip the pre-read commit bounce",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "phrase"
+      ],
+      "type": "object"
+    },
+    "name": "darkroom_say"
+  },
+  {
     "description": "Set one module parameter to an absolute value on the image currently open in the darkroom. Creates one darktable history item the user can see and undo. Values are read back from the XMP sidecar after the commit.",
     "inputSchema": {
       "additionalProperties": false,
@@ -354,13 +488,18 @@
     "name": "darkroom_status"
   },
   {
-    "description": "Revert the newest Scouter write in this job by setting the parameter back to its previous value. This adds a new history item rather than deleting one, so the user's own undo still works.",
+    "description": "Revert the newest Scouter move (a darkroom_say phrase is one move) by setting each parameter back to its previous value. This adds new history items rather than deleting one, so the user's own undo still works.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
         "dry_run": {
           "default": false,
           "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "single": {
+          "default": false,
+          "description": "undo only the newest write, not the whole phrase it was part of",
           "type": "boolean"
         }
       },
@@ -789,6 +928,146 @@
     "name": "outliers_list"
   },
   {
+    "description": "Apply a preset to the image open in the darkroom (via a quick view bounce, visible live) or to another image by path/id. Always appends to history; cannot be undone by Scouter (use darktable's history panel).",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "educative": {
+          "description": "explanation level for this call; omit to use the config's `educative` (default brief)",
+          "enum": [
+            "off",
+            "brief",
+            "full"
+          ],
+          "type": "string"
+        },
+        "image": {
+          "description": "absolute path to the raw file, or a darktable image id",
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "name": {
+          "description": "preset (darktable style) name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "preset_apply"
+  },
+  {
+    "description": "Apply a preset to every frame of a job, in batches, with per-image results and Scouter's idempotency ledger. Always gated: confirm=true.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "default": false,
+          "description": "required: authorises a batched write to every frame of the job",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "exclude": {
+          "description": "paths or ids to leave out",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "force": {
+          "default": false,
+          "description": "apply even where Scouter's ledger says it is already applied",
+          "type": "boolean"
+        },
+        "job_slug": {
+          "description": "job whose frames get the preset",
+          "type": "string"
+        },
+        "name": {
+          "description": "preset (darktable style) name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "job_slug"
+      ],
+      "type": "object"
+    },
+    "name": "preset_apply_job"
+  },
+  {
+    "description": "List presets: darktable's styles merged with Scouter's saved-preset index, flagging any deleted in darktable.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "preset_list"
+  },
+  {
+    "description": "Save the darkroom image's edits from this session as a named darktable style (a preset/filter). Modules default to the ones changed in this session; pass modules to choose. Needs confirm=true only to replace an existing preset of that name.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "default": false,
+          "description": "required only to replace an existing preset of this name",
+          "type": "boolean"
+        },
+        "description": {
+          "default": "",
+          "description": "style description",
+          "type": "string"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "educative": {
+          "description": "explanation level for this call; omit to use the config's `educative` (default brief)",
+          "enum": [
+            "off",
+            "brief",
+            "full"
+          ],
+          "type": "string"
+        },
+        "modules": {
+          "description": "modules to keep (default: this session's edits)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "preset (darktable style) name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "preset_save"
+  },
+  {
     "description": "Numeric distance between two images' current renders (deltas are b minus a).",
     "inputSchema": {
       "additionalProperties": false,
@@ -1061,6 +1340,46 @@
       "type": "object"
     },
     "name": "style_extract"
+  },
+  {
+    "description": "The conversational vocabulary: every module parameter Scouter can move by words, with unit, safe range, step, and status (live, absolute_only, candidate, unreachable). Read once per session.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "module": {
+          "description": "only this module's rows, e.g. colorbalancergb",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "vocab_list"
+  },
+  {
+    "description": "Show what a phrase would do (module, parameter, delta) and whether each move is reachable, without touching darktable.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "description": "multiplier on the phrase's default step (1 = one notch); replaces words like 'slightly'",
+          "exclusiveMinimum": 0,
+          "maximum": 5,
+          "type": "number"
+        },
+        "phrase": {
+          "description": "what to change, in plain words, e.g. 'warmer', 'a touch less contrast', 'lift the shadows', 'cooler by 300k'; call vocab_list for every phrase",
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "phrase"
+      ],
+      "type": "object"
+    },
+    "name": "vocab_resolve"
   },
   {
     "description": "Sweep the darkroom's Kelvin slider from k_from to k_to and write the measured per-camera table `~/.config/scouter/wb/<camera>.json`, which wb.kelvin and outliers.list's temperature_k_delta then use. Costs ~1.8s per point and adds one history item per point, so it refuses inside a job's raw/ unless allow_in_job=true -- run it on a scratch copy. Refuses (usage error) rather than write a table whose r/b coefficient ratio is not strictly increasing in Kelvin. Requires confirm=true to run at all (never overwrites an existing table otherwise).",

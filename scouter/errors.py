@@ -189,6 +189,29 @@ class ExportAllFailed(ScouterError):
     fix = "every render failed; see detail.files for the per-image reasons"
 
 
+class ValueUnknown(ScouterError):
+    """Phase 3 §15: a relative move needs a current value Scouter cannot read."""
+
+    code = "value_unknown"
+    fix = (
+        "Scouter cannot read this parameter's current value (see detail.reason). "
+        "Set it absolutely with `scouter darkroom set <module> <param> <value>`; "
+        "relative moves on it need its XMP slot pinned by a host probe (or, for "
+        "white balance, `scouter wb calibrate`)."
+    )
+
+
+class NotPinned(ScouterError):
+    """Phase 3 §15: a vocabulary row with no pinned darktable action path."""
+
+    code = "not_pinned"
+    fix = (
+        "this parameter has no pinned darktable action path; pinning is a host-probe "
+        "job (docs/superpowers/specs/2026-09-24-scouter-phase3-design.md §10.1). "
+        "`scouter vocab list` shows which words work today."
+    )
+
+
 #: Process exit codes. 0/1/2 follow shell convention; the rest are one per error
 #: class, so a shell script can branch on the failure without parsing JSON.
 EXIT_CODES: dict[str, int] = {
@@ -216,6 +239,8 @@ EXIT_CODES: dict[str, int] = {
     "manifest_unauthenticated": 17,
     "export_all_failed": 18,
     "no_sidecar": 19,
+    "value_unknown": 20,
+    "not_pinned": 21,
 }
 
 ERROR_CLASSES: tuple[type[ScouterError], ...] = (
@@ -234,6 +259,8 @@ ERROR_CLASSES: tuple[type[ScouterError], ...] = (
     EncryptionUnavailable,
     ManifestUnauthenticated,
     ExportAllFailed,
+    ValueUnknown,
+    NotPinned,
 )
 
 

@@ -1084,9 +1084,16 @@ end
 --
 -- Whichever path runs, the view is yield-polled afterwards rather than read
 -- immediately, because the switch is asynchronous.
+-- Third return, `waited` (phase 3 task 8 fix round 1): how many ms this call
+-- itself spent polling `wait_for_view`/`wait_for_darkroom_image` for the
+-- view to land, `0` when no such wait was needed (or on an early failure
+-- before any wait started). Every existing caller here captures only the
+-- first two returns (`switched, detail = switch_to_darkroom(...)`), and Lua
+-- silently drops extra returns for a caller that does not ask for them, so
+-- this is additive -- no existing call site's behaviour changes.
 local function switch_to_darkroom(image)
   local view = dt.gui and dt.gui.views and dt.gui.views.darkroom
-  if not view then return false, "dt.gui.views.darkroom missing" end
+  if not view then return false, "dt.gui.views.darkroom missing", 0 end
 
   -- Select FIRST, unconditionally. loaded_darkroom_image()'s action_images
   -- fallback must never read a stale selection if display_image's own getter
@@ -1097,8 +1104,10 @@ local function switch_to_darkroom(image)
   if current_view_name() == "darkroom" then
     if image and type(view.display_image) == "function" then
       local ok = pcall(view.display_image, image)
-      if ok and wait_for_darkroom_image(image, DISPLAY_IMAGE_BUDGET_MS) then
-        return true, "display_image"
+      local landed, waited = false, 0
+      if ok then landed, waited = wait_for_darkroom_image(image, DISPLAY_IMAGE_BUDGET_MS) end
+      if landed then
+        return true, "display_image", waited
       end
       -- `pcall` said ok and the image still did not land. Measured on the
       -- real host (scouter phase 2 task 14's live run, 2026-09-14): with
@@ -1114,23 +1123,23 @@ local function switch_to_darkroom(image)
     -- out to the lighttable so the switch back is a real transition rather
     -- than another no-op.
     if not (dt.gui.views and dt.gui.views.lighttable) then
-      return false, "dt.gui.views.lighttable missing"
+      return false, "dt.gui.views.lighttable missing", 0
     end
     if not pcall(dt.gui.current_view, dt.gui.views.lighttable) then
-      return false, "bounce to lighttable failed"
+      return false, "bounce to lighttable failed", 0
     end
     local left = wait_for_view("lighttable")
     if not left then
-      return false, "still in the darkroom after the bounce out to the lighttable"
+      return false, "still in the darkroom after the bounce out to the lighttable", 0
     end
   end
 
   local ok, err = pcall(dt.gui.current_view, view)
-  if not ok then return false, "view switch failed: " .. tostring(err) end
+  if not ok then return false, "view switch failed: " .. tostring(err), 0 end
   local landed, waited = wait_for_view("darkroom", VIEW_ENTER_DARKROOM_BUDGET_MS)
   if not landed then
     return false, string.format("view is still %s %dms after switching to darkroom",
-                                current_view_name(), waited)
+                                current_view_name(), waited), waited
   end
 
   -- In the darkroom now. If it came up on some other image, display_image is
@@ -1141,22 +1150,23 @@ local function switch_to_darkroom(image)
       pcall(view.display_image, image)
     end
   end
-  return true, "view_switch"
+  return true, "view_switch", waited
 end
 
 -- Return to the darkroom, with or without a specific image to load. Used by
 -- the commit bounce, whose return leg may have nothing to re-load (no image
--- was resolvable) but must still get the view back.
+-- was resolvable) but must still get the view back. Third return: see
+-- `switch_to_darkroom`'s own note.
 local function return_to_darkroom(image)
   if image then return switch_to_darkroom(image) end
   local ok, err = pcall(dt.gui.current_view, dt.gui.views.darkroom)
-  if not ok then return false, "view switch failed: " .. tostring(err) end
+  if not ok then return false, "view switch failed: " .. tostring(err), 0 end
   local landed, waited = wait_for_view("darkroom")
   if not landed then
     return false, string.format("view is still %s %dms after switching to darkroom",
-                                current_view_name(), waited)
+                                current_view_name(), waited), waited
   end
-  return true, "view_switch"
+  return true, "view_switch", waited
 end
 
 methods["darkroom.open"] = function(p)
@@ -1325,7 +1335,17 @@ end
 -- Returns {ok, error, view}. `view` is always the ACTUAL current view when
 -- the function returns, whether or not the bounce succeeded -- callers must
 -- never report a view the session did not really end up in.
-local function commit_view_bounce()
+--
+-- `between` (phase 3 task 8, optional): a callback run once, after the
+-- lighttable dwell and before leg 2 returns to the darkroom -- the seam
+-- `darkroom.apply_style` uses to apply a style while the darkroom pipe is
+-- genuinely unloaded (§8.3/§9). Every existing caller passes nothing, so the
+-- bounce is byte-for-byte unchanged for them: with no `between`, the
+-- returned table carries no `between_error` key at all, exactly as before
+-- this task. Only when a `between` callback is given can the result carry
+-- `between_error` plus the timing fields.
+local function commit_view_bounce(between)
+  local between_error = nil
   local starting_view = current_view_name()
   if starting_view ~= "darkroom" then
     -- A bounce that starts outside the darkroom cannot commit anything: the
@@ -1346,7 +1366,8 @@ local function commit_view_bounce()
   -- the lighttable really is current. Leaving the darkroom is also what makes
   -- darktable flush the pipe to the sidecar, so this wait is the commit.
   local ok1 = pcall(dt.gui.current_view, dt.gui.views.lighttable)
-  local left = ok1 and wait_for_view("lighttable")
+  local left, left_waited = false, 0
+  if ok1 then left, left_waited = wait_for_view("lighttable") end
   if not left then
     local stuck = current_view_name()
     return {ok = false,
@@ -1357,21 +1378,45 @@ local function commit_view_bounce()
   -- reloaded underneath it.
   if dt.control and dt.control.sleep then dt.control.sleep(VIEW_BOUNCE_DWELL_MS) end
 
+  if between then
+    local ok_between, between_err = pcall(between)
+    if not ok_between then
+      -- Still return to the darkroom below; report the failure after, so a
+      -- caller never gets stranded in the lighttable just because its own
+      -- callback raised.
+      between_error = tostring(between_err)
+    end
+  end
+
   -- Leg 2. return_to_darkroom yield-polls the view itself, so ok2 is a real
   -- answer about where the session ended up, not just "the call did not raise".
-  local ok2, detail2 = return_to_darkroom(image)
+  local ok2, detail2, returned_waited = return_to_darkroom(image)
   if not ok2 then
     -- One retry: a single flaky switch back should not strand the session in
     -- the lighttable when the commit itself already landed (the pipe unloaded
     -- on the way out). Same dwell before trying again.
     if dt.control and dt.control.sleep then dt.control.sleep(VIEW_BOUNCE_DWELL_MS) end
-    ok2, detail2 = return_to_darkroom(image)
+    ok2, detail2, returned_waited = return_to_darkroom(image)
   end
   local final_view = current_view_name()
+
+  -- Leg timings (fix round 1): `wait_for_view`'s own `waited` values,
+  -- surfaced ONLY when `between` is given -- so a plain `commit_view_bounce()`
+  -- call (every pre-task-8 caller: history.commit's retry loop) still gets
+  -- back exactly `{ok, error, view}`, no extra keys at all, and this stays a
+  -- true no-op for them.
+  local left_ms = between and left_waited or nil
+  local returned_ms = between and returned_waited or nil
+
   if not ok2 or final_view ~= "darkroom" then
-    return {ok = false, error = detail2 or "view switch failed", view = final_view}
+    -- `between_error` is nil here unless `between` was given and raised, so
+    -- this key is simply absent (never `false`/empty) for every pre-task-8
+    -- caller, matching the byte-for-byte-unchanged contract above.
+    return {ok = false, error = detail2 or "view switch failed", view = final_view,
+            between_error = between_error, left_ms = left_ms, returned_ms = returned_ms}
   end
-  return {ok = true, error = nil, view = final_view}
+  return {ok = true, error = nil, view = final_view, between_error = between_error,
+          left_ms = left_ms, returned_ms = returned_ms}
 end
 
 -- ---- Confirming a commit ---------------------------------------------------
@@ -1667,6 +1712,52 @@ methods["style.apply"] = function(p)
     end
   end
   return {name = p.name, mode = mode, applied = applied, missed = missed, errors = errors}
+end
+
+-- Phase 3 task 8 (design §8.3/§9): apply a style to the image OPEN in the
+-- darkroom, live. `image:apply_style` always appends, for one image the
+-- same as for a set (`style.apply` above) -- the honesty already documented
+-- there. Unlike `style.apply`, this refuses outright when the darkroom is
+-- not showing the requested image: applying while the darkroom holds a
+-- DIFFERENT image (or holds nothing) would silently style the wrong frame,
+-- or one the caller never asked about. The apply itself happens INSIDE
+-- `commit_view_bounce`'s lighttable leg (via `between`), after the darkroom
+-- pipe has genuinely unloaded and before the session switches back -- so the
+-- style change and the return-to-darkroom commit land together, and the
+-- Python layer's `history_end` readback sees a real appended entry.
+methods["darkroom.apply_style"] = function(p)
+  p = p or {}
+  if type(p.name) ~= "string" or p.name == "" then error("darkroom.apply_style: name required") end
+  local want = tonumber(p.image_id)
+  if not want then error("darkroom.apply_style: image_id required") end
+  local style = nil
+  for _, s in ipairs(dt.styles) do
+    if s.name == p.name then style = s; break end
+  end
+  if not style then error(string.format("darkroom.apply_style: style %q not found", p.name)) end
+  local image = darkroom_image()
+  if not image or not ids_match(image.id, want) then
+    error(string.format("wrong image loaded: darkroom shows %s, requested %d",
+                        tostring(image and image.id), want))
+  end
+  local applied = false
+  -- cpu_ms (fix round 1: was wall_ms, a dishonest name): CPU time
+  -- (os.clock()), not a true wall-clock duration -- same caveat as
+  -- history.commit's own cpu_ms above, same name for the same reason.
+  local started = os.clock()
+  local result = commit_view_bounce(function()
+    image:apply_style(style)
+    applied = true
+  end)
+  if result.between_error then
+    error("darkroom.apply_style: apply failed in the lighttable: " .. result.between_error)
+  end
+  if not result.ok then
+    error("darkroom.apply_style: " .. tostring(result.error))
+  end
+  return {applied = applied, name = p.name, image_id = want, view = current_view_name(),
+          left_ms = result.left_ms, returned_ms = result.returned_ms,
+          cpu_ms = math.floor((os.clock() - started) * 1000)}
 end
 
 -- Fix round 2, item 6: `scouter/core/dtstyle.py`'s writer escapes `&`/`<`/`>`

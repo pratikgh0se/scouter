@@ -618,6 +618,11 @@ class JobImageGuardTest(_DarkroomFixture):
         with self.assertRaises(NotInDarkroom) as ctx:
             darkroom.set_param(module="exposure", param="exposure", value=2.0)
         self.assertIn("darkroom.current reports 77, job opened 12", str(ctx.exception))
+        # Final review #9: the fix works from both layers (an MCP session's
+        # job is pinned per process, so "--job / $SCOUTER_JOB" was not
+        # actionable there).
+        self.assertIn("MCP darkroom_open", ctx.exception.fix)
+        self.assertNotIn("$SCOUTER_JOB", ctx.exception.fix)
         # Refused before any write reached darktable, and before journalling.
         sent = [m for m, _ in self.bridge.calls[before:]]
         self.assertNotIn("darkroom.action", sent)

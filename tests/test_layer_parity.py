@@ -20,6 +20,9 @@ EXPECTED_VERBS = {
     "darkroom.undo_last",
     "darkroom.status",
     "darkroom.describe_history",
+    "darkroom.get",
+    "darkroom.adjust",
+    "darkroom.say",
     "history.read",
     "history.commit",
     "history.changed",
@@ -45,6 +48,12 @@ EXPECTED_VERBS = {
     "outliers.list",
     "wb.kelvin",
     "wb.calibrate",
+    "vocab.list",
+    "vocab.resolve",
+    "preset.save",
+    "preset.list",
+    "preset.apply",
+    "preset.apply_job",
 }
 
 

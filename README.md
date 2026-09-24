@@ -235,12 +235,12 @@ These are load-bearing, not incidental — read them before scripting against Sc
   read-back is a normalised 0..1 position in the slider's visible range, and
   phase 1 has no verified position→value table for every slider — use
   `history read` (the XMP) for actual values; `status` is a liveness/reachability
-  check and the `wrong_view` signal, nothing more.
-- **`style extract --modules` can honestly fail to filter.** When darktable's
-  build doesn't expose per-module style filtering, extracting a style with a
-  `modules` list still captures the *whole* history and reports
-  `modules_honoured: false` — never a silent partial extraction dressed up
-  as a filtered one.
+  check and the `wrong_view` signal, nothing more. Use `darkroom get` (phase 3)
+  for a parameter's value.
+- **`style extract --no-filter` keeps the whole history.** Since phase 2 the
+  default `--modules` path filters for real (`modules_honoured: true`); only
+  `--no-filter` captures every active operation (minus `never_include`), and
+  says so.
 - **`style apply --mode overwrite` is refused, not downgraded.** darktable's
   Lua API only appends a style (`image:apply_style`), so overwrite is rejected
   with `unsupported_mode` before any bridge call — there is no confirmation
@@ -261,7 +261,8 @@ scouter --pretty metrics summary --since 7d
 
 `0` ok · `1` error · `2` usage · `3` bridge_timeout · `4` wrong_view ·
 `5` confirmation required (a dry run was printed) · `6` not_in_darkroom ·
-`7` cli_wrote_nothing · `8` db_locked · `9` style_partial · `10` commit_timeout
+`7` cli_wrote_nothing · `8` db_locked · `9` style_partial · `10` commit_timeout ·
+`20` value_unknown · `21` not_pinned
 
 ### Tests
 
@@ -447,6 +448,123 @@ a card under `~/Pictures/ScouterScratch`); E10 and E11 are covered by
 `tests/test_metrics.py` and `tests/test_layer_parity.py` +
 `tests/test_scouter_mcp_schemas.py`. **E12 — one real 300-frame job, delivered
 end to end — is Pratik's own run**, not something CI can assert.
+
+## Scouter phase 3 (conversation: say it, see it, save it)
+
+Phase 3 adds a plain-English layer over the phase 1/2 core: relative moves
+("a touch warmer"), an educative mode that explains what a move does and
+why, and named presets that round-trip through darktable's own styles. 44
+verbs total (9 new).
+
+### A hero session
+
+```sh
+export SCOUTER_JOB=teach-harbour
+scouter --pretty darkroom say "a touch warmer"
+scouter --pretty darkroom say "less contrast" --educative full
+scouter darkroom undo-last
+scouter preset save harbour-warm && scouter preset apply-job harbour-warm --job-slug harbour-wedding --yes
+```
+
+Setting `SCOUTER_JOB` pins one journal/session for the whole conversation —
+without it, every CLI call is its own session, and the MCP server pins its
+own session job once, at startup (see `_pin_session_job` below).
+
+### Educative mode
+
+`config.json` gains a top-level `"educative": "off" | "brief" | "full"` key
+(default `"brief"`); override per call with `--educative` / `educative=`.
+`off` adds no explanation. `brief` adds one sentence per move: what changed,
+its before/after values, and what to watch. `full` also explains the
+underlying concept (exposure, tone mapping, white balance, …) the first time
+that concept comes up in the session, then just the brief sentence after
+that — never repeated twice.
+
+### Exit codes, phase 3
+
+Two more exit codes join the phase 1 table: `20` `value_unknown` (a relative
+move needs a value phase 3 cannot read yet — no sidecar, an unpinned slider,
+or no wb calibration table) and `21` `not_pinned` (the vocabulary word's
+action path has not been confirmed by a host probe). `scouter vocab list`
+shows which words work today.
+
+### Honest limits, phase 3
+
+- **Relative moves read values from the XMP, not from sliders.** A slider
+  darktable reports only as a position is `absolute_only` until a host probe
+  pins its XMP slot. `darkroom adjust` refuses it with `value_unknown` and
+  names the absolute `darkroom set` form.
+- **A vocabulary word is only as real as its pin.** Rows whose action path no
+  probe has confirmed are `candidate`, and every relative or phrase verb
+  refuses them with `not_pinned`. `scouter vocab list` shows the current
+  status of every word.
+- **Relative white balance needs the camera's measured table and assumes
+  tint 1.0.** Without a table: `value_unknown`, naming `scouter wb
+  calibrate`.
+- **`darkroom adjust` bounces the view once before it reads** (about 1 s),
+  because a hand-moved slider is invisible on disk until darktable commits.
+  `--trust-sidecar` skips this for scripts that own the darkroom.
+- **Undoing a preset application is refused.** darktable's Lua API cannot
+  remove history items. Use the history panel.
+- **Color zones' zone curves are unreachable.** Only its global mix is a
+  candidate.
+- **Presets are darktable styles.** They are not Lightroom presets, and
+  applying one always appends.
+- **A relative move with no sidecar at all refuses `value_unknown`**, rather
+  than assuming the module's neutral value. When a sidecar exists but the
+  module has no history entry yet, a move starts from the vocabulary row's
+  declared `neutral` (colour balance rgb's sliders: 0), and it stays
+  undoable: the journal records that neutral as the entry's `before` value,
+  even when darktable does not confirm the commit afterwards.
+- **A move whose current value cannot be read, on a row that declares no
+  neutral or darktable default, refuses `value_unknown`** before anything is
+  written, so Scouter never makes an edit it could not undo. That affects
+  the colour-grade hue settings in "warm the highlights", "cool the shadows"
+  and "teal and orange": the hue rows have no neutral, declare no default
+  yet, and their XMP slots are not decoded yet. So once the host run pins
+  their action paths, those phrases still refuse until the hue slots are
+  pinned or the rows declare darktable's default. `darkroom set` can still
+  set a hue, but `undo last` cannot restore the value before it.
+- **`preset.apply` refuses with `no_sidecar`** when the image's history
+  cannot be read before the style is sent. Once darktable confirms the style
+  is applied, the result is reported as applied. When the history count on
+  disk did not visibly grow, it comes with a warning instead of a failure.
+  Either way, Scouter cannot undo a preset application; `undo last` says so
+  and points to darktable's history panel.
+- **Relative moves and `preset save` first ask darktable to write its
+  pending edits.** Only a timeout there becomes a warning ("the value read
+  may predate darktable's live state"). A wrong view or a lost bridge still
+  stops the call.
+- **Applying a preset to the open image reports its timing as `cpu_ms`.**
+  That is CPU time, not wall-clock time, and it covers the whole trip out of
+  the darkroom and back, not just the moment the style is applied.
+- **Colour-grade and most vocabulary rows stay `candidate`/`not_pinned`**
+  until the task 10 host probe pins their action paths and XMP slots — until
+  then `darkroom adjust`/`darkroom say` refuse them honestly rather than
+  guessing.
+- **The Lua plugin was exercised by the harness on Lua 5.5.1 only.**
+  darktable itself ships Lua 5.4, so the host run (below) is the real check,
+  not this repo's unit harness.
+- Exit codes: `0` ok · `1` error · `2` usage · `3` bridge_timeout ·
+  `4` wrong_view · `5` confirmation required · `6` not_in_darkroom ·
+  `7` cli_wrote_nothing · `8` db_locked · `9` style_partial ·
+  `10` commit_timeout · `20` value_unknown · `21` not_pinned
+
+## Phase 3 host run (task 10): WAITING FOR GO
+
+The host run (`tests/test_host_phase3.py`) is not yet written or run. It is
+task 10 of `docs/superpowers/plans/2026-09-24-scouter-phase3.md`. It is only
+done after Pratik says go.
+
+Until then `dtbridge.ACTION_PATHS` and `xmp.LAYOUTS` are not extended, so
+every candidate row above refuses `not_pinned` rather than guessing at an
+action path or XMP slot.
+
+When Pratik says go, darktable must be closed first and the hero ORF present:
+
+```sh
+SCOUTER_HOST_TESTS=1 uv run --extra dev python -m pytest tests/test_host_phase3.py -q -s
+```
 
 ## Contributing
 

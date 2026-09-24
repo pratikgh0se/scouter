@@ -1781,6 +1781,45 @@ local ov = plugin.handle({id = "y", method = "style.apply",
 assertTrue(ov.error ~= nil and ov.error:find("overwrite") ~= nil,
   "overwrite mode refused with an explanation")
 
+-- Phase 3 task 8: darkroom.apply_style applies INSIDE the bounce (the
+-- lighttable leg, via commit_view_bounce's `between` callback), then
+-- reports the darkroom the session really ended in. A mismatched image_id
+-- refuses with "wrong image loaded:" -- the same string dtbridge's
+-- `_WRONG_IMAGE_RE` classifies as not_in_darkroom.
+do
+  local order = {}
+  table.insert(stub_dt.styles, {name = "harbour-warm"})
+  local image = {id = 12, apply_style = function(self, s)
+    table.insert(order, "apply:" .. s.name .. "@" .. view_state.current)
+  end}
+  stub_dt.gui.action_images = {image}
+  view_state.current = "darkroom"
+
+  local r = plugin.methods["darkroom.apply_style"]({image_id = 12, name = "harbour-warm"})
+  assertEq(r.applied, true, "applied")
+  assertEq(order[1], "apply:harbour-warm@lighttable",
+    "applied in the lighttable, got " .. tostring(order[1]))
+  assertEq(r.view, "darkroom", "returned to the darkroom")
+  assertEq(view_state.current, "darkroom", "the session is genuinely back in the darkroom")
+  assertTrue(type(r.left_ms) == "number", "left_ms is a real number (between was given)")
+  assertTrue(type(r.returned_ms) == "number", "returned_ms is a real number (between was given)")
+  assertTrue(type(r.cpu_ms) == "number", "cpu_ms is reported honestly as CPU time")
+  assertEq(r.wall_ms, nil, "no dishonestly-named wall_ms field")
+
+  local ok, err = pcall(plugin.methods["darkroom.apply_style"], {image_id = 99, name = "harbour-warm"})
+  assertEq(ok, false, "refuses another image")
+  assertTrue(tostring(err):find("wrong image loaded:") ~= nil,
+    "refuses another image: " .. tostring(err))
+
+  local ok_missing, err_missing = pcall(
+    plugin.methods["darkroom.apply_style"], {image_id = 12, name = "does-not-exist"})
+  assertEq(ok_missing, false, "an unknown style raises")
+  assertTrue(tostring(err_missing):find("not found") ~= nil,
+    "unknown style names itself: " .. tostring(err_missing))
+
+  stub_dt.gui.action_images = {}
+end
+
 -- style.export_file: not-found is a real error, and a successful export
 -- writes a real file whose size file_size() reports honestly.
 local ok_missing, err_missing = pcall(function()
@@ -2321,6 +2360,30 @@ do
   assertEq(bounce.view, "darkroom", "and reports the view it really ended in")
   assertEq(view_state.current, "darkroom", "the session is genuinely back in the darkroom")
   view_state.switch_lag_sleeps = 0
+end
+
+-- Fix round 1: `left_ms`/`returned_ms` are surfaced ONLY when a `between`
+-- callback is passed -- a plain `commit_view_bounce()` call (every
+-- pre-task-8 caller, e.g. history.commit's retry loop) stays byte-for-byte
+-- {ok, error, view}, no extra keys at all.
+do
+  view_state.current = "darkroom"
+  stub_dt.gui.action_images = {images_by_id[101]}
+  local plain = plugin.commit_view_bounce()
+  assertEq(plain.ok, true, "plain bounce still succeeds")
+  assertEq(plain.left_ms, nil, "no left_ms without a between callback")
+  assertEq(plain.returned_ms, nil, "no returned_ms without a between callback")
+  assertEq(plain.between_error, nil, "no between_error without a between callback")
+
+  local called = false
+  local with_between = plugin.commit_view_bounce(function() called = true end)
+  assertEq(with_between.ok, true, "bounce with a between callback still succeeds")
+  assertEq(called, true, "the between callback actually ran")
+  assertTrue(type(with_between.left_ms) == "number",
+    "left_ms is a real number when between is given")
+  assertTrue(type(with_between.returned_ms) == "number",
+    "returned_ms is a real number when between is given")
+  stub_dt.gui.action_images = {}
 end
 
 -- A bounce that cannot LEAVE the darkroom fails honestly, naming the view it

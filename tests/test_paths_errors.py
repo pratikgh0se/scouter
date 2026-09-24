@@ -270,6 +270,8 @@ class ErrorsTest(unittest.TestCase):
             "encryption_unavailable",
             "manifest_unauthenticated",
             "export_all_failed",
+            "value_unknown",
+            "not_pinned",
         }
         codes = {cls.code for cls in errors.ERROR_CLASSES}
         self.assertEqual(codes, expected)

@@ -32,6 +32,29 @@ class LoadTest(TmpTestCase):
         self.assertFalse(cfg.exists)
         self.assertIsNone(cfg.library_root)
 
+    def test_non_numeric_version_is_usage_naming_the_file(self) -> None:
+        """Final review T4: not a bare ValueError/TypeError."""
+        path = self.tmp / "config.json"
+        for bad in ("one", None, [1]):
+            with self.subTest(version=bad):
+                path.write_text(json.dumps({"version": bad}))
+                with self.assertRaises(UsageError) as ctx:
+                    config.load(str(path))
+                self.assertIn(str(path), str(ctx.exception))
+                self.assertEqual(ctx.exception.detail["config"], str(path))
+
+    def test_bad_version_keeps_educative_fallback_to_brief(self) -> None:
+        """T4: explain.resolve_level falls back to "brief" on a broken config
+        (P3-R8) -- which needs the loader to raise a ScouterError."""
+        from scouter.core import explain
+
+        path = self.tmp / "config.json"
+        with mock.patch.dict(os.environ, {"SCOUTER_CONFIG": str(path)}):
+            path.write_text(json.dumps({"version": 1, "educative": "full"}))
+            self.assertEqual(explain.resolve_level(None), "full", "the config is really read")
+            path.write_text(json.dumps({"version": "one", "educative": "full"}))
+            self.assertEqual(explain.resolve_level(None), "brief")
+
     def test_unknown_top_key_rejected(self) -> None:
         path = self.tmp / "config.json"
         path.write_text(json.dumps({"version": 1, "bogus_key": True}))

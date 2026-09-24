@@ -43,6 +43,9 @@ SMOKE_ARGS: dict[str, dict] = {
     "darkroom.undo_last": {"dry_run": True},
     "darkroom.status": {"module": "exposure", "param": "exposure"},
     "darkroom.describe_history": {"image": SMOKE_RAW},
+    "darkroom.get": {"module": "exposure", "param": "exposure"},
+    "darkroom.adjust": {"module": "exposure", "param": "exposure", "delta": 0.3, "dry_run": True},
+    "darkroom.say": {"phrase": "brighter", "dry_run": True},
     "history.read": {"image": SMOKE_RAW},
     "history.commit": {"image": SMOKE_RAW, "timeout_s": 0.05},
     "history.changed": {"image": SMOKE_RAW},
@@ -111,6 +114,12 @@ SMOKE_ARGS: dict[str, dict] = {
     # wb.calibrate is gated, so this is a dry run -- one event, no darktable
     # writes, no table touched.
     "wb.calibrate": {"image": SMOKE_RAW, "k_from": 3000, "k_to": 3100},
+    "vocab.list": {},
+    "vocab.resolve": {"phrase": "warmer"},
+    "preset.save": {"name": "smoke", "dry_run": True},
+    "preset.list": {},
+    "preset.apply": {"name": "smoke", "dry_run": True},
+    "preset.apply_job": {"name": "smoke", "job_slug": "smoke-job"},
 }
 
 

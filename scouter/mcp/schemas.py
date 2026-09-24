@@ -35,6 +35,30 @@ BUDGET_S = {
     "default": 3.0,
     "description": "loop budget; over it, re-render at 512 px",
 }
+PHRASE = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 200,
+    "description": "what to change, in plain words, e.g. 'warmer', 'a touch less contrast', "
+    "'lift the shadows', 'cooler by 300k'; call vocab_list for every phrase",
+}
+AMOUNT = {
+    "type": "number",
+    "exclusiveMinimum": 0,
+    "maximum": 5,
+    "description": "multiplier on the phrase's default step (1 = one notch); replaces "
+    "words like 'slightly'",
+}
+EDUCATIVE = {
+    "type": "string",
+    "enum": ["off", "brief", "full"],
+    "description": "explanation level for this call; omit to use the config's `educative` "
+    "(default brief)",
+}
+PRESET_NAME = {
+    "type": "string",
+    "description": "preset (darktable style) name",
+}
 
 
 def _schema(properties: dict, required: list[str]) -> dict:
@@ -145,10 +169,20 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "darkroom_undo_last",
-        "description": "Revert the newest Scouter write in this job by setting the "
-        "parameter back to its previous value. This adds a new history "
-        "item rather than deleting one, so the user's own undo still works.",
-        "inputSchema": _schema({"dry_run": DRY_RUN}, []),
+        "description": "Revert the newest Scouter move (a darkroom_say phrase is one move) "
+        "by setting each parameter back to its previous value. This adds new "
+        "history items rather than deleting one, so the user's own undo still works.",
+        "inputSchema": _schema(
+            {
+                "single": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "undo only the newest write, not the whole phrase it was part of",
+                },
+                "dry_run": DRY_RUN,
+            },
+            [],
+        ),
     },
     {
         "name": "darkroom_status",
@@ -832,6 +866,130 @@ TOOL_SPECS: list[dict] = [
                 "dry_run": DRY_RUN,
             },
             ["image"],
+        ),
+    },
+    {
+        "name": "vocab_list",
+        "description": "The conversational vocabulary: every module parameter Scouter can move "
+        "by words, with unit, safe range, step, and status (live, absolute_only, candidate, "
+        "unreachable). Read once per session.",
+        "inputSchema": _schema(
+            {"module": {"type": "string", "description": "only this module's rows, e.g. colorbalancergb"}},
+            [],
+        ),
+    },
+    {
+        "name": "vocab_resolve",
+        "description": "Show what a phrase would do (module, parameter, delta) and whether each "
+        "move is reachable, without touching darktable.",
+        "inputSchema": _schema({"phrase": PHRASE, "amount": AMOUNT}, ["phrase"]),
+    },
+    {
+        "name": "darkroom_get",
+        "description": "Read one parameter's current VALUE from the image's XMP sidecar (or Kelvin "
+        "via the camera's measured table). Never moves the view; `fresh: false` means darktable "
+        "may hold newer, uncommitted changes.",
+        "inputSchema": _schema(
+            {"module": {"type": "string", "description": "darktable module, e.g. sigmoid"},
+             "param": {"type": "string", "description": "parameter, e.g. contrast"},
+             "instance": INSTANCE},
+            ["module", "param"],
+        ),
+    },
+    {
+        "name": "darkroom_adjust",
+        "description": "Change one module parameter by a relative delta in internal units (EV for "
+        "exposure, K for temperature, fractions for color balance rgb: 0.05 means 5 %). Reads the "
+        "current value first (one view bounce to flush unsaved slider moves unless trust_sidecar), "
+        "clamps to Scouter's safe range, sets it, and returns previous/target/applied plus a "
+        "one-line summary.",
+        "inputSchema": _schema(
+            {"module": {"type": "string", "description": "darktable module, e.g. exposure"},
+             "param": {"type": "string", "description": "parameter, e.g. exposure"},
+             "delta": {"type": "number", "description": "relative change, internal units, non-zero"},
+             "instance": INSTANCE,
+             "commit": {"type": "boolean", "default": True,
+                        "description": "commit history to the XMP after the write"},
+             "trust_sidecar": {"type": "boolean", "default": False,
+                               "description": "skip the pre-read commit bounce"},
+             "educative": EDUCATIVE,
+             "dry_run": DRY_RUN},
+            ["module", "param", "delta"],
+        ),
+    },
+    {
+        "name": "darkroom_say",
+        "description": "Edit the image open in darktable's darkroom by a plain-words phrase "
+        "('warmer', 'less contrast', 'lift the shadows', 'stronger colour grade'). Each move "
+        "reads the current value, applies one step (scaled by 'slightly'/'much' or `amount`) "
+        "and is visible live in darktable. All moves of one phrase are undone together by "
+        "darkroom_undo_last. Refuses the whole phrase if any move is not reachable yet "
+        "(not_pinned) or its current value cannot be read (value_unknown). Prefer this for "
+        "conversational editing; use darkroom_adjust for an exact delta.",
+        "inputSchema": _schema(
+            {"phrase": PHRASE, "amount": AMOUNT,
+             "commit": {"type": "boolean", "default": True,
+                        "description": "commit history to the XMP after the write"},
+             "trust_sidecar": {"type": "boolean", "default": False,
+                               "description": "skip the pre-read commit bounce"},
+             "educative": EDUCATIVE,
+             "dry_run": DRY_RUN},
+            ["phrase"],
+        ),
+    },
+    {
+        "name": "preset_save",
+        "description": "Save the darkroom image's edits from this session as a named darktable "
+        "style (a preset/filter). Modules default to the ones changed in this session; pass "
+        "modules to choose. Needs confirm=true only to replace an existing preset of that name.",
+        "inputSchema": _schema(
+            {"name": PRESET_NAME,
+             "modules": {"type": "array", "items": {"type": "string"},
+                         "description": "modules to keep (default: this session's edits)"},
+             "description": {"type": "string", "default": "", "description": "style description"},
+             "educative": EDUCATIVE,
+             "confirm": {"type": "boolean", "default": False,
+                         "description": "required only to replace an existing preset of this name"},
+             "dry_run": DRY_RUN},
+            ["name"],
+        ),
+    },
+    {
+        "name": "preset_list",
+        "description": "List presets: darktable's styles merged with Scouter's saved-preset "
+        "index, flagging any deleted in darktable.",
+        "inputSchema": _schema({}, []),
+    },
+    {
+        "name": "preset_apply",
+        "description": "Apply a preset to the image open in the darkroom (via a quick view "
+        "bounce, visible live) or to another image by path/id. Always appends to history; "
+        "cannot be undone by Scouter (use darktable's history panel).",
+        "inputSchema": _schema(
+            {"name": PRESET_NAME,
+             "image": IMAGE,
+             "educative": EDUCATIVE,
+             "dry_run": DRY_RUN},
+            ["name"],
+        ),
+    },
+    {
+        "name": "preset_apply_job",
+        "description": "Apply a preset to every frame of a job, in batches, with per-image "
+        "results and Scouter's idempotency ledger. Always gated: confirm=true.",
+        "inputSchema": _schema(
+            {"name": PRESET_NAME,
+             "job_slug": {"type": "string", "description": "job whose frames get the preset"},
+             "exclude": {"type": "array", "items": {"type": "string"},
+                         "description": "paths or ids to leave out"},
+             "force": {"type": "boolean", "default": False,
+                       "description": "apply even where Scouter's ledger says it is already "
+                       "applied"},
+             "confirm": {"type": "boolean", "default": False,
+                         "description": "required: authorises a batched write to every frame "
+                         "of the job"},
+             "dry_run": DRY_RUN},
+            ["name", "job_slug"],
         ),
     },
 ]

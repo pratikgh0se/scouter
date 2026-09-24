@@ -62,6 +62,28 @@ class ClassificationTest(unittest.TestCase):
         self.assertIn("wrong image loaded", str(ctx.exception))
         self.assertIn("expected 12, got 7", str(ctx.exception))
 
+    def test_wrong_image_loaded_classifies_with_the_real_bridge_prefix(self) -> None:
+        """Phase 3 task 8: the real plugin's error is wrapped by
+        `darktable_mcp.bridge.client.Bridge.call` as `"handler raised:
+        <file>:<line>: wrong image loaded: ..."`, not a bare "wrong image
+        loaded: ..." string. `_WRONG_IMAGE_RE` must classify that prefixed
+        form too, or `darkroom.apply_style` never becomes `not_in_darkroom`
+        on a real host (spec section 9)."""
+        dtbridge.set_bridge(
+            FakeBridge(
+                raises={
+                    "darkroom.apply_style": BridgeError(
+                        "handler raised: darktable_mcp.lua:1234: wrong image loaded: "
+                        "darkroom shows 7, requested 12"
+                    ),
+                },
+            )
+        )
+        with self.assertRaises(NotInDarkroom) as ctx:
+            dtbridge.call("darkroom.apply_style", {"image_id": 12, "name": "harbour-warm"})
+        self.assertIn("wrong image loaded", str(ctx.exception))
+        self.assertIn("darkroom shows 7, requested 12", str(ctx.exception))
+
     def test_action_path_returns_the_pinned_path(self) -> None:
         self.assertEqual(dtbridge.action_path("exposure", "exposure"), "iop/exposure/exposure")
         self.assertEqual(dtbridge.action_path("sigmoid", "contrast"), "iop/sigmoid/contrast")

@@ -16,6 +16,7 @@ outcome recorded honestly" apart from "attempted and this is what happened."
 
 from __future__ import annotations
 
+import contextvars
 import json
 import os
 import tempfile
@@ -24,6 +25,10 @@ from datetime import datetime, timezone
 
 from scouter import paths
 from scouter.errors import ScouterError
+
+#: Phase 3 §6.4: the move group every journal entry begun inside it belongs to.
+#: `darkroom.say` sets it around its moves; no write verb's signature changes.
+GROUP: contextvars.ContextVar[str | None] = contextvars.ContextVar("scouter_move_group", default=None)
 
 
 class JournalCorrupt(ScouterError):
@@ -61,6 +66,10 @@ class Entry:
     #: behalf, e.g. marking an unsupported-undo entry `undone` so an older
     #: write stays reachable (fix round 2, should-fix 5). `None` normally.
     note: str | None = None
+    #: Phase 3 §6.4: the move group this entry belongs to, stamped from
+    #: `GROUP.get()` at `begin`. `None` for an entry begun outside any group,
+    #: and for every entry written before this field existed.
+    group: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -192,6 +201,7 @@ def begin(
             before=before,
             after=None,
             commit=commit,
+            group=GROUP.get(),
         ),
     )
 
@@ -289,6 +299,73 @@ def latest_failed(job: str) -> Entry | None:
         if entry.outcome is not None and entry.outcome.startswith("error"):
             return entry
     return None
+
+
+class BeforePatchRefused(ScouterError):
+    """`set_before_neutral` was pointed at an entry it must not patch.
+
+    A programming error, never a user-facing refusal: the entry at `seq` is
+    for another module/param, or its `before.value` is already a real value
+    (final review #1b guard -- a fallback never overwrites a value read from
+    the XMP or the journal).
+    """
+
+    code = "journal_patch_refused"
+    fix = "a Scouter bug: report it with the journal file attached"
+
+
+#: The only fallbacks a `before` may be patched with (final review #1a
+#: ruling): the vocabulary row's declared neutral, or its darktable default.
+BEFORE_FALLBACK_SOURCES = ("neutral", "default")
+
+
+def set_before_neutral(job: str, seq: int, *, module: str, param: str, value: float,
+                       source: str = "neutral") -> None:
+    """Patch a landed entry's `before` to record the declared NEUTRAL (or,
+    with `source="default"`, the row's darktable DEFAULT) its move actually
+    started from (phase 3 task 6 fix round 1, controller ruling; the
+    `default` source is the final-review #1a ruling).
+
+    `moves.read_current`'s "neutral" fallback (spec §6.1 row 4) answers a
+    value the sidecar itself never carried -- the module simply has no
+    active history entry yet. `darkroom.set_param`'s own `before_state` is
+    built purely from the XMP/journal (`_raw_and_before_state`), which has
+    no way to know a neutral was used, so it journals `before.value: None`
+    for that very first move. Without this patch, `undo_last` can never
+    restore it: "the previous value ... was never readable from the XMP".
+
+    Called only from `scouter.core.moves` (the move layer). Guarded (final
+    review #1b): the entry at `seq` must be for exactly `module`/`param`,
+    and its `before.value` must still be `None` -- anything else raises
+    `BeforePatchRefused` and writes nothing, so a real value is never
+    overwritten. Raises `JournalCorrupt` on an unknown `seq`, the same as
+    `complete`.
+    """
+    if source not in BEFORE_FALLBACK_SOURCES:
+        raise BeforePatchRefused(
+            f"before fallback source must be one of {BEFORE_FALLBACK_SOURCES}, not {source!r}",
+            detail={"job": job, "seq": seq, "source": source},
+        )
+    entries = read_all(job)
+    _find_or_raise(entries, job, seq)
+    for entry in entries:
+        if entry.seq != seq:
+            continue
+        if (entry.module, entry.param) != (module, param):
+            raise BeforePatchRefused(
+                f"journal seq {seq} is {entry.module}.{entry.param}, not {module}.{param}: "
+                "refusing to patch its before value",
+                detail={"job": job, "seq": seq, "entry": f"{entry.module}.{entry.param}",
+                        "requested": f"{module}.{param}"},
+            )
+        if entry.before.get("value") is not None:
+            raise BeforePatchRefused(
+                f"journal seq {seq} already records a before value "
+                f"({entry.before.get('value')!r}); a {source} never overwrites it",
+                detail={"job": job, "seq": seq, "before": entry.before.get("value")},
+            )
+        entry.before = {**entry.before, "value": value, "source": source}
+    _write_all(job, entries)
 
 
 def mark_undone(job: str, seq: int, *, note: str | None = None) -> None:
