@@ -453,6 +453,19 @@ These are load-bearing. Read them before scripting against phase 2.
   sidecar-less scratch copy, so it always scores the frame as imported, never
   its current edited history -- editing a hero no longer moves its burst's
   pick to a different frame on the next `cull propose`.
+- **`library import` labels a mixed-body card from each file's own EXIF, and
+  `--camera` filters rather than refuses.** A card holding more than one
+  camera body used to be refused outright ("pass --camera to choose one"),
+  and once `--camera` was given every file was stamped with that ONE slug --
+  including the other body's, with `camera_model` cleared to `null` for all
+  of them. Every file is now always named from its own EXIF body; `--camera
+  X` imports only that body's files and the result's `skipped_other_camera`
+  lists the rest (`{"source_name", "camera"}` per file), never silently
+  drops them. `import.json`'s top-level `camera`/`cameras`/`camera_model`/
+  `totals` describe the WHOLE job (every import it has ever had), not just
+  the run that just finished -- an appending import used to overwrite these
+  with only its own numbers even though `files` already held every prior
+  import's frames too.
 
 ### Phase 2 exit criteria
 

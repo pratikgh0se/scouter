@@ -124,16 +124,27 @@ class PlanTest(LibraryTestCase):
         self.assertEqual(by_source["ZZZ0001.JPG"]["seq"], 1)  # shared stem
         self.assertEqual(by_source["AAA0002.ORF"]["seq"], 2)  # later capture time
 
-    def test_mixed_camera_card_refused_without_camera_flag(self) -> None:
+    def test_mixed_camera_card_labels_each_file_from_its_own_body(self) -> None:
+        """E12 D5, row 407 call 1: a mixed card is never refused, and never
+        silently labelled with one chosen body -- each file is imported
+        under its OWN EXIF-derived slug."""
         source = self.tmp / "card"
         _make_card(source, 2)
         with mock.patch.object(exif, "camera_slug", side_effect=["em10iii", "a7"]):
-            with self.assertRaises(UsageError) as ctx:
-                library.import_card(str(source), "harbour-wedding", confirm=True)
-        self.assertIn("em10iii", str(ctx.exception))
-        self.assertIn("a7", str(ctx.exception))
+            result = library.import_card(str(source), "harbour-wedding", confirm=True)
 
-    def test_camera_flag_overrides(self) -> None:
+        self.assertEqual(result.totals["copied"], 2)
+        self.assertEqual(result.skipped_other_camera, [])
+        by_source = {f["source_name"]: f for f in result.files}
+        self.assertEqual(by_source["P6281000.ORF"]["camera"], "em10iii")
+        self.assertEqual(by_source["P6281001.ORF"]["camera"], "a7")
+        dest_names = {Path(f["dest"]).name for f in result.files}
+        self.assertIn("2026-06-28_harbour-wedding_em10iii_0001.orf", dest_names)
+        self.assertIn("2026-06-28_harbour-wedding_a7_0002.orf", dest_names)
+        self.assertEqual(result.cameras, ["a7", "em10iii"])
+        self.assertEqual(result.camera, "mixed")
+
+    def test_camera_flag_filters_to_one_body_and_reports_the_rest(self) -> None:
         source = self.tmp / "card"
         _make_card(source, 2)
         with mock.patch.object(exif, "camera_slug", side_effect=["em10iii", "a7"]):
@@ -141,6 +152,25 @@ class PlanTest(LibraryTestCase):
                 str(source), "harbour-wedding", camera="em10iii", confirm=True
             )
         self.assertEqual(result.camera, "em10iii")
+        self.assertEqual(result.totals["copied"], 1)
+        self.assertEqual(len(result.files), 1)
+        self.assertEqual(result.files[0]["source_name"], "P6281000.ORF")
+        self.assertEqual(len(result.skipped_other_camera), 1)
+        self.assertEqual(result.skipped_other_camera[0]["source_name"], "P6281001.ORF")
+        self.assertEqual(result.skipped_other_camera[0]["camera"], "a7")
+        self.assertTrue(any("skipped" in w for w in result.warnings))
+
+    def test_camera_flag_matching_nothing_is_a_usage_error(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        with mock.patch.object(exif, "camera_slug", side_effect=["em10iii", "a7"]):
+            with self.assertRaises(UsageError) as ctx:
+                library.import_card(
+                    str(source), "harbour-wedding", camera="nex5n", confirm=True
+                )
+        self.assertIn("nex5n", str(ctx.exception))
+        self.assertIn("em10iii", str(ctx.exception))
+        self.assertIn("a7", str(ctx.exception))
 
 
 class DryRunTest(LibraryTestCase):
@@ -1181,6 +1211,55 @@ class CullProposalFlagTest(LibraryTestCase):
         self.assertIn('f"cull-{ts}.json"', writer)
         (scouter_d / "cull-20260914T101500Z.json").write_text("{}", encoding="utf-8")
         self.assertTrue(library.jobs().jobs[0]["has_cull_proposal"])
+
+
+class JobWideTotalsTest(LibraryTestCase):
+    """E12 D8, row 407: `totals`/`camera`/`source_root` must describe the
+    WHOLE job (every import it has ever had), not just the run that just
+    finished -- the E12 Sony job had `files` with all 14 frames but `totals`
+    and `camera` describing only the 6 imported last."""
+
+    def test_totals_and_cameras_cover_every_import_of_the_job(self) -> None:
+        card_a = self.tmp / "card-a7"
+        _make_card(card_a, 2)
+        with mock.patch.object(exif, "camera_slug", side_effect=["a7", "a7"]):
+            result1 = library.import_card(str(card_a), "e12-sony", confirm=True)
+
+        card_b = self.tmp / "card-nex5n"
+        _write_one(card_b, "DSC07448.ARW", "2026:06:28 15:49:40")
+        with mock.patch.object(exif, "camera_slug", side_effect=["nex5n"]):
+            result2 = library.import_card(str(card_b), "e12-sony", confirm=True)
+
+        # The SECOND result's totals must cover all 3 files of the job, not
+        # only the 1 this run copied.
+        self.assertEqual(result2.totals["copied"], 1, "this run's own count is unaffected")
+        self.assertEqual(result2.totals["job_files"], 3)
+        expected_bytes = sum(f["bytes"] for f in result1.files) + result2.files[-1]["bytes"]
+        self.assertEqual(result2.totals["job_bytes"], expected_bytes)
+        self.assertEqual(result2.cameras, ["a7", "nex5n"])
+        self.assertEqual(result2.camera, "mixed")
+        self.assertEqual(len(result2.files), 3)
+
+        # And it must be what actually landed on disk, not just in memory.
+        import_json = Path(result2.path) / ".scouter" / "import.json"
+        on_disk = json.loads(import_json.read_text())
+        self.assertEqual(on_disk["totals"]["job_files"], 3)
+        self.assertEqual(sorted(on_disk["cameras"]), ["a7", "nex5n"])
+        self.assertEqual(len(on_disk["files"]), 3)
+
+    def test_source_roots_accumulate_across_imports(self) -> None:
+        card_a = self.tmp / "card-a7"
+        _make_card(card_a, 1)
+        with mock.patch.object(exif, "camera_slug", return_value="a7"):
+            library.import_card(str(card_a), "e12-sony", confirm=True)
+
+        card_b = self.tmp / "card-nex5n"
+        _write_one(card_b, "DSC07448.ARW", "2026:06:28 15:49:40")
+        with mock.patch.object(exif, "camera_slug", return_value="nex5n"):
+            result2 = library.import_card(str(card_b), "e12-sony", confirm=True)
+
+        self.assertIn(str(card_a), result2.source_roots)
+        self.assertIn(str(card_b), result2.source_roots)
 
 
 if __name__ == "__main__":

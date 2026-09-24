@@ -361,7 +361,17 @@ class ImportResult(Payload):
     camera: str = ""
     camera_model: str | None = None
     camera_make: str | None = None
+    #: E12 D5/D8, row 407: every distinct body/model actually present across
+    #: the WHOLE job (every import it has ever had), not just this run's --
+    #: `camera`/`camera_model` above are `"mixed"`/`None` when this list has
+    #: more than one entry.
+    cameras: list[str] = field(default_factory=list)
+    camera_models: list[str] = field(default_factory=list)
+    #: Files this run's `--camera` filter excluded because their own EXIF
+    #: names a different body (D5): `{"source_name", "camera"}` per file.
+    skipped_other_camera: list[dict] = field(default_factory=list)
     source_root: str = ""
+    source_roots: list[str] = field(default_factory=list)
     files: list[dict] = field(default_factory=list)
     totals: dict[str, int] = field(default_factory=dict)
     film_roll_registered: bool = False

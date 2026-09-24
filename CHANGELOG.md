@@ -23,3 +23,11 @@ vault; decision row 407).
   copy with no adjacent `.xmp`, so it scores the frame as imported rather
   than its current edited history (editing a hero no longer moves its
   burst's pick on the next proposal).
+- Mixed-body import fixed (D5/D8, row 407 call 1): `library import` labels
+  every file from its own EXIF body rather than refusing a mixed card, or
+  (once `--camera` got past the refusal) mislabelling every file with the
+  one chosen slug. `--camera X` now filters to that body and reports the
+  rest in `skipped_other_camera`. `import.json`'s top-level `camera`,
+  `cameras`, `camera_model`, `camera_models`, `totals` (`job_files`,
+  `job_bytes`) and `source_roots` now describe the whole job across every
+  import it has ever had, not just the run that just finished.

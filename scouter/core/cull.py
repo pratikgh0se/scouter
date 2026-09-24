@@ -398,7 +398,11 @@ def propose(
                     "image_id": resolved.image_id,
                     "captured_at": f.get("captured_at"),
                     "subsec": f.get("subsec") or 0,
-                    "camera": manifest.get("camera", ""),
+                    # This file's OWN body when import.json recorded one
+                    # (E12 D5): a mixed-body job must still burst-group
+                    # correctly, which needs the real per-file camera, not
+                    # the job-level summary (`"mixed"` for such a job).
+                    "camera": f.get("camera") or manifest.get("camera", ""),
                 }
             )
 
