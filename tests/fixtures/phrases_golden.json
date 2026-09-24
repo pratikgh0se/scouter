@@ -1,0 +1,625 @@
+{
+  "Lift The Shadows": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "lift_shadows",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": 1.0,
+        "param": "shadows_luminance",
+        "value": null
+      }
+    ]
+  },
+  "Make it warmer, please!": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "warmer",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "temperature",
+        "notches": 1.0,
+        "param": "temperature",
+        "value": null
+      }
+    ]
+  },
+  "a little bit darker": {
+    "explicit": false,
+    "intensity": 0.5,
+    "key": "darker",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "exposure",
+        "notches": -0.5,
+        "param": "exposure",
+        "value": null
+      }
+    ]
+  },
+  "a lot more saturation": {
+    "explicit": false,
+    "intensity": 2.0,
+    "key": "more_saturation",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": 2.0,
+        "param": "global_saturation",
+        "value": null
+      }
+    ]
+  },
+  "a touch warmer": {
+    "explicit": false,
+    "intensity": 0.5,
+    "key": "warmer",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "temperature",
+        "notches": 0.5,
+        "param": "temperature",
+        "value": null
+      }
+    ]
+  },
+  "brighter": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "brighter",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "exposure",
+        "notches": 1.0,
+        "param": "exposure",
+        "value": null
+      }
+    ]
+  },
+  "brighter by 0.5 EV": {
+    "explicit": true,
+    "intensity": 1.0,
+    "key": "brighter",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "exposure",
+        "notches": null,
+        "param": "exposure",
+        "value": 0.5
+      }
+    ]
+  },
+  "brighter highlights": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "brighter_highlights",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": 1.0,
+        "param": "highlights_luminance",
+        "value": null
+      }
+    ]
+  },
+  "brighter midtones": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "brighter_midtones",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": 1.0,
+        "param": "midtones_luminance",
+        "value": null
+      }
+    ]
+  },
+  "cool the shadows": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "cool_shadows",
+    "moves": [
+      {
+        "kind": "set",
+        "module": "colorbalancergb",
+        "notches": null,
+        "param": "shadows_hue",
+        "value": 220.0
+      },
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": 1.0,
+        "param": "shadows_chroma",
+        "value": null
+      }
+    ]
+  },
+  "cooler": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "cooler",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "temperature",
+        "notches": -1.0,
+        "param": "temperature",
+        "value": null
+      }
+    ]
+  },
+  "cooler by 300k": {
+    "explicit": true,
+    "intensity": 1.0,
+    "key": "cooler",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "temperature",
+        "notches": null,
+        "param": "temperature",
+        "value": -300.0
+      }
+    ]
+  },
+  "darker": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "darker",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "exposure",
+        "notches": -1.0,
+        "param": "exposure",
+        "value": null
+      }
+    ]
+  },
+  "darker midtones": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "darker_midtones",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": -1.0,
+        "param": "midtones_luminance",
+        "value": null
+      }
+    ]
+  },
+  "deeper blacks": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "deeper_blacks",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "exposure",
+        "notches": 1.0,
+        "param": "black",
+        "value": null
+      }
+    ]
+  },
+  "deeper shadows": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "deepen_shadows",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": -1.0,
+        "param": "shadows_luminance",
+        "value": null
+      }
+    ]
+  },
+  "desaturate": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "less_saturation",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": -1.0,
+        "param": "global_saturation",
+        "value": null
+      }
+    ]
+  },
+  "faded blacks": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "faded_blacks",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "exposure",
+        "notches": -1.0,
+        "param": "black",
+        "value": null
+      }
+    ]
+  },
+  "less chroma": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "less_chroma",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": -1.0,
+        "param": "global_chroma",
+        "value": null
+      }
+    ]
+  },
+  "less contrast": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "less_contrast",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "@tone",
+        "notches": -1.0,
+        "param": "contrast",
+        "value": null
+      }
+    ]
+  },
+  "less saturation": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "less_saturation",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": -1.0,
+        "param": "global_saturation",
+        "value": null
+      }
+    ]
+  },
+  "less vibrance": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "less_vibrance",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": -1.0,
+        "param": "global_vibrance",
+        "value": null
+      }
+    ]
+  },
+  "lift the shadows": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "lift_shadows",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": 1.0,
+        "param": "shadows_luminance",
+        "value": null
+      }
+    ]
+  },
+  "more chroma": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "more_chroma",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": 1.0,
+        "param": "global_chroma",
+        "value": null
+      }
+    ]
+  },
+  "more contrast": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "more_contrast",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "@tone",
+        "notches": 1.0,
+        "param": "contrast",
+        "value": null
+      }
+    ]
+  },
+  "more green": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "more_green",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "temperature",
+        "notches": 1.0,
+        "param": "tint",
+        "value": null
+      }
+    ]
+  },
+  "more magenta": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "more_magenta",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "temperature",
+        "notches": -1.0,
+        "param": "tint",
+        "value": null
+      }
+    ]
+  },
+  "more saturation": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "more_saturation",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": 1.0,
+        "param": "global_saturation",
+        "value": null
+      }
+    ]
+  },
+  "more saturation by 10%": {
+    "explicit": true,
+    "intensity": 1.0,
+    "key": "more_saturation",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": null,
+        "param": "global_saturation",
+        "value": 0.1
+      }
+    ]
+  },
+  "more vibrance": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "more_vibrance",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": 1.0,
+        "param": "global_vibrance",
+        "value": null
+      }
+    ]
+  },
+  "much cooler": {
+    "explicit": false,
+    "intensity": 2.0,
+    "key": "cooler",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "temperature",
+        "notches": -2.0,
+        "param": "temperature",
+        "value": null
+      }
+    ]
+  },
+  "punchier": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "more_contrast",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "@tone",
+        "notches": 1.0,
+        "param": "contrast",
+        "value": null
+      }
+    ]
+  },
+  "slightly less contrast": {
+    "explicit": false,
+    "intensity": 0.5,
+    "key": "less_contrast",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "@tone",
+        "notches": -0.5,
+        "param": "contrast",
+        "value": null
+      }
+    ]
+  },
+  "stronger colour grade": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "stronger_grade",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": 1.0,
+        "param": "shadows_chroma",
+        "value": null
+      },
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": 1.0,
+        "param": "midtones_chroma",
+        "value": null
+      },
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": 1.0,
+        "param": "highlights_chroma",
+        "value": null
+      }
+    ]
+  },
+  "tame the highlights": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "tame_highlights",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": -1.0,
+        "param": "highlights_luminance",
+        "value": null
+      }
+    ]
+  },
+  "teal and orange": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "teal_orange",
+    "moves": [
+      {
+        "kind": "set",
+        "module": "colorbalancergb",
+        "notches": null,
+        "param": "shadows_hue",
+        "value": 200.0
+      },
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": 1.0,
+        "param": "shadows_chroma",
+        "value": null
+      },
+      {
+        "kind": "set",
+        "module": "colorbalancergb",
+        "notches": null,
+        "param": "highlights_hue",
+        "value": 55.0
+      },
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": 1.0,
+        "param": "highlights_chroma",
+        "value": null
+      }
+    ]
+  },
+  "warm the highlights": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "warm_highlights",
+    "moves": [
+      {
+        "kind": "set",
+        "module": "colorbalancergb",
+        "notches": null,
+        "param": "highlights_hue",
+        "value": 60.0
+      },
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": 1.0,
+        "param": "highlights_chroma",
+        "value": null
+      }
+    ]
+  },
+  "warmer": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "warmer",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "temperature",
+        "notches": 1.0,
+        "param": "temperature",
+        "value": null
+      }
+    ]
+  },
+  "way brighter": {
+    "explicit": false,
+    "intensity": 2.0,
+    "key": "brighter",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "exposure",
+        "notches": 2.0,
+        "param": "exposure",
+        "value": null
+      }
+    ]
+  },
+  "weaker color grade": {
+    "explicit": false,
+    "intensity": 1.0,
+    "key": "weaker_grade",
+    "moves": [
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": -1.0,
+        "param": "shadows_chroma",
+        "value": null
+      },
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": -1.0,
+        "param": "midtones_chroma",
+        "value": null
+      },
+      {
+        "kind": "adjust",
+        "module": "colorbalancergb",
+        "notches": -1.0,
+        "param": "highlights_chroma",
+        "value": null
+      }
+    ]
+  }
+}

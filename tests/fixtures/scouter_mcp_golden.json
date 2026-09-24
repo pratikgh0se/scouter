@@ -1078,6 +1078,31 @@
     "name": "vocab_list"
   },
   {
+    "description": "Show what a phrase would do (module, parameter, delta) and whether each move is reachable, without touching darktable.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "description": "multiplier on the phrase's default step (1 = one notch); replaces words like 'slightly'",
+          "exclusiveMinimum": 0,
+          "maximum": 5,
+          "type": "number"
+        },
+        "phrase": {
+          "description": "what to change, in plain words, e.g. 'warmer', 'a touch less contrast', 'lift the shadows', 'cooler by 300k'; call vocab_list for every phrase",
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "phrase"
+      ],
+      "type": "object"
+    },
+    "name": "vocab_resolve"
+  },
+  {
     "description": "Sweep the darkroom's Kelvin slider from k_from to k_to and write the measured per-camera table `~/.config/scouter/wb/<camera>.json`, which wb.kelvin and outliers.list's temperature_k_delta then use. Costs ~1.8s per point and adds one history item per point, so it refuses inside a job's raw/ unless allow_in_job=true -- run it on a scratch copy. Refuses (usage error) rather than write a table whose r/b coefficient ratio is not strictly increasing in Kelvin. Requires confirm=true to run at all (never overwrites an existing table otherwise).",
     "inputSchema": {
       "additionalProperties": false,

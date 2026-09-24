@@ -35,6 +35,20 @@ BUDGET_S = {
     "default": 3.0,
     "description": "loop budget; over it, re-render at 512 px",
 }
+PHRASE = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 200,
+    "description": "what to change, in plain words, e.g. 'warmer', 'a touch less contrast', "
+    "'lift the shadows', 'cooler by 300k'; call vocab_list for every phrase",
+}
+AMOUNT = {
+    "type": "number",
+    "exclusiveMinimum": 0,
+    "maximum": 5,
+    "description": "multiplier on the phrase's default step (1 = one notch); replaces "
+    "words like 'slightly'",
+}
 
 
 def _schema(properties: dict, required: list[str]) -> dict:
@@ -843,6 +857,12 @@ TOOL_SPECS: list[dict] = [
             {"module": {"type": "string", "description": "only this module's rows, e.g. colorbalancergb"}},
             [],
         ),
+    },
+    {
+        "name": "vocab_resolve",
+        "description": "Show what a phrase would do (module, parameter, delta) and whether each "
+        "move is reachable, without touching darktable.",
+        "inputSchema": _schema({"phrase": PHRASE, "amount": AMOUNT}, ["phrase"]),
     },
 ]
 

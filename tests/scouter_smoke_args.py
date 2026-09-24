@@ -112,6 +112,7 @@ SMOKE_ARGS: dict[str, dict] = {
     # writes, no table touched.
     "wb.calibrate": {"image": SMOKE_RAW, "k_from": 3000, "k_to": 3100},
     "vocab.list": {},
+    "vocab.resolve": {"phrase": "warmer"},
 }
 
 

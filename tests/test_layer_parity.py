@@ -46,6 +46,7 @@ EXPECTED_VERBS = {
     "wb.kelvin",
     "wb.calibrate",
     "vocab.list",
+    "vocab.resolve",
 }
 
 
