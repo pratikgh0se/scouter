@@ -45,3 +45,9 @@ vault; decision row 407).
   restart darktable" -- wrong, darktable is running). It is now
   `not_in_darkroom` (exit 6) with a fix naming the real cause: open the
   frame in darktable yourself or relaunch darktable on it.
+- Bounded wait on the job state lock (D3, row 407): `state/<job>.json.lock`
+  used to block on a plain `flock(LOCK_EX)` with no timeout at all; the E12
+  live run stalled 15-18 minutes on it twice. Now polls with a bound
+  (`cache.lock_wait_s`, default 30s) and fails with a new `state_locked`
+  error (exit 22) naming the pid holding the lock and since when, instead
+  of waiting indefinitely.

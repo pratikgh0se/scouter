@@ -113,6 +113,17 @@ class VaultConfig:
 
 
 @dataclass(frozen=True)
+class CacheConfig:
+    #: E12 D3, row 407: `state/<job>.json.lock`'s exclusive `flock` used to
+    #: block with no timeout at all; the E12 live run saw two CLI calls
+    #: stall 15-18 minutes on it, contending with a concurrently running
+    #: build/benchmark process. A caller now waits at most this long before
+    #: failing with `state_locked` and who (as far as the lock file itself
+    #: records) is holding it.
+    lock_wait_s: float = 30.0
+
+
+@dataclass(frozen=True)
 class Config:
     version: int = CONFIG_VERSION
     library_root: str | None = None
@@ -128,6 +139,7 @@ class Config:
     export: ExportConfig = field(default_factory=ExportConfig)
     stats: StatsConfig = field(default_factory=StatsConfig)
     educative: str = "brief"
+    cache: CacheConfig = field(default_factory=CacheConfig)
 
     def camera_map(self) -> dict[str, str]:
         return dict(self.cameras)
@@ -150,6 +162,7 @@ SECTIONS = {
     "style": ("style", StyleConfig),
     "export": ("export", ExportConfig),
     "stats": ("stats", StatsConfig),
+    "cache": ("cache", CacheConfig),
 }
 TOP_KEYS = {"version", "library_root", "cameras", "educative", "_comment", *SECTIONS}
 

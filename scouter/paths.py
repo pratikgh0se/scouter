@@ -3,16 +3,28 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import fcntl
 import json
 import os
 import re
 import tempfile
+import time
 from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
-from scouter.errors import UsageError
+from scouter.errors import StateLocked, UsageError
+
+#: Fallback bound on a lock wait when the config cannot be loaded (deferred
+#: import inside `_locked_job_state` avoids a circular import at module load
+#: time: `scouter.config` imports `scouter.paths`). `cache.lock_wait_s`
+#: overrides this whenever the config loads cleanly (E12 D3, row 407).
+DEFAULT_LOCK_WAIT_S = 30.0
+
+#: How often a bounded wait re-polls the lock. An implementation constant,
+#: not a tuning knob a job needs.
+_LOCK_POLL_S = 0.1
 
 #: A job id becomes a FILENAME (`audit/<job>.jsonl`, `journal/<job>.jsonl`,
 #: `state/<job>.json`), so it is validated the moment it enters -- otherwise
@@ -127,8 +139,34 @@ def _job_state_lock_path(job: str) -> Path:
     return Path(str(job_state_path(job)) + ".lock")
 
 
+def _lock_wait_budget() -> float:
+    """`cache.lock_wait_s`, or `DEFAULT_LOCK_WAIT_S` when the config cannot
+    be loaded -- a lock acquisition must never itself fail (or block on a
+    config read no simpler than the lock it is guarding) just because the
+    config happens to be broken right now."""
+    try:
+        from scouter.config import load as _load_config
+
+        return _load_config().cache.lock_wait_s
+    except Exception:  # noqa: BLE001 - the lock wait bound falls back, never raises
+        return DEFAULT_LOCK_WAIT_S
+
+
+def _read_lock_holder(lock_fh) -> dict:
+    """Best-effort: whatever the current (or last) holder recorded about
+    itself. Stale (a holder that crashed without releasing) is still useful
+    -- `since` then shows exactly how long the lock has been stuck."""
+    try:
+        lock_fh.seek(0)
+        raw = lock_fh.read()
+        data = json.loads(raw) if raw.strip() else {}
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 @contextlib.contextmanager
-def _locked_job_state(job: str) -> Iterator[None]:
+def _locked_job_state(job: str, *, wait_s: float | None = None) -> Iterator[None]:
     """Hold an exclusive advisory lock for the whole read-modify-write critical
     section on this job's state file (fix round 1, should-fix 5).
 
@@ -144,13 +182,49 @@ def _locked_job_state(job: str) -> Iterator[None]:
 
     `fcntl.flock` on a sibling `.lock` file (POSIX only, matching this
     codebase's macOS/Linux target -- darktable itself does not run on
-    Windows): the lock file's own contents are never read, only its
-    existence and the OS-level lock on its file descriptor.
+    Windows).
+
+    E12 D3, row 407: this used to be a plain blocking `LOCK_EX`, with no
+    timeout at all -- the E12 live run saw two CLI calls stall 15-18 minutes
+    on exactly this lock, contending with a concurrently running build or
+    benchmark process. It now polls `LOCK_EX | LOCK_NB` for at most
+    `wait_s` (default `cache.lock_wait_s`, 30s) and fails with `state_locked`
+    (exit 20) naming who holds it, rather than waiting minutes for a lock
+    that may never come free. The lock file's contents, previously never
+    read or written, now record `{"pid", "since"}` for the CURRENT holder as
+    soon as it acquires the lock -- so a caller that times out can say
+    exactly what a bare `flock` cannot: who, and since when.
     """
+    if wait_s is None:
+        wait_s = _lock_wait_budget()
     lock_path = ensure(_job_state_lock_path(job))
     with open(lock_path, "a+") as lock_fh:
-        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        deadline = time.monotonic() + wait_s
+        while True:
+            try:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as e:
+                if e.errno not in (errno.EAGAIN, errno.EACCES):
+                    raise
+                if time.monotonic() >= deadline:
+                    holder = _read_lock_holder(lock_fh)
+                    raise StateLocked(
+                        f"lock held by pid {holder.get('pid', 'unknown')} since "
+                        f"{holder.get('since', 'unknown')}: {lock_path} still locked "
+                        f"after waiting {wait_s:g}s",
+                        detail={"job": job, "lock_path": str(lock_path), **holder},
+                    ) from None
+                time.sleep(_LOCK_POLL_S)
         try:
+            lock_fh.seek(0)
+            lock_fh.truncate()
+            lock_fh.write(
+                json.dumps(
+                    {"pid": os.getpid(), "since": datetime.now(timezone.utc).isoformat()}
+                )
+            )
+            lock_fh.flush()
             yield
         finally:
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
@@ -182,19 +256,23 @@ def _write_job_state_unlocked(job: str, state: dict) -> None:
             pass
 
 
-def job_state_read(job: str) -> dict:
+def job_state_read(job: str, *, wait_s: float | None = None) -> dict:
     """This job's small on-disk state dict, or `{}` when there is none yet.
 
     Lock-guarded (the same lock `job_state_update` holds for its own
     read-modify-write) so a read never lands between another writer's read
     and its write -- a torn-looking read is never possible, only "before"
-    or "after" a given update.
+    or "after" a given update. `wait_s` overrides `cache.lock_wait_s`
+    (E12 D3) -- mainly a test seam; production callers leave it as the
+    config default.
     """
-    with _locked_job_state(job):
+    with _locked_job_state(job, wait_s=wait_s):
         return _read_job_state_unlocked(job)
 
 
-def job_state_update(job: str, mutate: Callable[[dict], None]) -> dict:
+def job_state_update(
+    job: str, mutate: Callable[[dict], None], *, wait_s: float | None = None
+) -> dict:
     """Read-modify-write this job's state file under one exclusive lock.
 
     The ONE seam both `darkroom.py` (`opened_image_id`/`opened_path`) and
@@ -204,8 +282,9 @@ def job_state_update(job: str, mutate: Callable[[dict], None]) -> dict:
     `mutate` receives the CURRENT on-disk dict (read while holding the lock)
     and edits it in place; the result is written back before the lock
     releases, so no other writer's update is ever silently discarded.
+    `wait_s` overrides `cache.lock_wait_s` (E12 D3) -- mainly a test seam.
     """
-    with _locked_job_state(job):
+    with _locked_job_state(job, wait_s=wait_s):
         state = _read_job_state_unlocked(job)
         mutate(state)
         _write_job_state_unlocked(job, state)

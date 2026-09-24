@@ -452,6 +452,13 @@ These are load-bearing. Read them before scripting against phase 2.
 - **`style apply-set --mode overwrite` is still refused.** The Lua API only
   appends. The one place overwrite exists is render-only:
   `export release --overwrite-style`.
+- **A job's state lock now fails fast instead of blocking for minutes
+  (D3, row 407).** `~/.cache/scouter/state/<job>.json.lock` guards
+  `darkroom.open`'s and `history.commit`'s read-modify-write of a job's small
+  state file; the E12 live run saw two CLI calls stall 15-18 minutes on it,
+  contending with a concurrently running build/benchmark process. A caller
+  now waits at most `cache.lock_wait_s` (default 30s) before failing with
+  `state_locked` (exit `22`), naming the pid that holds it and since when.
 - **`cull propose`'s sharpness gate is relative to the job, not an absolute
   number.** A singleton frame is proposed `pick_rating` when its sharpness is
   in the sharpest `cull.sharpness_keep_top_pct` fraction of THAT job's own

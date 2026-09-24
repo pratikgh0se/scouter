@@ -176,6 +176,24 @@ class ManifestUnauthenticated(ScouterError):
     )
 
 
+class StateLocked(ScouterError):
+    """A job's `state/<job>.json.lock` (E12 D3, row 407) stayed held by
+    another process for longer than `cache.lock_wait_s` -- the E12 live run
+    saw two CLI calls stall 15-18 minutes on exactly this lock, contending
+    with a concurrently running build/benchmark process, with no bound at
+    all on the old blocking `flock`. `detail.pid`/`detail.since` are the
+    holder's own pid and when it took the lock, when the lock file recorded
+    them (best-effort: a holder that died without releasing leaves them
+    stale, which is itself useful to know)."""
+
+    code = "state_locked"
+    fix = (
+        "another Scouter process is holding this job's lock (see `detail.pid` "
+        "and `detail.since`); wait for it to finish, or raise `cache.lock_wait_s` "
+        "in the config if 30s is routinely too short for this machine"
+    )
+
+
 class ExportAllFailed(ScouterError):
     """Every frame `export.release` tried to render failed.
 
@@ -241,6 +259,9 @@ EXIT_CODES: dict[str, int] = {
     "no_sidecar": 19,
     "value_unknown": 20,
     "not_pinned": 21,
+    # Fix branch (E12 D3) originally claimed 20; renumbered to the next free
+    # value once phase 3 landed "value_unknown"/"not_pinned" at 20/21.
+    "state_locked": 22,
 }
 
 ERROR_CLASSES: tuple[type[ScouterError], ...] = (
@@ -261,6 +282,7 @@ ERROR_CLASSES: tuple[type[ScouterError], ...] = (
     ExportAllFailed,
     ValueUnknown,
     NotPinned,
+    StateLocked,
 )
 
 
