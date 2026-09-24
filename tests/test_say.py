@@ -1,0 +1,141 @@
+"""Phase 3 task 6: phrases as grouped moves, undone together."""
+
+from __future__ import annotations
+
+from unittest import mock
+
+from scouter.core import darkroom, dtbridge, journal, moves
+from scouter.errors import NotPinned, UsageError, ValueUnknown
+from tests.test_moves import _MovesFixture
+
+
+class SayTest(_MovesFixture):
+    def test_one_move_phrase_lands_in_a_group(self) -> None:
+        r = moves.say.__wrapped__("a touch warmer", commit=False, job="job-test")
+        self.assertEqual(r.key, "warmer")
+        self.assertEqual(len(r.moves), 1)
+        self.assertAlmostEqual(r.moves[0]["delta"], 150.0)
+        self.assertTrue(r.group.startswith("say-"))
+        self.assertEqual(journal.read_all("job-test")[-1].group, r.group)
+        self.assertIsNone(journal.GROUP.get(), "the contextvar must be reset")
+
+    def test_contrast_routes_to_sigmoid_on_the_fixture(self) -> None:
+        r = moves.say.__wrapped__("less contrast", commit=False, job="job-test")
+        self.assertEqual(r.moves[0]["module"], "sigmoid")
+        self.assertAlmostEqual(r.moves[0]["target"], 1.3, places=5)
+
+    def test_contrast_routes_to_filmic_when_filmic_is_the_tone_mapper(self) -> None:
+        with mock.patch("scouter.core.moves.route_tone", return_value="filmicrgb"):
+            with self.assertRaises(NotPinned) as cm:
+                moves.say.__wrapped__("less contrast", job="job-test")
+        self.assertEqual(cm.exception.detail["refused"][0]["module"], "filmicrgb")
+
+    def test_a_phrase_with_any_unreachable_move_is_refused_whole(self) -> None:
+        with self.assertRaises(NotPinned) as cm:
+            moves.say.__wrapped__("teal and orange", job="job-test")
+        self.assertEqual(len(cm.exception.detail["refused"]), 4)
+        self.assertEqual(self.sets(), [], "nothing may land before the pre-validation")
+
+    def test_absolute_only_phrase_is_value_unknown(self) -> None:
+        with self.assertRaises(ValueUnknown):
+            moves.say.__wrapped__("more saturation", job="job-test")
+
+    def test_unknown_phrase_is_usage_with_suggestions(self) -> None:
+        with self.assertRaises(UsageError) as cm:
+            moves.say.__wrapped__("warmmer", job="job-test")
+        self.assertIn("warmer", cm.exception.detail["suggestions"])
+
+    def test_one_pre_commit_for_the_whole_phrase(self) -> None:
+        moves.say.__wrapped__("brighter", commit=False, job="job-test")
+        self.assertEqual(self.commits, [(1, False)])
+
+    def test_dry_run_resolves_without_darktable(self) -> None:
+        r = moves.say.__wrapped__("warmer", dry_run=True, job="job-test")
+        self.assertEqual(r.outcome, "dry_run")
+        self.assertEqual(self.bridge.calls, [])
+
+    def test_partial_when_a_later_move_fails(self) -> None:
+        with mock.patch.dict(dtbridge.ACTION_PATHS, {
+            ("colorbalancergb", "shadows_chroma"): "iop/colorbalancergb/shadows lift/chroma",
+            ("colorbalancergb", "midtones_chroma"): "iop/colorbalancergb/power/chroma",
+            ("colorbalancergb", "highlights_chroma"): "iop/colorbalancergb/highlights gain/chroma",
+        }), mock.patch("scouter.core.vocab.xmp_named", return_value=True):
+            calls = {"n": 0}
+
+            def flaky(p):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    return {"nan": True, "view": "darkroom", **p}
+                return {"nan": False, "status": p.get("value"), "view": "darkroom", **p}
+
+            self.bridge.responses["darkroom.action"] = flaky
+            r = moves.say.__wrapped__("stronger grade", commit=False, job="job-test")
+        self.assertEqual(r.outcome, "partial")
+        self.assertEqual(len(r.moves), 1)
+        self.assertEqual(r.refused[0]["code"], "not_in_darkroom")
+
+
+class GroupUndoTest(_MovesFixture):
+    def _two_moves(self) -> str:
+        """Land two exposure writes in one group by hand (no multi-move live phrase exists yet)."""
+        token = journal.GROUP.set("say-test")
+        try:
+            darkroom.set_param.__wrapped__("exposure", "exposure", 1.8, commit=False, job="job-test")
+            darkroom.set_param.__wrapped__("sigmoid", "contrast", 1.6, commit=False, job="job-test")
+        finally:
+            journal.GROUP.reset(token)
+        return "say-test"
+
+    def test_undo_reverts_the_whole_group_newest_first(self) -> None:
+        self._two_moves()
+        r = darkroom.undo_last.__wrapped__(job="job-test")
+        self.assertEqual([u["undone"]["module"] for u in r.undone_group], ["sigmoid", "exposure"])
+        self.assertTrue(all(e.undone for e in journal.read_all("job-test")))
+
+    def test_single_undoes_only_the_newest(self) -> None:
+        self._two_moves()
+        r = darkroom.undo_last.__wrapped__(single=True, job="job-test")
+        self.assertEqual(r.undone["module"], "sigmoid")
+        self.assertEqual(r.undone_group, [])
+        self.assertEqual([e.undone for e in journal.read_all("job-test")], [False, True])
+
+    def test_ungrouped_writes_behave_as_before(self) -> None:
+        darkroom.set_param.__wrapped__("exposure", "exposure", 1.8, commit=False, job="job-test")
+        darkroom.set_param.__wrapped__("sigmoid", "contrast", 1.6, commit=False, job="job-test")
+        r = darkroom.undo_last.__wrapped__(job="job-test")
+        self.assertEqual(r.undone["module"], "sigmoid")
+        self.assertEqual([e.undone for e in journal.read_all("job-test")], [False, True])
+
+    def test_group_dry_run_lists_every_member_and_changes_nothing(self) -> None:
+        self._two_moves()
+        r = darkroom.undo_last.__wrapped__(dry_run=True, job="job-test")
+        self.assertEqual(r.outcome, "dry_run")
+        self.assertEqual(len(r.plan), 2)
+        self.assertFalse(any(e.undone for e in journal.read_all("job-test")))
+
+    def test_a_stuck_member_stops_the_loop_and_reports_partial(self) -> None:
+        """Controller ruling: the group-undo loop must terminate. A member
+        whose own undo leaves it open (temperature tier 2 with an unverified
+        restore is the real-world case) must not spin forever -- the loop
+        iterates over the group's members computed ONCE, and stops with
+        outcome=partial the first time a member is still open after its
+        own _undo_one call."""
+        self._two_moves()
+        real_undo_one = darkroom._undo_one
+
+        def stuck(*, dry_run, job):
+            # Never marks the newest (sigmoid) entry undone, simulating an
+            # undo whose verification never landed -- without a bounded
+            # loop this would spin on the same open entry forever.
+            entry = journal.latest_open(job)
+            return darkroom.UndoResult(
+                image_id=entry.image_id, path=entry.path, seq=entry.seq,
+                undone={"verb": entry.verb, "module": entry.module, "param": entry.param,
+                        "restored_to": None, "verified": False},
+                committed=False,
+            )
+
+        with mock.patch("scouter.core.darkroom._undo_one", side_effect=stuck):
+            r = darkroom.undo_last.__wrapped__(job="job-test")
+        self.assertEqual(r.outcome, "partial")
+        self.assertEqual([e.undone for e in journal.read_all("job-test")], [False, False])

@@ -11,11 +11,11 @@ from __future__ import annotations
 import time
 
 from scouter import metrics
-from scouter.core import darkroom, dtbridge, explain, history, vocab, wb, xmp
+from scouter.core import darkroom, dtbridge, explain, history, journal, phrases, vocab, wb, xmp
 from scouter.errors import CommitTimeout, NotPinned, ScouterError, UsageError, ValueUnknown
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
-from scouter.types import AdjustResult, ResolvedImage, ValueResult
+from scouter.types import AdjustResult, ResolvedImage, SayResult, ValueResult
 
 #: Only the always-finite coefficients (controller ruling, task 5): the real
 #: sidecar decodes `coeff_g2` as `None` (`xmp.latest_params` -> `_json_safe`
@@ -283,6 +283,101 @@ def adjust(module: str, param: str, delta: float, *, instance: int = 0, commit: 
     return result
 
 
+def _refusal(mv_module: str, param: str, kind: str) -> dict | None:
+    s = vocab.spec(mv_module, param)
+    if s is None:
+        return {"module": mv_module, "param": param, "code": "usage", "status": "missing"}
+    try:
+        gate(s, relative=(kind == "adjust"))
+    except ScouterError as e:
+        return {"module": mv_module, "param": param, "code": e.code, "status": vocab.status(s),
+                "message": e.message}
+    return None
+
+
+def _raise_refused(phrase: str, key: str, refused: list[dict], total: int) -> None:
+    first = refused[0]
+    cls = {"not_pinned": NotPinned, "value_unknown": ValueUnknown}.get(first["code"], UsageError)
+    raise cls(
+        f"'{phrase}' cannot run: {len(refused)} of {total} move(s) are not reachable "
+        f"({', '.join(r['module'] + '.' + r['param'] for r in refused)})",
+        detail={"phrase": phrase, "key": key, "refused": refused},
+    )
+
+
+@metrics.instrumented("darkroom.say")
+def say(phrase: str, *, amount: float | None = None, commit: bool = True,
+        trust_sidecar: bool = False, educative: str | None = None, dry_run: bool = False,
+        job: str | None = None) -> SayResult:
+    """A plain-words edit: every move of the phrase, as one undoable group (§6.3)."""
+    job = job or current_job()
+    res = phrases.resolve(phrase, amount)
+    level = explain.resolve_level(educative)
+    if dry_run:
+        return SayResult(
+            outcome="dry_run", phrase=phrase, key=res.key, intensity=res.intensity,
+            moves=[phrases.move_view(mv) for mv in res.moves],
+            reason="dry run: no darktable calls; @tone was not routed against the image",
+        )
+    # Controller ruling: refuse before touching the bridge at all. Every
+    # non-@tone move can be gated with no darktable call (`_refusal` never
+    # calls the bridge); @tone needs `route_tone`, which needs the darkroom
+    # image resolved, so it is checked in a second pass below. This is what
+    # makes `say("teal and orange")` refuse (not_pinned) with zero bridge
+    # calls, including no `darkroom.current` lookup.
+    pre_refused = [r for r in (_refusal(mv.module, mv.param, mv.kind) for mv in res.moves
+                                if mv.module != phrases.TONE) if r]
+    if pre_refused:
+        _raise_refused(phrase, res.key, pre_refused, len(res.moves))
+    resolved = darkroom._current_image()
+    darkroom._require_job_image(job, resolved.image_id)
+    dtbridge.require_darkroom()
+    tone = route_tone(resolved.path)
+    concrete = [(tone if mv.module == phrases.TONE else mv.module, mv) for mv in res.moves]
+    refused = [r for r in (_refusal(m, mv.param, mv.kind) for m, mv in concrete) if r]
+    if refused:
+        _raise_refused(phrase, res.key, refused, len(concrete))
+    group = f"say-{journal.next_seq(job)}"
+    warning = None if trust_sidecar else _precommit(job, resolved.image_id)
+    landed: list[dict] = []
+    notes: list[explain.MoveNote] = []
+    failures: list[dict] = []
+    token = journal.GROUP.set(group)
+    try:
+        for module, mv in concrete:
+            s = vocab.spec(module, mv.param)
+            try:
+                if mv.kind == "adjust":
+                    delta = mv.value if mv.notches is None else mv.notches * s.step
+                    r = _adjust_core(module, mv.param, delta, resolved=resolved, instance=0,
+                                     commit=commit, level="off", job=job)
+                    notes.append(explain.MoveNote(s, r.previous, r.target))
+                    landed.append(r.to_dict())
+                else:
+                    target, _ = vocab.clamp(s, float(mv.value))
+                    set_fn = getattr(darkroom.set_param, "__wrapped__", darkroom.set_param)
+                    r = set_fn(module, mv.param, target, commit=commit, job=job)
+                    notes.append(explain.MoveNote(s, r.previous, target, "set"))
+                    landed.append({**r.to_dict(), "target": target,
+                                   "summary": f"{s.ui}: set to {explain.with_unit(s, f'{vocab.to_display(s, target):.4g}')}"})
+            except ScouterError as e:
+                if not landed:
+                    raise
+                failures.append({"module": module, "param": mv.param, "code": e.code,
+                                 "message": e.message})
+                break
+    finally:
+        journal.GROUP.reset(token)
+    return SayResult(
+        outcome="partial" if failures else "ok",
+        image_id=resolved.image_id, path=resolved.path, phrase=phrase, key=res.key,
+        intensity=res.intensity, group=group, moves=landed, refused=failures,
+        summary="; ".join(m.get("summary", "") for m in landed),
+        explain=explain.lines(notes, level=level, job=job),
+        warnings=[w for w in [warning] if w],
+    )
+
+
 EDUCATIVE_ARG = ArgSpec("educative", "str", default=None, choices=("off", "brief", "full"),
                         help="explanation level for this call (default: config's educative)")
 TRUST_ARG = ArgSpec("trust_sidecar", "bool", default=False,
@@ -316,6 +411,24 @@ for verb in (
         writes=True,
         gated=False,
         summary="Change one parameter by a relative amount, clamped to a safe range.",
+    ),
+    Verb(
+        id="darkroom.say",
+        group="darkroom",
+        fn=say,
+        args=(
+            ArgSpec("phrase", "str", required=True, positional=True,
+                    help="plain words, e.g. 'a touch warmer' (quote it)"),
+            ArgSpec("amount", "float", default=None,
+                    help="multiplier on the phrase's step (0-5]"),
+            darkroom.COMMIT_ARG,
+            TRUST_ARG,
+            EDUCATIVE_ARG,
+            darkroom.DRY_RUN_ARG,
+        ),
+        writes=True,
+        gated=False,
+        summary="Edit by a plain-words phrase; its moves undo together.",
     ),
 ):
     register(verb)

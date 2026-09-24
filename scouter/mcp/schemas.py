@@ -165,10 +165,20 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "darkroom_undo_last",
-        "description": "Revert the newest Scouter write in this job by setting the "
-        "parameter back to its previous value. This adds a new history "
-        "item rather than deleting one, so the user's own undo still works.",
-        "inputSchema": _schema({"dry_run": DRY_RUN}, []),
+        "description": "Revert the newest Scouter move (a darkroom_say phrase is one move) "
+        "by setting each parameter back to its previous value. This adds new "
+        "history items rather than deleting one, so the user's own undo still works.",
+        "inputSchema": _schema(
+            {
+                "single": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "undo only the newest write, not the whole phrase it was part of",
+                },
+                "dry_run": DRY_RUN,
+            },
+            [],
+        ),
     },
     {
         "name": "darkroom_status",
@@ -901,6 +911,26 @@ TOOL_SPECS: list[dict] = [
              "educative": EDUCATIVE,
              "dry_run": DRY_RUN},
             ["module", "param", "delta"],
+        ),
+    },
+    {
+        "name": "darkroom_say",
+        "description": "Edit the image open in darktable's darkroom by a plain-words phrase "
+        "('warmer', 'less contrast', 'lift the shadows', 'stronger colour grade'). Each move "
+        "reads the current value, applies one step (scaled by 'slightly'/'much' or `amount`) "
+        "and is visible live in darktable. All moves of one phrase are undone together by "
+        "darkroom_undo_last. Refuses the whole phrase if any move is not reachable yet "
+        "(not_pinned) or its current value cannot be read (value_unknown). Prefer this for "
+        "conversational editing; use darkroom_adjust for an exact delta.",
+        "inputSchema": _schema(
+            {"phrase": PHRASE, "amount": AMOUNT,
+             "commit": {"type": "boolean", "default": True,
+                        "description": "commit history to the XMP after the write"},
+             "trust_sidecar": {"type": "boolean", "default": False,
+                               "description": "skip the pre-read commit bounce"},
+             "educative": EDUCATIVE,
+             "dry_run": DRY_RUN},
+            ["phrase"],
         ),
     },
 ]

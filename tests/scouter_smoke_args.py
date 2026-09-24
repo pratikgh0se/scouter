@@ -45,6 +45,7 @@ SMOKE_ARGS: dict[str, dict] = {
     "darkroom.describe_history": {"image": SMOKE_RAW},
     "darkroom.get": {"module": "exposure", "param": "exposure"},
     "darkroom.adjust": {"module": "exposure", "param": "exposure", "delta": 0.3, "dry_run": True},
+    "darkroom.say": {"phrase": "brighter", "dry_run": True},
     "history.read": {"image": SMOKE_RAW},
     "history.commit": {"image": SMOKE_RAW, "timeout_s": 0.05},
     "history.changed": {"image": SMOKE_RAW},

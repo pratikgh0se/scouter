@@ -1225,8 +1225,7 @@ def _refuse_temperature_undo(entry: journal.Entry, before_params: dict | None) -
     )
 
 
-@metrics.instrumented("darkroom.undo_last")
-def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
+def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
     """Revert the newest Scouter write in this job by re-setting its old value."""
     job = job or current_job()
     entry = journal.latest_open(job)
@@ -1452,6 +1451,72 @@ def undo_last(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
     )
 
 
+@metrics.instrumented("darkroom.undo_last")
+def undo_last(*, single: bool = False, dry_run: bool = False, job: str | None = None) -> UndoResult:
+    """Revert the newest Scouter MOVE in this job (phase 3 §6.4).
+
+    A `darkroom.say` phrase is one move of several writes sharing a journal
+    `group`; every other write is a move of one, so phase 1/2 behaviour is
+    unchanged. `single=True` reverts only the newest write.
+
+    Controller ruling: the group loop must terminate. The group's member
+    entries are computed ONCE, up front, and the loop iterates over that
+    fixed list -- it never re-queries `journal.latest_open` to decide
+    whether to keep going, so a member whose own `_undo_one` call leaves it
+    still open (an unverified temperature restore, tier 2, is the real
+    case) cannot spin forever. The loop stops the first time that happens
+    and reports `outcome="partial"`, naming what did and did not undo.
+    """
+    job = job or current_job()
+    newest = journal.latest_open(job)
+    if single or newest is None or newest.group is None:
+        return _undo_one(dry_run=dry_run, job=job)
+    group = newest.group
+    members = [e for e in reversed(journal.read_all(job))
+               if e.group == group and not e.undone
+               and not (e.outcome or "").startswith("error")]
+    if dry_run:
+        return UndoResult(
+            outcome="dry_run", image_id=newest.image_id, path=newest.path, seq=newest.seq,
+            plan=[{"action": "darkroom.undo_last", "seq": e.seq, "module": e.module,
+                   "param": e.param, "restore_to": e.before.get("value")} for e in members],
+            reason=f"would undo {len(members)} write(s) of move {group}, newest first",
+        )
+    results: list[dict] = []
+    for member in members:
+        try:
+            result = _undo_one(dry_run=False, job=job)
+        except ScouterError as e:
+            if not results:
+                raise
+            return UndoResult(
+                outcome="partial", image_id=newest.image_id, path=newest.path, seq=newest.seq,
+                undone=results[0].get("undone"), undone_group=results, committed=False,
+                reason=f"undid {len(results)} of move {group}, then failed: {e.code}: {e.message}",
+            )
+        results.append(result.to_dict())
+        # Bounded-loop guard (controller ruling): `_undo_one` is trusted to
+        # have undone `member` (the newest open entry when it ran, which --
+        # unless something else concurrently touched the journal -- is
+        # `member` itself). If it somehow left the entry open, re-reading
+        # the journal proves it rather than trusting the return value, and
+        # the loop stops here instead of retrying the same entry forever.
+        still_open = any(e.seq == member.seq and not e.undone for e in journal.read_all(job))
+        if still_open:
+            return UndoResult(
+                outcome="partial", image_id=newest.image_id, path=newest.path, seq=newest.seq,
+                undone=results[0].get("undone"), undone_group=results, committed=False,
+                reason=(f"undid {len(results)} of move {group}, then seq {member.seq} "
+                        f"({member.module}.{member.param}) stayed open after its own undo"),
+            )
+    return UndoResult(
+        image_id=newest.image_id, path=newest.path, seq=newest.seq,
+        undone=results[0].get("undone") if results else None, undone_group=results,
+        committed=all(r.get("committed") for r in results),
+        warnings=[w for r in results for w in r.get("warnings", [])],
+    )
+
+
 @metrics.instrumented("darkroom.status")
 def status(
     module: str | None = None,
@@ -1620,7 +1685,11 @@ for verb in (
         id="darkroom.undo_last",
         group="darkroom",
         fn=undo_last,
-        args=(DRY_RUN_ARG,),
+        args=(
+            ArgSpec("single", "bool", default=False,
+                    help="undo only the newest write, not the whole move it was part of"),
+            DRY_RUN_ARG,
+        ),
         writes=True,
         gated=False,
         summary="Revert the newest Scouter write in this job.",

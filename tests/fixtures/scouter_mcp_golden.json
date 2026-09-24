@@ -371,6 +371,55 @@
     "name": "darkroom_reset"
   },
   {
+    "description": "Edit the image open in darktable's darkroom by a plain-words phrase ('warmer', 'less contrast', 'lift the shadows', 'stronger colour grade'). Each move reads the current value, applies one step (scaled by 'slightly'/'much' or `amount`) and is visible live in darktable. All moves of one phrase are undone together by darkroom_undo_last. Refuses the whole phrase if any move is not reachable yet (not_pinned) or its current value cannot be read (value_unknown). Prefer this for conversational editing; use darkroom_adjust for an exact delta.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "description": "multiplier on the phrase's default step (1 = one notch); replaces words like 'slightly'",
+          "exclusiveMinimum": 0,
+          "maximum": 5,
+          "type": "number"
+        },
+        "commit": {
+          "default": true,
+          "description": "commit history to the XMP after the write",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "educative": {
+          "description": "explanation level for this call; omit to use the config's `educative` (default brief)",
+          "enum": [
+            "off",
+            "brief",
+            "full"
+          ],
+          "type": "string"
+        },
+        "phrase": {
+          "description": "what to change, in plain words, e.g. 'warmer', 'a touch less contrast', 'lift the shadows', 'cooler by 300k'; call vocab_list for every phrase",
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "trust_sidecar": {
+          "default": false,
+          "description": "skip the pre-read commit bounce",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "phrase"
+      ],
+      "type": "object"
+    },
+    "name": "darkroom_say"
+  },
+  {
     "description": "Set one module parameter to an absolute value on the image currently open in the darkroom. Creates one darktable history item the user can see and undo. Values are read back from the XMP sidecar after the commit.",
     "inputSchema": {
       "additionalProperties": false,
@@ -439,13 +488,18 @@
     "name": "darkroom_status"
   },
   {
-    "description": "Revert the newest Scouter write in this job by setting the parameter back to its previous value. This adds a new history item rather than deleting one, so the user's own undo still works.",
+    "description": "Revert the newest Scouter move (a darkroom_say phrase is one move) by setting each parameter back to its previous value. This adds new history items rather than deleting one, so the user's own undo still works.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
         "dry_run": {
           "default": false,
           "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "single": {
+          "default": false,
+          "description": "undo only the newest write, not the whole phrase it was part of",
           "type": "boolean"
         }
       },
