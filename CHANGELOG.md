@@ -142,3 +142,9 @@ vault; decision row 407).
   outcome a structured `error.fix` over every layer (it is a RESULT, not a
   raised error, so it previously had nowhere else to put one) -- MCP now
   surfaces the same actionable hint the CLI's exit code alone could not.
+- **Nit:** removed the dead `except ManifestCorrupt` around
+  `import_card`'s prior-manifest read -- `_plan()` already reads (and
+  would raise on) this same `import.json` earlier in the same run, so the
+  catch never fires on the normal path, and would have silently dropped
+  `source_roots` rather than surfacing a genuine corruption on the
+  vanishingly narrow race where it could.

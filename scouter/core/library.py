@@ -1169,10 +1169,14 @@ def import_card(
     job_cameras = sorted({f["camera"] for f in merged_preview if f.get("camera")})
     job_models = sorted({f["camera_model"] for f in merged_preview if f.get("camera_model")})
     job_makes = sorted({f["camera_make"] for f in merged_preview if f.get("camera_make")})
-    try:
-        prior_manifest = _read_manifest(scouter_d / "import.json")
-    except ManifestCorrupt:
-        prior_manifest = None
+    # Review round 1 nit: no try/except here -- `_plan()` already read (and
+    # would have raised `ManifestCorrupt` on) this same `import.json`
+    # earlier in this run, via `_recover_existing_files`. Catching it again
+    # here was dead code on the normal path, and on the vanishingly narrow
+    # race where the file changed under us in between, swallowing it would
+    # have silently dropped `source_roots` rather than surfacing the real
+    # problem.
+    prior_manifest = _read_manifest(scouter_d / "import.json")
     prior_roots = (prior_manifest or {}).get("source_roots") or (
         [prior_manifest["source_root"]] if (prior_manifest or {}).get("source_root") else []
     )
