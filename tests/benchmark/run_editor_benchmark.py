@@ -948,7 +948,11 @@ class BenchRun:
         paths: dict[str, str],
         job_frames: Callable[[dict], dict[str, str]] | None = None,
         log: Callable[[str], None] = print,
+        sessions: list[str] | None = None,
+        settle_poll_s: float = 0.5,
     ) -> None:
+        self.only_sessions = sessions
+        self.settle_poll_s = settle_poll_s
         self.doc = doc
         self.body = body
         self.run_id = run_id
@@ -1070,6 +1074,34 @@ class BenchRun:
         calls = self._run_steps(task["plan"])
         wall = round(time.monotonic() - t0, 3)
         after = self._snap(roles)
+        settle = None
+        if task.get("settle_s"):
+            # darktable writes a style application's sidecar LATER than the
+            # bridge call returns. The immediate snapshot is kept (it is what
+            # a read right after the call would see); scoring uses the state
+            # once the sidecars stop changing, and the lag is recorded.
+            immediate = after
+            settle_t0 = time.monotonic()
+            lag = None
+            stable_since = None
+            last_fp = {k: v.get("fingerprint") for k, v in after.items()}
+            while time.monotonic() - settle_t0 < float(task["settle_s"]):
+                time.sleep(self.settle_poll_s)
+                now = self._snap(roles)
+                fp = {k: v.get("fingerprint") for k, v in now.items()}
+                if fp != last_fp:
+                    lag = round(time.monotonic() - t0, 2)
+                    stable_since = time.monotonic()
+                    last_fp = fp
+                    after = now
+                elif stable_since is not None and time.monotonic() - stable_since >= 2.0:
+                    break
+            settle = {
+                "settle_s": task["settle_s"],
+                "last_change_s_after_call_start": lag,
+                "changed_after_call_returned": lag is not None,
+                "immediate": {k: compact_snapshot(v) for k, v in immediate.items()},
+            }
         ctx = {
             "before": before,
             "after": after,
@@ -1103,6 +1135,7 @@ class BenchRun:
             "outcome": outcome,
             "wall_s": wall,
             "snapshots": snaps,
+            "settle": settle,
         }
 
     def _session_blocked(self, task_result: dict) -> bool:
@@ -1121,6 +1154,8 @@ class BenchRun:
         by_id = tasks_by_id(self.doc)
         frames = self.doc["frames"][self.body]
         for session in self.doc["sessions"]:
+            if self.only_sessions and session["id"] not in self.only_sessions:
+                continue
             if session.get("only_if") and not frames.get(session["only_if"]):
                 self.sessions.append(
                     {"id": session["id"], "skipped": f"{session['only_if']} is off for {self.body}"}
@@ -1151,7 +1186,7 @@ class BenchRun:
                             self.ctx.update(self.job_frames(rec.get("envelope") or {}))
                 for tid in session.get("tasks") or []:
                     task = by_id[tid]
-                    self.log(f"[{self.body}]   {tid} {task['category']}: {task['sentence'][:60]}")
+                    self.log(f"[{self.body}]   {tid} {task['category']}")
                     result = self.run_task(task, blocked=blocked)
                     self.results.append(result)
                     srec["tasks"].append(tid)
@@ -1406,6 +1441,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--compare", nargs=2, type=Path, metavar=("OLD", "NEW"))
     p.add_argument("--validate", action="store_true", help="validate the task file and exit")
+    p.add_argument("--sessions", help="comma-separated session ids to run (default: all)")
     args = p.parse_args(argv)
 
     if args.compare:
@@ -1487,6 +1523,7 @@ def main(argv: list[str] | None = None) -> int:
             snapshot=snapshot_xmp,
             paths=ctx,
             job_frames=job_frames,
+            sessions=args.sessions.split(",") if args.sessions else None,
         )
         try:
             result = runner.run()

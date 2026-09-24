@@ -446,8 +446,15 @@ class FakeHost:
         return {"ok": True, "how": "fake"}
 
 
+def _fast(doc):
+    for t in doc["tasks"]:
+        if t.get("settle_s"):
+            t["settle_s"] = 0.05
+    return doc
+
+
 def test_fake_run_produces_a_valid_result(tmp_path, monkeypatch):
-    doc = rb.load_tasks()
+    doc = _fast(rb.load_tasks())
     state = {}
     fake = FakeMcp(state)
 
@@ -510,3 +517,60 @@ def test_blocked_launch_marks_session_tasks_blocked(monkeypatch):
 
 def test_main_refuses_without_live(capsys):
     assert rb.main([]) == 2
+
+
+def test_settle_scores_the_late_sidecar_and_records_the_lag(monkeypatch):
+    """darktable writes a style application's sidecar after the call returns:
+    the immediate snapshot is kept, scoring uses the settled one."""
+    doc = rb.load_tasks()
+    task = next(t for t in doc["tasks"] if t["id"] == "F4")
+    polls = {"n": 0}
+
+    def snapshot(path):
+        polls["n"] += 1
+        late = polls["n"] > 6  # 3 before + 3 immediate-after, then it lands
+        return _snap(end=4 if late else 0, fp="late" if late else "x")
+
+    class Mcp(FakeMcp):
+        def call_tool(self, name, args, timeout):
+            return {"ok": True, "outcome": "ok", "data": {"applied": 3}}
+
+    monkeypatch.setattr(rb, "git_info", lambda: {"sha": "0" * 40, "branch": "t", "dirty": False})
+    run = rb.BenchRun(
+        doc,
+        "olympus",
+        run_id="t",
+        label="fake",
+        mcp=Mcp({}),
+        host=FakeHost(),
+        snapshot=snapshot,
+        paths=_ctx("olympus"),
+        log=lambda *_: None,
+        settle_poll_s=0.01,
+    )
+    run.tools = ["style_apply_set"]
+    r = run.run_task(task)
+    assert r["settle"]["changed_after_call_returned"] is True
+    assert r["settle"]["immediate"]["job:1"]["history_end"] == 0
+    assert r["score"] == "pass"
+
+
+def test_session_filter_runs_only_named_sessions(monkeypatch):
+    doc = rb.load_tasks()
+    monkeypatch.setattr(rb, "git_info", lambda: {"sha": "0" * 40, "branch": "t", "dirty": False})
+    host = FakeHost()
+    run = rb.BenchRun(
+        doc,
+        "olympus",
+        run_id="t",
+        label="fake",
+        mcp=FakeMcp({}),
+        host=host,
+        snapshot=lambda p: _snap(),
+        paths=_ctx("olympus"),
+        log=lambda *_: None,
+        sessions=["A"],
+    )
+    result = run.run()
+    assert [t["id"] for t in result["tasks"]] == ["E1", "T4", "S2"]
+    assert len(host.launched) == 1

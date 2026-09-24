@@ -1657,7 +1657,8 @@
         "refusal": [
           "refused"
         ]
-      }
+      },
+      "settle_s": 15
     },
     {
       "id": "F5",
@@ -1739,7 +1740,8 @@
         "refusal": [
           "refused"
         ]
-      }
+      },
+      "settle_s": 15
     },
     {
       "id": "F6",
