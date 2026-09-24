@@ -5,6 +5,45 @@ branch, which fixes defects found by the E12 live evaluation against real
 darktable (`Knowledge/Scouter - E12 live evaluation 2026-09-24.md` in the
 vault; decision row 407).
 
+## Unreleased (fix/bounce-main-thread)
+
+- Row 418 (controller, 2026-09-24 21:22): darktable crashed 4 of 7 live
+  benchmark-run-2 launches, SIGSEGV, `thread pool-1`:
+  `_dt_ctl_switch_mode_to_by_view -> dt_view_manager_switch_by_view ->
+  dt_gui_process_events -> gdk_event_prepare -> NSAutoreleasePool drain`. Root
+  cause: the Lua plugin's `history.commit` view bounce called
+  `dt.gui.current_view(v)` from whatever OS thread darktable resumed the
+  `dt.control.dispatch` worker on after a `dt.control.sleep` yield -- not
+  reliably the main thread under load, and macOS's Cocoa/Quartz GDK backend
+  segfaults when that view-manager call runs off the main thread. The same
+  signature explains row 407/E12's B1 ("5 of 13 first-commit hangs") and the
+  E12 stalls.
+- Fix: every `dt.gui.current_view` SETTER call in `darktable_mcp.lua`
+  (`commit_view_bounce`'s both legs, `switch_to_darkroom`,
+  `return_to_darkroom`) now goes through a new `switch_view` /
+  `run_on_main_thread` marshaling layer: a Lua shortcut registered once at
+  load time (`dt.register_event(..., "shortcut", ...)`), fired via
+  `dt.gui.action("lua/darktable_mcp_main_thread_proxy", ...)` -- the same
+  thread-safe marshaling every slider/rating verb in this plugin already
+  relied on. A view switch whose proxy cannot be confirmed to have run
+  (missing `dt.register_event`/`dt.gui.action`, or the proxy not firing
+  within its 3s budget) is refused with an honest error instead of falling
+  back to the direct, unmarshaled call -- fail closed, never crash. Bounce
+  semantics (leave the darkroom, dwell, return) and its timing budgets are
+  unchanged.
+- Lua dispatcher unit suite (`tests/lua/test_dispatcher.lua`) gained
+  coverage: a view switch / commit bounce is executed via the main-thread
+  proxy (asserted against `dt.gui.action`'s call log), a GUI call whose proxy
+  never fires within budget is refused rather than run unmarshaled, and a
+  build with no `dt.register_event` at all registers nothing and refuses
+  every main-thread call up front.
+- README's "Honest limits" B1 entry updated: fixed pending host verification
+  (the host run to confirm this against a live darktable session has not run
+  yet).
+- No Python-side or bridge-protocol changes; `history.commit`'s
+  request/response shape is unchanged, so no MCP goldens needed
+  regenerating.
+
 ## Unreleased (phase-3-task10: host run)
 
 - Phase 3 task 10 host run on darktable 5.4.1 (details in

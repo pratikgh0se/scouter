@@ -855,6 +855,156 @@ local function wait_for_view(target, budget_ms)
   end
 end
 
+-- ---- Main-thread marshaling (row 418) --------------------------------------
+--
+-- Row 418 (controller, 2026-09-24 21:22): benchmark run 2 crashed darktable
+-- 4 of 7 launches, SIGSEGV, thread pool-1:
+--   _dt_ctl_switch_mode_to_by_view -> dt_view_manager_switch_by_view ->
+--   dt_gui_process_events -> gdk_event_prepare -> NSAutoreleasePool drain.
+-- The same signature explains run 1's "5 of 13 first-commit hangs" (B1) and
+-- the E12 stalls -- both are this same crash, just observed as a hang by
+-- whatever was waiting on the response when darktable died.
+--
+-- Root cause: `dt.gui.current_view(v)` (the SETTER) calls straight into
+-- darktable's view manager on whatever OS thread the Lua call runs on.
+-- `dt_ctl_switch_mode_to_by_view` pumps GTK events as part of the switch,
+-- and on macOS's Cocoa/Quartz backend that pump touches an NSAutoreleasePool
+-- that only the AppKit main thread may touch -- off it, it segfaults.
+--
+-- worker_loop runs inside a `dt.control.dispatch` coroutine. The note above
+-- `loaded_darkroom_image` (task 12, 2026-09-14) claimed "the worker
+-- coroutine runs on darktable's own main thread" -- that was true often
+-- enough to look reliable under a quiet single-request session, but row
+-- 418's benchmark load (many concurrent requests) proves it false:
+-- darktable's control job system can resume a dispatched coroutine on ANY
+-- pool worker after a `dt.control.sleep` yield, not necessarily the thread
+-- it started on -- "thread pool-1" in the crash is exactly that: a real
+-- background worker, not the Cocoa main thread. That 2026-09-14 claim is
+-- SUPERSEDED by this note; do not trust it for any GTK-touching call.
+--
+-- `dt.gui.action` does not crash under the same load -- every other verb in
+-- this file is a thin wrapper over it, host-proven repeatedly, including
+-- under tonight's benchmark run. darktable's own Lua binding for
+-- `dt.gui.action` marshals the actual widget/action call onto the main
+-- thread and blocks the calling coroutine until it completes; that is
+-- general darktable Lua behaviour (any Lua script driving `dt.gui.action`
+-- from a `dt.control.dispatch` worker relies on exactly this), not
+-- something specific to this plugin.
+--
+-- `dt.gui.current_view` has no such marshaling: it is a raw view-manager
+-- call, not an action path, and there is no direct `dt.gui.action`
+-- equivalent for "switch to view X" in darktable's Lua API -- the whole
+-- reason this plugin uses `current_view` in the first place (see "View
+-- switching is ASYNCHRONOUS" above) is that no action path was ever found
+-- for it.
+--
+-- Fix: register ONE Lua shortcut at load time. Any `dt.register_event(...,
+-- "shortcut", callback, name)` callback becomes addressable through
+-- `dt.gui.action("lua/<name>", ...)` once registered -- documented darktable
+-- convention for a lua-registered shortcut's action path. To run a closure
+-- on the main thread: stash it, then "press" that shortcut via
+-- `dt.gui.action` -- the same marshaling every other verb here already
+-- relies on carries the closure onto the main thread and runs it there.
+--
+-- NEEDS HOST VERIFICATION (the controller's host test, not tonight): the
+-- exact action path a lua-registered shortcut is addressable under
+-- (MAIN_THREAD_PROXY_ACTION_PATH below) has not been exercised on this Mac.
+-- If it is wrong, `run_on_main_thread` FAILS CLOSED -- see its own comment
+-- -- so the worst case of a wrong path is an honest refusal on every view
+-- switch, never a crash.
+local MAIN_THREAD_PROXY_NAME = "darktable_mcp_main_thread_proxy"
+local MAIN_THREAD_PROXY_ACTION_PATH = "lua/" .. MAIN_THREAD_PROXY_NAME
+local MAIN_THREAD_PROXY_BUDGET_MS = 3000
+
+-- Registered once, at module load time (itself on darktable's real startup
+-- thread, not the later dispatch worker). `main_thread_proxy_registered`
+-- captures whether that registration actually happened, so a build without
+-- `dt.register_event` (old darktable, or a stripped test double) is
+-- detected once, up front, rather than discovered mid-request.
+local main_thread_proxy_registered = false
+local main_thread_job = nil
+local main_thread_job_done = false
+local main_thread_job_ok = false
+local main_thread_job_result = nil
+
+-- Runs on whatever thread darktable invokes the shortcut from -- by design,
+-- that is the main thread, because it is the same marshaling dt.gui.action
+-- uses for every other verb in this file.
+local function main_thread_proxy_handler(_event, _shortcut_name)
+  local job = main_thread_job
+  main_thread_job = nil
+  if not job then return end
+  main_thread_job_ok, main_thread_job_result = pcall(job)
+  main_thread_job_done = true
+end
+
+if dt.register_event then
+  local registered = pcall(dt.register_event, "darktable_mcp", "shortcut",
+                            main_thread_proxy_handler, MAIN_THREAD_PROXY_NAME)
+  main_thread_proxy_registered = registered
+end
+
+-- Run `fn` on darktable's main thread. Returns (ok, result) on success or
+-- (false, reason) on any failure -- exactly like `pcall`, so every call site
+-- below reads the same as the direct `pcall(dt.gui.current_view, ...)` it
+-- replaces.
+--
+-- FAILS CLOSED: any missing piece of the marshaling machinery (no
+-- `dt.register_event` at load time, no `dt.gui.action` now, the proxy never
+-- firing within budget) returns `false, <honest reason>`. `fn` is NEVER
+-- called directly on the calling thread as a fallback -- that fallback is
+-- exactly row 418's crash. This is the "refuse rather than crash" honesty
+-- rule: a GUI-touching call that cannot be proven to have reached the main
+-- thread is refused, not attempted anyway.
+local function run_on_main_thread(fn, budget_ms)
+  budget_ms = budget_ms or MAIN_THREAD_PROXY_BUDGET_MS
+  if not main_thread_proxy_registered then
+    return false, "main-thread proxy unavailable: dt.register_event did not " ..
+      "register the shortcut at load time (darktable too old, or no GUI)"
+  end
+  if not (dt.gui and dt.gui.action) then
+    return false, "main-thread proxy unavailable: dt.gui.action is missing"
+  end
+  main_thread_job = fn
+  main_thread_job_done = false
+  main_thread_job_ok = false
+  main_thread_job_result = nil
+  local fired = pcall(dt.gui.action, MAIN_THREAD_PROXY_ACTION_PATH, 0, "", "activate", 1.0)
+  if not fired then
+    main_thread_job = nil
+    return false, "main-thread proxy unavailable: dt.gui.action(" ..
+      MAIN_THREAD_PROXY_ACTION_PATH .. ") failed to fire"
+  end
+  local waited = 0
+  while not main_thread_job_done do
+    if not (dt.control and dt.control.sleep) then
+      main_thread_job = nil
+      return false, "main-thread proxy: dt.control.sleep unavailable, cannot wait for it"
+    end
+    if waited >= budget_ms then
+      main_thread_job = nil
+      return false, string.format(
+        "main-thread proxy did not fire within %dms (dt.gui.action activated the " ..
+        "shortcut but its handler never ran -- refusing rather than calling the " ..
+        "GTK-touching code directly on this thread)", budget_ms)
+    end
+    dt.control.sleep(VIEW_SETTLE_POLL_MS)
+    waited = waited + VIEW_SETTLE_POLL_MS
+  end
+  if not main_thread_job_ok then return false, main_thread_job_result end
+  return true, main_thread_job_result
+end
+
+-- Switch to `view` (a dt.gui.views.* table) via the main-thread proxy.
+-- Every direct `dt.gui.current_view(v)` SETTER call in this file goes
+-- through this function now -- see the block comment above for why. The
+-- getter form (`current_view_name`'s bare `dt.gui.current_view()`) is left
+-- as a direct call: it is a read, host-proven never to crash, and is not
+-- the call the row 418 crash stack points at.
+local function switch_view(view)
+  return run_on_main_thread(function() return dt.gui.current_view(view) end)
+end
+
 -- Both ids must be present, coercible numbers, AND equal. A naive
 -- `tonumber(a) == tonumber(b)` is a trap: `tonumber(nil)` is nil, and Lua's
 -- `nil == nil` is true, so "neither side has an id" would read as a match.
@@ -1125,8 +1275,9 @@ local function switch_to_darkroom(image)
     if not (dt.gui.views and dt.gui.views.lighttable) then
       return false, "dt.gui.views.lighttable missing", 0
     end
-    if not pcall(dt.gui.current_view, dt.gui.views.lighttable) then
-      return false, "bounce to lighttable failed", 0
+    local ok_bounce, err_bounce = switch_view(dt.gui.views.lighttable)
+    if not ok_bounce then
+      return false, "bounce to lighttable failed: " .. tostring(err_bounce), 0
     end
     local left = wait_for_view("lighttable")
     if not left then
@@ -1134,7 +1285,7 @@ local function switch_to_darkroom(image)
     end
   end
 
-  local ok, err = pcall(dt.gui.current_view, view)
+  local ok, err = switch_view(view)
   if not ok then return false, "view switch failed: " .. tostring(err), 0 end
   local landed, waited = wait_for_view("darkroom", VIEW_ENTER_DARKROOM_BUDGET_MS)
   if not landed then
@@ -1159,7 +1310,7 @@ end
 -- `switch_to_darkroom`'s own note.
 local function return_to_darkroom(image)
   if image then return switch_to_darkroom(image) end
-  local ok, err = pcall(dt.gui.current_view, dt.gui.views.darkroom)
+  local ok, err = switch_view(dt.gui.views.darkroom)
   if not ok then return false, "view switch failed: " .. tostring(err), 0 end
   local landed, waited = wait_for_view("darkroom")
   if not landed then
@@ -1365,14 +1516,15 @@ local function commit_view_bounce(between)
   -- view straight afterwards (that returns the stale "darkroom"): yield until
   -- the lighttable really is current. Leaving the darkroom is also what makes
   -- darktable flush the pipe to the sidecar, so this wait is the commit.
-  local ok1 = pcall(dt.gui.current_view, dt.gui.views.lighttable)
+  local ok1, err1 = switch_view(dt.gui.views.lighttable)
   local left, left_waited = false, 0
   if ok1 then left, left_waited = wait_for_view("lighttable") end
   if not left then
     local stuck = current_view_name()
-    return {ok = false,
-            error = "could not leave the darkroom (view is " .. stuck .. ")",
-            view = stuck}
+    local reason = ok1
+      and ("could not leave the darkroom (view is " .. stuck .. ")")
+      or ("could not leave the darkroom: " .. tostring(err1))
+    return {ok = false, error = reason, view = stuck}
   end
   -- Dwell in the lighttable so the sidecar write finishes before the pipe is
   -- reloaded underneath it.
@@ -2275,6 +2427,13 @@ return {
   switch_to_darkroom = switch_to_darkroom,
   return_to_darkroom = return_to_darkroom,
   wait_for_view = wait_for_view,
+  -- Row 418 main-thread marshaling.
+  run_on_main_thread = run_on_main_thread,
+  switch_view = switch_view,
+  main_thread_proxy_action_path = MAIN_THREAD_PROXY_ACTION_PATH,
+  main_thread_proxy_name = MAIN_THREAD_PROXY_NAME,
+  main_thread_proxy_registered = main_thread_proxy_registered,
+  main_thread_proxy_budget_ms = MAIN_THREAD_PROXY_BUDGET_MS,
   wait_for_darkroom_image = wait_for_darkroom_image,
   view_settle = {
     poll_ms = VIEW_SETTLE_POLL_MS,

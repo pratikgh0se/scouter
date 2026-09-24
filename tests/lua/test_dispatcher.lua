@@ -66,9 +66,31 @@ local selection_log = {}
 local styles_created = {}
 local applied_styles = {}
 
+-- Row 418: registered "shortcut" callbacks, keyed by name -- mirrors real
+-- darktable's `dt.register_event(plugin, "shortcut", callback, name)`. The
+-- stub `dt.gui.action` below fires the matching callback synchronously for
+-- any `"lua/<name>"` path, which is exactly the marshaling
+-- `run_on_main_thread` depends on: a real host does this on the main
+-- thread, the stub does it inline (there is only one thread in the test
+-- process), and either way the closure runs and the proxy loop sees
+-- `main_thread_job_done` flip before its budget expires.
+local registered_shortcuts = {}
+-- Test-controlled kill switch: when true, the stub's `dt.gui.action` records
+-- the call (so callers can see it fired) but does NOT invoke the registered
+-- handler -- simulating a proxy that activated but whose handler never ran
+-- on the main thread within budget. Exercises run_on_main_thread's honest
+-- refusal path.
+local suppress_main_thread_proxy = false
+
 local stub_dt = {
   database = stub_db,
   print_log = function(msg) table.insert(dt_log, msg) end,
+  register_event = function(_plugin, event_type, callback, name)
+    if event_type == "shortcut" then
+      registered_shortcuts[name] = callback
+    end
+    return true
+  end,
   control = {
     dispatch = function(_) end,
     -- Real darktable's view switch is ASYNCHRONOUS (host-proven: see the
@@ -95,6 +117,15 @@ stub_dt.gui = {
   action = function(path, instance, element, effect, value)
     table.insert(action_log, {path = path, instance = instance, element = element,
                              effect = effect, value = value})
+    -- Row 418: a "lua/<name>" path is a registered shortcut's action path.
+    -- Fire its handler now, exactly as real darktable's dt.gui.action does
+    -- when it marshals the activation onto the main thread and runs it.
+    local shortcut_prefix = "lua/"
+    if path:sub(1, #shortcut_prefix) == shortcut_prefix and not suppress_main_thread_proxy then
+      local name = path:sub(#shortcut_prefix + 1)
+      local handler = registered_shortcuts[name]
+      if handler then handler("shortcut", name) end
+    end
     local r = action_returns[path]
     if r == nil then return value or 0 end
     if r == "nan" then return NAN end
@@ -2400,6 +2431,116 @@ do
   assertTrue(bounce.error:find("could not leave the darkroom") ~= nil,
     "and says so: " .. tostring(bounce.error))
   stub_dt.gui.current_view = original
+end
+
+-- Row 418: a view switch request is executed via the main-thread proxy, not
+-- as a direct dt.gui.current_view call on whatever thread is running.
+do
+  assertEq(plugin.main_thread_proxy_registered, true,
+    "the main-thread shortcut registered at load time")
+  assertTrue(registered_shortcuts[plugin.main_thread_proxy_name] ~= nil,
+    "the stub actually recorded the dt.register_event registration")
+
+  view_state.current = "darkroom"
+  local actions_before = #action_log
+  local ran_on_proxy = false
+  local ok, err = plugin.run_on_main_thread(function() ran_on_proxy = true; return "ok" end)
+  assertEq(ok, true, "run_on_main_thread succeeds when the proxy fires")
+  assertEq(err, "ok", "run_on_main_thread returns the job's own result")
+  assertEq(ran_on_proxy, true, "the job actually ran")
+  local fired = false
+  for i = actions_before + 1, #action_log do
+    if action_log[i].path == plugin.main_thread_proxy_action_path then fired = true end
+  end
+  assertTrue(fired, "run_on_main_thread activated the shortcut via dt.gui.action, "
+    .. "the same marshaling every other verb in this file relies on")
+
+  -- switch_view (what commit_view_bounce / switch_to_darkroom / return_to_
+  -- darkroom now all call instead of dt.gui.current_view directly) goes
+  -- through the same proxy and actually lands the switch.
+  local actions_before2 = #action_log
+  local ok2 = plugin.switch_view(views.lighttable)
+  assertEq(ok2, true, "switch_view succeeds via the proxy")
+  assertEq(view_state.current, "lighttable", "and the view really switched")
+  local fired2 = false
+  for i = actions_before2 + 1, #action_log do
+    if action_log[i].path == plugin.main_thread_proxy_action_path then fired2 = true end
+  end
+  assertTrue(fired2, "switch_view's dt.gui.current_view call was marshaled through the proxy")
+  view_state.current = "darkroom"
+
+  -- A full commit_view_bounce also goes through the proxy for both legs.
+  local actions_before3 = #action_log
+  stub_dt.gui.action_images = {images_by_id[101]}
+  local bounce = plugin.commit_view_bounce()
+  assertEq(bounce.ok, true, "commit_view_bounce still succeeds through the proxy")
+  local proxy_calls = 0
+  for i = actions_before3 + 1, #action_log do
+    if action_log[i].path == plugin.main_thread_proxy_action_path then
+      proxy_calls = proxy_calls + 1
+    end
+  end
+  assertTrue(proxy_calls >= 2,
+    "commit_view_bounce marshals BOTH legs (out to lighttable, back to darkroom) "
+    .. "through the main-thread proxy, got " .. proxy_calls)
+  stub_dt.gui.action_images = {}
+end
+
+-- Row 418: a GUI call attempted off the main thread is refused, not
+-- crashed. Simulate the proxy shortcut firing (dt.gui.action succeeds) but
+-- its handler never actually running within budget -- exactly what a wrong
+-- MAIN_THREAD_PROXY_ACTION_PATH or a genuinely stuck main thread would look
+-- like from here.
+do
+  suppress_main_thread_proxy = true
+  local job_ran = false
+  local ok, err = plugin.run_on_main_thread(function() job_ran = true end, 50)
+  assertEq(ok, false, "run_on_main_thread refuses rather than proceeding unmarshaled")
+  assertEq(job_ran, false,
+    "the GUI-touching closure NEVER runs directly on the calling thread -- "
+    .. "that fallback is exactly row 418's crash")
+  assertTrue(err ~= nil and err:find("did not fire") ~= nil,
+    "and says so honestly: " .. tostring(err))
+  suppress_main_thread_proxy = false
+
+  -- The same refusal propagates through switch_view / commit_view_bounce:
+  -- a bounce whose proxy is suppressed fails honestly instead of calling
+  -- dt.gui.current_view directly.
+  view_state.current = "darkroom"
+  suppress_main_thread_proxy = true
+  local bounce = plugin.commit_view_bounce()
+  assertEq(bounce.ok, false,
+    "commit_view_bounce refuses honestly when the main-thread proxy cannot be confirmed")
+  assertTrue(bounce.error ~= nil and bounce.error:find("could not leave the darkroom") ~= nil,
+    "and the failure is reported, not a crash or a silent unmarshaled switch: "
+    .. tostring(bounce.error))
+  assertEq(view_state.current, "darkroom",
+    "and the view was never actually switched off-thread")
+  suppress_main_thread_proxy = false
+end
+
+-- Row 418: with no dt.register_event at all (an old darktable, or a
+-- stripped-down build), the proxy never registers and every GUI-touching
+-- call refuses up front -- this is the "no API to detect the thread, so
+-- fail closed instead" branch `run_on_main_thread`'s own comment describes.
+do
+  local dt_no_register_event = {}
+  for k, v in pairs(stub_dt) do dt_no_register_event[k] = v end
+  dt_no_register_event.register_event = nil
+  package.loaded.darktable = dt_no_register_event
+  package.loaded.darktable_mcp = nil
+  local reloaded = require("darktable_mcp")
+  assertEq(reloaded.main_thread_proxy_registered, false,
+    "no dt.register_event => the proxy never registers")
+  local ok, err = reloaded.run_on_main_thread(function() return "unreachable" end)
+  assertEq(ok, false, "and every main-thread call refuses honestly instead of crashing")
+  assertTrue(err ~= nil and err:find("dt.register_event") ~= nil,
+    "naming the actual missing piece: " .. tostring(err))
+  -- Restore the real stub for every test below this one.
+  package.loaded.darktable = stub_dt
+  package.loaded.darktable_mcp = nil
+  require("darktable_mcp")
+  package.loaded["darktable_mcp"] = internals
 end
 
 -- image.lookup by absolute path.

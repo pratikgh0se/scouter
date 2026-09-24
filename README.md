@@ -235,9 +235,20 @@ These are load-bearing, not incidental — read them before scripting against Sc
   `commit_timeout` when the value genuinely is not there. The editor
   benchmark (row 408 B1) measured the FIRST `history commit`/view-bounce
   after a fresh darktable launch intermittently wedging the bridge outright
-  (5 of 13 sessions: no MCP answer in 30s, then `view.current` itself dead)
-  -- not isolated to a specific cause yet, and not fixed here; it needs a
-  darktable-launch-state isolation harness this branch does not have.
+  (5 of 13 sessions: no MCP answer in 30s, then `view.current` itself dead).
+  Row 418 (2026-09-24) found the actual mechanism: the view bounce's
+  `dt.gui.current_view` switch was running on whatever thread darktable's
+  `dt.control.dispatch` worker happened to be resumed on -- not reliably the
+  main thread -- and on macOS's Cocoa backend that segfaults the app outright
+  (SIGSEGV in `dt_ctl_switch_mode_to_by_view`), which is what B1's "wedged
+  bridge" actually was on the sessions that didn't crash cleanly enough to
+  notice. **Fixed pending host verification:** every view switch is now
+  marshaled onto the main thread through a registered Lua shortcut fired via
+  `dt.gui.action` (the same thread-safe path every slider/rating verb here
+  already used), and a switch that cannot be confirmed to have reached the
+  main thread is refused with an honest error instead of attempted anyway.
+  Covered by the Lua dispatcher unit suite; not yet re-run against a live
+  darktable session -- that host run is still pending.
 - **`darkroom status` reports slider *positions*, not values.** `dt.gui.action`'s
   read-back is a normalised 0..1 position in the slider's visible range, and
   phase 1 has no verified position→value table for every slider — use
