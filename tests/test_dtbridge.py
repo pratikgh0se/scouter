@@ -119,6 +119,30 @@ class ClassificationTest(unittest.TestCase):
         self.assertIn("wrong image loaded", str(ctx.exception))
         self.assertIn("darkroom shows 7, requested 12", str(ctx.exception))
 
+    def test_editor_benchmark_own_message_shape_still_classifies(self) -> None:
+        """Row 408, B3: the editor benchmark's `darkroom_open` (task F7) saw
+        the message wrapped in the MCP tool_runner's OWN "handler raised: "
+        prefix, ahead of Lua's own "<source>:<line>: " prefix --
+        `"handler raised: .../darktable_mcp.lua:1218: wrong image loaded: "
+        "asked for 3, darkroom shows 4 after 15000ms"`. Confirms the
+        unanchored `search()` (this item's E12 D4 fix) also covers this
+        exact shape, and that it happens for a frame from an EARLIER
+        session too -- R20 is broader than "same session"."""
+        dtbridge.set_bridge(
+            FakeBridge(
+                raises={
+                    "darkroom.open": BridgeError(
+                        "handler raised: /path/to/darktable_mcp.lua:1218: wrong image "
+                        "loaded: asked for 3, darkroom shows 4 after 15000ms"
+                    ),
+                }
+            )
+        )
+        with self.assertRaises(NotInDarkroom) as ctx:
+            dtbridge.call("darkroom.open", {"image_id": 3})
+        self.assertEqual(ctx.exception.code, "not_in_darkroom")
+        self.assertIn("double-click", ctx.exception.fix)
+
     def test_action_path_returns_the_pinned_path(self) -> None:
         self.assertEqual(dtbridge.action_path("exposure", "exposure"), "iop/exposure/exposure")
         self.assertEqual(dtbridge.action_path("sigmoid", "contrast"), "iop/sigmoid/contrast")
