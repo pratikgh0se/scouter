@@ -90,6 +90,11 @@ class AdjustTest(_MovesFixture):
         r = moves.adjust.__wrapped__("exposure", "exposure", 0.3, commit=False, job="job-test")
         self.assertTrue(r.noop)
         self.assertEqual(len(self.sets()), before, "a move at the limit must send nothing")
+        # Fix round 1, controller ruling: the no-op path still reports
+        # plan[0] with ms_precommit/ms_read/ms_set (spec §16).
+        self.assertEqual(r.plan[0]["ms_set"], 0)
+        self.assertIn("ms_precommit", r.plan[0])
+        self.assertIn("ms_read", r.plan[0])
 
     def test_kelvin_comes_from_the_measured_table(self) -> None:
         r = moves.adjust.__wrapped__("temperature", "temperature", 300.0, commit=False,
@@ -111,6 +116,38 @@ class AdjustTest(_MovesFixture):
                                      job="job-test")
         self.assertEqual((r.previous, r.source), (0.0, "neutral"))
         self.assertIn("+5% (0% → 5%)", r.summary)
+
+    def test_no_sidecar_refuses_value_unknown_not_neutral(self) -> None:
+        # Fix round 1, important: `_module_state`'s `enabled: None` is
+        # ambiguous between "no sidecar at all" and "a sidecar exists but
+        # this module has no active entry" -- only the second case may fall
+        # back to the declared neutral (spec §6.1 row 4). With the sidecar
+        # removed entirely, colorbalancergb.contrast (a neutral=0.0 row) must
+        # refuse value_unknown, not silently report (0.0, "neutral").
+        os.remove(str(self.raw) + ".xmp")
+        with self.assertRaises(ValueUnknown) as cm:
+            moves.adjust.__wrapped__("colorbalancergb", "contrast", 0.05, job="job-test")
+        self.assertIn("no sidecar", cm.exception.detail["reason"])
+        self.assertEqual(self.sets(), [])
+
+    def test_precommit_only_downgrades_commit_timeout(self) -> None:
+        # Controller ruling: only CommitTimeout is downgraded to a warning;
+        # every other ScouterError from the pre-commit bounce propagates.
+        from scouter.errors import WrongView
+
+        with mock.patch("scouter.core.darkroom._commit", side_effect=WrongView("not darkroom")):
+            with self.assertRaises(WrongView):
+                moves.adjust.__wrapped__("exposure", "exposure", 0.3, commit=False, job="job-test")
+        self.assertEqual(self.sets(), [])
+
+    def test_precommit_timeout_is_downgraded_to_a_warning(self) -> None:
+        from scouter.errors import CommitTimeout
+
+        with mock.patch("scouter.core.darkroom._commit",
+                        side_effect=CommitTimeout("no bounce")):
+            r = moves.adjust.__wrapped__("exposure", "exposure", 0.3, commit=False, job="job-test")
+        self.assertTrue(any("pre-commit did not confirm" in w for w in r.warnings))
+        self.assertEqual(len(self.sets()), 1)
 
     def test_absolute_only_refuses_value_unknown_before_any_write(self) -> None:
         with self.assertRaises(ValueUnknown) as cm:
@@ -179,6 +216,15 @@ class GetTest(_MovesFixture):
         r = moves.get.__wrapped__("sigmoid", "skew", job="job-test")
         self.assertIsNone(r.value)
         self.assertEqual(r.status, "absolute_only")
+
+    def test_get_with_no_sidecar_reports_null_not_neutral(self) -> None:
+        # Fix round 1, important: same ambiguity as the adjust-side test --
+        # `get` on a neutral=0.0 row with no sidecar at all must not report
+        # `0.0`; `get` never raises (it reports value: null with a reason).
+        os.remove(str(self.raw) + ".xmp")
+        r = moves.get.__wrapped__("colorbalancergb", "contrast", job="job-test")
+        self.assertIsNone(r.value)
+        self.assertIn("no sidecar", " ".join(r.warnings))
 
 
 class CliNegativeDeltaTest(unittest.TestCase):

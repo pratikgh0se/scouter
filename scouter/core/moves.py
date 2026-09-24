@@ -12,7 +12,7 @@ import time
 
 from scouter import metrics
 from scouter.core import darkroom, dtbridge, explain, history, vocab, wb, xmp
-from scouter.errors import NotPinned, ScouterError, UsageError, ValueUnknown
+from scouter.errors import CommitTimeout, NotPinned, ScouterError, UsageError, ValueUnknown
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
 from scouter.types import AdjustResult, ResolvedImage, ValueResult
@@ -106,6 +106,17 @@ def read_current(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int,
         job, resolved.image_id, resolved.path, s.module, s.param, instance)
     if pending and before.get("value") is not None:
         return float(before["value"]), "journal", None
+    # Fix round 1, important: `_module_state`'s `enabled: None` is ambiguous --
+    # it means BOTH "no sidecar at all" and "a sidecar exists, but this module
+    # has no active entry in it" (darkroom.py's `_module_state`/`_read_sidecar_
+    # parsed`, including an OSError read). Spec §6.1 row 4 only ever allows the
+    # neutral fallback for the second case; `history_end` is `None` only when
+    # there is no sidecar to parse (or a torn read never settled), so checking
+    # it here is what tells the two apart -- the wb_table branch above already
+    # refuses outright when there is no sidecar, and this branch must agree
+    # rather than silently guessing a neutral value nobody has confirmed yet.
+    if raw.get("history_end") is None:
+        return None, "xmp", "no sidecar yet: commit history first"
     if raw.get("value") is not None:
         return float(raw["value"]), "xmp", None
     if raw.get("enabled") is None and s.neutral is not None:
@@ -164,12 +175,17 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
         if rng and not (rng[0] <= target <= rng[1]):
             target, clamped = min(max(target, rng[0]), rng[1]), True
     if clamped and abs(target - previous) < 1e-6:
+        # Fix round 1, controller ruling: the no-op path still reports
+        # plan[0] with ms_precommit/ms_read/ms_set (spec §16) -- ms_set is
+        # always 0 here, since no set_fn call was ever made.
         return AdjustResult(
             image_id=resolved.image_id, path=resolved.path, module=module, param=param,
             instance=instance, unit=s.unit, delta=delta, previous=previous, target=target,
             applied=previous, clamped=True, source=source, committed=False, noop=True,
             summary=f"{s.ui}: already at the limit ({_fmt(s, previous)}); nothing sent",
             warnings=warnings,
+            plan=[{"action": "darkroom.adjust", "ms_precommit": ms_precommit,
+                   "ms_read": int((time.monotonic() - t0) * 1000), "ms_set": 0}],
         )
     set_fn = getattr(darkroom.set_param, "__wrapped__", darkroom.set_param)
     t1 = time.monotonic()
@@ -192,10 +208,18 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
 
 
 def _precommit(job: str, image_id: int) -> str | None:
-    """One expect-no-change bounce (P3-R3). A timeout is a warning, not a failure."""
+    """One expect-no-change bounce (P3-R3). A timeout is a warning, not a failure.
+
+    Controller ruling, fix round 1: ONLY `CommitTimeout` (spec §6.2 step 4) is
+    downgraded to a warning here -- darktable simply not settling within one
+    bounce is an expected, honest outcome, not a reason to refuse the whole
+    move. Every other `ScouterError` (a wrong view, a dead bridge, a locked
+    library, ...) is a real failure and propagates untouched: swallowing it
+    here would silently continue a move whose pre-flight already failed.
+    """
     try:
         darkroom._commit(job, image_id, strategy="auto", attempts=1, expect_change=False)
-    except ScouterError as e:
+    except CommitTimeout as e:
         return f"pre-commit did not confirm ({e.code}); the value read may predate darktable's live state"
     return None
 
