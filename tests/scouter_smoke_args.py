@@ -116,6 +116,8 @@ SMOKE_ARGS: dict[str, dict] = {
     "wb.calibrate": {"image": SMOKE_RAW, "k_from": 3000, "k_to": 3100},
     "vocab.list": {},
     "vocab.resolve": {"phrase": "warmer"},
+    "preset.save": {"name": "smoke", "dry_run": True},
+    "preset.list": {},
 }
 
 

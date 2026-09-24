@@ -252,6 +252,12 @@ class ConfirmGateTest(unittest.TestCase):
         # fires before any EXIF/camera lookup, so `self.raw`'s fake bytes
         # (not a readable TIFF header) never get that far without confirm.
         "wb.calibrate": {"image": None, "k_from": 3000, "k_to": 3100},
+        # preset.save checks `style._existing_styles()` (== list_styles, which
+        # this fixture's `RefusingBridge` answers with "hero") BEFORE
+        # resolving the darkroom image or touching it in any way -- so no
+        # `darkroom.current`/`view.current` fixture wiring is needed here,
+        # unlike every other gated verb above.
+        "preset.save": {"name": "hero"},
     }
     # `style.apply` is deliberately NOT here (final review, should-fix 7): its
     # only would-be gate was mode=overwrite, which darktable cannot do at all,

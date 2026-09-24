@@ -928,6 +928,64 @@
     "name": "outliers_list"
   },
   {
+    "description": "List presets: darktable's styles merged with Scouter's saved-preset index, flagging any deleted in darktable.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "preset_list"
+  },
+  {
+    "description": "Save the darkroom image's edits from this session as a named darktable style (a preset/filter). Modules default to the ones changed in this session; pass modules to choose. Needs confirm=true only to replace an existing preset of that name.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "default": false,
+          "description": "required only to replace an existing preset of this name",
+          "type": "boolean"
+        },
+        "description": {
+          "default": "",
+          "description": "style description",
+          "type": "string"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "educative": {
+          "description": "explanation level for this call; omit to use the config's `educative` (default brief)",
+          "enum": [
+            "off",
+            "brief",
+            "full"
+          ],
+          "type": "string"
+        },
+        "modules": {
+          "description": "modules to keep (default: this session's edits)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "preset (darktable style) name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "preset_save"
+  },
+  {
     "description": "Numeric distance between two images' current renders (deltas are b minus a).",
     "inputSchema": {
       "additionalProperties": false,

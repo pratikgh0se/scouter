@@ -75,6 +75,7 @@ _CORE_MODULES: tuple[str, ...] = (
     "scouter.core.backup",
     "scouter.core.vocab",
     "scouter.core.phrases",
+    "scouter.core.presets",
     "scouter.metrics",
 )
 

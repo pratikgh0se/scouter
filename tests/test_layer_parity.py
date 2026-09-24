@@ -50,6 +50,8 @@ EXPECTED_VERBS = {
     "wb.calibrate",
     "vocab.list",
     "vocab.resolve",
+    "preset.save",
+    "preset.list",
 }
 
 

@@ -55,6 +55,10 @@ EDUCATIVE = {
     "description": "explanation level for this call; omit to use the config's `educative` "
     "(default brief)",
 }
+PRESET_NAME = {
+    "type": "string",
+    "description": "preset (darktable style) name",
+}
 
 
 def _schema(properties: dict, required: list[str]) -> dict:
@@ -932,6 +936,29 @@ TOOL_SPECS: list[dict] = [
              "dry_run": DRY_RUN},
             ["phrase"],
         ),
+    },
+    {
+        "name": "preset_save",
+        "description": "Save the darkroom image's edits from this session as a named darktable "
+        "style (a preset/filter). Modules default to the ones changed in this session; pass "
+        "modules to choose. Needs confirm=true only to replace an existing preset of that name.",
+        "inputSchema": _schema(
+            {"name": PRESET_NAME,
+             "modules": {"type": "array", "items": {"type": "string"},
+                         "description": "modules to keep (default: this session's edits)"},
+             "description": {"type": "string", "default": "", "description": "style description"},
+             "educative": EDUCATIVE,
+             "confirm": {"type": "boolean", "default": False,
+                         "description": "required only to replace an existing preset of this name"},
+             "dry_run": DRY_RUN},
+            ["name"],
+        ),
+    },
+    {
+        "name": "preset_list",
+        "description": "List presets: darktable's styles merged with Scouter's saved-preset "
+        "index, flagging any deleted in darktable.",
+        "inputSchema": _schema({}, []),
     },
 ]
 
