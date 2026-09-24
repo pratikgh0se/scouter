@@ -38,9 +38,11 @@ def test_every_plan_placeholder_resolves_for_both_bodies():
         ctx = _ctx(body)
         for t in doc["tasks"]:
             rb.render(t["sentence"], ctx)
-            rb.render(t["plan"], ctx)
-            rb.render(t.get("context") or [], ctx)
-            rb.render(t["assertions"], ctx)
+            for version in rb.PLAN_VERSIONS:
+                e = rb.effective_task(t, version)
+                rb.render(e["plan"], ctx)
+                rb.render(e.get("context") or [], ctx)
+                rb.render(e["assertions"], ctx)
         for s in doc["sessions"]:
             if s["id"] == "calib" and not doc["frames"][body]["wb_calibrate"]:
                 continue
@@ -58,7 +60,7 @@ def test_frames_named_exist_in_editing_trial_when_present():
     if not rb.EDITING_TRIAL.is_dir():
         pytest.skip("EditingTrial not on this machine")
     for body, spec in doc["frames"].items():
-        for role in ("dark", "bright", "hero"):
+        for role in ("dark", "bright", "blown", "hero"):
             assert (rb.EDITING_TRIAL / spec[role]).is_file(), (body, role)
 
 
@@ -361,7 +363,7 @@ def _ctx(body: str) -> dict:
         "preset": f"scouter-bench-{body}-x",
         "out_dir": "/fake/out",
     }
-    for role in ("dark", "bright", "hero", "calib"):
+    for role in ("dark", "bright", "blown", "hero", "calib"):
         name = spec.get(role) or spec["hero"]
         ctx[f"frame:{role}"] = f"/fake/{body}/{Path(name).name}"
         ctx[f"framename:{role}"] = Path(name).name
@@ -482,7 +484,7 @@ def test_fake_run_produces_a_valid_result(tmp_path, monkeypatch):
     assert by_id["C2"]["outcome"] == "honest_refusal"
     assert by_id["U1"]["outcome"] == "correct_refusal"
     assert by_id["F1"]["score"] == "fail"  # dry_run undo is never a pass
-    assert run.host.quits == 4 and len(run.host.launched) == 4  # calib, A, B, C
+    assert run.host.quits == 5 and len(run.host.launched) == 5  # calib, A, B, B2, C
     j, m = rb.write_results(result, tmp_path, "t")
     assert json.loads(j.read_text())["body"] == "olympus"
     assert "| E1 |" in m.read_text()
@@ -511,7 +513,7 @@ def test_blocked_launch_marks_session_tasks_blocked(monkeypatch):
     )
     result = run.run()
     assert {r["outcome"] for r in result["tasks"]} == {"blocked"}
-    assert run.host.quits == 3  # sony has no calib session; quit is always called
+    assert run.host.quits == 4  # sony has no calib session; quit is always called
     assert rb.validate_result(result) == []
 
 
@@ -605,3 +607,144 @@ def test_merge_replaces_by_id_and_keeps_the_replaced(monkeypatch):
     assert merged["tasks"][0]["from_run"] == "b" and merged["tasks"][1]["from_run"] == "a"
     assert merged["summary"]["counts"]["pass"] == 1 and len(merged["replaced"]) == 1
     assert rb.validate_result(merged) == []
+
+
+# -- revision 2: plan v2 and the E2 frame ------------------------------------
+
+
+def test_revision_2_changes_only_e2_and_adds_plan_v2_to_every_task():
+    doc = rb.load_tasks()
+    assert doc["revision"] == 2 and doc["revisions"][-1]["invalidates"] == ["E2"]
+    assert all("plan_v2" in t for t in doc["tasks"])
+    revised = [t["id"] for t in doc["tasks"] if t.get("revised_in")]
+    assert revised == ["E2"]
+    e2 = rb.tasks_by_id(doc)["E2"]
+    assert e2["frames"] == ["blown"] and "{frame:bright}" not in json.dumps(e2)
+    # F7 still opens the bright frame, imported in an earlier session (B).
+    order = [s["id"] for s in doc["sessions"]]
+    assert order.index("B") < order.index("C") and "F7" in doc["sessions"][-1]["tasks"]
+    assert next(s for s in doc["sessions"] if s["id"] == "B")["role"] == "bright"
+
+
+def test_plan_v1_is_the_task_unchanged():
+    doc = rb.load_tasks()
+    for t in doc["tasks"]:
+        e = rb.effective_task(t, "v1")
+        assert e["plan"] == t["plan"] and e["assertions"] == t["assertions"]
+        assert e["plan_used"] == "v1"
+
+
+def test_plan_v2_remaps_steps_and_never_changes_thresholds():
+    doc = rb.load_tasks()
+    by_id = rb.tasks_by_id(doc)
+    e1 = rb.effective_task(by_id["E1"], "v2")
+    assert [s["tool"] for s in e1["plan"]] == ["darkroom_say"]
+    assert e1["assertions"]["set_ok"]["step"] == 0
+    assert e1["assertions"]["delta"] == by_id["E1"]["assertions"]["delta"]
+    w1 = rb.effective_task(by_id["W1"], "v2")
+    assert w1["assertions"]["kelvin"]["step"] == 1
+    assert w1["assertions"]["kelvin"]["tol"] == 150
+    assert w1["assertions"]["kelvin"]["value"] == {
+        "$env": {"step": 0, "path": "data.moves.0.target"}
+    }
+    c4 = rb.effective_task(by_id["C4"], "v2")
+    assert c4["plan"] == by_id["C4"]["plan"] and c4["plan_used"] == "v2=v1"
+    f1 = rb.effective_task(by_id["F1"], "v2")
+    assert f1["context"][0]["tool"] == "darkroom_say"
+    for t in doc["tasks"]:
+        e = rb.effective_task(t, "v2")
+        assert e["scoring"] == t["scoring"] and e["budget_s"] == t["budget_s"]
+        for aid, a in t["assertions"].items():
+            for k in ("tol", "delta", "sign", "min_rel", "frame", "frames", "min_frames"):
+                assert e["assertions"][aid].get(k) == a.get(k), (t["id"], aid, k)
+
+
+def test_validator_refuses_a_threshold_override():
+    doc = rb.load_tasks()
+    t = rb.tasks_by_id(doc)["W1"]
+    t["plan_v2"]["assertion_overrides"]["kelvin"]["tol"] = 9999
+    assert any("may not override" in e for e in rb.validate_tasks(doc))
+
+
+def test_validator_wants_every_asserted_step_mapped():
+    doc = rb.load_tasks()
+    t = rb.tasks_by_id(doc)["E1"]
+    t["plan_v2"]["step_map"] = {}
+    assert any("no plan v2 equivalent" in e for e in rb.validate_tasks(doc))
+
+
+def test_env_expected_and_set_eq():
+    ctx = {
+        "steps": [
+            {"envelope": {"data": {"moves": [{"target": 5600.0}]}}},
+            {"envelope": {"data": {"kelvin": 5550.0, "modules": ["b", "a"]}}},
+        ]
+    }
+    ok = rb.evaluate(
+        {
+            "type": "step_field",
+            "step": 1,
+            "path": "data.kelvin",
+            "op": "abs_within",
+            "value": {"$env": {"step": 0, "path": "data.moves.0.target"}},
+            "tol": 150,
+        },
+        ctx,
+    )
+    assert ok["ok"] and ok["expected"] == 5600.0
+    assert rb.evaluate(
+        {
+            "type": "step_field",
+            "step": 1,
+            "path": "data.modules",
+            "op": "set_eq",
+            "value": ["a", "b"],
+        },
+        ctx,
+    )["ok"]
+    assert not rb.evaluate(
+        {"type": "step_field", "step": 1, "path": "data.modules", "op": "set_eq", "value": ["a"]},
+        ctx,
+    )["ok"]
+
+
+def test_fake_v2_run_is_valid_and_records_the_plan(monkeypatch):
+    doc = _fast(rb.load_tasks())
+    monkeypatch.setattr(rb, "git_info", lambda: {"sha": "0" * 40, "branch": "t", "dirty": False})
+    result = rb.BenchRun(
+        doc,
+        "olympus",
+        run_id="t",
+        label="fake",
+        mcp=FakeMcp({}),
+        host=FakeHost(),
+        snapshot=lambda p: _snap(),
+        paths=_ctx("olympus"),
+        log=lambda *_: None,
+        plan_version="v2",
+    ).run()
+    assert rb.validate_result(result) == []
+    assert result["plan_version"] == "v2" and result["tasks_revision"] == 2
+    by_id = {r["id"]: r for r in result["tasks"]}
+    assert by_id["E1"]["plan_used"] == "v2" and by_id["E1"]["plan"][0]["tool"] == "darkroom_say"
+    assert by_id["S2"]["plan_used"] == "v2=v1"
+
+
+def test_compare_marks_revised_tasks_not_comparable(monkeypatch):
+    monkeypatch.setattr(rb, "git_info", lambda: {"sha": "0" * 40, "branch": "t", "dirty": False})
+    doc = _fast(rb.load_tasks())
+    new = rb.BenchRun(
+        doc,
+        "sony",
+        run_id="n",
+        label="new",
+        mcp=FakeMcp({}),
+        host=FakeHost(),
+        snapshot=lambda p: _snap(),
+        paths=_ctx("sony"),
+        log=lambda *_: None,
+    ).run()
+    old = dict(new, label="old", tasks_revision=1)
+    out = rb.compare(old, new)
+    assert "| E2 |" in out and "not comparable (task revised)" in out
+    assert "| category | tasks | before | after |" in out

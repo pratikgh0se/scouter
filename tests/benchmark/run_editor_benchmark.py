@@ -111,6 +111,13 @@ SNAPSHOT_OPS = (
     "denoiseprofile",
 )
 DEFAULT_CALL_TIMEOUT_S = 60.0
+PLAN_VERSIONS = ("v1", "v2")
+#: What a plan_v2 `assertion_overrides` entry may change: only WHERE a fact is
+#: read (which call, which envelope field, where an expected value comes from),
+#: never a threshold, tolerance, delta, frame or scoring group.
+OVERRIDE_KEYS = ("step", "steps", "before_step", "after_step", "path", "value", "op")
+OVERRIDE_OPS = ("set_eq",)
+_STEP_KEYS = ("step", "before_step", "after_step")
 
 # ---------------------------------------------------------------------------
 # The task file
@@ -181,7 +188,109 @@ def validate_tasks(doc: dict) -> list[str]:
                 errors.append(f"{tid}: a plan step has no tool")
     if unreachable != 2:
         errors.append(f"expected exactly 2 unreachable tasks, found {unreachable}")
+    for t in tasks:
+        errors.extend(_validate_plan_v2(t))
     return errors
+
+
+def _assertion_steps(a: dict) -> list[int]:
+    out = [a[k] for k in _STEP_KEYS if k in a]
+    out.extend(a.get("steps") or [])
+    v = a.get("value")
+    if isinstance(v, dict) and "$arg" in v:
+        out.append(v["$arg"]["step"])
+    return out
+
+
+def _validate_plan_v2(t: dict) -> list[str]:
+    """plan_v2 is optional. It may only re-address assertions (see OVERRIDE_KEYS)."""
+    tid, v2 = t.get("id"), t.get("plan_v2")
+    if v2 is None:
+        return []
+    errors: list[str] = []
+    if not v2.get("why"):
+        errors.append(f"{tid}: plan_v2 must say why")
+    if v2.get("same_as_v1"):
+        if any(k in v2 for k in ("steps", "context", "step_map", "assertion_overrides")):
+            errors.append(f"{tid}: plan_v2 same_as_v1 cannot also carry steps")
+        return errors
+    steps = v2.get("steps")
+    if not isinstance(steps, list):
+        return errors + [f"{tid}: plan_v2 needs steps (or same_as_v1)"]
+    if t.get("category") == "unreachable" and steps:
+        errors.append(f"{tid}: an unreachable task's plan_v2 must be empty")
+    for step in steps + list(v2.get("context") or []):
+        if not step.get("tool"):
+            errors.append(f"{tid}: a plan_v2 step has no tool")
+    smap = v2.get("step_map")
+    v1_len = len(t.get("plan") or [])
+    if smap is not None:
+        for k, v in smap.items():
+            if not (k.isdigit() and int(k) < v1_len):
+                errors.append(f"{tid}: plan_v2.step_map key {k!r} is not a plan v1 step")
+            if not (isinstance(v, int) and 0 <= v < len(steps)):
+                errors.append(f"{tid}: plan_v2.step_map value {v!r} is not a plan v2 step")
+    overrides = v2.get("assertion_overrides") or {}
+    for aid, o in overrides.items():
+        if aid not in (t.get("assertions") or {}):
+            errors.append(f"{tid}: plan_v2 overrides unknown assertion {aid!r}")
+        bad = sorted(set(o) - set(OVERRIDE_KEYS))
+        if bad:
+            errors.append(f"{tid}.{aid}: plan_v2 may not override {bad} (thresholds are fixed)")
+        if "op" in o and o["op"] not in OVERRIDE_OPS:
+            errors.append(f"{tid}.{aid}: plan_v2 op override must be one of {OVERRIDE_OPS}")
+    for aid, a in (t.get("assertions") or {}).items():
+        if aid in overrides and any(k in overrides[aid] for k in (*_STEP_KEYS, "steps")):
+            continue
+        for s in _assertion_steps(a):
+            if isinstance(a.get("value"), dict) and "value" in overrides.get(aid, {}):
+                if s == (a["value"].get("$arg") or {}).get("step"):
+                    continue
+            mapped = s if smap is None else smap.get(str(s))
+            if mapped is None or mapped >= len(steps):
+                errors.append(
+                    f"{tid}.{aid}: plan v1 step {s} has no plan v2 equivalent (add it to step_map)"
+                )
+    return errors
+
+
+def _remap(a: dict, smap: dict | None) -> dict:
+    if not smap:
+        return dict(a)
+    out = dict(a)
+    for k in _STEP_KEYS:
+        if k in out:
+            out[k] = smap.get(str(out[k]), out[k])
+    if "steps" in out:
+        out["steps"] = [smap.get(str(s), s) for s in out["steps"]]
+    v = out.get("value")
+    if isinstance(v, dict) and "$arg" in v:
+        arg = dict(v["$arg"])
+        arg["step"] = smap.get(str(arg["step"]), arg["step"])
+        out["value"] = {"$arg": arg}
+    return out
+
+
+def effective_task(task: dict, plan_version: str) -> dict:
+    """The task as run under `plan_version`: plan v1 is the task itself; plan v2
+    swaps in plan_v2's steps/context and re-addresses the assertions (step_map,
+    assertion_overrides). Assertion thresholds and scoring are never touched."""
+    if plan_version not in PLAN_VERSIONS:
+        raise ValueError(f"unknown plan version {plan_version!r}")
+    v2 = task.get("plan_v2")
+    if plan_version == "v1" or not v2 or v2.get("same_as_v1"):
+        used = "v1" if plan_version == "v1" else "v2=v1"
+        return dict(task) | {"plan_used": used}
+    smap = v2.get("step_map")
+    overrides = v2.get("assertion_overrides") or {}
+    assertions = {
+        aid: _remap(a, smap) | (overrides.get(aid) or {})
+        for aid, a in (task.get("assertions") or {}).items()
+    }
+    out = dict(task) | {"plan": v2["steps"], "assertions": assertions, "plan_used": "v2"}
+    if "context" in v2:
+        out["context"] = v2["context"]
+    return out
 
 
 def tasks_by_id(doc: dict) -> dict[str, dict]:
@@ -394,6 +503,9 @@ def _env(ctx: dict, step: int) -> dict | None:
 
 
 def _expected(value: Any, ctx: dict) -> Any:
+    if isinstance(value, dict) and "$env" in value:
+        spec = value["$env"]
+        return dig(_env(ctx, spec["step"]), spec["path"])
     if isinstance(value, dict) and "$arg" in value:
         spec = value["$arg"]
         steps = ctx.get("steps") or []
@@ -445,6 +557,8 @@ def evaluate(a: dict, ctx: dict) -> dict:
                 ok = got is not None
             elif op == "is_null":
                 ok = got is None
+            elif op == "set_eq":
+                ok = isinstance(got, list) and sorted(map(str, got)) == sorted(map(str, want))
             else:
                 raise ValueError(f"unknown step_field op {op!r}")
             return {"ok": bool(ok), "measured": got, "expected": want}
@@ -950,7 +1064,11 @@ class BenchRun:
         log: Callable[[str], None] = print,
         sessions: list[str] | None = None,
         settle_poll_s: float = 0.5,
+        plan_version: str = "v1",
     ) -> None:
+        if plan_version not in PLAN_VERSIONS:
+            raise ValueError(f"unknown plan version {plan_version!r}")
+        self.plan_version = plan_version
         self.only_sessions = sessions
         self.settle_poll_s = settle_poll_s
         self.doc = doc
@@ -1019,6 +1137,7 @@ class BenchRun:
     # -- tasks ---------------------------------------------------------------
 
     def run_task(self, task: dict, *, blocked: bool = False) -> dict:
+        task = effective_task(task, self.plan_version)
         roles = list(task["frames"])
         try:
             sentence = render(task["sentence"], self.ctx)
@@ -1033,6 +1152,8 @@ class BenchRun:
                 for r in roles
             },
             "plan": [{"tool": s["tool"], "args": s.get("args") or {}} for s in task["plan"]],
+            "plan_used": task["plan_used"],
+            "revised_in": task.get("revised_in"),
             "agent_note": task.get("agent_note"),
             "agent_response": task.get("agent_response"),
             "budget_s": task["budget_s"],
@@ -1211,6 +1332,8 @@ class BenchRun:
             "run_id": self.run_id,
             "label": self.label,
             "body": self.body,
+            "plan_version": self.plan_version,
+            "tasks_revision": self.doc.get("revision", 1),
             "camera": frames.get("camera"),
             "git": git_info(),
             "started": started,
@@ -1274,6 +1397,8 @@ def markdown(doc: dict) -> str:
         f"- run `{doc['run_id']}`, git `{doc['git']['sha'][:10]}` on `{doc['git']['branch']}`"
         f"{' (dirty)' if doc['git'].get('dirty') else ''}, {doc['started']} to {doc['finished']}",
         f"- camera: {doc.get('camera')}",
+        f"- agent plan {doc.get('plan_version', 'v1')},"
+        f" task file revision {doc.get('tasks_revision', 1)}",
         f"- **{s['counts']['pass']} pass / {s['counts']['partial']} partial / {s['counts']['fail']} fail** of {s['tasks']} "
         f"({s['points']:.1f} points); median task {s['median_task_s']}s, median darkroom_set {s['median_darkroom_set_s']}s",
         f"- outcomes: {', '.join(f'{k} {v}' for k, v in sorted(s['outcomes'].items()))}",
@@ -1325,22 +1450,46 @@ def markdown(doc: dict) -> str:
 
 
 def compare(old: dict, new: dict) -> str:
-    """Per-task delta between two result files (the phase 3 re-run)."""
+    """Per-task and per-category delta between two result files (the phase 3
+    re-run). A task revised after the old file's task revision is marked not
+    comparable and left out of the comparable points."""
     o = {r["id"]: r for r in old["tasks"]}
+    old_rev = old.get("tasks_revision", 1)
+    pts = {"pass": 1.0, "partial": 0.5, "fail": 0.0}
     lines = [
         f"# Benchmark delta {old['body']}: {old['label']} -> {new['label']}",
         "",
-        f"points {old['summary']['points']:.1f} -> {new['summary']['points']:.1f}",
+        f"points {old['summary']['points']:.1f} -> {new['summary']['points']:.1f}"
+        f" (plan {old.get('plan_version', 'v1')} rev {old_rev} -> plan"
+        f" {new.get('plan_version', 'v1')} rev {new.get('tasks_revision', 1)})",
         "",
-        "| id | category | before | after |",
-        "|---|---|---|---|",
+        "| id | category | before | after | delta |",
+        "|---|---|---|---|---|",
     ]
+    cats: dict[str, list[float]] = {}
+    not_comparable = []
     for r in new["tasks"]:
         before = o.get(r["id"])
         b = f"{before['score']} ({before['outcome']})" if before else "-"
         a = f"{r['score']} ({r['outcome']})"
-        mark = "" if before and before["score"] == r["score"] else " **changed**"
-        lines.append(f"| {r['id']} | {r['category']} | {b} | {a}{mark} |")
+        if (r.get("revised_in") or 0) > old_rev:
+            not_comparable.append(r["id"])
+            lines.append(f"| {r['id']} | {r['category']} | {b} | {a} | not comparable (revised) |")
+            continue
+        d = pts[r["score"]] - (pts[before["score"]] if before else 0.0)
+        c = cats.setdefault(r["category"], [0.0, 0.0, 0])
+        c[0] += pts[before["score"]] if before else 0.0
+        c[1] += pts[r["score"]]
+        c[2] += 1
+        mark = "" if not d else f" **{d:+.1f}**"
+        lines.append(f"| {r['id']} | {r['category']} | {b} | {a} |{mark} |")
+    lines += ["", "| category | tasks | before | after |", "|---|---|---|---|"]
+    for cat in CATEGORIES:
+        if cat in cats:
+            b, a, n = cats[cat]
+            lines.append(f"| {cat} | {n} | {100 * b / n:.1f}% | {100 * a / n:.1f}% |")
+    if not_comparable:
+        lines += ["", f"not comparable (task revised): {', '.join(not_comparable)}"]
     return "\n".join(lines) + "\n"
 
 
@@ -1411,7 +1560,7 @@ def stage_body(
     spec = doc["frames"][body]
     bdir = run_dir / body
     ctx: dict[str, str] = {"body": body, "run_id": run_id}
-    for role in ("dark", "bright", "hero", "calib"):
+    for role in ("dark", "bright", "blown", "hero", "calib"):
         name = spec.get(role)
         if not name:
             continue
@@ -1471,6 +1620,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--live", action="store_true", help="drive the real darktable (required to run)")
     p.add_argument("--body", choices=("olympus", "sony", "all"), default="all")
     p.add_argument("--label", default="phase2-main")
+    p.add_argument(
+        "--plan",
+        choices=PLAN_VERSIONS,
+        default="v1",
+        help="agent plan: v1 (revision 1, phase 2 verbs) or v2 (phase 3 verbs where they apply)",
+    )
     p.add_argument("--tasks", type=Path, default=TASKS_PATH)
     p.add_argument("--out", type=Path, default=RESULTS_DIR)
     p.add_argument(
@@ -1576,6 +1731,7 @@ def main(argv: list[str] | None = None) -> int:
             paths=ctx,
             job_frames=job_frames,
             sessions=args.sessions.split(",") if args.sessions else None,
+            plan_version=args.plan,
         )
         try:
             result = runner.run()

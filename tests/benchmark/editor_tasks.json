@@ -2,6 +2,28 @@
   "schema": "scouter-editor-tasks/1",
   "decision_row": 406,
   "written": "2026-09-24",
+  "revision": 2,
+  "revisions": [
+    {
+      "revision": 1,
+      "date": "2026-09-24",
+      "commit": "a2f7ccf (rebased c65a7d6)",
+      "change": "first release: 27 tasks, plan v1 only; run 1 scored on phase 2 main 33ebaef"
+    },
+    {
+      "revision": 2,
+      "date": "2026-09-24",
+      "change": "E2 ('The sky's blown out') moves from the EXIF-chosen 'bright' frame (rendered clipping 0.0% on both bodies in run 1, so E2's premise was refuted) to a new 'blown' role chosen by rendered clipped-highlight percentage (darktable-cli default pipeline, 512 px, the same render and ppm.stats scout_stats uses; full scan in frames.<body>.clip_scan). Session B stays on 'bright' with no tasks so F7's frame is still imported in an earlier darktable session, exactly as in revision 1; E2 runs in the new session B2. Adds an optional 'plan_v2' per task (phase 3 verbs); plan v1 is unchanged and still runnable with --plan v1.",
+      "invalidates": [
+        "E2"
+      ],
+      "note": "Only E2's run 1 vs run 2 comparison is invalid (different frame). Every other task's definition, assertions, tolerances and scoring are byte-identical to revision 1."
+    }
+  ],
+  "plan_versions": {
+    "v1": "revision 1's plan: phase 2 verbs only (history_read + absolute darkroom_set, wb_kelvin, style_extract, style_apply_set).",
+    "v2": "what a competent agent does with phase 3 (main e64f760): darkroom_say for editor sentences that map to a phrase (magnitude pinned to plan v1's so the same assertions apply), darkroom_adjust for an exact relative move with no phrase, preset_save / preset_apply_job for the preset tasks, and undo through the MCP session job. Tasks where no phase 3 verb helps declare same_as_v1 with the reason. A plan_v2 may carry step_map (plan v1 step index -> plan v2 step index, so assertions that name a step read the equivalent call) and assertion_overrides limited to WHERE a fact is read (step, steps, path, the source of an expected value, and op set_eq for an unordered module list): thresholds, tolerances, deltas, frames and the scoring groups never change."
+  },
   "about": "The Scouter editor benchmark: sentences a photo editor would say to Claude, the MCP calls a competent agent makes for each one (the 'agent plan'), and machine-checkable assertions read back from the XMP sidecar darktable wrote, the tool envelopes, or files on disk. Deterministic: no model runs; the plan is fixed data; every value an agent would compute from a tool result is computed by the same rule from that result ($hist / $ref resolvers).",
   "scoring_rules": {
     "pass": "every assertion in scoring.pass holds AND the task finished inside budget_s",
@@ -15,6 +37,7 @@
       "camera": "OM Digital / Olympus E-M10 Mark III (.ORF)",
       "dark": "P5240151.ORF",
       "bright": "P6281368.ORF",
+      "blown": "P5240140.ORF",
       "hero": "P6281348.ORF",
       "calib": "P6281348.ORF",
       "job": [
@@ -31,13 +54,60 @@
         "bright": "EXIF: ISO 160, 1/1000 s, bias 0.0, daylight 2026-06-28 16:18. The fastest daylight shutter in the set; the highlight-clipping candidate. Manual lens (f 0.0).",
         "hero": "EXIF: ISO 200, 1/50 s, f/22, bias 0.0, 2026-06-28 15:49. README's own hero frame; an electronic lens (f-number recorded), so lens correction has data to work with.",
         "calib": "A second scratch copy of the hero, used only for `wb_calibrate` (it adds ~21 temperature history items to the frame it runs on).",
-        "job": "Six E-M10 III frames outside the three edit frames, staged as a card and imported as one job."
+        "job": "Six E-M10 III frames outside the three edit frames, staged as a card and imported as one job.",
+        "blown": "Rendered clipping (revision 2): 0.4493% of samples at or above the clip byte, luminance p99 249, the highest of all 39 Olympus frames by an order of magnitude (next: P5240151 0.0367%, which is the dark frame). darktable-cli default pipeline at 512 px, the same render scout_stats measures. Not a job or edit frame."
+      },
+      "clip_scan": {
+        "method": "scout._raster_for(copy, 512) + ppm.stats on scratch copies of every frame, darktable 5.4.1 default pipeline, 2026-09-24",
+        "top": [
+          {
+            "file": "P5240140.ORF",
+            "clipped_high_pct": 0.4493,
+            "luminance_p99": 249
+          },
+          {
+            "file": "P5240151.ORF",
+            "clipped_high_pct": 0.0367,
+            "luminance_p99": 223
+          },
+          {
+            "file": "P5240138.ORF",
+            "clipped_high_pct": 0.0321,
+            "luminance_p99": 247
+          },
+          {
+            "file": "P5240125.ORF",
+            "clipped_high_pct": 0.0178,
+            "luminance_p99": 217
+          },
+          {
+            "file": "P6281361.ORF",
+            "clipped_high_pct": 0.0163,
+            "luminance_p99": 249
+          },
+          {
+            "file": "P5240152.ORF",
+            "clipped_high_pct": 0.0107,
+            "luminance_p99": 215
+          },
+          {
+            "file": "P5240126.ORF",
+            "clipped_high_pct": 0.0076,
+            "luminance_p99": 216
+          },
+          {
+            "file": "P5240154.ORF",
+            "clipped_high_pct": 0.0056,
+            "luminance_p99": 233
+          }
+        ]
       }
     },
     "sony": {
       "camera": "Sony ILCE-7 (A7) and NEX-5N (.ARW)",
       "dark": "sony/DSC01425.ARW",
       "bright": "sony/DSC07452.ARW",
+      "blown": "sony/DSC01431.ARW",
       "hero": "sony/DSC01426.ARW",
       "calib": null,
       "job": [
@@ -54,7 +124,53 @@
         "bright": "EXIF: NEX-5N, ISO 100, 1/1600 s (fastest shutter in the Sony set), bias 0.0, daylight 2026-07-15 14:42. Highlight-clipping candidate. Manual lens (f 0.0).",
         "hero": "EXIF: ILCE-7, ISO 2000, 1/60 s, f/3.5, bias 0.0. Electronic lens.",
         "calib": "none: Sony white-balance tables are out of scope (row 390), so Kelvin read-back is EXPECTED to refuse on this body.",
-        "job": "Six ILCE-7 frames (one camera, so the import needs no --camera override)."
+        "job": "Six ILCE-7 frames (one camera, so the import needs no --camera override).",
+        "blown": "Rendered clipping (revision 2): 0.0217%, luminance p99 229, the highest of all 14 Sony frames. Every Sony frame outside the job renders 0.0% (DSC074xx included, p99 227-229), so the highest-clipping frame is job frame 5; E2 edits its own scratch copy under frames/ (a different file and sidecar from the imported job copy), so the job is not touched. The clipping is tiny: a real Sony 'blown sky' frame does not exist in the set."
+      },
+      "clip_scan": {
+        "method": "scout._raster_for(copy, 512) + ppm.stats on scratch copies of every frame, darktable 5.4.1 default pipeline, 2026-09-24",
+        "top": [
+          {
+            "file": "DSC01431.ARW",
+            "clipped_high_pct": 0.0217,
+            "luminance_p99": 229
+          },
+          {
+            "file": "DSC01432.ARW",
+            "clipped_high_pct": 0.016,
+            "luminance_p99": 230
+          },
+          {
+            "file": "DSC01429.ARW",
+            "clipped_high_pct": 0.0143,
+            "luminance_p99": 204
+          },
+          {
+            "file": "DSC01427.ARW",
+            "clipped_high_pct": 0.0137,
+            "luminance_p99": 215
+          },
+          {
+            "file": "DSC01428.ARW",
+            "clipped_high_pct": 0.0137,
+            "luminance_p99": 213
+          },
+          {
+            "file": "DSC01426.ARW",
+            "clipped_high_pct": 0.004,
+            "luminance_p99": 215
+          },
+          {
+            "file": "DSC01425.ARW",
+            "clipped_high_pct": 0.0,
+            "luminance_p99": 182
+          },
+          {
+            "file": "DSC01430.ARW",
+            "clipped_high_pct": 0.0,
+            "luminance_p99": 197
+          }
+        ]
       }
     }
   },
@@ -107,9 +223,26 @@
           "timeout_s": 30
         }
       ],
+      "tasks": [],
+      "note": "Revision 2: kept with no tasks so the 'bright' frame is imported in an earlier darktable session before F7 opens it, exactly as in revision 1. E2 moved to session B2."
+    },
+    {
+      "id": "B2",
+      "role": "blown",
+      "setup": [
+        {
+          "tool": "history_commit",
+          "args": {
+            "image": "{frame:blown}",
+            "timeout_s": 10
+          },
+          "timeout_s": 30
+        }
+      ],
       "tasks": [
         "E2"
-      ]
+      ],
+      "note": "Revision 2: E2 on the frame chosen by rendered clipping."
     },
     {
       "id": "C",
@@ -240,6 +373,20 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "why": "one phrase: darkroom_say reads the current exposure itself (pre-commit bounce + XMP) and adds +1.0 EV; no history_read arithmetic.",
+        "steps": [
+          {
+            "tool": "darkroom_say",
+            "args": {
+              "phrase": "brighter by 1 ev"
+            }
+          }
+        ],
+        "step_map": {
+          "1": 0
+        }
       }
     },
     {
@@ -320,6 +467,20 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "why": "'crush the blacks a touch' is the deeper_blacks phrase; the explicit 'by 0.01' keeps plan v1's magnitude so the 0.01 +/- 0.001 assertion is unchanged.",
+        "steps": [
+          {
+            "tool": "darkroom_say",
+            "args": {
+              "phrase": "deeper blacks by 0.01"
+            }
+          }
+        ],
+        "step_map": {
+          "1": 0
+        }
       }
     },
     {
@@ -374,6 +535,10 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "same_as_v1": true,
+        "why": "no phase 3 verb enables a module; darkroom_enable is still the move."
       }
     },
     {
@@ -381,21 +546,21 @@
       "category": "exposure",
       "sentence": "The sky's blown out. Pull the highlights back.",
       "frames": [
-        "bright"
+        "blown"
       ],
       "budget_s": 20,
       "plan": [
         {
           "tool": "scout_stats",
           "args": {
-            "image": "{frame:bright}",
+            "image": "{frame:blown}",
             "px": 512
           }
         },
         {
           "tool": "history_read",
           "args": {
-            "image": "{frame:bright}"
+            "image": "{frame:blown}"
           }
         },
         {
@@ -417,7 +582,7 @@
         {
           "tool": "scout_stats",
           "args": {
-            "image": "{frame:bright}",
+            "image": "{frame:blown}",
             "px": 512
           }
         }
@@ -430,7 +595,7 @@
         },
         "delta": {
           "type": "param_delta",
-          "frame": "bright",
+          "frame": "blown",
           "module": "exposure",
           "param": "exposure",
           "delta": -0.7,
@@ -450,7 +615,7 @@
         "untouched": {
           "type": "history_unchanged",
           "frames": [
-            "bright"
+            "blown"
           ]
         }
       },
@@ -470,6 +635,37 @@
           "refused",
           "untouched"
         ]
+      },
+      "revised_in": 2,
+      "plan_v2": {
+        "why": "the highlight phrases (tame the highlights = colorbalancergb highlights luminance) are candidates that refuse not_pinned until task 10, so the reachable move is still -0.7 EV, now as a phrase with the histogram checked before and after.",
+        "steps": [
+          {
+            "tool": "scout_stats",
+            "args": {
+              "image": "{frame:blown}",
+              "px": 512
+            }
+          },
+          {
+            "tool": "darkroom_say",
+            "args": {
+              "phrase": "darker by 0.7 ev"
+            }
+          },
+          {
+            "tool": "scout_stats",
+            "args": {
+              "image": "{frame:blown}",
+              "px": 512
+            }
+          }
+        ],
+        "step_map": {
+          "0": 0,
+          "2": 1,
+          "3": 2
+        }
       }
     },
     {
@@ -562,6 +758,37 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "why": "darkroom_say reads Kelvin through the camera's table and moves +600 K (plan v1's magnitude). Without a table (Sony) it refuses value_unknown instead of guessing 6500 K; the expected Kelvin is the phrase's own target instead of v1's absolute argument.",
+        "steps": [
+          {
+            "tool": "darkroom_say",
+            "args": {
+              "phrase": "warmer by 600k"
+            }
+          },
+          {
+            "tool": "wb_kelvin",
+            "args": {
+              "image": "{frame:hero}"
+            }
+          }
+        ],
+        "step_map": {
+          "1": 0,
+          "2": 1
+        },
+        "assertion_overrides": {
+          "kelvin": {
+            "value": {
+              "$env": {
+                "step": 0,
+                "path": "data.moves.0.target"
+              }
+            }
+          }
+        }
       }
     },
     {
@@ -653,6 +880,37 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "why": "as W1, -900 K.",
+        "steps": [
+          {
+            "tool": "darkroom_say",
+            "args": {
+              "phrase": "cooler by 900k"
+            }
+          },
+          {
+            "tool": "wb_kelvin",
+            "args": {
+              "image": "{frame:hero}"
+            }
+          }
+        ],
+        "step_map": {
+          "1": 0,
+          "2": 1
+        },
+        "assertion_overrides": {
+          "kelvin": {
+            "value": {
+              "$env": {
+                "step": 0,
+                "path": "data.moves.0.target"
+              }
+            }
+          }
+        }
       }
     },
     {
@@ -717,6 +975,10 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "same_as_v1": true,
+        "why": "tint is absolute_only (no readable value source), so 'more magenta' as a phrase would refuse value_unknown; the absolute set is still the competent move."
       }
     },
     {
@@ -790,6 +1052,10 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "same_as_v1": true,
+        "why": "'match daylight' is an absolute target (5500 K); say/adjust are relative."
       }
     },
     {
@@ -870,6 +1136,20 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "why": "'more punch' / 'add contrast' is the more_contrast phrase; @tone routes to sigmoid on these frames; 'by 0.3' keeps v1's magnitude.",
+        "steps": [
+          {
+            "tool": "darkroom_say",
+            "args": {
+              "phrase": "more contrast by 0.3"
+            }
+          }
+        ],
+        "step_map": {
+          "1": 0
+        }
       }
     },
     {
@@ -958,6 +1238,28 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "why": "no phrase names the colour balance rgb (midtone) contrast -- 'less contrast' routes to the sigmoid tone mapper -- so the agent uses darkroom_adjust for the exact relative move (live row, declared neutral 0.0) instead of history_read arithmetic.",
+        "steps": [
+          {
+            "tool": "darkroom_enable",
+            "args": {
+              "module": "colorbalancergb"
+            }
+          },
+          {
+            "tool": "darkroom_adjust",
+            "args": {
+              "module": "colorbalancergb",
+              "param": "contrast",
+              "delta": -0.1
+            }
+          }
+        ],
+        "step_map": {
+          "2": 1
+        }
       }
     },
     {
@@ -1025,6 +1327,10 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "same_as_v1": true,
+        "why": "'try 0.2' is an absolute value, and sigmoid skew is absolute_only."
       }
     },
     {
@@ -1098,6 +1404,10 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "same_as_v1": true,
+        "why": "global_saturation is absolute_only (its XMP slot is not pinned), so 'more saturation' would refuse value_unknown; enable + absolute set stays the competent plan."
       }
     },
     {
@@ -1168,6 +1478,25 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "why": "the more_vibrance phrase with v1's magnitude (15 % from the neutral 0 = 0.15); global_vibrance is a candidate row, so phase 3 is expected to refuse not_pinned before any bridge call until task 10 pins it.",
+        "steps": [
+          {
+            "tool": "darkroom_say",
+            "args": {
+              "phrase": "more vibrance by 15%"
+            }
+          }
+        ],
+        "step_map": {
+          "0": 0
+        },
+        "assertion_overrides": {
+          "readback": {
+            "path": "data.moves.0.applied"
+          }
+        }
       }
     },
     {
@@ -1224,6 +1553,20 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "why": "the agent tries the sentence as a phrase; no phrase or vocabulary row reaches colour zones (the zone curves row is 'unreachable'), so the refusal is the honest answer.",
+        "steps": [
+          {
+            "tool": "darkroom_say",
+            "args": {
+              "phrase": "shift the greens toward yellow"
+            }
+          }
+        ],
+        "step_map": {
+          "0": 0
+        }
       }
     },
     {
@@ -1313,6 +1656,10 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "same_as_v1": true,
+        "why": "no phrase says 'warm the shadows, cool the highlights' (the table has the opposite pair and teal-and-orange); the hue/chroma rows are candidates, so the explicit sets are kept and refuse."
       }
     },
     {
@@ -1398,6 +1745,23 @@
         "refusal": [
           "refused",
           "untouched"
+        ]
+      },
+      "plan_v2": {
+        "why": "the preceding edit is a phrase; undo_last reverts the newest move group through the MCP server's session job (phase 3 task 9).",
+        "context": [
+          {
+            "tool": "darkroom_say",
+            "args": {
+              "phrase": "more contrast by 0.2"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "tool": "darkroom_undo_last",
+            "args": {}
+          }
         ]
       }
     },
@@ -1512,6 +1876,33 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "why": "two phrases, two group undos.",
+        "context": [
+          {
+            "tool": "darkroom_say",
+            "args": {
+              "phrase": "brighter by 0.3 ev"
+            }
+          },
+          {
+            "tool": "darkroom_say",
+            "args": {
+              "phrase": "more contrast by 0.1"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "tool": "darkroom_undo_last",
+            "args": {}
+          },
+          {
+            "tool": "darkroom_undo_last",
+            "args": {}
+          }
+        ]
       }
     },
     {
@@ -1580,6 +1971,36 @@
         "refusal": [
           "refused"
         ]
+      },
+      "plan_v2": {
+        "why": "preset_save on the darkroom image (flushes, extracts, keeps a copy in the library memory). It reports the modules the style really includes (data.modules = style.extract's operations_included) instead of style_extract's modules_honoured flag, so 'filtered' reads that list.",
+        "steps": [
+          {
+            "tool": "preset_save",
+            "args": {
+              "name": "{preset}",
+              "modules": [
+                "exposure",
+                "sigmoid",
+                "temperature",
+                "colorbalancergb"
+              ],
+              "description": "Scouter editor benchmark look"
+            }
+          }
+        ],
+        "assertion_overrides": {
+          "filtered": {
+            "path": "data.modules",
+            "op": "set_eq",
+            "value": [
+              "exposure",
+              "sigmoid",
+              "temperature",
+              "colorbalancergb"
+            ]
+          }
+        }
       }
     },
     {
@@ -1658,7 +2079,26 @@
           "refused"
         ]
       },
-      "settle_s": 15
+      "settle_s": 15,
+      "plan_v2": {
+        "why": "one gated batch with Scouter's idempotency ledger: the job minus the three frames not named. (preset_apply takes one image per call; three calls would be the other competent choice.)",
+        "steps": [
+          {
+            "tool": "preset_apply_job",
+            "args": {
+              "name": "{preset}",
+              "job_slug": "{job_slug}",
+              "exclude": [
+                "{job:4}",
+                "{job:5}",
+                "{job:6}"
+              ],
+              "confirm": true
+            },
+            "timeout_s": 180
+          }
+        ]
+      }
     },
     {
       "id": "F5",
@@ -1741,7 +2181,26 @@
           "refused"
         ]
       },
-      "settle_s": 15
+      "settle_s": 15,
+      "plan_v2": {
+        "why": "the rest of the job; the ledger would also skip frames 1-3 on its own.",
+        "steps": [
+          {
+            "tool": "preset_apply_job",
+            "args": {
+              "name": "{preset}",
+              "job_slug": "{job_slug}",
+              "exclude": [
+                "{job:1}",
+                "{job:2}",
+                "{job:3}"
+              ],
+              "confirm": true
+            },
+            "timeout_s": 180
+          }
+        ]
+      }
     },
     {
       "id": "F6",
@@ -1799,6 +2258,10 @@
         "refusal": [
           "refused"
         ]
+      },
+      "plan_v2": {
+        "same_as_v1": true,
+        "why": "export is unchanged in phase 3."
       }
     },
     {
@@ -1837,6 +2300,10 @@
         "partial": [],
         "partial_criteria": "none: the correct outcome is an honest refusal with nothing written",
         "refusal": []
+      },
+      "plan_v2": {
+        "same_as_v1": true,
+        "why": "still refused: no local-adjustment tool."
       }
     },
     {
@@ -1876,6 +2343,10 @@
         "partial": [],
         "partial_criteria": "none: the correct outcome is an honest refusal with nothing written",
         "refusal": []
+      },
+      "plan_v2": {
+        "same_as_v1": true,
+        "why": "still refused: no retouch tool."
       }
     },
     {
@@ -1931,6 +2402,10 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "same_as_v1": true,
+        "why": "no phase 3 verb for lens correction."
       }
     },
     {
@@ -1985,6 +2460,10 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "same_as_v1": true,
+        "why": "no phase 3 verb for lens correction."
       }
     },
     {
@@ -2039,6 +2518,10 @@
           "refused",
           "untouched"
         ]
+      },
+      "plan_v2": {
+        "same_as_v1": true,
+        "why": "no phase 3 verb for sharpen."
       }
     },
     {
@@ -2107,6 +2590,10 @@
         "refusal": [
           "refused"
         ]
+      },
+      "plan_v2": {
+        "same_as_v1": true,
+        "why": "darkroom_open is unchanged (its wrong-image regex fix is in E12, not a new verb)."
       }
     }
   ]
