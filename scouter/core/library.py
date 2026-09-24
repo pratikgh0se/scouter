@@ -538,15 +538,40 @@ def _plan(
                 },
             )
 
+    plan_warnings: list[str] = []
     if date is None:
-        times = [t.captured_at for _, t in tagged if t.captured_at]
+        times = sorted(t.captured_at for _, t in tagged if t.captured_at)
         if not times:
             raise UsageError(
                 "no capture time could be read from any file in this card; pass "
                 "--date explicitly",
                 detail={"files": len(files)},
             )
-        date = min(times)[:10]
+        # E12 D6, row 407: the earliest capture time still wins normally (a
+        # card spanning midnight must still get the day the shoot started
+        # on) -- but one bad clock (an unset RTC defaulting to 2013-01-01,
+        # the E12 Sony card's own DSC01425) used to drag the WHOLE job's
+        # date down to it, because it was always the earliest, no matter how
+        # far from every other frame on the card. The median is robust to a
+        # single such outlier; the earliest is only trusted when it is
+        # within 30 days of the median, and the fallback is a warning, never
+        # a silent switch.
+        earliest, median = times[0], times[len(times) // 2]
+        delta_days = abs(
+            (
+                datetime.strptime(earliest[:10], "%Y-%m-%d")
+                - datetime.strptime(median[:10], "%Y-%m-%d")
+            ).days
+        )
+        if delta_days > 30:
+            date = median[:10]
+            plan_warnings.append(
+                f"the earliest capture time ({earliest}) is {delta_days} days from "
+                f"the job's median date ({date}); used the median instead -- check "
+                "that file's camera clock"
+            )
+        else:
+            date = earliest[:10]
 
     # Needs `date` (just resolved above) and `job_slug`; a plain read (even
     # the raw-dir fallback tier only hashes files already on disk, not the
@@ -556,7 +581,6 @@ def _plan(
     existing_files = _recover_existing_files(
         config.scouter_dir(job_path), config.raw_dir(job_path), date, job_slug
     )
-    plan_warnings: list[str] = []
 
     # Fix round 4, item 4: a `seq` recovered from `checksums.sha256` can be
     # `None` (a destination name Scouter didn't write, or one this job's

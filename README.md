@@ -484,6 +484,15 @@ These are load-bearing. Read them before scripting against phase 2.
   the run that just finished -- an appending import used to overwrite these
   with only its own numbers even though `files` already held every prior
   import's frames too.
+- **`library import`'s auto-derived date no longer trusts a single
+  outlier.** A card's date used to default to the EARLIEST capture time,
+  full stop -- so one file with an unset clock (the E12 Sony card's own
+  DSC01425, defaulting to 2013-01-01) set the whole job's date. The
+  earliest time is still used when it is within 30 days of the card's
+  median capture time (a normal midnight-spanning card is unaffected); an
+  earlier outlier past that falls back to the median instead, with a
+  warning naming the outlier so the camera clock gets checked (D6, row
+  407).
 
 ### Phase 2 exit criteria
 

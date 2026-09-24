@@ -725,6 +725,38 @@ class MidnightCardTest(LibraryTestCase):
         drifted_path = self._job_path("2026-06-29").parent / "2026-06-29 harbour-wedding"
         self.assertFalse(drifted_path.exists())
 
+
+class OneBadClockTest(LibraryTestCase):
+    """E12 D6, row 407: one file with an unset RTC (the E12 Sony card's own
+    DSC01425, clock defaulting to 2013-01-01) used to set the WHOLE job's
+    date, because the job date was always the EARLIEST capture time no
+    matter how far it was from the rest of the card."""
+
+    def test_a_wildly_early_outlier_does_not_set_the_job_date(self) -> None:
+        source = self.tmp / "card"
+        _write_one(source, "DSC01421.ARW", "2013:01:01 00:00:00")  # unset clock
+        for i in range(2, 9):
+            _write_one(source, f"DSC0142{i}.ARW", f"2026:09:14 15:{40 + i}:00")
+
+        result = library.import_card(str(source), "e12-sony", confirm=True)
+
+        self.assertEqual(result.date, "2026-09-14", "the median, not the 2013 outlier")
+        self.assertTrue(
+            any("2013" in w and "camera clock" in w for w in result.warnings),
+            result.warnings,
+        )
+
+    def test_a_normal_midnight_spanning_card_still_uses_the_earliest(self) -> None:
+        """The fix must not go too far the other way: a real card spanning
+        midnight (a few minutes' gap, not years) still gets the day the
+        shoot started on, exactly like `MidnightCardTest` above."""
+        source = self.tmp / "card"
+        _write_one(source, "P0001.ORF", "2026:06:28 23:58:00")
+        _write_one(source, "P0002.ORF", "2026:06:29 00:03:00")
+        result = library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertEqual(result.date, "2026-06-28")
+        self.assertFalse(any("camera clock" in w for w in result.warnings))
+
     def test_explicit_date_differing_from_existing_job_is_refused(self) -> None:
         source = self.tmp / "card"
         _make_card(source, 2)

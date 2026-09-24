@@ -51,3 +51,9 @@ vault; decision row 407).
   (`cache.lock_wait_s`, default 30s) and fails with a new `state_locked`
   error (exit 22) naming the pid holding the lock and since when, instead
   of waiting indefinitely.
+- `library import`'s auto date derivation no longer trusts a single outlier
+  (D6, row 407): the earliest capture time is used only when it is within
+  30 days of the card's median capture time; a bad clock (e.g. an unset RTC
+  defaulting to 2013-01-01) falls back to the median with a warning,
+  instead of setting the whole job's date. A normal midnight-spanning card
+  is unaffected.
