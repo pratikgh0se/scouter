@@ -36,3 +36,12 @@ vault; decision row 407).
   missing calibration table and points at `scouter wb calibrate`, the same
   as the no-table refusal does on its own, instead of only reporting the
   missing XMP module and leaving the table question unanswered.
+- `darkroom open` on a same-session import now reports the real cause (D4,
+  row 407): the wrong-image-loaded classifier in `scouter/core/dtbridge.py`
+  was anchored to the start of the message (`^wrong image loaded:`), but
+  Lua's own `error()` prepends a `source:line:` position prefix the Lua
+  plugin never asked for, so the anchored match never fired and the refusal
+  fell through to the generic `bridge_timeout` ("start darktable ...
+  restart darktable" -- wrong, darktable is running). It is now
+  `not_in_darkroom` (exit 6) with a fix naming the real cause: open the
+  frame in darktable yourself or relaunch darktable on it.

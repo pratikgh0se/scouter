@@ -433,7 +433,14 @@ These are load-bearing. Read them before scripting against phase 2.
   image that never loaded. **So the workflow is: pick the frame in
   darktable, and Scouter edits what is loaded.** No set-wide verb is affected
   -- `cull.*`, `style.*`, `outliers list` and `export.*` all work off the XMP
-  and `darktable-cli` and never touch the darkroom.
+  and `darktable-cli` and never touch the darkroom. This refusal is
+  `not_in_darkroom` (exit 6), with a fix naming the real cause -- "open it in
+  darktable yourself (double-click it in the lighttable) or relaunch
+  darktable on it" -- never `bridge_timeout` (exit 3, "start darktable"):
+  darktable IS running, it is just showing a different frame (E12 D4, row
+  407). The Lua plugin's own `error()` calls prepend a `source:line:`
+  position to the message before Scouter ever sees it; the classifier
+  matches the phrase wherever that prefix put it, not just at the start.
 - **Hand darktable RESOLVED paths.** `/var` is a symlink to `/private/var` on
   macOS and darktable records the resolved film path, so a `library_root`
   reached through a symlink makes every `image.lookup` miss and every film

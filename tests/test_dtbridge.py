@@ -61,6 +61,41 @@ class ClassificationTest(unittest.TestCase):
             dtbridge.call("darkroom.open", {"image_id": 12})
         self.assertIn("wrong image loaded", str(ctx.exception))
         self.assertIn("expected 12, got 7", str(ctx.exception))
+        # E12 D4: the fix text must be the wrong-image one, not the generic
+        # nan-action NotInDarkroom.fix, and never bridge_timeout's "start
+        # darktable" (darktable IS running).
+        self.assertIn("double-click", ctx.exception.fix)
+        self.assertNotIn("start darktable", ctx.exception.fix)
+
+    def test_lua_own_position_prefix_still_classifies_as_not_in_darkroom(self) -> None:
+        """E12 D4/row 407: darktable_mcp.lua's `error(...)` calls (around
+        line 1218) pass no explicit level, so Lua's own `error()` prepends
+        `"<source>:<line>: "` to the message -- the REAL message the E12 live
+        run saw was `"darktable_mcp.lua:1218: wrong image loaded: asked for
+        113, darkroom shows 92 after 15000ms"`, not the bare
+        "wrong image loaded: ..." the old anchored regex assumed. That
+        message fell through to the generic bridge_timeout classification,
+        misreporting a same-session-import refusal (R20, an honest limit --
+        darktable cannot load a frame this job imported into the SAME
+        running session) as if darktable were unreachable, and costing the
+        15s wait for nothing."""
+        dtbridge.set_bridge(
+            FakeBridge(
+                raises={
+                    "darkroom.open": BridgeError(
+                        "darktable_mcp.lua:1218: wrong image loaded: asked for 113, "
+                        "darkroom shows 92 after 15000ms"
+                    ),
+                }
+            )
+        )
+        with self.assertRaises(NotInDarkroom) as ctx:
+            dtbridge.call("darkroom.open", {"image_id": 113})
+        self.assertNotIsInstance(ctx.exception, BridgeTimeout)
+        self.assertEqual(ctx.exception.code, "not_in_darkroom")
+        self.assertIn("asked for 113", str(ctx.exception))
+        self.assertIn("double-click", ctx.exception.fix)
+        self.assertNotIn("start darktable", ctx.exception.fix)
 
     def test_wrong_image_loaded_classifies_with_the_real_bridge_prefix(self) -> None:
         """Phase 3 task 8: the real plugin's error is wrapped by
