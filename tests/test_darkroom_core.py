@@ -495,10 +495,28 @@ class DarkroomCoreTest(_DarkroomFixture):
         assert result.undone is not None
         self.assertEqual(result.undone["verb"], "darkroom.set")
 
-    def test_undo_last_on_an_empty_journal_is_a_dry_run_not_a_crash(self) -> None:
+    def test_undo_last_on_an_empty_journal_is_a_noop_not_a_crash(self) -> None:
+        """Row 408, B2: a REAL (non-dry) call with nothing to undo used to
+        report `outcome: dry_run` unconditionally -- indistinguishable from
+        a genuine preview, and `ok = outcome in ("ok", "dry_run")` counted
+        it as success. It is now "noop" (never "ok", never "dry_run") for a
+        real call, and still "dry_run" for an actual dry run."""
         result = darkroom.undo_last()
-        self.assertEqual(result.outcome, "dry_run")
+        self.assertEqual(result.outcome, "noop")
         self.assertIn("nothing to undo", result.reason or "")
+
+        dry_result = darkroom.undo_last(dry_run=True)
+        self.assertEqual(dry_result.outcome, "dry_run")
+
+    def test_a_real_noop_undo_is_never_reported_ok_by_the_registry(self) -> None:
+        from scouter import registry
+
+        envelope = registry.call("darkroom.undo_last", "cli", job="job-test")
+        self.assertEqual(envelope.outcome, "noop")
+        self.assertFalse(envelope.ok, "a noop undo must never be reported ok")
+        from scouter.errors import exit_code_for
+
+        self.assertNotIn(exit_code_for(envelope.outcome), (0, 5))
 
     def test_undo_last_names_the_failed_entry_when_that_is_all_there_is(self) -> None:
         """Should-fix 4: a journal that is not empty, but whose only entry

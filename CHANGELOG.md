@@ -62,3 +62,8 @@ vault; decision row 407).
   it (merely opening it in darktable is enough) is now skipped and listed
   in the new `stale` result field, with a warning; every other frame is
   still applied.
+- `darkroom undo-last` on an empty journal, called for real (not a dry
+  run), no longer reports `outcome: dry_run` / `ok: true` (row 408 B2,
+  editor benchmark): it now reports a new "noop" outcome (exit 23), which
+  `ok = outcome in ("ok", "dry_run")` correctly excludes from success. A
+  genuine dry run is unaffected.

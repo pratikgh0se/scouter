@@ -499,6 +499,13 @@ These are load-bearing. Read them before scripting against phase 2.
   sidecar had moved since `cull propose` wrote it. The stale frame(s) are
   now skipped and named in `result.stale`/a warning; every other frame in
   the proposal is still applied as planned (D7, row 407).
+- **`darkroom undo-last` never reports a real no-op as `ok`.** A REAL
+  (non-dry) call on an empty journal used to report `outcome: dry_run`
+  unconditionally -- `ok = outcome in ("ok", "dry_run")` counted it as a
+  success indistinguishable from a genuine preview. It now reports
+  `outcome: "noop"` (exit `23`) for a real call with nothing to undo; a
+  true dry run still reports `dry_run` as before (row 408 B2, editor
+  benchmark).
 
 ### Phase 2 exit criteria
 

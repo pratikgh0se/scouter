@@ -262,6 +262,13 @@ EXIT_CODES: dict[str, int] = {
     # Fix branch (E12 D3) originally claimed 20; renumbered to the next free
     # value once phase 3 landed "value_unknown"/"not_pinned" at 20/21.
     "state_locked": 22,
+    # Row 408, B2: `darkroom.undo_last` on an empty journal, called for REAL
+    # (not a dry run) -- distinct from both "ok" (0) and "dry_run" (5), so a
+    # shell script (or `ok = outcome in ("ok", "dry_run")`) never mistakes
+    # "there was nothing to undo" for "the undo happened". Fix branch
+    # originally claimed 21; renumbered to the next free value after
+    # "state_locked" took 22.
+    "noop": 23,
 }
 
 ERROR_CLASSES: tuple[type[ScouterError], ...] = (
