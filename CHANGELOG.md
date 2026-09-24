@@ -31,3 +31,8 @@ vault; decision row 407).
   `cameras`, `camera_model`, `camera_models`, `totals` (`job_files`,
   `job_bytes`) and `source_roots` now describe the whole job across every
   import it has ever had, not just the run that just finished.
+- `wb kelvin` refusal made actionable for a camera with no committed
+  `temperature` module (row 407, the A7 case): the reason now also names a
+  missing calibration table and points at `scouter wb calibrate`, the same
+  as the no-table refusal does on its own, instead of only reporting the
+  missing XMP module and leaving the table question unanswered.

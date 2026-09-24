@@ -417,9 +417,13 @@ These are load-bearing. Read them before scripting against phase 2.
   sidecar alone, and Scouter does not pretend there is: `wb kelvin` returns
   `kelvin: null` with a reason naming `scouter wb calibrate` when the camera has
   no table, and `null` with the measured range when a value falls outside it —
-  never an extrapolated guess. `outliers list` says which test actually ran
-  (`wb_test: "kelvin" | "ratio"`) and falls back to the always-available
-  coefficient ratio.
+  never an extrapolated guess. When the image has no committed `temperature`
+  module at all (so there are no coefficients to invert in the first place),
+  the reason names *that*, and — if the camera also has no calibration table
+  — says so in the same reason too, exactly like the no-table case does on
+  its own: neither fact is allowed to hide the other (E12 row 407). `outliers
+  list` says which test actually ran (`wb_test: "kelvin" | "ratio"`) and
+  falls back to the always-available coefficient ratio.
 - **Scouter cannot move darktable's darkroom onto a frame imported in the same
   session.** Measured five times on darktable 5.4.1 (`docs/measurements.md`,
   phase 2 fact 4): `display_image` returns without error and the darkroom
