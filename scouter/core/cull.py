@@ -251,14 +251,18 @@ def _propose_one(
         if frame["seq"] == best_seq:
             candidate = cfg.cull.pick_rating
             reasons.append(
+                # Review round 1 nit: `.4f` like the singleton reasons --
+                # real ORF/ARW renders (0.003-0.04) printed as "0.02 vs
+                # 0.02" at `.2f`, indistinguishable even when the burst's
+                # pick won by real margin.
                 f"sharpest of {len(members)} in burst {burst['burst_id']} "
-                f"({frame['sharpness']:.2f} vs {second['sharpness']:.2f} next)"
+                f"({frame['sharpness']:.4f} vs {second['sharpness']:.4f} next)"
             )
         else:
             candidate = cfg.cull.keep_rating
             reasons.append(
                 f"softer than the pick of burst {burst['burst_id']} "
-                f"({frame['sharpness']:.2f} vs {best['sharpness']:.2f})"
+                f"({frame['sharpness']:.4f} vs {best['sharpness']:.4f})"
             )
     else:
         pct = cfg.cull.sharpness_keep_top_pct

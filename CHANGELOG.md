@@ -148,3 +148,8 @@ vault; decision row 407).
   catch never fires on the normal path, and would have silently dropped
   `source_roots` rather than surfacing a genuine corruption on the
   vanishingly narrow race where it could.
+- **Nit:** burst-comparison reasons ("sharpest of N in burst...", "softer
+  than the pick...") now print sharpness at `.4f`, like the singleton
+  reasons already did -- at `.2f`, real ORF/ARW renders (0.003-0.04)
+  printed as "0.02 vs 0.02", indistinguishable even when the burst's pick
+  won by a real margin.
