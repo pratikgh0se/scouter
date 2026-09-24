@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from scouter.core import darkroom, journal, presets
-from scouter.errors import CommitTimeout, NoSidecar, UsageError
+from scouter.errors import CommitTimeout, NoSidecar, UsageError, WrongView
 from scouter.types import StyleResult, StyleSetResult
 from tests.test_moves import _MovesFixture
 
@@ -31,15 +31,72 @@ class PresetApplyTest(_MovesFixture):
         self.assertNotIn("style.apply", [m for m, _ in self.bridge.calls])
         self.assertEqual((r.applied_to, r.history_end_before, r.history_end_after),
                          ("darkroom", 14, 16))
-        self.assertEqual(self.commits[-1], (None, True))
         entry = journal.read_all("job-test")[-1]
         self.assertEqual((entry.verb, entry.after["history_end"]), ("preset.apply", 16))
 
-    def test_history_that_did_not_advance_is_commit_timeout(self) -> None:
-        self.history_end = iter([14, 14])
-        with self.assertRaises(CommitTimeout) as cm:
+    def test_history_already_advanced_means_no_second_commit(self) -> None:
+        """Final review #2: the bounce inside darkroom.apply_style already
+        made darktable write the sidecar; when history_end has advanced, no
+        second commit (a second bounce) is spent, and the entry is complete."""
+        r = presets.apply.__wrapped__("harbour-warm", job="job-test")
+        self.assertEqual(self.commits, [], "one bounce only")
+        self.assertEqual(r.warnings, [])
+        entry = journal.read_all("job-test")[-1]
+        self.assertIsNone(entry.outcome)
+        self.assertEqual(entry.after, {"history_end": 16, "style": "harbour-warm"})
+
+    def test_history_not_yet_advanced_commits_once_then_completes(self) -> None:
+        self.history_end = iter([14, 14, 16])
+        r = presets.apply.__wrapped__("harbour-warm", job="job-test")
+        self.assertEqual(self.commits, [(None, True)])
+        self.assertEqual(r.history_end_after, 16)
+        self.assertIsNone(journal.read_all("job-test")[-1].outcome)
+
+    def test_commit_timeout_after_an_applied_style_is_a_warning_and_undo_refuses(self) -> None:
+        """Final review #2: an APPLIED style is never journal.fail'ed. A
+        commit that times out is a warning, the entry is complete (advance
+        unverified), and undo_last gives the §8.4 refusal instead of
+        silently restoring a value underneath the style."""
+        darkroom.set_param.__wrapped__("exposure", "exposure", 1.8, commit=False, job="job-test")
+        self.history_end = iter([14, 14, 14])
+        with mock.patch("scouter.core.darkroom._commit",
+                        side_effect=CommitTimeout("sidecar never advanced")):
+            r = presets.apply.__wrapped__("harbour-warm", job="job-test")
+        self.assertEqual(r.outcome, "ok")
+        self.assertIsNone(r.history_end_after)
+        self.assertTrue(any("commit after applying did not confirm (commit_timeout)" in w
+                            for w in r.warnings), r.warnings)
+        self.assertTrue(any("could not be verified" in w for w in r.warnings), r.warnings)
+        entry = journal.read_all("job-test")[-1]
+        self.assertEqual((entry.verb, entry.outcome), ("preset.apply", None))
+        self.assertIsNotNone(entry.after)
+        sets_before = len([m for m, _ in self.bridge.calls if m == "darkroom.action"])
+        with self.assertRaises(darkroom._UnsupportedUndo) as cm:
+            darkroom.undo_last.__wrapped__(job="job-test")
+        self.assertIn("appended some history item(s)", str(cm.exception))
+        self.assertEqual(len([m for m, _ in self.bridge.calls if m == "darkroom.action"]),
+                         sets_before, "nothing restored underneath the style")
+
+    def test_a_bridge_error_leaves_a_failed_entry(self) -> None:
+        def boom(p):
+            raise WrongView("could not leave the darkroom")
+
+        self.bridge.responses["darkroom.apply_style"] = boom
+        with self.assertRaises(WrongView):
             presets.apply.__wrapped__("harbour-warm", job="job-test")
-        self.assertEqual((cm.exception.detail["before"], cm.exception.detail["after"]), (14, 14))
+        entry = journal.read_all("job-test")[-1]
+        self.assertEqual((entry.verb, entry.outcome), ("preset.apply", "error:wrong_view"))
+        self.assertIsNone(journal.latest_open("job-test"))
+
+    def test_a_gui_style_name_with_spaces_is_accepted(self) -> None:
+        """Final review #3: apply never turns the name into a filename, so a
+        GUI style like "Portra 400" (listed by preset.list as
+        darktable_only) must apply; only save keeps the filename rule."""
+        self.bridge.responses["list_styles"] = {"styles": [{"name": "Portra 400"}], "count": 1}
+        r = presets.apply.__wrapped__("Portra 400", job="job-test")
+        self.assertEqual(r.applied_to, "darkroom")
+        sent = [p for m, p in self.bridge.calls if m == "darkroom.apply_style"]
+        self.assertEqual(sent[0]["name"], "Portra 400")
 
     def test_another_image_uses_the_library_path(self) -> None:
         with mock.patch("scouter.core.style.apply.__wrapped__",

@@ -47,6 +47,12 @@ class ParamSpec:
     candidate_paths: tuple[str, ...] = ()
     reachable: bool = True
     note: str = ""
+    #: darktable's module default for this param (spec §4.3 `default`
+    #: column), declared only where it is known. Final review #1a ruling: a
+    #: `set` move whose before value is unreadable journals this as its
+    #: before (source "default") when the row has no `neutral`; a row with
+    #: neither refuses the move `value_unknown`. No row declares one yet.
+    default: float | None = None
 
 
 def _cb(param: str, ui: str, unit: str, lo: float, hi: float, step: float, concept: str,

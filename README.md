@@ -511,17 +511,33 @@ shows which words work today.
 - **Presets are darktable styles.** They are not Lightroom presets, and
   applying one always appends.
 - **A relative move with no sidecar at all refuses `value_unknown`**, rather
-  than assuming the module's neutral value — a move that started from a
-  *declared* neutral (one this session itself wrote) is still undoable,
-  because the journal records that neutral as the entry's `before` value.
-- **`preset.apply` refuses with `no_sidecar`** when `history_end` cannot be
-  read before the bounce, and — like every other preset application — cannot
-  be undone by Scouter.
-- **`_precommit`'s pre-adjust bounce downgrades only a `CommitTimeout`** to a
-  warning; every other failure still stops the move.
-- **`darkroom.apply_style` reports `cpu_ms`** (CPU time via `os.clock()`,
-  not wall-clock time) for its lighttable dwell, same discipline as
-  `history.commit`.
+  than assuming the module's neutral value. When a sidecar exists but the
+  module has no history entry yet, a move starts from the vocabulary row's
+  declared `neutral` (colour balance rgb's sliders: 0), and it stays
+  undoable: the journal records that neutral as the entry's `before` value,
+  even when darktable does not confirm the commit afterwards.
+- **A move whose current value cannot be read, on a row that declares no
+  neutral or darktable default, refuses `value_unknown`** before anything is
+  written, so Scouter never makes an edit it could not undo. That affects
+  the colour-grade hue settings in "warm the highlights", "cool the shadows"
+  and "teal and orange": the hue rows have no neutral, declare no default
+  yet, and their XMP slots are not decoded yet. So once the host run pins
+  their action paths, those phrases still refuse until the hue slots are
+  pinned or the rows declare darktable's default. `darkroom set` can still
+  set a hue, but `undo last` cannot restore the value before it.
+- **`preset.apply` refuses with `no_sidecar`** when the image's history
+  cannot be read before the style is sent. Once darktable confirms the style
+  is applied, the result is reported as applied. When the history count on
+  disk did not visibly grow, it comes with a warning instead of a failure.
+  Either way, Scouter cannot undo a preset application; `undo last` says so
+  and points to darktable's history panel.
+- **Relative moves and `preset save` first ask darktable to write its
+  pending edits.** Only a timeout there becomes a warning ("the value read
+  may predate darktable's live state"). A wrong view or a lost bridge still
+  stops the call.
+- **Applying a preset to the open image reports its timing as `cpu_ms`.**
+  That is CPU time, not wall-clock time, and it covers the whole trip out of
+  the darkroom and back, not just the moment the style is applied.
 - **Colour-grade and most vocabulary rows stay `candidate`/`not_pinned`**
   until the task 10 host probe pins their action paths and XMP slots — until
   then `darkroom adjust`/`darkroom say` refuse them honestly rather than

@@ -128,9 +128,12 @@ def save(name: str, *, modules: list[str] | None = None, description: str = "",
     darkroom._require_job_image(job, resolved.image_id)
     dtbridge.require_darkroom()
     warnings: list[str] = []
+    # Final review #4: only a CommitTimeout (darktable not settling within
+    # one bounce) is a warning, exactly as `moves._precommit`; a wrong view,
+    # a dead bridge or a locked library is a real failure and propagates.
     try:
         darkroom._commit(job, resolved.image_id, strategy="auto", attempts=1, expect_change=False)
-    except ScouterError as e:
+    except CommitTimeout as e:
         warnings.append(f"flush before saving did not confirm ({e.code}): the style reflects the "
                         "last committed sidecar")
     chosen = list(modules) if modules else session_modules(job, resolved.image_id)
@@ -260,7 +263,13 @@ def apply(name: str, image: str | int | None = None, *, educative: str | None = 
     """Apply a preset to the open image (through a bounce, §8.3) or to another
     image (the library path, phase 2's `style.apply`)."""
     job = job or current_job()
-    paths.validate_style_name(name)
+    # Final review #3: no `paths.validate_style_name` here -- that is a
+    # FILENAME rule (save writes `<name>.dtstyle`), and it rejected GUI
+    # styles with spaces ("Portra 400") that `preset.list` shows and phase
+    # 2's `style.apply` accepts. Apply never turns the name into a path;
+    # `_require_style` below is the check that matters.
+    if not isinstance(name, str) or not name.strip():
+        raise UsageError("a preset name is required", detail={"name": name})
     level = explain.resolve_level(educative)
     if dry_run:
         return PresetResult(outcome="dry_run", name=name, action="apply",
@@ -296,24 +305,47 @@ def apply(name: str, image: str | int | None = None, *, educative: str | None = 
         )
     entry = journal.begin(job, verb="preset.apply", image_id=current.image_id, path=current.path,
                           module="", param="", instance=0, before={"history_end": before})
+    # Final review #2: only a failure of the bridge call ITSELF means the
+    # style did not land -- `journal.fail` is for that alone. Once darktable
+    # answers `applied: true`, the style IS in the history (and
+    # `darkroom.apply_style`'s own bounce already made darktable write the
+    # sidecar): failing the entry then would hide an applied style from
+    # `latest_open`, so the next `undo_last` would silently restore a value
+    # UNDER the style instead of giving the §8.4 refusal.
+    # The Lua method raises on every path where the style did not land
+    # (unknown style, wrong image, a failed apply in the lighttable, a
+    # bounce that could not leave the darkroom), so a normal return IS its
+    # `applied: true`.
     try:
         dtbridge.call("darkroom.apply_style", {"image_id": current.image_id, "name": name})
-        darkroom._commit(job, current.image_id, strategy="auto", expect_change=True)
-    except ScouterError as e:
-        journal.fail(job, entry.seq, outcome=f"error:{e.code}")
+    except Exception as e:
+        code = e.code if isinstance(e, ScouterError) else "error"
+        journal.fail(job, entry.seq, outcome=f"error:{code}")
         raise
+    warnings: list[str] = []
     after = _history_end(current.path)
     if after is None or after <= before:
-        journal.fail(job, entry.seq, outcome="error:commit_timeout")
-        raise CommitTimeout(
-            f"style {name!r} was sent but the sidecar's history did not advance",
-            detail={"before": before, "after": after, "name": name},
-        )
+        # The bounce's own sidecar write has not shown up yet: one more
+        # commit (a second bounce), only in this case. Its timeout is a
+        # warning, never a failure -- the style is applied either way.
+        try:
+            darkroom._commit(job, current.image_id, strategy="auto", expect_change=True)
+        except ScouterError as e:
+            warnings.append(f"commit after applying did not confirm ({e.code})")
+        after = _history_end(current.path)
+    if after is None or after <= before:
+        warnings.append(
+            f"style {name!r} was applied, but the sidecar's history_end did not advance "
+            f"({before} -> {after}): the advance could not be verified; darktable holds the "
+            "style, and undo still refuses it (history items cannot be removed)")
+        after = None
     journal.complete(job, entry.seq, after={"history_end": after, "style": name})
     return PresetResult(
         image_id=current.image_id, path=current.path, name=name, action="apply",
         applied_to="darkroom", history_end_before=before, history_end_after=after,
-        explain=explain.preset_lines("apply", name, [], after - before, level=level, job=job),
+        warnings=warnings,
+        explain=explain.preset_lines("apply", name, [], None if after is None else after - before,
+                                     level=level, job=job),
     )
 
 

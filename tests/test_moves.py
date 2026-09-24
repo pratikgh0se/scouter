@@ -135,6 +135,41 @@ class AdjustTest(_MovesFixture):
         self.assertAlmostEqual(self.sets()[-1]["value"], 0.0)
         self.assertTrue(journal.read_all("job-test")[-1].undone)
 
+    def test_neutral_patch_survives_a_commit_timeout_after_the_write_landed(self) -> None:
+        """Final review #1b: `set_param` lands the write, then its commit
+        raises `CommitTimeout`. The neutral must still be journalled as the
+        entry's before, so `undo_last` restores it instead of wedging on
+        "seq N ... never readable"."""
+        from scouter.errors import CommitTimeout
+
+        def timeout_on_change(job, image, *, strategy="auto", attempts=None, expect_change=True):
+            if expect_change:
+                raise CommitTimeout("sidecar never advanced")
+            return CommitResult(committed=True, changed=False, warnings=[])
+
+        with mock.patch("scouter.core.darkroom._commit", side_effect=timeout_on_change):
+            with self.assertRaises(CommitTimeout):
+                moves.adjust.__wrapped__("colorbalancergb", "contrast", 0.05, job="job-test")
+        entry = journal.read_all("job-test")[-1]
+        self.assertEqual((entry.module, entry.param), ("colorbalancergb", "contrast"))
+        self.assertEqual(entry.after, {"value": 0.05}, "the write landed")
+        self.assertEqual((entry.before.get("value"), entry.before.get("source")), (0.0, "neutral"))
+        darkroom.undo_last.__wrapped__(single=True, job="job-test")
+        self.assertAlmostEqual(self.sets()[-1]["value"], 0.0)
+        self.assertTrue(journal.read_all("job-test")[-1].undone)
+
+    def test_a_write_that_never_landed_is_not_patched(self) -> None:
+        """#1b: the patch only applies to a landed entry -- a bridge failure
+        (journal.fail, `after` None) is left exactly as the engine wrote it."""
+        from scouter.errors import NotInDarkroom
+
+        self.bridge.responses["darkroom.action"] = lambda p: {"nan": True, "view": "darkroom", **p}
+        with self.assertRaises(NotInDarkroom):
+            moves.adjust.__wrapped__("colorbalancergb", "contrast", 0.05, job="job-test")
+        entry = journal.read_all("job-test")[-1]
+        self.assertIsNone(entry.after)
+        self.assertIsNone(entry.before.get("value"))
+
     def test_no_sidecar_refuses_value_unknown_not_neutral(self) -> None:
         # Fix round 1, important: `_module_state`'s `enabled: None` is
         # ambiguous between "no sidecar at all" and "a sidecar exists but

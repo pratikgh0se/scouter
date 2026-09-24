@@ -71,6 +71,13 @@ class PhraseRulesTest(unittest.TestCase):
         self.assertAlmostEqual(mv.value, 0.10)
         self.assertAlmostEqual(phrases.resolve("cooler by 300k").moves[0].value, -300.0)
 
+    def test_zero_by_amount_is_refused(self) -> None:
+        """Final review #5: 'by 0' is a zero-delta move; refuse it as usage."""
+        for text in ("brighter by 0", "warmer by 0k", "brighter by 0.0 ev"):
+            with self.subTest(text=text), self.assertRaises(UsageError) as cm:
+                phrases.resolve(text)
+            self.assertIn("non-zero", cm.exception.message)
+
     def test_negative_by_amount_is_refused(self) -> None:
         with self.assertRaises(UsageError):
             phrases.resolve("warmer by -300k")

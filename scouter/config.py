@@ -173,10 +173,20 @@ def load(path: str | None = None) -> Config:
         raise UsageError(f"{cfg_path} must hold a JSON object", detail={"config": str(cfg_path)})
     _reject_unknown(str(cfg_path), set(raw) - {"_comment"}, TOP_KEYS)
 
+    # Final review T4: a non-numeric version is the file's fault, not a
+    # crash -- a bare ValueError/TypeError would escape callers that rely on
+    # UsageError (explain.resolve_level's fallback to "brief", P3-R8).
+    try:
+        version = int(raw.get("version", CONFIG_VERSION))
+    except (TypeError, ValueError, OverflowError) as e:
+        raise UsageError(
+            f"{cfg_path}: `version` must be an integer, got {raw.get('version')!r}",
+            detail={"config": str(cfg_path), "version": repr(raw.get("version"))},
+        ) from e
     kwargs: dict = {
         "path": str(cfg_path),
         "exists": True,
-        "version": int(raw.get("version", CONFIG_VERSION)),
+        "version": version,
     }
     if raw.get("library_root"):
         kwargs["library_root"] = str(Path(str(raw["library_root"])).expanduser())

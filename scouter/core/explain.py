@@ -162,7 +162,7 @@ def lines(notes: list[MoveNote], *, level: str, job: str) -> list[str]:
     return out
 
 
-def preset_lines(action: str, name: str, modules: list[str], items: int, *,
+def preset_lines(action: str, name: str, modules: list[str], items: int | None, *,
                  level: str, job: str) -> list[str]:
     if level == "off":
         return []
@@ -170,7 +170,8 @@ def preset_lines(action: str, name: str, modules: list[str], items: int, *,
         line = (f"saved {len(modules)} module(s) ({', '.join(modules)}) as style '{name}': "
                 "apply it from darktable's styles panel or with preset apply.")
     else:
-        line = (f"applied style '{name}' ({items} history item(s) appended): compare with the "
+        count = "some" if items is None else items
+        line = (f"applied style '{name}' ({count} history item(s) appended): compare with the "
                 "history panel; darktable's own history is the way back.")
     out: list[str] = []
     if level == "full":

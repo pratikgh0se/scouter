@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from scouter.core import darkroom, journal, presets
-from scouter.errors import UsageError
+from scouter.errors import CommitTimeout, UsageError, WrongView
 from scouter.types import StyleResult
 from tests.test_moves import _MovesFixture
 from tests.scouter_fakes import write_minimal_style_sidecar
@@ -48,6 +48,34 @@ class PresetSaveTest(_PresetFixture):
         self.assertEqual(self.extract_calls[0]["modules"], ["exposure", "sigmoid"])
         self.assertEqual(r.modules, ["exposure", "sigmoid"])
         self.assertEqual(self.commits[0], (1, False), "flush before extracting")
+
+    def test_flush_timeout_is_a_warning(self) -> None:
+        """Final review #4: a CommitTimeout from the flush is downgraded to a
+        warning (like moves._precommit); the save still happens."""
+        self._edit()
+        with mock.patch("scouter.core.darkroom._commit",
+                        side_effect=CommitTimeout("no bounce")):
+            r = presets.save.__wrapped__("harbour-warm", job="job-test")
+        self.assertTrue(any("flush before saving did not confirm (commit_timeout)" in w
+                            for w in r.warnings), r.warnings)
+        self.assertEqual(len(self.extract_calls), 1)
+
+    def test_flush_failure_other_than_a_timeout_propagates(self) -> None:
+        """Final review #4: a wrong view / dead bridge is a real failure, not
+        a warning -- nothing is extracted."""
+        self._edit()
+        with mock.patch("scouter.core.darkroom._commit", side_effect=WrongView("not darkroom")):
+            with self.assertRaises(WrongView):
+                presets.save.__wrapped__("harbour-warm", job="job-test")
+        self.assertEqual(self.extract_calls, [])
+
+    def test_save_keeps_the_filename_rule(self) -> None:
+        """Final review #3: only apply drops validate_style_name; save still
+        writes `<name>.dtstyle`, so a name with spaces is refused there."""
+        self._edit()
+        with self.assertRaises(UsageError):
+            presets.save.__wrapped__("Portra 400", job="job-test")
+        self.assertEqual(self.extract_calls, [])
 
     def test_session_modules_skip_undone_and_failed_writes(self) -> None:
         self._edit()

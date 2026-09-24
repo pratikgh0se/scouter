@@ -118,8 +118,8 @@ def _require_job_image(job: str, loaded_image_id: int) -> None:
         f"darkroom.current reports {int(loaded_image_id)}, job opened {int(expected)}: "
         "refusing to write to an image this job did not open",
         fix=(
-            "re-open the image you meant (`scouter darkroom open <image>`), or "
-            "start a new job (--job / $SCOUTER_JOB)"
+            "re-open the image you meant with darkroom open (CLI `scouter darkroom open "
+            "<image>`, MCP darkroom_open), or start a new job"
         ),
         detail={"loaded_image_id": int(loaded_image_id), "job_image_id": int(expected), "job": job},
     )

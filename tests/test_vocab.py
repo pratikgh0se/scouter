@@ -102,3 +102,28 @@ class VocabListVerbTest(unittest.TestCase):
     def test_unknown_module_is_usage(self) -> None:
         with self.assertRaises(UsageError):
             vocab.list_vocab.__wrapped__("nosuchmodule", job="job-test")
+
+
+class VocabPrettyTableTest(unittest.TestCase):
+    """Spec §14.1: `--pretty` renders `vocab.list` as a table
+    (module.param, status, unit, clamp, step)."""
+
+    def test_vocab_list_has_a_table_renderer(self) -> None:
+        from scouter.cli import tables
+
+        payload = vocab.list_vocab.__wrapped__(job="job-test").to_dict()
+        rendered = tables.render("vocab.list", payload)
+        self.assertIsNotNone(rendered)
+        lines = rendered.splitlines()
+        self.assertEqual(lines[0].split(), ["module.param", "status", "unit", "clamp", "step"])
+        body = lines[2:2 + len(vocab.PARAMS)]
+        self.assertEqual(len(body), len(vocab.PARAMS))
+        exposure = next(line for line in body if line.startswith("exposure.exposure "))
+        self.assertEqual(exposure.split(), ["exposure.exposure", "live", "EV", "-3", "..", "4",
+                                            "0.3"])
+        hue = next(line for line in body if line.startswith("colorbalancergb.shadows_hue "))
+        self.assertIn("0 .. 360 (wraps)", hue)
+        curves = next(line for line in body if line.startswith("colorzones.curves "))
+        self.assertEqual(curves.split()[1], "unreachable")
+        self.assertEqual(curves.split()[-2:], ["-", "-"], "no clamp/step when unreachable")
+        self.assertTrue(lines[-1].startswith(f"{len(vocab.PARAMS)} word(s): live "))

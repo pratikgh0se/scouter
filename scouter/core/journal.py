@@ -301,10 +301,30 @@ def latest_failed(job: str) -> Entry | None:
     return None
 
 
-def set_before_neutral(job: str, seq: int, *, value: float) -> None:
-    """Patch a landed entry's `before` to record the declared NEUTRAL its
-    move actually started from (phase 3 task 6 fix round 1, controller
-    ruling).
+class BeforePatchRefused(ScouterError):
+    """`set_before_neutral` was pointed at an entry it must not patch.
+
+    A programming error, never a user-facing refusal: the entry at `seq` is
+    for another module/param, or its `before.value` is already a real value
+    (final review #1b guard -- a fallback never overwrites a value read from
+    the XMP or the journal).
+    """
+
+    code = "journal_patch_refused"
+    fix = "a Scouter bug: report it with the journal file attached"
+
+
+#: The only fallbacks a `before` may be patched with (final review #1a
+#: ruling): the vocabulary row's declared neutral, or its darktable default.
+BEFORE_FALLBACK_SOURCES = ("neutral", "default")
+
+
+def set_before_neutral(job: str, seq: int, *, module: str, param: str, value: float,
+                       source: str = "neutral") -> None:
+    """Patch a landed entry's `before` to record the declared NEUTRAL (or,
+    with `source="default"`, the row's darktable DEFAULT) its move actually
+    started from (phase 3 task 6 fix round 1, controller ruling; the
+    `default` source is the final-review #1a ruling).
 
     `moves.read_current`'s "neutral" fallback (spec §6.1 row 4) answers a
     value the sidecar itself never carried -- the module simply has no
@@ -314,16 +334,37 @@ def set_before_neutral(job: str, seq: int, *, value: float) -> None:
     for that very first move. Without this patch, `undo_last` can never
     restore it: "the previous value ... was never readable from the XMP".
 
-    Called only from `scouter.core.moves._adjust_core`, only when
-    `read_current` itself reported source `"neutral"` -- every other
-    source's `before` is already correct and this is never reached for it.
-    Raises `JournalCorrupt` on an unknown `seq`, the same as `complete`.
+    Called only from `scouter.core.moves` (the move layer). Guarded (final
+    review #1b): the entry at `seq` must be for exactly `module`/`param`,
+    and its `before.value` must still be `None` -- anything else raises
+    `BeforePatchRefused` and writes nothing, so a real value is never
+    overwritten. Raises `JournalCorrupt` on an unknown `seq`, the same as
+    `complete`.
     """
+    if source not in BEFORE_FALLBACK_SOURCES:
+        raise BeforePatchRefused(
+            f"before fallback source must be one of {BEFORE_FALLBACK_SOURCES}, not {source!r}",
+            detail={"job": job, "seq": seq, "source": source},
+        )
     entries = read_all(job)
     _find_or_raise(entries, job, seq)
     for entry in entries:
-        if entry.seq == seq:
-            entry.before = {**entry.before, "value": value, "source": "neutral"}
+        if entry.seq != seq:
+            continue
+        if (entry.module, entry.param) != (module, param):
+            raise BeforePatchRefused(
+                f"journal seq {seq} is {entry.module}.{entry.param}, not {module}.{param}: "
+                "refusing to patch its before value",
+                detail={"job": job, "seq": seq, "entry": f"{entry.module}.{entry.param}",
+                        "requested": f"{module}.{param}"},
+            )
+        if entry.before.get("value") is not None:
+            raise BeforePatchRefused(
+                f"journal seq {seq} already records a before value "
+                f"({entry.before.get('value')!r}); a {source} never overwrites it",
+                detail={"job": job, "seq": seq, "before": entry.before.get("value")},
+            )
+        entry.before = {**entry.before, "value": value, "source": source}
     _write_all(job, entries)
 
 

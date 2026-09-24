@@ -187,18 +187,16 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
             plan=[{"action": "darkroom.adjust", "ms_precommit": ms_precommit,
                    "ms_read": int((time.monotonic() - t0) * 1000), "ms_set": 0}],
         )
-    set_fn = getattr(darkroom.set_param, "__wrapped__", darkroom.set_param)
     t1 = time.monotonic()
-    result = set_fn(module, param, target, instance=instance, commit=commit, job=job)
-    if source == "neutral" and not result.noop:
-        # Fix round 1, controller ruling, load-bearing: `set_param`'s own
-        # `before_state` never heard about the neutral fallback (it reads
-        # only the XMP/journal) and journalled `before.value: None` for
-        # this move -- undoable. Patch the entry it just landed to record
-        # the neutral it actually started from. `result.noop` is excluded:
-        # the zero-bridge-write shortcut never calls `journal.begin` at
-        # all, so there is no entry here to patch.
-        journal.set_before_neutral(job, journal.next_seq(job) - 1, value=previous)
+    # Fix round 1, controller ruling, load-bearing: `set_param`'s own
+    # `before_state` never heard about the neutral fallback (it reads only
+    # the XMP/journal) and journals `before.value: None` for this move --
+    # `_set_recording_before` patches the entry it lands to record the
+    # neutral it actually started from, including when the write landed
+    # and the commit then timed out (final review #1b).
+    result = _set_recording_before(
+        module, param, target, instance=instance, commit=commit, job=job,
+        fallback=(previous, "neutral") if source == "neutral" else None)
     applied = result.applied
     if s.value_source == "wb_table":
         applied, _, _ = read_current(resolved, s, instance, job) if commit else (None, "", None)
@@ -214,6 +212,88 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
                "ms_read": int((t1 - t0) * 1000),
                "ms_set": int((time.monotonic() - t1) * 1000)}],
     )
+
+
+def before_fallback(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int,
+                    job: str) -> tuple[float, str] | None:
+    """What a `set` move's journal entry must record as `before` (final review #1a).
+
+    `darkroom.set_param` journals the XMP/journal value it reads
+    (`_raw_and_before_state`). When that is readable, nothing is needed:
+    `None`. When it is not, and the sidecar exists but the module has no
+    active history entry (spec §6.1 row 4's condition), the row's declared
+    `neutral` -- or, failing that, its darktable `default` -- is what the
+    module really holds: `(value, "neutral" | "default")`. Anything else
+    (no sidecar, an entry that does not decode, or a row declaring neither)
+    raises `ValueUnknown` BEFORE any write, so a move never creates an entry
+    `undo_last` can only refuse ("never readable"). Local reads only; no
+    bridge call. `wb_table` rows are left alone: their undo restores the
+    journalled coefficients, not `before.value`.
+    """
+    if s.value_source == "wb_table":
+        return None
+    raw, before, _ = darkroom._raw_and_before_state(
+        job, resolved.image_id, resolved.path, s.module, s.param, instance)
+    if before.get("value") is not None:
+        return None
+    if raw.get("history_end") is None:
+        reason = "no sidecar yet: commit history first"
+    elif raw.get("enabled") is None:
+        if s.neutral is not None:
+            return float(s.neutral), "neutral"
+        if s.default is not None:
+            return float(s.default), "default"
+        reason = (f"{s.module} has no active history entry and the vocabulary row declares "
+                  "no neutral or darktable default, so the move could not be undone")
+    else:
+        reason = f"{s.module}.{s.param} did not decode from the XMP"
+    raise ValueUnknown(
+        f"cannot read {s.module}.{s.param}'s current value, so this move could not be undone",
+        fix=(f"Scouter refuses rather than make an edit it could not undo: set it in "
+             f"darktable, or with `scouter darkroom set {s.module} {s.param} <value>` "
+             "(undo_last cannot restore the value before it)"),
+        detail={"module": s.module, "param": s.param, "reason": reason},
+    )
+
+
+def _patch_before(job: str, seq: int, module: str, param: str,
+                  fallback: tuple[float, str]) -> None:
+    """Record `fallback` as entry `seq`'s before -- only if that entry exists,
+    is this module/param, actually landed (`after` set) and still has no
+    readable before. `journal.set_before_neutral` re-checks and refuses."""
+    entry = next((e for e in journal.read_all(job) if e.seq == seq), None)
+    if entry is None or entry.after is None or (entry.module, entry.param) != (module, param):
+        return
+    if entry.before.get("value") is not None:
+        return
+    journal.set_before_neutral(job, seq, module=module, param=param, value=fallback[0],
+                               source=fallback[1])
+
+
+def _set_recording_before(module: str, param: str, target: float, *, instance: int,
+                          commit: bool, job: str, fallback: tuple[float, str] | None):
+    """`darkroom.set_param.__wrapped__`, then record `fallback` as the landed
+    entry's before. The engine is untouched: this only patches the journal.
+
+    Final review #1b: `set_param` can land the write (`journal.complete`)
+    and THEN raise `CommitTimeout` from its commit. The entry exists and is
+    undoable -- so the patch must happen on that path too, before the
+    timeout is re-raised; skipping it wedged every later `undo_last` on
+    "seq N ... never readable". `seq` is taken before the call, so a no-op
+    shortcut (which begins no entry) or a write that failed before `begin`
+    patches nothing.
+    """
+    set_fn = getattr(darkroom.set_param, "__wrapped__", darkroom.set_param)
+    seq = journal.next_seq(job)
+    try:
+        result = set_fn(module, param, target, instance=instance, commit=commit, job=job)
+    except CommitTimeout:
+        if fallback is not None:
+            _patch_before(job, seq, module, param, fallback)
+        raise
+    if fallback is not None and not result.noop:
+        _patch_before(job, seq, module, param, fallback)
+    return result
 
 
 def _precommit(job: str, image_id: int) -> str | None:
@@ -304,11 +384,12 @@ def _refusal(mv_module: str, param: str, kind: str) -> dict | None:
     return None
 
 
-def _raise_refused(phrase: str, key: str, refused: list[dict], total: int) -> None:
+def _raise_refused(phrase: str, key: str, refused: list[dict], total: int,
+                   why: str = "are not reachable") -> None:
     first = refused[0]
     cls = {"not_pinned": NotPinned, "value_unknown": ValueUnknown}.get(first["code"], UsageError)
     raise cls(
-        f"'{phrase}' cannot run: {len(refused)} of {total} move(s) are not reachable "
+        f"'{phrase}' cannot run: {len(refused)} of {total} move(s) {why} "
         f"({', '.join(r['module'] + '.' + r['param'] for r in refused)})",
         detail={"phrase": phrase, "key": key, "refused": refused},
     )
@@ -348,6 +429,24 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
         _raise_refused(phrase, res.key, refused, len(concrete))
     group = f"say-{journal.next_seq(job)}"
     warning = None if trust_sidecar else _precommit(job, resolved.image_id)
+    # Final review #1a ruling, all-or-nothing: a `set` move whose before
+    # value is unreadable and whose row declares no neutral/default would
+    # journal an entry `undo_last` can only refuse. Refuse the whole phrase
+    # now -- after the pre-commit (so the read matches what `set_param` will
+    # see) and before any write.
+    unreadable = []
+    for module, mv in concrete:
+        if mv.kind != "set":
+            continue
+        try:
+            before_fallback(resolved, vocab.spec(module, mv.param), 0, job)
+        except ValueUnknown as e:
+            unreadable.append({"module": module, "param": mv.param, "code": e.code,
+                               "status": vocab.status(vocab.spec(module, mv.param)),
+                               "message": e.message, "reason": e.detail.get("reason")})
+    if unreadable:
+        _raise_refused(phrase, res.key, unreadable, len(concrete),
+                       why="have no readable current value to undo to")
     landed: list[dict] = []
     notes: list[explain.MoveNote] = []
     failures: list[dict] = []
@@ -364,8 +463,14 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
                     landed.append(r.to_dict())
                 else:
                     target, _ = vocab.clamp(s, float(mv.value))
-                    set_fn = getattr(darkroom.set_param, "__wrapped__", darkroom.set_param)
-                    r = set_fn(module, mv.param, target, commit=commit, job=job)
+                    # Re-read per move: an earlier move of this phrase may
+                    # have given the module a history entry since the gate.
+                    fallback = before_fallback(resolved, s, 0, job)
+                    r = _set_recording_before(
+                        module, mv.param, target, instance=0, commit=commit, job=job,
+                        fallback=fallback)
+                    if r.previous is None and fallback is not None and not r.noop:
+                        r.previous = fallback[0]
                     notes.append(explain.MoveNote(s, r.previous, target, "set"))
                     landed.append({**r.to_dict(), "target": target,
                                    "summary": f"{s.ui}: set to {explain.with_unit(s, f'{vocab.to_display(s, target):.4g}')}"})

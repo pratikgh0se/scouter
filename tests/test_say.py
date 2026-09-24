@@ -80,6 +80,84 @@ class SayTest(_MovesFixture):
         self.assertEqual(r.refused[0]["code"], "not_in_darkroom")
 
 
+class SetMoveBeforeTest(_MovesFixture):
+    """Final review #1a ruling: a `set` move (the hue rows of warm_highlights,
+    cool_shadows, teal_orange) whose before value is unreadable -- the
+    fixture's XMP has no colorbalancergb entry at all -- journals the row's
+    darktable default when it declares one, and is refused value_unknown
+    up front (before any write) when it declares neither neutral nor default."""
+
+    HUE = ("colorbalancergb", "highlights_hue")
+    CHROMA = ("colorbalancergb", "highlights_chroma")
+
+    def _pinned(self):
+        return mock.patch.dict(dtbridge.ACTION_PATHS, {
+            self.HUE: "iop/colorbalancergb/highlights gain/hue",
+            self.CHROMA: "iop/colorbalancergb/highlights gain/chroma",
+        })
+
+    def _with_default(self, default):
+        import dataclasses
+
+        from scouter.core import vocab
+
+        row = dataclasses.replace(vocab.spec(*self.HUE), default=default)
+        return mock.patch.dict(vocab._BY_KEY, {self.HUE: row})
+
+    def test_no_neutral_and_no_default_refuses_before_any_write(self) -> None:
+        with self._pinned(), mock.patch("scouter.core.vocab.xmp_named", return_value=True):
+            with self.assertRaises(ValueUnknown) as cm:
+                moves.say.__wrapped__("warm the highlights", commit=False, job="job-test")
+        refused = cm.exception.detail["refused"]
+        self.assertEqual([(r["module"], r["param"]) for r in refused], [self.HUE])
+        self.assertIn("no neutral or darktable default", refused[0]["reason"])
+        self.assertEqual(self.sets(), [], "all-or-nothing: no move may land")
+        self.assertEqual(journal.read_all("job-test"), [], "no un-undoable entry is created")
+
+    def test_a_declared_default_is_journalled_and_undo_restores_it(self) -> None:
+        with self._pinned(), self._with_default(0.0), \
+             mock.patch("scouter.core.vocab.xmp_named", return_value=True):
+            r = moves.say.__wrapped__("warm the highlights", commit=False, job="job-test")
+            self.assertEqual(r.outcome, "ok")
+            hue = [e for e in journal.read_all("job-test") if e.param == "highlights_hue"][0]
+            self.assertEqual((hue.before.get("value"), hue.before.get("source")), (0.0, "default"))
+            self.assertEqual(r.moves[0]["previous"], 0.0, "the result names the default too")
+            result = darkroom.undo_last.__wrapped__(job="job-test")
+        self.assertEqual(result.outcome, "ok")
+        self.assertEqual(len(result.undone_group), 2)
+        self.assertAlmostEqual(self.sets()[-1]["value"], 0.0, msg="hue restored to the default")
+        self.assertTrue(all(e.undone for e in journal.read_all("job-test")))
+
+    def test_default_patch_survives_a_commit_timeout_after_the_write_landed(self) -> None:
+        from scouter.errors import CommitTimeout
+        from scouter.types import CommitResult
+
+        def timeout_on_change(job, image, *, strategy="auto", attempts=None, expect_change=True):
+            if expect_change:
+                raise CommitTimeout("sidecar never advanced")
+            return CommitResult(committed=True, changed=False, warnings=[])
+
+        with self._pinned(), self._with_default(0.0), \
+             mock.patch("scouter.core.vocab.xmp_named", return_value=True), \
+             mock.patch("scouter.core.darkroom._commit", side_effect=timeout_on_change):
+            with self.assertRaises(CommitTimeout):
+                moves.say.__wrapped__("warm the highlights", job="job-test")
+        [entry] = journal.read_all("job-test")
+        self.assertEqual((entry.before.get("value"), entry.before.get("source")), (0.0, "default"))
+
+    def test_a_readable_before_is_left_to_set_param(self) -> None:
+        with self._pinned(), mock.patch("scouter.core.vocab.xmp_named", return_value=True), \
+             mock.patch("scouter.core.darkroom._raw_and_before_state",
+                        return_value=({"value": 120.0, "enabled": True, "history_end": 9},
+                                      {"value": 120.0, "enabled": True, "history_end": 9},
+                                      False)):
+            r = moves.say.__wrapped__("warm the highlights", commit=False, job="job-test")
+        self.assertEqual(r.outcome, "ok")
+        hue = [e for e in journal.read_all("job-test") if e.param == "highlights_hue"][0]
+        self.assertEqual(hue.before.get("value"), 120.0)
+        self.assertNotIn(hue.before.get("source"), ("neutral", "default"))
+
+
 class GroupUndoTest(_MovesFixture):
     def _two_moves(self) -> str:
         """Land two exposure writes in one group by hand (no multi-move live phrase exists yet)."""

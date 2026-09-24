@@ -165,6 +165,13 @@ def resolve(text: str, amount: float | None = None) -> Resolution:
                 "(say 'cooler by 300k', not 'warmer by -300k')",
                 detail={"phrase": text},
             )
+        if float(raw_number) == 0:
+            # Final review #5: "brighter by 0" is a zero-delta move -- a
+            # write (and an undo entry) that changes nothing.
+            raise UsageError(
+                "give a non-zero amount: 'by 0' would change nothing",
+                detail={"phrase": text},
+            )
         explicit = (float(raw_number), m.group(2))
         core = (core[: m.start()] + " " + core[m.end():]).strip()
     factor = 1.0

@@ -2,6 +2,7 @@
   {
     "candidate_paths": [],
     "concept": "exposure",
+    "default": null,
     "display_scale": 1.0,
     "hi": 4.0,
     "lo": -3.0,
@@ -23,6 +24,7 @@
   {
     "candidate_paths": [],
     "concept": "black_level",
+    "default": null,
     "display_scale": 1.0,
     "hi": 0.1,
     "lo": -0.1,
@@ -44,6 +46,7 @@
   {
     "candidate_paths": [],
     "concept": "tone_mapper",
+    "default": null,
     "display_scale": 1.0,
     "hi": 3.0,
     "lo": 0.5,
@@ -65,6 +68,7 @@
   {
     "candidate_paths": [],
     "concept": "tone_mapper",
+    "default": null,
     "display_scale": 1.0,
     "hi": 1.0,
     "lo": -1.0,
@@ -86,6 +90,7 @@
   {
     "candidate_paths": [],
     "concept": "white_balance",
+    "default": null,
     "display_scale": 1.0,
     "hi": 12000.0,
     "lo": 2000.0,
@@ -107,6 +112,7 @@
   {
     "candidate_paths": [],
     "concept": "white_balance",
+    "default": null,
     "display_scale": 1.0,
     "hi": 2.0,
     "lo": 0.5,
@@ -128,6 +134,7 @@
   {
     "candidate_paths": [],
     "concept": "color_balance",
+    "default": null,
     "display_scale": 100.0,
     "hi": 0.5,
     "lo": -0.5,
@@ -149,6 +156,7 @@
   {
     "candidate_paths": [],
     "concept": "chroma_saturation",
+    "default": null,
     "display_scale": 100.0,
     "hi": 0.5,
     "lo": -0.5,
@@ -172,6 +180,7 @@
       "iop/colorbalancergb/global vibrance"
     ],
     "concept": "chroma_saturation",
+    "default": null,
     "display_scale": 100.0,
     "hi": 0.5,
     "lo": -0.5,
@@ -195,6 +204,7 @@
       "iop/colorbalancergb/global chroma"
     ],
     "concept": "chroma_saturation",
+    "default": null,
     "display_scale": 100.0,
     "hi": 0.5,
     "lo": -0.5,
@@ -219,6 +229,7 @@
       "iop/colorbalancergb/shadows luminance"
     ],
     "concept": "color_balance",
+    "default": null,
     "display_scale": 100.0,
     "hi": 0.25,
     "lo": -0.25,
@@ -243,6 +254,7 @@
       "iop/colorbalancergb/shadows hue"
     ],
     "concept": "grading",
+    "default": null,
     "display_scale": 1.0,
     "hi": 360.0,
     "lo": 0.0,
@@ -267,6 +279,7 @@
       "iop/colorbalancergb/shadows chroma"
     ],
     "concept": "grading",
+    "default": null,
     "display_scale": 100.0,
     "hi": 0.3,
     "lo": 0.0,
@@ -291,6 +304,7 @@
       "iop/colorbalancergb/midtones luminance"
     ],
     "concept": "color_balance",
+    "default": null,
     "display_scale": 100.0,
     "hi": 0.25,
     "lo": -0.25,
@@ -315,6 +329,7 @@
       "iop/colorbalancergb/midtones hue"
     ],
     "concept": "grading",
+    "default": null,
     "display_scale": 1.0,
     "hi": 360.0,
     "lo": 0.0,
@@ -339,6 +354,7 @@
       "iop/colorbalancergb/midtones chroma"
     ],
     "concept": "grading",
+    "default": null,
     "display_scale": 100.0,
     "hi": 0.3,
     "lo": 0.0,
@@ -363,6 +379,7 @@
       "iop/colorbalancergb/highlights luminance"
     ],
     "concept": "color_balance",
+    "default": null,
     "display_scale": 100.0,
     "hi": 0.25,
     "lo": -0.25,
@@ -387,6 +404,7 @@
       "iop/colorbalancergb/highlights hue"
     ],
     "concept": "grading",
+    "default": null,
     "display_scale": 1.0,
     "hi": 360.0,
     "lo": 0.0,
@@ -411,6 +429,7 @@
       "iop/colorbalancergb/highlights chroma"
     ],
     "concept": "grading",
+    "default": null,
     "display_scale": 100.0,
     "hi": 0.3,
     "lo": 0.0,
@@ -434,6 +453,7 @@
       "iop/filmicrgb/white relative exposure"
     ],
     "concept": "tone_mapper",
+    "default": null,
     "display_scale": 1.0,
     "hi": 10.0,
     "lo": 2.0,
@@ -457,6 +477,7 @@
       "iop/filmicrgb/black relative exposure"
     ],
     "concept": "tone_mapper",
+    "default": null,
     "display_scale": 1.0,
     "hi": -3.0,
     "lo": -14.0,
@@ -480,6 +501,7 @@
       "iop/filmicrgb/contrast"
     ],
     "concept": "tone_mapper",
+    "default": null,
     "display_scale": 1.0,
     "hi": 3.0,
     "lo": 0.5,
@@ -503,6 +525,7 @@
       "iop/colorzones/mix"
     ],
     "concept": "color_zones",
+    "default": null,
     "display_scale": 100.0,
     "hi": 2.0,
     "lo": 0.0,
@@ -524,6 +547,7 @@
   {
     "candidate_paths": [],
     "concept": "color_zones",
+    "default": null,
     "display_scale": 1.0,
     "hi": 0.0,
     "lo": 0.0,

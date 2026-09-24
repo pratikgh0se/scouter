@@ -1,7 +1,7 @@
 """Aligned tables for the three verbs whose payload Pratik reads directly.
 
 JSON stays the default and the only machine contract; `--pretty` swaps in a
-table for `cull.propose`, `outliers.list` and `library.jobs` because a 300-row
+table for `cull.propose`, `outliers.list` and `vocab.list` (phase 3 §14.1) because a 300-row
 JSON array is not something a human culls from. Keyed by verb id, so a verb
 without a renderer simply gets indented JSON.
 """
@@ -89,11 +89,38 @@ def _render_outliers_list(payload: dict) -> str:
     return f"{table}\n\n{footer}"
 
 
+def _render_vocab_list(payload: dict) -> str:
+    """One row per vocabulary word (spec §14.1: module.param, status, unit,
+    clamp, step), in the table's own order. Clamp and step are internal
+    units, the same numbers every argument takes."""
+    headers = ["module.param", "status", "unit", "clamp", "step"]
+    rows = []
+    for r in payload.get("rows", []):
+        clamp = f"{r.get('lo', 0):g} .. {r.get('hi', 0):g}"
+        if r.get("wraps"):
+            clamp += " (wraps)"
+        if r.get("status") == "unreachable":
+            clamp, step = "-", "-"
+        else:
+            step = f"{r.get('step', 0):g}"
+        rows.append([f"{r.get('module', '')}.{r.get('param', '')}", str(r.get("status", "")),
+                     str(r.get("unit", "")), clamp, step])
+    table = _align(headers, rows)
+    counts = payload.get("counts", {})
+    footer = (
+        f"{len(rows)} word(s): live {counts.get('live', 0)}, "
+        f"absolute_only {counts.get('absolute_only', 0)}, "
+        f"candidate {counts.get('candidate', 0)}, unreachable {counts.get('unreachable', 0)}"
+    )
+    return f"{table}\n\n{footer}"
+
+
 #: Renderers land here as the verbs they cover are built. `library.jobs` adds
 #: its own entry in its own task.
 RENDERERS: dict[str, Callable[[dict], str]] = {
     "cull.propose": _render_cull_propose,
     "outliers.list": _render_outliers_list,
+    "vocab.list": _render_vocab_list,
 }
 
 
