@@ -60,10 +60,8 @@ import contextlib
 import json
 import os
 import shutil
-import signal
 import struct
 import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -72,11 +70,23 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
-DARKTABLE = Path("/Applications/darktable.app/Contents/MacOS/darktable")
+from tests import host_support
+
+# INSTALLED_PLUGIN/PLUGIN_SRC are re-exported (brief's own import line, task 9)
+# so the rest of this file's names do not have to change, even though this
+# file only reaches them through `host_support.*` now (see
+# PluginInstallSafetyTest below).
+from tests.host_support import (  # noqa: F401
+    DARKTABLE,
+    HERO,
+    INSTALLED_PLUGIN,
+    PLUGIN_SRC,
+    SCRATCH_DIR,
+)
+from tests.host_support import PluginInstall as _PluginInstall
+from tests.host_support import quit_darktable as _quit
+
 EDITING_TRIAL = Path("/Users/pratik/Pictures/EditingTrial")
-HERO = EDITING_TRIAL / "P6281348.ORF"
-PLUGIN_SRC = Path(__file__).resolve().parent.parent / "darktable_mcp" / "lua" / "darktable_mcp.lua"
-INSTALLED_PLUGIN = Path.home() / ".config" / "darktable" / "lua" / "darktable_mcp.lua"
 CAPTURED_FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 
 _MISSING = []
@@ -93,148 +103,6 @@ SKIP_REASON = (
     if _MISSING
     else ""
 )
-
-
-class _PluginInstall:
-    """Install this repo's Lua plugin over the user's, restorably.
-
-    Fix round 1, minor g: every host class here had its own copy of this,
-    each keeping the user's plugin bytes in a CLASS ATTRIBUTE -- so a hard
-    kill, a power loss or a pytest crash between install and teardown left
-    Scouter's development plugin installed in the user's real
-    `~/.config/darktable` with no way to get theirs back. That is exactly
-    what the backup existed to prevent.
-
-    The copy now goes to `~/Pictures/ScouterScratch/dtconfig-backup-<ts>/`
-    BEFORE anything is overwritten, `restore()` reads from that file rather
-    than from memory, and the directory survives a crash (it is deleted only
-    after a successful restore) so a human can undo it by hand from a path
-    its own MANIFEST.txt names.
-
-    **What is NOT backed up, and NOT restored: darktable's `library.db`.**
-    A host run imports a film roll into it and writes ratings, and Scouter
-    may not write `library.db` itself, so there is nothing here that could
-    put it back. Stated rather than hidden.
-    """
-
-    def __init__(self) -> None:
-        self.backup_dir: Path | None = None
-        self.plugin_existed_before = False
-        self.luarc_existed_before = False
-        self.luarc_line_added = False
-        self.luarc_path: Path | None = None
-
-    def install(self) -> None:
-        # FIRST, before any mkdir (fix round 2, minor m1): `install`'s own
-        # `except BaseException` calls `restore()`, and `restore()` UNLINKS
-        # the plugin when `plugin_existed_before` is False. Reading these
-        # flags after a mkdir meant a failing mkdir left them at their
-        # `False` defaults and the restore then deleted the user's real
-        # plugin -- the cleanup destroying exactly what the backup exists to
-        # protect. Two `exists()` calls, no side effects, nothing before them.
-        luarc = INSTALLED_PLUGIN.parent.parent / "luarc"
-        self.luarc_path = luarc
-        self.plugin_existed_before = INSTALLED_PLUGIN.exists()
-        self.luarc_existed_before = luarc.exists()
-
-        try:
-            INSTALLED_PLUGIN.parent.mkdir(parents=True, exist_ok=True)
-            SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
-            # The pid is in the name (minor m2) so two host classes running
-            # inside the same second -- or two pytest processes -- cannot
-            # share a backup directory and overwrite each other's copy of the
-            # user's plugin.
-            self.backup_dir = SCRATCH_DIR / (
-                f"dtconfig-backup-{time.strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}"
-            )
-            self.backup_dir.mkdir(parents=True, exist_ok=True)
-
-            # Everything needed to undo this, on disk, before the first write.
-            if self.plugin_existed_before:
-                (self.backup_dir / "darktable_mcp.lua").write_bytes(INSTALLED_PLUGIN.read_bytes())
-            if self.luarc_existed_before:
-                (self.backup_dir / "luarc").write_bytes(luarc.read_bytes())
-            (self.backup_dir / "MANIFEST.txt").write_text(
-                "Scouter host test backup of the user's darktable Lua config.\n"
-                f"taken_at: {time.strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
-                f"plugin_path: {INSTALLED_PLUGIN}\n"
-                f"plugin_existed_before: {self.plugin_existed_before}\n"
-                f"luarc_path: {luarc}\n"
-                f"luarc_existed_before: {self.luarc_existed_before}\n"
-                "\n"
-                "If this directory still exists, a test did not finish its\n"
-                "restore. To undo by hand: copy darktable_mcp.lua and luarc\n"
-                "back to the paths above, deleting them instead if the\n"
-                "matching *_existed_before line says false.\n"
-                "\n"
-                "NOT backed up and NOT restored: darktable's library.db. A\n"
-                "host run imports a film roll into it and writes ratings.\n",
-                encoding="utf-8",
-            )
-
-            shutil.copy(PLUGIN_SRC, INSTALLED_PLUGIN)
-
-            line = 'require "darktable_mcp"\n'
-            if not luarc.exists() or line not in luarc.read_text():
-                self.luarc_line_added = True
-                with luarc.open("a") as fh:
-                    fh.write(line)
-        except BaseException:
-            self.restore()
-            raise
-
-    def restore(self) -> None:
-        backup = self.backup_dir
-        try:
-            if self.luarc_path is not None:
-                saved_luarc = (backup / "luarc") if backup is not None else None
-                if self.luarc_existed_before:
-                    if saved_luarc is not None and saved_luarc.is_file():
-                        self.luarc_path.write_bytes(saved_luarc.read_bytes())
-                    elif self.luarc_line_added:
-                        # No backup file to fall back on: strip just the line
-                        # this install appended, which is all it changed.
-                        line = 'require "darktable_mcp"\n'
-                        text = self.luarc_path.read_text()
-                        self.luarc_path.write_text(text.replace(line, "", 1))
-                elif self.luarc_line_added:
-                    self.luarc_path.unlink(missing_ok=True)
-
-            saved_plugin = (backup / "darktable_mcp.lua") if backup is not None else None
-            if self.plugin_existed_before:
-                if saved_plugin is not None and saved_plugin.is_file():
-                    INSTALLED_PLUGIN.write_bytes(saved_plugin.read_bytes())
-            else:
-                INSTALLED_PLUGIN.unlink(missing_ok=True)
-        except OSError as e:
-            print(
-                "WARNING: could not restore the darktable Lua config; the backup is at "
-                f"{backup} and its MANIFEST.txt says how to undo this by hand: {e}"
-            )
-            return
-        if backup is not None:
-            shutil.rmtree(backup, ignore_errors=True)
-        self.backup_dir = None
-
-
-def _quit(proc: subprocess.Popen[bytes]) -> None:
-    try:
-        subprocess.run(
-            ["osascript", "-e", 'tell application "darktable" to quit'],
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        pass
-    for wait, sig in ((20, None), (10, signal.SIGTERM), (10, signal.SIGKILL)):
-        if sig is not None:
-            proc.send_signal(sig) if sig == signal.SIGTERM else proc.kill()
-        try:
-            proc.wait(timeout=wait)
-            return
-        except subprocess.TimeoutExpired:
-            continue
 
 
 @unittest.skipUnless(not _MISSING, SKIP_REASON)
@@ -547,7 +415,6 @@ WB_SLIDER_SCHEMES: tuple[tuple[str, str, str], ...] = (
     ),
 )
 
-SCRATCH_DIR = Path.home() / "Pictures" / "ScouterScratch"
 SCRATCH_ORF = SCRATCH_DIR / "em10iii.ORF"
 MEASUREMENTS_GENERATED = (
     Path(__file__).resolve().parent.parent / "docs" / "measurements-generated.md"
@@ -1991,8 +1858,13 @@ class PluginInstallSafetyTest(unittest.TestCase):
         self.luarc = self.tmp / "config" / "darktable" / "luarc"
         self.scratch = self.tmp / "scratch"
         self._patches = [
-            mock.patch.object(sys.modules[__name__], "INSTALLED_PLUGIN", self.plugin),
-            mock.patch.object(sys.modules[__name__], "SCRATCH_DIR", self.scratch),
+            # Patches `tests.host_support`'s own module globals (task 9: this
+            # class moved there), not this file's re-exported names -- the
+            # class's methods look `INSTALLED_PLUGIN`/`SCRATCH_DIR` up in
+            # THEIR OWN module's namespace, so patching this module's copy
+            # would silently leave the real paths in effect.
+            mock.patch.object(host_support, "INSTALLED_PLUGIN", self.plugin),
+            mock.patch.object(host_support, "SCRATCH_DIR", self.scratch),
         ]
         for patch in self._patches:
             patch.start()

@@ -230,6 +230,12 @@ def load_table(camera: str) -> dict | None:
             "synthetic; run `scouter wb calibrate` for a real, provenanced table"
         )
     elif isinstance(data, dict) and isinstance(data.get("samples"), list) and data["samples"]:
+        version = data.get("version", 1)
+        if version != 1:
+            raise ValueError(
+                f"{path}: calibration table version {version} is not supported "
+                "(this Scouter reads version 1); re-run `scouter wb calibrate`"
+            )
         for point in data["samples"]:
             _validate_object_sample(path, point)
         samples = [
