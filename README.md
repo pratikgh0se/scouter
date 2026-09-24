@@ -268,8 +268,13 @@ scouter --pretty metrics summary --since 7d
 
 `0` ok · `1` error · `2` usage · `3` bridge_timeout · `4` wrong_view ·
 `5` confirmation required (a dry run was printed) · `6` not_in_darkroom ·
-`7` cli_wrote_nothing · `8` db_locked · `9` style_partial · `10` commit_timeout ·
-`20` value_unknown · `21` not_pinned
+`7` cli_wrote_nothing · `8` db_locked · `9` style_partial / partial ·
+`10` commit_timeout · `11` backup_not_configured · `12` checksum_mismatch ·
+`13` destination_collision · `14` exif_unreadable · `15` style_write_failed ·
+`16` encryption_unavailable · `17` manifest_unauthenticated ·
+`18` export_all_failed · `19` no_sidecar · `20` value_unknown ·
+`21` not_pinned · `22` state_locked · `23` noop
+(`darkroom undo-last` with nothing to undo, on a real, non-dry call)
 
 ### Tests
 
