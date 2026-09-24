@@ -514,7 +514,12 @@ These are load-bearing. Read them before scripting against phase 2.
   `totals` describe the WHOLE job (every import it has ever had), not just
   the run that just finished -- an appending import used to overwrite these
   with only its own numbers even though `files` already held every prior
-  import's frames too.
+  import's frames too. A file with NO camera model in its EXIF at all never
+  fails the whole card either (review round 1, ruling 2): with an explicit
+  `--camera X`, it is imported under X and listed in `assumed_camera`
+  (`{"source_name", "camera"}`); without one, it is skipped and listed in
+  `skipped_no_body` (`{"source_name"}`), and the rest of the card still
+  imports.
 - **`library import`'s auto-derived date no longer trusts a single
   outlier.** A card's date used to default to the EARLIEST capture time,
   full stop -- so one file with an unset clock (the E12 Sony card's own

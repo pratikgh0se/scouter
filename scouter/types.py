@@ -370,6 +370,14 @@ class ImportResult(Payload):
     #: Files this run's `--camera` filter excluded because their own EXIF
     #: names a different body (D5): `{"source_name", "camera"}` per file.
     skipped_other_camera: list[dict] = field(default_factory=list)
+    #: A file with NO camera model in its EXIF at all, imported under an
+    #: explicit `--camera X` anyway (review round 1, ruling 2):
+    #: `{"source_name", "camera"}` per file.
+    assumed_camera: list[dict] = field(default_factory=list)
+    #: A file with no camera model in its EXIF, skipped because there was no
+    #: `--camera` to fall back on (review round 1, ruling 2): `{"source_name"}`
+    #: per file. The card never fails over this one file.
+    skipped_no_body: list[dict] = field(default_factory=list)
     source_root: str = ""
     source_roots: list[str] = field(default_factory=list)
     files: list[dict] = field(default_factory=list)

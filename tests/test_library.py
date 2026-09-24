@@ -25,6 +25,7 @@ from scouter.errors import (
     BridgeTimeout,
     ChecksumMismatch,
     DestinationCollision,
+    ExifUnreadable,
     UsageError,
 )
 from tests.scouter_fakes import FakeBridge, TempCache, config_fixture
@@ -171,6 +172,45 @@ class PlanTest(LibraryTestCase):
         self.assertIn("nex5n", str(ctx.exception))
         self.assertIn("em10iii", str(ctx.exception))
         self.assertIn("a7", str(ctx.exception))
+
+    def test_a_no_body_file_is_imported_under_an_explicit_camera(self) -> None:
+        """Review round 1, ruling 2: `exif.camera_slug` raises `ExifUnreadable`
+        for a file with no camera model at all -- this used to abort the
+        WHOLE card over that one file. With an explicit `--camera X`, the
+        file is now imported under X and listed in `assumed_camera`."""
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        with mock.patch.object(
+            exif,
+            "camera_slug",
+            side_effect=[ExifUnreadable("no camera model"), "a7"],
+        ):
+            result = library.import_card(
+                str(source), "harbour-wedding", camera="a7", confirm=True
+            )
+        self.assertEqual(result.totals["copied"], 2, "the card never fails on this one file")
+        self.assertEqual(
+            result.assumed_camera, [{"source_name": "P6281000.ORF", "camera": "a7"}]
+        )
+        self.assertEqual(result.skipped_no_body, [])
+        by_source = {f["source_name"]: f for f in result.files}
+        self.assertEqual(by_source["P6281000.ORF"]["camera"], "a7")
+
+    def test_a_no_body_file_is_skipped_without_camera(self) -> None:
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        with mock.patch.object(
+            exif,
+            "camera_slug",
+            side_effect=[ExifUnreadable("no camera model"), "em10iii"],
+        ):
+            result = library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertEqual(result.totals["copied"], 1, "the card never fails on this one file")
+        self.assertEqual(result.skipped_no_body, [{"source_name": "P6281000.ORF"}])
+        self.assertEqual(result.assumed_camera, [])
+        by_source = {f["source_name"]: f for f in result.files}
+        self.assertNotIn("P6281000.ORF", by_source)
+        self.assertIn("P6281001.ORF", by_source)
 
 
 class DryRunTest(LibraryTestCase):

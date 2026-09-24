@@ -35,6 +35,7 @@ from scouter.errors import (
     BridgeTimeout,
     ChecksumMismatch,
     DestinationCollision,
+    ExifUnreadable,
     ScouterError,
     UsageError,
 )
@@ -86,6 +87,14 @@ class _Plan:
     #: names a different body -- `{"source_name", "camera"}` per file, never
     #: silently dropped.
     skipped_other_camera: list[dict] = dataclasses.field(default_factory=list)
+    #: Review round 1, ruling 2: a file with NO EXIF body at all, imported
+    #: under an explicit `--camera X` anyway -- `{"source_name", "camera"}`
+    #: per file, so the assumption is visible, never silent.
+    assumed_camera: list[dict] = dataclasses.field(default_factory=list)
+    #: Review round 1, ruling 2: a file with no EXIF body, skipped because
+    #: there was no `--camera` to fall back on -- `{"source_name"}` per
+    #: file. The card never fails over this one file.
+    skipped_no_body: list[dict] = dataclasses.field(default_factory=list)
 
 
 class ManifestCorrupt(UsageError):
@@ -656,10 +665,36 @@ def _plan(
     # behaviour refused a mixed card outright, then (once `--camera` was
     # given to get past the refusal) mislabelled every OTHER body's files
     # with the chosen slug and cleared their `camera_model`.
-    slug_by_path: dict[Path, str] = {path: exif.camera_slug(t, cfg) for path, t in tagged}
-    skipped_other_camera: list[dict] = []
     if camera is not None:
         camera = paths.validate_slug(camera)
+
+    # Review round 1, ruling 2: `exif.camera_slug` raises `ExifUnreadable`
+    # for a file with NO camera model in its EXIF at all -- this used to
+    # abort the WHOLE card over that one file, and the raised message ("no
+    # camera model ... and no --camera was given") was false the moment
+    # `--camera` WAS given, since the old code never even reached this far
+    # with one. An explicit `--camera X` is also a label for such a file
+    # (imported under X, listed in `assumed_camera`); without one, the file
+    # is skipped (`skipped_no_body`) and the rest of the card still imports.
+    slug_by_path: dict[Path, str] = {}
+    assumed_camera: list[dict] = []
+    skipped_no_body: list[dict] = []
+    readable_tagged: list[tuple[Path, exif.ExifTags]] = []
+    for path, t in tagged:
+        try:
+            slug_by_path[path] = exif.camera_slug(t, cfg)
+            readable_tagged.append((path, t))
+        except ExifUnreadable:
+            if camera is not None:
+                slug_by_path[path] = camera
+                assumed_camera.append({"source_name": path.name, "camera": camera})
+                readable_tagged.append((path, t))
+            else:
+                skipped_no_body.append({"source_name": path.name})
+    tagged = readable_tagged
+
+    skipped_other_camera: list[dict] = []
+    if camera is not None:
         matching = [(p, t) for p, t in tagged if slug_by_path[p] == camera]
         skipped_other_camera = [
             {"source_name": p.name, "camera": slug_by_path[p]}
@@ -787,6 +822,8 @@ def _plan(
         hashed_files=hashed_files,
         hashed_bytes=hashed_bytes,
         skipped_other_camera=skipped_other_camera,
+        assumed_camera=assumed_camera,
+        skipped_no_body=skipped_no_body,
     )
 
 
@@ -848,6 +885,18 @@ def import_card(
             f"--camera {camera!r} matched {len(planned)} file(s); skipped "
             f"{len(resolved.skipped_other_camera)} from other bodies: {skipped_names}"
         )
+    if resolved.assumed_camera:
+        names = ", ".join(e["source_name"] for e in resolved.assumed_camera)
+        warnings.append(
+            f"{len(resolved.assumed_camera)} file(s) had no camera model in their EXIF; "
+            f"imported under --camera {camera!r} anyway (see assumed_camera): {names}"
+        )
+    if resolved.skipped_no_body:
+        names = ", ".join(e["source_name"] for e in resolved.skipped_no_body)
+        warnings.append(
+            f"{len(resolved.skipped_no_body)} file(s) had no camera model in their EXIF "
+            f"and no --camera was given; skipped (see skipped_no_body): {names}"
+        )
 
     plan_view = [
         {
@@ -888,6 +937,8 @@ def import_card(
             camera_make=camera_make,
             source_root=str(source_path),
             skipped_other_camera=resolved.skipped_other_camera,
+            assumed_camera=resolved.assumed_camera,
+            skipped_no_body=resolved.skipped_no_body,
             plan=plan_view,
             warnings=warnings,
             reason=(
@@ -1203,6 +1254,8 @@ def import_card(
         files=merged_files,
         totals=totals,
         skipped_other_camera=resolved.skipped_other_camera,
+        assumed_camera=resolved.assumed_camera,
+        skipped_no_body=resolved.skipped_no_body,
         film_roll_registered=film_roll_registered,
         imported=imported_count,
         scan_incomplete=scan_incomplete,

@@ -101,3 +101,10 @@ vault; decision row 407).
   ones -- was proposed a pick. Both kinds of frame are now excluded from
   the percentile, and a `stats_error` frame is never proposed `pick_rating`
   regardless of what the threshold computes to.
+- **Should-fix:** a file with no camera model in its EXIF at all used to
+  abort the WHOLE card (`exif.camera_slug` now runs per file, before
+  `--camera` is applied, so it raised even WITH `--camera` given -- the
+  raised message "and no --camera was given" was then false). With an
+  explicit `--camera X` such a file is now imported under X
+  (`assumed_camera`); without one it is skipped (`skipped_no_body`), never
+  the whole card.
