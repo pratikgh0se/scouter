@@ -122,3 +122,9 @@ vault; decision row 407).
   open in the README's honest limits. Added `metrics.instrumented`'s new
   `startup_ms` (time from process start to a verb's own start, in every
   events.jsonl/audit line) so the next such stall is attributable.
+- **Should-fix:** MCP `library_import`'s `camera` and `date` field
+  descriptions (`scouter/mcp/schemas.py`) still said the old semantics
+  ("camera slug override; required for a mixed-camera card", "default: the
+  earliest capture time") -- agent-facing parity drift against the CLI
+  help text, which D5/D6 already updated. Copied the new wording to both
+  layers and regenerated `tests/fixtures/scouter_mcp_golden.json`.

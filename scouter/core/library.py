@@ -1585,7 +1585,13 @@ for _verb in (
             ArgSpec(
                 "job_slug", "str", required=True, help="job directory slug, e.g. harbour-wedding"
             ),
-            ArgSpec("date", "str", help="YYYY-MM-DD; default: the earliest capture time"),
+            ArgSpec(
+                "date",
+                "str",
+                help="YYYY-MM-DD; default: the earliest capture time, unless it is "
+                "more than 30 days from the card's median capture time (one bad "
+                "clock), in which case the median is used instead, with a warning",
+            ),
             ArgSpec(
                 "camera",
                 "str",

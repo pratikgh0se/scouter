@@ -579,11 +579,15 @@ TOOL_SPECS: list[dict] = [
                 },
                 "date": {
                     "type": "string",
-                    "description": "YYYY-MM-DD; default: the earliest capture time",
+                    "description": "YYYY-MM-DD; default: the earliest capture time, unless it "
+                    "is more than 30 days from the card's median capture time (one bad "
+                    "clock), in which case the median is used instead, with a warning",
                 },
                 "camera": {
                     "type": "string",
-                    "description": "camera slug override; required for a mixed-camera card",
+                    "description": "import only this body's files from a mixed card; the "
+                    "rest are skipped and reported (every file is always labelled from "
+                    "its own EXIF)",
                 },
                 "extensions": {
                     "type": "array",
