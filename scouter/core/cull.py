@@ -579,10 +579,18 @@ def apply(
     frames = data.get("frames", [])
     recorded_mtimes = data.get("xmp_mtimes", {})
 
-    # The proposal is stale the moment any recorded frame's sidecar mtime has
-    # moved: the numbers Pratik read are no longer the numbers on disk, and
-    # `cull.apply` must not silently re-derive new ones (design 8.3).
+    # A frame is stale the moment its recorded sidecar mtime has moved: the
+    # number Pratik read for THAT frame is no longer the number on disk, and
+    # `cull.apply` must not silently re-derive a new one for it (design 8.3).
+    #
+    # E12 D7, row 407: this used to refuse the WHOLE proposal the moment any
+    # ONE frame went stale (opening the hero in darktable was enough --
+    # merely LOOKING at a frame rewrites its XMP). The rest of the job's
+    # frames are unaffected by one frame's edit, so they are applied as
+    # planned; only the stale ones are skipped, and named, never silently
+    # dropped.
     stale: list[str] = []
+    fresh_frames: list[dict] = []
     for f in frames:
         path = f["path"]
         recorded = recorded_mtimes.get(path)
@@ -590,13 +598,18 @@ def apply(
         current = sidecar.stat().st_mtime_ns if sidecar.exists() else None
         if recorded != current:
             stale.append(path)
+        else:
+            fresh_frames.append(f)
+
+    stale_warnings: list[str] = []
     if stale:
-        raise UsageError(
+        stale_warnings.append(
             f"{len(stale)} frame(s) changed since this proposal was written "
             f"({', '.join(Path(p).name for p in stale[:5])}"
-            f"{', ...' if len(stale) > 5 else ''}); re-run `cull propose` for fresh numbers",
-            detail={"proposal": str(proposal_path), "stale_frames": stale},
+            f"{', ...' if len(stale) > 5 else ''}); skipped -- re-run `cull propose` "
+            "for fresh numbers on those"
         )
+    frames = fresh_frames
 
     to_change = [f for f in frames if f["rating_proposed"] != f["rating_now"]]
     unchanged = len(frames) - len(to_change)
@@ -616,6 +629,8 @@ def apply(
             would_change=len(to_change),
             unchanged=unchanged,
             plan=plan,
+            stale=stale,
+            warnings=stale_warnings,
             reason=(
                 "dry run: no ratings were written"
                 if dry_run
@@ -678,7 +693,7 @@ def apply(
         )
 
     applied = len(to_change) - len(missed_ids)
-    warnings: list[str] = []
+    warnings: list[str] = list(stale_warnings)
     if unverified_count:
         warnings.append(
             f"{unverified_count} rating(s) landed in darktable's database but the XMP "
@@ -713,6 +728,7 @@ def apply(
         verified=verified_count,
         unverified=unverified_count,
         per_image=per_image,
+        stale=stale,
         warnings=warnings,
     )
 

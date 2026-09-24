@@ -493,6 +493,12 @@ These are load-bearing. Read them before scripting against phase 2.
   earlier outlier past that falls back to the median instead, with a
   warning naming the outlier so the camera clock gets checked (D6, row
   407).
+- **`cull apply` no longer refuses the whole job over one stale frame.**
+  Merely opening a frame in darktable rewrites its XMP, which used to make
+  `cull apply` refuse the ENTIRE proposal the moment any one frame's
+  sidecar had moved since `cull propose` wrote it. The stale frame(s) are
+  now skipped and named in `result.stale`/a warning; every other frame in
+  the proposal is still applied as planned (D7, row 407).
 
 ### Phase 2 exit criteria
 

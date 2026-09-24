@@ -510,6 +510,11 @@ class CullApplyResult(Payload):
     verified: int = 0
     unverified: int = 0
     per_image: list[dict] = field(default_factory=list)
+    #: E12 D7, row 407: frames whose sidecar changed since the proposal was
+    #: written -- skipped, never applied on stale numbers, but no longer a
+    #: reason to refuse the rest of the job (paths, not just names, so a
+    #: caller can act on them directly).
+    stale: list[str] = field(default_factory=list)
 
 
 @dataclass

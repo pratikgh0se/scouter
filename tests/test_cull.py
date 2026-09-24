@@ -13,7 +13,6 @@ from unittest import mock
 from scouter.cli import tables
 from scouter.config import Config
 from scouter.core import cull, dtbridge, xmp
-from scouter.errors import UsageError
 from tests.scouter_fakes import FakeBridge, TempCache
 
 
@@ -247,7 +246,11 @@ class CullApplyTest(unittest.TestCase):
         path.write_text(json.dumps(document), encoding="utf-8")
         return path
 
-    def test_apply_refuses_stale_proposal(self) -> None:
+    def test_apply_skips_the_stale_frame_and_applies_the_rest(self) -> None:
+        """E12 D7, row 407: one frame going stale (its sidecar changed since
+        the proposal was written -- merely opening it in darktable is
+        enough) used to refuse the WHOLE proposal. It is now skipped and
+        named; every other frame is still applied."""
         raw_a = str(self.tmp / "a.orf")
         raw_b = str(self.tmp / "b.orf")
         sidecar_a = xmp.sidecar_path(raw_a)
@@ -267,11 +270,49 @@ class CullApplyTest(unittest.TestCase):
         future = time.time() + 5
         os.utime(sidecar_a, (future, future))
 
-        with self.assertRaises(UsageError) as ctx:
-            cull.apply(proposal=str(proposal_path), confirm=True)
-        self.assertEqual(ctx.exception.code, "usage")
-        self.assertIn(raw_a, ctx.exception.detail["stale_frames"])
-        self.assertNotIn(raw_b, ctx.exception.detail["stale_frames"])
+        def rate(params: dict) -> dict:
+            return {
+                "per_image": [
+                    {"image_id": i, "rating_before": 0, "rating_after": params["rating"]}
+                    for i in params["image_ids"]
+                ],
+                "missed": [],
+            }
+
+        dtbridge.set_bridge(FakeBridge({"image.rate": rate}))
+
+        result = cull.apply(proposal=str(proposal_path), confirm=True)
+        self.assertEqual(result.stale, [raw_a])
+        self.assertEqual(result.applied, 1, "the fresh frame (b) is still applied")
+        self.assertTrue(any("changed since this proposal" in w for w in result.warnings))
+        # Only frame b's image_id (2) was ever sent to the bridge -- the
+        # stale frame's rating was never touched.
+        applied_ids = {row["image_id"] for row in result.per_image}
+        self.assertEqual(applied_ids, {2})
+
+    def test_apply_dry_run_reports_stale_without_refusing(self) -> None:
+        raw_a = str(self.tmp / "a.orf")
+        raw_b = str(self.tmp / "b.orf")
+        sidecar_a = xmp.sidecar_path(raw_a)
+        sidecar_b = xmp.sidecar_path(raw_b)
+        sidecar_a.write_text('<x xmp:Rating="0"/>', encoding="utf-8")
+        sidecar_b.write_text('<x xmp:Rating="0"/>', encoding="utf-8")
+        frames = [
+            {"path": raw_a, "image_id": 1, "seq": 1, "rating_now": 0, "rating_proposed": 2},
+            {"path": raw_b, "image_id": 2, "seq": 2, "rating_now": 0, "rating_proposed": 2},
+        ]
+        xmp_mtimes = {
+            raw_a: sidecar_a.stat().st_mtime_ns,
+            raw_b: sidecar_b.stat().st_mtime_ns,
+        }
+        proposal_path = self._write_proposal(frames, xmp_mtimes)
+        future = time.time() + 5
+        os.utime(sidecar_a, (future, future))
+
+        result = cull.apply(proposal=str(proposal_path), dry_run=True)
+        self.assertEqual(result.outcome, "dry_run")
+        self.assertEqual(result.stale, [raw_a])
+        self.assertEqual(result.would_change, 1)
 
     def test_apply_batches_at_fifty(self) -> None:
         frames = [

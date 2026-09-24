@@ -57,3 +57,8 @@ vault; decision row 407).
   defaulting to 2013-01-01) falls back to the median with a warning,
   instead of setting the whole job's date. A normal midnight-spanning card
   is unaffected.
+- `cull apply` no longer refuses the whole proposal over one stale frame
+  (D7, row 407): a frame whose sidecar changed since `cull propose` wrote
+  it (merely opening it in darktable is enough) is now skipped and listed
+  in the new `stale` result field, with a warning; every other frame is
+  still applied.
