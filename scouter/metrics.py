@@ -135,7 +135,7 @@ def instrumented(verb_id: str) -> Callable[[F], F]:
     def decorate(fn: F) -> F:
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            from scouter import PHASE, __version__
+            from scouter import PHASE, _PROCESS_STARTED_MONOTONIC, __version__
 
             job = kwargs.get("job") or paths.current_job()
             kwargs["job"] = job
@@ -143,6 +143,12 @@ def instrumented(verb_id: str) -> Callable[[F], F]:
             if args:
                 bound["_positional"] = list(args)
             started = time.monotonic()
+            # Review round 1, should-fix (D3, row 407): time from process
+            # start to THIS call's own verb start -- attributes a stall that
+            # happens before the verb's body ever runs (a bridge handshake,
+            # a contended lock, a hung import), which `ms` below cannot see
+            # since it only starts timing here.
+            startup_ms = int((started - _PROCESS_STARTED_MONOTONIC) * 1000)
             outcome = "ok"
             images: list[int] = []
             payload: dict = {}
@@ -175,6 +181,11 @@ def instrumented(verb_id: str) -> Callable[[F], F]:
                     "args_digest": args_digest(bound),
                     "images": images,
                     "ms": ms,
+                    # Not in `EVENT_KEYS`/the sqlite schema on purpose (no
+                    # migration path exists for metrics.db yet): carried in
+                    # events.jsonl and the audit line only, which are
+                    # schema-free JSON.
+                    "startup_ms": startup_ms,
                     "outcome": outcome,
                     "bytes_in": bytes_in,
                     "bytes_out": bytes_out,

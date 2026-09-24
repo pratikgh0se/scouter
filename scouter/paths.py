@@ -185,15 +185,22 @@ def _locked_job_state(job: str, *, wait_s: float | None = None) -> Iterator[None
     Windows).
 
     E12 D3, row 407: this used to be a plain blocking `LOCK_EX`, with no
-    timeout at all -- the E12 live run saw two CLI calls stall 15-18 minutes
-    on exactly this lock, contending with a concurrently running build or
-    benchmark process. It now polls `LOCK_EX | LOCK_NB` for at most
-    `wait_s` (default `cache.lock_wait_s`, 30s) and fails with `state_locked`
-    (exit 20) naming who holds it, rather than waiting minutes for a lock
-    that may never come free. The lock file's contents, previously never
-    read or written, now record `{"pid", "since"}` for the CURRENT holder as
+    timeout at all. It now polls `LOCK_EX | LOCK_NB` for at most `wait_s`
+    (default `cache.lock_wait_s`, 30s) and fails with `state_locked` (exit
+    20) naming who holds it, rather than waiting minutes for a lock that
+    may never come free. The lock file's contents, previously never read
+    or written, now record `{"pid", "since"}` for the CURRENT holder as
     soon as it acquires the lock -- so a caller that times out can say
     exactly what a bare `flock` cannot: who, and since when.
+
+    Review round 1, should-fix: this is HARDENING, not the fix for D3's own
+    reported stalls. The E12 live run's two 15-18 minute stalls happened
+    BEFORE the verb was ever reached -- `darkroom open`'s stall was inside
+    `dtbridge.call`, before this lock is even taken; `outliers list`'s verb
+    never takes this lock at all. D3's root cause is still open; each lock
+    hold here is a microsecond-scale mutate, never the multi-minute one the
+    live run measured. `metrics.instrumented`'s `startup_ms` (review round
+    1) is the follow-up that makes the next such stall attributable.
     """
     if wait_s is None:
         wait_s = _lock_wait_budget()

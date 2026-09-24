@@ -178,13 +178,20 @@ class ManifestUnauthenticated(ScouterError):
 
 class StateLocked(ScouterError):
     """A job's `state/<job>.json.lock` (E12 D3, row 407) stayed held by
-    another process for longer than `cache.lock_wait_s` -- the E12 live run
-    saw two CLI calls stall 15-18 minutes on exactly this lock, contending
-    with a concurrently running build/benchmark process, with no bound at
-    all on the old blocking `flock`. `detail.pid`/`detail.since` are the
-    holder's own pid and when it took the lock, when the lock file recorded
-    them (best-effort: a holder that died without releasing leaves them
-    stale, which is itself useful to know)."""
+    another process for longer than `cache.lock_wait_s`, with no bound at
+    all on the old blocking `flock`.
+
+    Review round 1, should-fix: this bounded wait is HARDENING against lock
+    contention in general -- it is not a fix for the E12 live run's own two
+    15-18 minute stalls. Those stalls happened BEFORE the verb (and this
+    lock, when the verb even takes it) was ever reached: run 036
+    (`darkroom open`) failed inside `dtbridge.call`, before
+    `_record_opened_image`'s lock; run 042 (`outliers list`) never takes
+    this lock at all. D3's actual root cause is still open; `metrics.
+    instrumented`'s new `startup_ms` (review round 1) is the follow-up that
+    makes the NEXT such stall attributable. `detail.pid`/`detail.since` are
+    the holder's own pid and when it took the lock, when the lock file
+    recorded them."""
 
     code = "state_locked"
     fix = (

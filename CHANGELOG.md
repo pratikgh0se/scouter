@@ -45,12 +45,18 @@ vault; decision row 407).
   restart darktable" -- wrong, darktable is running). It is now
   `not_in_darkroom` (exit 6) with a fix naming the real cause: open the
   frame in darktable yourself or relaunch darktable on it.
-- Bounded wait on the job state lock (D3, row 407): `state/<job>.json.lock`
-  used to block on a plain `flock(LOCK_EX)` with no timeout at all; the E12
-  live run stalled 15-18 minutes on it twice. Now polls with a bound
+- Bounded wait on the job state lock (D3, row 407 -- **hardening, not the
+  D3 fix**): `state/<job>.json.lock` used to block on a plain
+  `flock(LOCK_EX)` with no timeout at all. Now polls with a bound
   (`cache.lock_wait_s`, default 30s) and fails with a new `state_locked`
   error (exit 22) naming the pid holding the lock and since when, instead
-  of waiting indefinitely.
+  of waiting indefinitely. This is general hardening against lock
+  contention; it is NOT what caused the E12 live run's two 15-18 minute
+  stalls -- the evidence shows both happened before the verb was ever
+  reached (one inside the bridge call, before this lock is taken; the
+  other in a verb that never takes this lock at all), and each lock hold
+  is microsecond-scale. **D3's root cause is still open** (README honest
+  limits).
 - `library import`'s auto date derivation no longer trusts a single outlier
   (D6, row 407): the earliest capture time is used only when it is within
   30 days of the card's median capture time; a bad clock (e.g. an unset RTC
@@ -108,3 +114,11 @@ vault; decision row 407).
   explicit `--camera X` such a file is now imported under X
   (`assumed_camera`); without one it is skipped (`skipped_no_body`), never
   the whole card.
+- **Should-fix:** corrected the D3 (row 407) wording everywhere it appeared
+  (this file, README, `errors.py`, `config.py`, `paths.py`): the bounded
+  lock wait is hardening against lock contention in general, not the fix
+  for the E12 live run's own two 15-18 minute stalls -- the evidence shows
+  both happened before the verb was ever reached. D3's root cause stays
+  open in the README's honest limits. Added `metrics.instrumented`'s new
+  `startup_ms` (time from process start to a verb's own start, in every
+  events.jsonl/audit line) so the next such stall is attributable.

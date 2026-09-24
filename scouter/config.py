@@ -115,11 +115,12 @@ class VaultConfig:
 @dataclass(frozen=True)
 class CacheConfig:
     #: E12 D3, row 407: `state/<job>.json.lock`'s exclusive `flock` used to
-    #: block with no timeout at all; the E12 live run saw two CLI calls
-    #: stall 15-18 minutes on it, contending with a concurrently running
-    #: build/benchmark process. A caller now waits at most this long before
-    #: failing with `state_locked` and who (as far as the lock file itself
-    #: records) is holding it.
+    #: block with no timeout at all. A caller now waits at most this long
+    #: before failing with `state_locked` and who (as far as the lock file
+    #: itself records) is holding it -- general hardening against lock
+    #: contention, NOT a fix for the E12 live run's own two 15-18 minute
+    #: stalls (review round 1: those happened before the verb, and this
+    #: lock, were ever reached; D3's root cause is still open).
     lock_wait_s: float = 30.0
 
 

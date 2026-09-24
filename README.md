@@ -476,13 +476,21 @@ These are load-bearing. Read them before scripting against phase 2.
   question from "has this specific caller's next read landed after the
   write" -- if you read a frame's history right after applying a style,
   either poll `history read` until it changes or add a short pause first.
-- **A job's state lock now fails fast instead of blocking for minutes
-  (D3, row 407).** `~/.cache/scouter/state/<job>.json.lock` guards
-  `darkroom.open`'s and `history.commit`'s read-modify-write of a job's small
-  state file; the E12 live run saw two CLI calls stall 15-18 minutes on it,
-  contending with a concurrently running build/benchmark process. A caller
-  now waits at most `cache.lock_wait_s` (default 30s) before failing with
-  `state_locked` (exit `22`), naming the pid that holds it and since when.
+- **A job's state lock now fails fast instead of blocking for minutes --
+  hardening, not a fix for D3 (row 407, still open).**
+  `~/.cache/scouter/state/<job>.json.lock` guards `darkroom.open`'s and
+  `history.commit`'s read-modify-write of a job's small state file. A
+  caller now waits at most `cache.lock_wait_s` (default 30s) before failing
+  with `state_locked` (exit `22`), naming the pid that holds it and since
+  when, instead of blocking forever. This is general hardening against
+  lock contention, **not** the fix for the E12 live run's own two 15-18
+  minute stalls: the evidence shows both happened BEFORE the verb was ever
+  reached (`darkroom open`'s stall was inside the bridge call, before this
+  lock is even taken; `outliers list`'s verb never takes this lock at
+  all), and each lock hold here is microsecond-scale, never
+  multi-minute. **D3's root cause is still open.** `metrics.instrumented`
+  now records `startup_ms` (time from process start to a verb's own start)
+  in every event line, so the next such stall is attributable.
 - **`cull propose`'s sharpness gate is relative to the job, not an absolute
   number.** A singleton frame is proposed `pick_rating` when its sharpness is
   in the sharpest `cull.sharpness_keep_top_pct` fraction of THAT job's own
