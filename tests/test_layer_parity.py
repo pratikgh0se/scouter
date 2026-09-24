@@ -45,6 +45,7 @@ EXPECTED_VERBS = {
     "outliers.list",
     "wb.kelvin",
     "wb.calibrate",
+    "vocab.list",
 }
 
 

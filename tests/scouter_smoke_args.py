@@ -111,6 +111,7 @@ SMOKE_ARGS: dict[str, dict] = {
     # wb.calibrate is gated, so this is a dry run -- one event, no darktable
     # writes, no table touched.
     "wb.calibrate": {"image": SMOKE_RAW, "k_from": 3000, "k_to": 3100},
+    "vocab.list": {},
 }
 
 

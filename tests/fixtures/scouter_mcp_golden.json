@@ -1063,6 +1063,21 @@
     "name": "style_extract"
   },
   {
+    "description": "The conversational vocabulary: every module parameter Scouter can move by words, with unit, safe range, step, and status (live, absolute_only, candidate, unreachable). Read once per session.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "module": {
+          "description": "only this module's rows, e.g. colorbalancergb",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "vocab_list"
+  },
+  {
     "description": "Sweep the darkroom's Kelvin slider from k_from to k_to and write the measured per-camera table `~/.config/scouter/wb/<camera>.json`, which wb.kelvin and outliers.list's temperature_k_delta then use. Costs ~1.8s per point and adds one history item per point, so it refuses inside a job's raw/ unless allow_in_job=true -- run it on a scratch copy. Refuses (usage error) rather than write a table whose r/b coefficient ratio is not strictly increasing in Kelvin. Requires confirm=true to run at all (never overwrites an existing table otherwise).",
     "inputSchema": {
       "additionalProperties": false,

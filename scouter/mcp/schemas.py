@@ -834,6 +834,16 @@ TOOL_SPECS: list[dict] = [
             ["image"],
         ),
     },
+    {
+        "name": "vocab_list",
+        "description": "The conversational vocabulary: every module parameter Scouter can move "
+        "by words, with unit, safe range, step, and status (live, absolute_only, candidate, "
+        "unreachable). Read once per session.",
+        "inputSchema": _schema(
+            {"module": {"type": "string", "description": "only this module's rows, e.g. colorbalancergb"}},
+            [],
+        ),
+    },
 ]
 
 
