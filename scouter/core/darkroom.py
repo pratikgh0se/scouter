@@ -1496,7 +1496,7 @@ def status(
         nan=nan,
         warnings=[
             "positions are normalised slider positions, not parameter values; "
-            "read values with `history read` (design 7.3)"
+            "read values with `darkroom get` or `history read` (design 7.3)"
         ],
     )
 

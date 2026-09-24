@@ -64,6 +64,7 @@ def register(verb: Verb) -> Verb:
 _CORE_MODULES: tuple[str, ...] = (
     "scouter.config",
     "scouter.core.darkroom",
+    "scouter.core.moves",
     "scouter.core.export",
     "scouter.core.history",
     "scouter.core.scout",

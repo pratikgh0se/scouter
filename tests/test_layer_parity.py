@@ -20,6 +20,8 @@ EXPECTED_VERBS = {
     "darkroom.undo_last",
     "darkroom.status",
     "darkroom.describe_history",
+    "darkroom.get",
+    "darkroom.adjust",
     "history.read",
     "history.commit",
     "history.changed",

@@ -1,0 +1,297 @@
+"""Relative moves (phase 3 design §6): read the current value, add, clamp, set.
+
+The engine is unchanged: every write goes through `darkroom.set_param.__wrapped__`
+(one metrics event per top-level verb). Values come from the journal, the XMP,
+the measured WB table or a declared neutral -- never from a slider position
+(P3-R2).
+"""
+
+from __future__ import annotations
+
+import time
+
+from scouter import metrics
+from scouter.core import darkroom, dtbridge, explain, history, vocab, wb, xmp
+from scouter.errors import NotPinned, ScouterError, UsageError, ValueUnknown
+from scouter.paths import current_job
+from scouter.registry import ArgSpec, Verb, register
+from scouter.types import AdjustResult, ResolvedImage, ValueResult
+
+#: Only the always-finite coefficients (controller ruling, task 5): the real
+#: sidecar decodes `coeff_g2` as `None` (`xmp.latest_params` -> `_json_safe`
+#: cleans `inf`/`nan` to `None`, and `coeff_g2` is `inf` on the EM10iii body),
+#: so requiring it here would fail every Kelvin read. `wb.kelvin`'s own
+#: `_ratio` only ever uses `coeff_r`/`coeff_b` anyway -- the same set
+#: `wb._TEMPERATURE_COEFF_NAMES` already uses for exactly this reason.
+_TEMP_COEFFS = wb._TEMPERATURE_COEFF_NAMES
+_TINT_WARNING = ("Kelvin read from the r/b coefficient ratio against a table measured at "
+                 "tint 1.0; at another tint it is approximate")
+
+
+def require_row(module: str, param: str) -> vocab.ParamSpec:
+    s = vocab.spec(module, param)
+    if s is None:
+        raise UsageError(
+            f"{module}.{param} is not in the conversational vocabulary",
+            fix="`scouter darkroom set` reaches any pinned pair; `scouter vocab list` shows the words",
+            detail={"module": module, "param": param},
+        )
+    return s
+
+
+def gate(s: vocab.ParamSpec, *, relative: bool) -> None:
+    """Refuse by status BEFORE any bridge call (design §4.2)."""
+    st = vocab.status(s)
+    if st in ("candidate", "unreachable"):
+        alt = vocab.closest_live(s)
+        hint = s.note or (f"closest live word: {alt.module}.{alt.param} ({alt.ui})" if alt else
+                          "no live alternative yet")
+        raise NotPinned(
+            f"{s.module}.{s.param} has no pinned darktable action path (status {st}); {hint}",
+            detail={"module": s.module, "param": s.param, "status": st,
+                    "candidate_paths": list(s.candidate_paths)},
+        )
+    if relative and st == "absolute_only":
+        raise ValueUnknown(
+            f"{s.module}.{s.param}'s current value is not readable from the XMP yet",
+            fix=(f"set it absolutely: `scouter darkroom set {s.module} {s.param} <value>`; "
+                 "relative moves need its XMP slot pinned by a host probe"),
+            detail={"module": s.module, "param": s.param, "status": st,
+                    "reason": "no named XMP field for this parameter"},
+        )
+
+
+def _camera_for(path: str) -> str | None:
+    """Camera slug from EXIF, or None. A test seam: unit tests patch it."""
+    from scouter import config
+    from scouter.core import exif
+
+    try:
+        return exif.camera_slug(exif.read_tags(path), config.load())
+    except (ScouterError, OSError):
+        return None
+
+
+def _table_range(camera: str) -> tuple[float, float] | None:
+    try:
+        table = wb.load_table(camera)
+    except ValueError:
+        return None
+    if not table:
+        return None
+    ks = [float(p["kelvin"]) for p in table["samples"]]
+    return min(ks), max(ks)
+
+
+def read_current(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int,
+                 job: str) -> tuple[float | None, str, str | None]:
+    """(value, source, reason). Source order: journal, xmp, wb_table, neutral."""
+    if s.value_source == "wb_table":
+        parsed = darkroom._read_sidecar_parsed(resolved.path)
+        if parsed is None:
+            return None, "wb_table", "no sidecar yet: commit history first"
+        params = xmp.latest_params(parsed, "temperature", instance)
+        if not params:
+            return None, "wb_table", "no active temperature entry in the XMP"
+        try:
+            coeffs = [float(params[k]) for k in _TEMP_COEFFS]
+        except (KeyError, TypeError, ValueError):
+            return None, "wb_table", "temperature's coefficients did not decode"
+        camera = _camera_for(resolved.path)
+        if camera is None:
+            return None, "wb_table", "camera model unreadable from EXIF; run scouter wb calibrate"
+        result = wb.kelvin(coeffs, camera)
+        return result.get("kelvin"), "wb_table", result.get("reason")
+    raw, before, pending = darkroom._raw_and_before_state(
+        job, resolved.image_id, resolved.path, s.module, s.param, instance)
+    if pending and before.get("value") is not None:
+        return float(before["value"]), "journal", None
+    if raw.get("value") is not None:
+        return float(raw["value"]), "xmp", None
+    if raw.get("enabled") is None and s.neutral is not None:
+        return s.neutral, "neutral", None
+    return None, "xmp", f"{s.module}.{s.param} did not decode from the XMP"
+
+
+def route_tone(raw_path: str) -> str:
+    """`@tone` -> filmicrgb only when filmic is enabled+active and sigmoid is not (§5.4)."""
+    parsed = darkroom._read_sidecar_parsed(raw_path)
+    if parsed is None:
+        return "sigmoid"
+    enabled = {e.operation for e in xmp.active_entries(parsed) if e.enabled}
+    return "filmicrgb" if "filmicrgb" in enabled and "sigmoid" not in enabled else "sigmoid"
+
+
+def _fmt(s: vocab.ParamSpec, v: float | None) -> str:
+    return "?" if v is None else explain.with_unit(s, f"{vocab.to_display(s, v):.4g}")
+
+
+def _summary(s: vocab.ParamSpec, delta: float, prev: float, shown: float | None,
+             clamped: bool, target: float) -> str:
+    d = explain.with_unit(s, f"{vocab.to_display(s, delta):+.3g}")
+    line = f"{s.ui}: {d} ({_fmt(s, prev)} → {_fmt(s, shown if shown is not None else target)})"
+    if clamped:
+        line += f" [clamped at {_fmt(s, target)}]"
+    return line
+
+
+def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedImage,
+                 instance: int, commit: bool, level: str, job: str,
+                 ms_precommit: int = 0) -> AdjustResult:
+    """Steps 5-11 of §6.2. The caller has gated, resolved and (maybe) pre-committed.
+
+    `ms_precommit` (spec §16): the caller's own pre-commit bounce time, folded
+    into `plan[0]` alongside `ms_read`/`ms_set` -- it defaults to 0 for a
+    caller that skipped the pre-commit (`trust_sidecar`, a dry run, or a
+    future caller like `say` that pre-commits once for a whole group).
+    """
+    s = vocab.spec(module, param)
+    assert s is not None
+    t0 = time.monotonic()
+    previous, source, reason = read_current(resolved, s, instance, job)
+    if previous is None:
+        raise ValueUnknown(
+            f"cannot read {module}.{param}'s current value",
+            detail={"module": module, "param": param, "source_tried": source,
+                    "reason": reason or "unknown"},
+        )
+    warnings: list[str] = []
+    target, clamped = vocab.clamp(s, previous + delta)
+    if s.value_source == "wb_table":
+        warnings.append(_TINT_WARNING)
+        camera = _camera_for(resolved.path)
+        rng = _table_range(camera) if camera else None
+        if rng and not (rng[0] <= target <= rng[1]):
+            target, clamped = min(max(target, rng[0]), rng[1]), True
+    if clamped and abs(target - previous) < 1e-6:
+        return AdjustResult(
+            image_id=resolved.image_id, path=resolved.path, module=module, param=param,
+            instance=instance, unit=s.unit, delta=delta, previous=previous, target=target,
+            applied=previous, clamped=True, source=source, committed=False, noop=True,
+            summary=f"{s.ui}: already at the limit ({_fmt(s, previous)}); nothing sent",
+            warnings=warnings,
+        )
+    set_fn = getattr(darkroom.set_param, "__wrapped__", darkroom.set_param)
+    t1 = time.monotonic()
+    result = set_fn(module, param, target, instance=instance, commit=commit, job=job)
+    applied = result.applied
+    if s.value_source == "wb_table":
+        applied, _, _ = read_current(resolved, s, instance, job) if commit else (None, "", None)
+    warnings.extend(result.warnings)
+    explain_lines = explain.lines([explain.MoveNote(s, previous, target)], level=level, job=job)
+    return AdjustResult(
+        image_id=resolved.image_id, path=resolved.path, module=module, param=param,
+        instance=instance, unit=s.unit, delta=delta, previous=previous, target=target,
+        applied=applied, clamped=clamped, source=source, committed=result.committed,
+        noop=result.noop, summary=_summary(s, delta, previous, applied, clamped, target),
+        explain=explain_lines, warnings=warnings,
+        plan=[{"action": "darkroom.adjust", "ms_precommit": ms_precommit,
+               "ms_read": int((t1 - t0) * 1000),
+               "ms_set": int((time.monotonic() - t1) * 1000)}],
+    )
+
+
+def _precommit(job: str, image_id: int) -> str | None:
+    """One expect-no-change bounce (P3-R3). A timeout is a warning, not a failure."""
+    try:
+        darkroom._commit(job, image_id, strategy="auto", attempts=1, expect_change=False)
+    except ScouterError as e:
+        return f"pre-commit did not confirm ({e.code}); the value read may predate darktable's live state"
+    return None
+
+
+@metrics.instrumented("darkroom.get")
+def get(module: str, param: str, *, instance: int = 0, job: str | None = None) -> ValueResult:
+    """A parameter's current VALUE. Never commits, never moves the view."""
+    job = job or current_job()
+    s = require_row(module, param)
+    resolved = darkroom._current_image()
+    value, source, reason = read_current(resolved, s, instance, job)
+    fresh, why = history.watermark_fresh(job, resolved.image_id, resolved.xmp_path)
+    warnings: list[str] = []
+    if not fresh:
+        warnings.append(f"sidecar not known-fresh ({why}): darktable may hold newer, uncommitted "
+                        "changes; `darkroom adjust` commits before it reads")
+    if value is None:
+        warnings.append(reason or f"{module}.{param} is not readable")
+    return ValueResult(
+        image_id=resolved.image_id, path=resolved.path, module=module, param=param,
+        instance=instance, value=value,
+        display_value=None if value is None else vocab.to_display(s, value),
+        unit=s.unit, source=source, enabled=darkroom._module_enabled(resolved.path, module, instance),
+        fresh=bool(fresh), status=vocab.status(s), warnings=warnings,
+    )
+
+
+@metrics.instrumented("darkroom.adjust")
+def adjust(module: str, param: str, delta: float, *, instance: int = 0, commit: bool = True,
+           trust_sidecar: bool = False, educative: str | None = None, dry_run: bool = False,
+           job: str | None = None) -> AdjustResult:
+    """Move one parameter by `delta` (internal units), relative to its current value."""
+    job = job or current_job()
+    s = require_row(module, param)
+    delta = darkroom._require_finite("delta", delta)
+    if delta == 0:
+        raise UsageError("delta must be non-zero", detail={"argument": "delta"})
+    level = explain.resolve_level(educative)
+    gate(s, relative=True)
+    if dry_run:
+        return AdjustResult(
+            outcome="dry_run", module=module, param=param, instance=instance, unit=s.unit,
+            delta=delta,
+            plan=[{"action": "darkroom.adjust", "path": dtbridge.ACTION_PATHS[(module, param)],
+                   "delta": delta, "clamp": [s.lo, s.hi], "wraps": s.wraps}],
+            reason="dry run: no darktable calls were made; the current value was not read",
+        )
+    resolved = darkroom._current_image()
+    darkroom._require_job_image(job, resolved.image_id)
+    dtbridge.require_darkroom()
+    ms_precommit = 0
+    warning = None
+    if not trust_sidecar:
+        t_pre = time.monotonic()
+        warning = _precommit(job, resolved.image_id)
+        ms_precommit = int((time.monotonic() - t_pre) * 1000)
+    result = _adjust_core(module, param, delta, resolved=resolved, instance=instance,
+                          commit=commit, level=level, job=job, ms_precommit=ms_precommit)
+    if warning:
+        result.warnings.insert(0, warning)
+    return result
+
+
+EDUCATIVE_ARG = ArgSpec("educative", "str", default=None, choices=("off", "brief", "full"),
+                        help="explanation level for this call (default: config's educative)")
+TRUST_ARG = ArgSpec("trust_sidecar", "bool", default=False,
+                    help="skip the pre-read commit bounce (scripts that own the darkroom)")
+
+for verb in (
+    Verb(
+        id="darkroom.get",
+        group="darkroom",
+        fn=get,
+        args=(darkroom.MODULE_ARG, darkroom.PARAM_ARG, darkroom.INSTANCE_ARG),
+        writes=False,
+        gated=False,
+        summary="Read one parameter's current value from the XMP (never moves the view).",
+    ),
+    Verb(
+        id="darkroom.adjust",
+        group="darkroom",
+        fn=adjust,
+        args=(
+            darkroom.MODULE_ARG,
+            darkroom.PARAM_ARG,
+            ArgSpec("delta", "float", required=True, positional=True,
+                    help="relative change in internal units (EV, K, or a fraction: 0.05 = 5%%)"),
+            darkroom.INSTANCE_ARG,
+            darkroom.COMMIT_ARG,
+            TRUST_ARG,
+            EDUCATIVE_ARG,
+            darkroom.DRY_RUN_ARG,
+        ),
+        writes=True,
+        gated=False,
+        summary="Change one parameter by a relative amount, clamped to a safe range.",
+    ),
+):
+    register(verb)

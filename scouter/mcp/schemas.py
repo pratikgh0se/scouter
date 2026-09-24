@@ -49,6 +49,12 @@ AMOUNT = {
     "description": "multiplier on the phrase's default step (1 = one notch); replaces "
     "words like 'slightly'",
 }
+EDUCATIVE = {
+    "type": "string",
+    "enum": ["off", "brief", "full"],
+    "description": "explanation level for this call; omit to use the config's `educative` "
+    "(default brief)",
+}
 
 
 def _schema(properties: dict, required: list[str]) -> dict:
@@ -863,6 +869,39 @@ TOOL_SPECS: list[dict] = [
         "description": "Show what a phrase would do (module, parameter, delta) and whether each "
         "move is reachable, without touching darktable.",
         "inputSchema": _schema({"phrase": PHRASE, "amount": AMOUNT}, ["phrase"]),
+    },
+    {
+        "name": "darkroom_get",
+        "description": "Read one parameter's current VALUE from the image's XMP sidecar (or Kelvin "
+        "via the camera's measured table). Never moves the view; `fresh: false` means darktable "
+        "may hold newer, uncommitted changes.",
+        "inputSchema": _schema(
+            {"module": {"type": "string", "description": "darktable module, e.g. sigmoid"},
+             "param": {"type": "string", "description": "parameter, e.g. contrast"},
+             "instance": INSTANCE},
+            ["module", "param"],
+        ),
+    },
+    {
+        "name": "darkroom_adjust",
+        "description": "Change one module parameter by a relative delta in internal units (EV for "
+        "exposure, K for temperature, fractions for color balance rgb: 0.05 means 5 %). Reads the "
+        "current value first (one view bounce to flush unsaved slider moves unless trust_sidecar), "
+        "clamps to Scouter's safe range, sets it, and returns previous/target/applied plus a "
+        "one-line summary.",
+        "inputSchema": _schema(
+            {"module": {"type": "string", "description": "darktable module, e.g. exposure"},
+             "param": {"type": "string", "description": "parameter, e.g. exposure"},
+             "delta": {"type": "number", "description": "relative change, internal units, non-zero"},
+             "instance": INSTANCE,
+             "commit": {"type": "boolean", "default": True,
+                        "description": "commit history to the XMP after the write"},
+             "trust_sidecar": {"type": "boolean", "default": False,
+                               "description": "skip the pre-read commit bounce"},
+             "educative": EDUCATIVE,
+             "dry_run": DRY_RUN},
+            ["module", "param", "delta"],
+        ),
     },
 ]
 

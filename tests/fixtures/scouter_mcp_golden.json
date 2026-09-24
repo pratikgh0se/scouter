@@ -144,6 +144,63 @@
     "name": "cull_propose"
   },
   {
+    "description": "Change one module parameter by a relative delta in internal units (EV for exposure, K for temperature, fractions for color balance rgb: 0.05 means 5 %). Reads the current value first (one view bounce to flush unsaved slider moves unless trust_sidecar), clamps to Scouter's safe range, sets it, and returns previous/target/applied plus a one-line summary.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "default": true,
+          "description": "commit history to the XMP after the write",
+          "type": "boolean"
+        },
+        "delta": {
+          "description": "relative change, internal units, non-zero",
+          "type": "number"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "educative": {
+          "description": "explanation level for this call; omit to use the config's `educative` (default brief)",
+          "enum": [
+            "off",
+            "brief",
+            "full"
+          ],
+          "type": "string"
+        },
+        "instance": {
+          "default": 0,
+          "description": "module instance (darktable's multi_priority)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "module": {
+          "description": "darktable module, e.g. exposure",
+          "type": "string"
+        },
+        "param": {
+          "description": "parameter, e.g. exposure",
+          "type": "string"
+        },
+        "trust_sidecar": {
+          "default": false,
+          "description": "skip the pre-read commit bounce",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "module",
+        "param",
+        "delta"
+      ],
+      "type": "object"
+    },
+    "name": "darkroom_adjust"
+  },
+  {
     "description": "The darkroom image's committed history: every module, whether it is active, and its decoded parameters where a verified layout exists (otherwise opaque hex plus the module version).",
     "inputSchema": {
       "additionalProperties": false,
@@ -188,6 +245,34 @@
       "type": "object"
     },
     "name": "darkroom_enable"
+  },
+  {
+    "description": "Read one parameter's current VALUE from the image's XMP sidecar (or Kelvin via the camera's measured table). Never moves the view; `fresh: false` means darktable may hold newer, uncommitted changes.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "instance": {
+          "default": 0,
+          "description": "module instance (darktable's multi_priority)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "module": {
+          "description": "darktable module, e.g. sigmoid",
+          "type": "string"
+        },
+        "param": {
+          "description": "parameter, e.g. contrast",
+          "type": "string"
+        }
+      },
+      "required": [
+        "module",
+        "param"
+      ],
+      "type": "object"
+    },
+    "name": "darkroom_get"
   },
   {
     "description": "Move a slider by darktable's own default step, up (positive steps) or down (negative). Use when the user says 'a bit more'.",
