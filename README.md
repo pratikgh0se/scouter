@@ -441,6 +441,18 @@ These are load-bearing. Read them before scripting against phase 2.
 - **`style apply-set --mode overwrite` is still refused.** The Lua API only
   appends. The one place overwrite exists is render-only:
   `export release --overwrite-style`.
+- **`cull propose`'s sharpness gate is relative to the job, not an absolute
+  number.** A singleton frame is proposed `pick_rating` when its sharpness is
+  in the sharpest `cull.sharpness_keep_top_pct` fraction of THAT job's own
+  frames (default keeps the top 60%), never against a fixed number tuned on
+  one fixture -- real ORF/ARW renders measured 0.003-0.04 in the E12 live
+  run, well under the old fixed `cull.sharpness_floor` of 0.20, so nothing
+  was ever picked on its own merits. `sharpness_floor` still exists in the
+  config and in every proposal's `tolerances_used`, but only as a diagnostic
+  field now; it gates nothing. `cull propose` also renders every frame from a
+  sidecar-less scratch copy, so it always scores the frame as imported, never
+  its current edited history -- editing a hero no longer moves its burst's
+  pick to a different frame on the next `cull propose`.
 
 ### Phase 2 exit criteria
 

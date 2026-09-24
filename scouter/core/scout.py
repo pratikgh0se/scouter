@@ -197,32 +197,69 @@ def _stats_scratch_path(px: int, ext: str) -> Path:
     return paths.preview_dir() / f"stats-{px}-{token}.{ext}"
 
 
-def _raster_for(raw_path: str, px: int) -> tuple[ppm.Raster, int]:
+def _unedited_copy(raw_path: str) -> Path:
+    """A scratch copy of `raw_path` with no adjacent `.xmp` beside it.
+
+    darktable-cli auto-applies a same-named sidecar next to whatever it
+    renders (`xmp.sidecar_path`: `<raw>.xmp`); `render()` never passes an
+    explicit sidecar argument, so a plain render of the real raw path scores
+    WHATEVER history is currently on disk -- the current edit, not the frame
+    as imported. E12 D1: after the hero was edited, `cull propose`'s
+    re-proposal moved the burst's pick to a different frame, because the
+    "sharpest" comparison was scoring the edited render. Copying the raw
+    bytes to a fresh scratch path (which darktable-cli finds no sidecar
+    beside) makes the render use only its auto-applied defaults -- the same
+    numbers a fresh, never-opened import would produce.
+    """
+    token = f"{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex[:8]}"
+    dest = paths.preview_dir() / f"unedited-{token}{Path(raw_path).suffix}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(raw_path, dest)
+    return dest
+
+
+def _raster_for(raw_path: str, px: int, *, unedited: bool = False) -> tuple[ppm.Raster, int]:
     out = _stats_scratch_path(px, "ppm")
-    render_ms = render(raw_path, out, px, "ppm")
-    raster = ppm.parse_p6(out.read_bytes())
-    out.unlink(missing_ok=True)  # stats do not need the pixels kept
+    scratch_raw = _unedited_copy(raw_path) if unedited else None
+    try:
+        render_ms = render(str(scratch_raw) if scratch_raw else raw_path, out, px, "ppm")
+        raster = ppm.parse_p6(out.read_bytes())
+    finally:
+        out.unlink(missing_ok=True)  # stats do not need the pixels kept
+        if scratch_raw is not None:
+            scratch_raw.unlink(missing_ok=True)
     return raster, render_ms
 
 
-@metrics.instrumented("scout.stats")
-def stats(
-    image: str | int, *, px: int = 1024, budget_s: float = 3.0, job: str | None = None
+def _stats_impl(
+    image: str | int,
+    *,
+    px: int = 1024,
+    budget_s: float = 3.0,
+    unedited: bool = False,
 ) -> StatsResult:
-    """Histogram, clipping, luminance percentiles, WB ratios and sharpness."""
+    """The real body of `stats()`. Split out so `unedited` (cull-only, E12
+    D1) is not a public verb argument: `stats()` keeps the registered
+    signature `test_layer_parity.py` pins against the registry, and
+    `_stats_many_one` (the only other caller) reaches this directly."""
     _validate_px(px)
     resolved = dtbridge.resolve_image(image)
     warnings: list[str] = []
     started = time.monotonic()
-    raster, render_ms = _raster_for(resolved.path, px)
+    raster, render_ms = _raster_for(resolved.path, px, unedited=unedited)
     px_used = px
     if (time.monotonic() - started) > budget_s and px > FALLBACK_PX:
         warnings.append(
             f"loop took {time.monotonic() - started:.2f}s at {px}px, over the "
             f"{budget_s:g}s budget: re-rendered at {FALLBACK_PX}px (spec 7)"
         )
-        raster, render_ms = _raster_for(resolved.path, FALLBACK_PX)
+        raster, render_ms = _raster_for(resolved.path, FALLBACK_PX, unedited=unedited)
         px_used = FALLBACK_PX
+    if unedited:
+        warnings.append(
+            "rendered from a sidecar-less scratch copy: these numbers are the frame "
+            "as imported, not its current edited history (cull.propose, E12 D1)"
+        )
 
     analyse_started = time.monotonic()
     hist = ppm.histogram(raster)
@@ -245,13 +282,24 @@ def stats(
     )
 
 
-def _stats_cache_path(raw_path: str, px: int) -> Path:
+@metrics.instrumented("scout.stats")
+def stats(
+    image: str | int, *, px: int = 1024, budget_s: float = 3.0, job: str | None = None
+) -> StatsResult:
+    """Histogram, clipping, luminance percentiles, WB ratios and sharpness."""
+    return _stats_impl(image, px=px, budget_s=budget_s)
+
+
+def _stats_cache_path(raw_path: str, px: int, *, unedited: bool = False) -> Path:
     """Key: absolute path + the XMP's mtime_ns + px + Scouter's version.
 
     The XMP mtime is in the key on purpose: after `style.apply_set` the frames
     whose history changed get fresh numbers and the rest are read from cache,
     which is what makes "stats before the style, stats after the style"
-    affordable over 300 frames.
+    affordable over 300 frames. `unedited` is in the key too: an unedited
+    render and the current-history render of the same frame at the same mtime
+    are different numbers and must not collide in the same cache entry (E12
+    D1).
     """
     # Local import (see `stats_many`): `scouter/__init__.py` is cheap, but
     # importing it at module scope here is the same cycle risk, and keeping
@@ -261,20 +309,20 @@ def _stats_cache_path(raw_path: str, px: int) -> Path:
 
     mtime = xmp.sidecar_path(raw_path)
     stamp = mtime.stat().st_mtime_ns if mtime.exists() else 0
-    digest_input = f"{Path(raw_path).resolve()}|{stamp}|{px}|{__version__}"
+    digest_input = f"{Path(raw_path).resolve()}|{stamp}|{px}|{__version__}|unedited={unedited}"
     key = hashlib.sha1(digest_input.encode()).hexdigest()
     return paths.stats_dir() / f"{key}.json"
 
 
-def _stats_many_one(path: str, px: int) -> dict:
+def _stats_many_one(path: str, px: int, *, unedited: bool = False) -> dict:
     """One frame's stats entry for `stats_many`: cache hit, cache miss, or error.
 
-    Ruling 23: cache misses call `stats.__wrapped__` directly -- no nested
-    metrics event, only the one `stats_many` itself does not even emit (it is
-    not a registered top-level verb; the verb that calls it, task 9/12, emits
-    the single event for the whole set).
+    Ruling 23: cache misses call `_stats_impl` directly -- no nested metrics
+    event, only the one `stats_many` itself does not even emit (it is not a
+    registered top-level verb; the verb that calls it, task 9/12, emits the
+    single event for the whole set).
     """
-    cache_path = _stats_cache_path(path, px)
+    cache_path = _stats_cache_path(path, px, unedited=unedited)
     if cache_path.exists():
         try:
             data = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -284,7 +332,7 @@ def _stats_many_one(path: str, px: int) -> dict:
             data["cached"] = True
             return data
     try:
-        result = stats.__wrapped__(path, px=px)
+        result = _stats_impl(path, px=px, unedited=unedited)
     except ScouterError as e:
         return {"path": path, "error": {"code": e.code, "message": e.message}}
     except Exception as e:  # one bad frame must not fail the whole set
@@ -300,7 +348,12 @@ def _stats_many_one(path: str, px: int) -> dict:
 
 
 def stats_many(
-    paths_in: list[str], *, px: int, workers: int, job_dir: Path | None = None
+    paths_in: list[str],
+    *,
+    px: int,
+    workers: int,
+    job_dir: Path | None = None,
+    unedited: bool = False,
 ) -> list[dict]:
     """Stats for a set, cached on disk and rendered by a small thread pool.
 
@@ -325,7 +378,10 @@ def stats_many(
 
     slots: list[dict] = [{} for _ in paths_in]
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_stats_many_one, p, px): i for i, p in enumerate(paths_in)}
+        futures = {
+            pool.submit(_stats_many_one, p, px, unedited=unedited): i
+            for i, p in enumerate(paths_in)
+        }
         for future in as_completed(futures):
             slots[futures[future]] = future.result()
 

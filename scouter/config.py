@@ -60,7 +60,18 @@ class Tolerances:
 @dataclass(frozen=True)
 class CullConfig:
     burst_gap_s: float = 2.0
+    #: E12 D1: real ORF/ARW renders came back 0.003-0.04, against this fixed
+    #: floor tuned on the synthetic fixture -- so nothing but noise ever
+    #: cleared it. Kept ONLY as a diagnostic field on the proposal now (row
+    #: 407 call 2); `sharpness_keep_top_pct` is what actually gates a
+    #: singleton frame, computed fresh from each job's own distribution.
     sharpness_floor: float = 0.20
+    #: The fraction of a job's frames (by sharpness) a singleton must be in
+    #: to be proposed `pick_rating` -- e.g. 0.6 keeps the sharpest 60%, so
+    #: the gate is `sharpness >= the job's own (1 - 0.6) = 40th percentile`.
+    #: Relative to the job, never an absolute number: a dim interior job and
+    #: a bright daylight job render completely different sharpness scales.
+    sharpness_keep_top_pct: float = 0.6
     luminance_low: int = 25
     luminance_high: int = 230
     clipped_flag_pct: float = 5.0
