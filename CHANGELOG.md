@@ -159,3 +159,13 @@ vault; decision row 407).
   date from the A7 files too. Acceptable behaviour (a legitimate multi-day
   trip now gets the median date with a warning, per D6), just undocumented
   before this. Regenerated the golden MCP contract snapshot.
+
+### Fix round 2
+
+- A card where NOT A SINGLE file has a camera model in its EXIF, imported
+  without `--camera`, now refuses (`UsageError` naming every file, fix
+  "pass --camera X") instead of silently succeeding with an empty job
+  directory. Round 1 correctly made a no-body FILE never fail the whole
+  card (skipped, listed in `skipped_no_body`, the rest still imports) --
+  this only fires when NOTHING is left to import; a card with some bodies
+  present keeps round 1's behaviour unchanged.

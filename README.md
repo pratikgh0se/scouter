@@ -544,7 +544,10 @@ These are load-bearing. Read them before scripting against phase 2.
   `--camera X`, it is imported under X and listed in `assumed_camera`
   (`{"source_name", "camera"}`); without one, it is skipped and listed in
   `skipped_no_body` (`{"source_name"}`), and the rest of the card still
-  imports.
+  imports. A card where NOT A SINGLE file has a camera model, imported
+  without `--camera`, still refuses outright (fix round 2) -- naming every
+  file and pointing at `--camera X` -- rather than silently succeeding
+  with an empty job directory.
 - **`library import`'s auto-derived date no longer trusts a single
   outlier.** A card's date used to default to the EARLIEST capture time,
   full stop -- so one file with an unset clock (the E12 Sony card's own

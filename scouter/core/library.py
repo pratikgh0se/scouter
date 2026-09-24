@@ -693,6 +693,21 @@ def _plan(
                 skipped_no_body.append({"source_name": path.name})
     tagged = readable_tagged
 
+    # Fix round 2: round 1 made a no-body FILE never fail the whole card
+    # (skipped, listed in `skipped_no_body`, the rest still imports) -- but
+    # a card where NOT A SINGLE file has a camera model, imported without
+    # `--camera`, must still refuse rather than silently succeed with an
+    # empty job directory. A card with SOME bodies present keeps round 1's
+    # behaviour untouched (this only fires when nothing at all is left).
+    if camera is None and not tagged and skipped_no_body:
+        names = ", ".join(e["source_name"] for e in skipped_no_body)
+        raise UsageError(
+            f"no camera model in any file's EXIF on this card ({names}); "
+            "nothing to import",
+            fix="pass --camera X to import them all under one explicit body",
+            detail={"skipped_no_body": skipped_no_body},
+        )
+
     skipped_other_camera: list[dict] = []
     if camera is not None:
         matching = [(p, t) for p, t in tagged if slug_by_path[p] == camera]

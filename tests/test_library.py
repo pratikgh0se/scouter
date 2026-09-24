@@ -212,6 +212,30 @@ class PlanTest(LibraryTestCase):
         self.assertNotIn("P6281000.ORF", by_source)
         self.assertIn("P6281001.ORF", by_source)
 
+    def test_a_card_with_no_body_anywhere_refuses_without_camera(self) -> None:
+        """Fix round 2: round 1 made a no-body FILE never fail the whole
+        card (skipped, listed in skipped_no_body) -- but a card where NOT A
+        SINGLE file has a camera model, imported without --camera, must
+        still refuse rather than silently succeed with an empty job
+        directory. A card with SOME bodies present keeps round 1's
+        behaviour (the sibling test above)."""
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        with mock.patch.object(
+            exif,
+            "camera_slug",
+            side_effect=[
+                ExifUnreadable("no camera model"),
+                ExifUnreadable("no camera model"),
+            ],
+        ):
+            with self.assertRaises(UsageError) as ctx:
+                library.import_card(str(source), "harbour-wedding", confirm=True)
+        self.assertIn("P6281000.ORF", str(ctx.exception))
+        self.assertIn("P6281001.ORF", str(ctx.exception))
+        self.assertIn("--camera", ctx.exception.fix)
+        self.assertFalse(self._job_path().exists(), "no job directory must be created")
+
 
 class DryRunTest(LibraryTestCase):
     def test_dry_run_creates_nothing(self) -> None:
