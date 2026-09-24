@@ -51,8 +51,13 @@ class ParamSpec:
     #: column), declared only where it is known. Final review #1a ruling: a
     #: `set` move whose before value is unreadable journals this as its
     #: before (source "default") when the row has no `neutral`; a row with
-    #: neither refuses the move `value_unknown`. No row declares one yet.
+    #: neither refuses the move `value_unknown`. Task 10: the colour balance
+    #: rgb hue rows declare 0.0 (darktable's module default).
     default: float | None = None
+
+
+#: darktable's colorbalancergb default for every hue param (degrees).
+_CB_HUE_DEFAULT = 0.0
 
 
 def _cb(param: str, ui: str, unit: str, lo: float, hi: float, step: float, concept: str,
@@ -64,6 +69,13 @@ def _cb(param: str, ui: str, unit: str, lo: float, hi: float, step: float, conce
         display_scale=100.0 if unit == "%" else 1.0, lo=lo, hi=hi, step=step,
         value_source="xmp", neutral=None if wraps else neutral, wraps=wraps,
         concept=concept, why=why, watch=watch, candidate_paths=candidates,
+        # Phase 3 task 10 ruling: a hue row declares darktable's module
+        # default (0.0 degrees, read from the sidecar darktable itself wrote
+        # for a freshly enabled colour balance rgb, tests/fixtures/
+        # colorbalancergb.xmp slots 2/5/8), so "warm the highlights" can set
+        # a hue on an image with no colour-balance history and still be
+        # undone to what the module really held.
+        default=_CB_HUE_DEFAULT if wraps else None,
     )
 
 

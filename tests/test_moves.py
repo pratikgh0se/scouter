@@ -158,6 +158,28 @@ class AdjustTest(_MovesFixture):
         self.assertAlmostEqual(self.sets()[-1]["value"], 0.0)
         self.assertTrue(journal.read_all("job-test")[-1].undone)
 
+    def test_neutral_patch_survives_any_bridge_error_after_the_write_landed(self) -> None:
+        """Task 10 (parked final-review issue): a non-CommitTimeout error
+        from the commit (here BridgeTimeout) after the write landed must
+        still journal the neutral as before, or `undo_last` wedges."""
+        from scouter.errors import BridgeTimeout
+
+        def bridge_dies_on_change(job, image, *, strategy="auto", attempts=None,
+                                  expect_change=True):
+            if expect_change:
+                raise BridgeTimeout("bridge went away mid-commit")
+            return CommitResult(committed=True, changed=False, warnings=[])
+
+        with mock.patch("scouter.core.darkroom._commit", side_effect=bridge_dies_on_change):
+            with self.assertRaises(BridgeTimeout):
+                moves.adjust.__wrapped__("colorbalancergb", "contrast", 0.05, job="job-test")
+        entry = journal.read_all("job-test")[-1]
+        self.assertEqual(entry.after, {"value": 0.05}, "the write landed")
+        self.assertEqual((entry.before.get("value"), entry.before.get("source")), (0.0, "neutral"))
+        darkroom.undo_last.__wrapped__(single=True, job="job-test")
+        self.assertAlmostEqual(self.sets()[-1]["value"], 0.0)
+        self.assertTrue(journal.read_all("job-test")[-1].undone)
+
     def test_a_write_that_never_landed_is_not_patched(self) -> None:
         """#1b: the patch only applies to a landed entry -- a bridge failure
         (journal.fail, `after` None) is left exactly as the engine wrote it."""

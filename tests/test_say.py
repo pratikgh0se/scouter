@@ -104,8 +104,20 @@ class SetMoveBeforeTest(_MovesFixture):
         row = dataclasses.replace(vocab.spec(*self.HUE), default=default)
         return mock.patch.dict(vocab._BY_KEY, {self.HUE: row})
 
+    def test_the_hue_rows_declare_darktables_default(self) -> None:
+        """Task 10 ruling: every colour balance rgb hue row declares 0.0
+        (darktable's module default), so hue phrases run without history."""
+        from scouter.core import vocab
+
+        hues = [s for s in vocab.PARAMS if s.wraps]
+        self.assertEqual(len(hues), 3)
+        self.assertEqual({s.default for s in hues}, {0.0})
+
     def test_no_neutral_and_no_default_refuses_before_any_write(self) -> None:
-        with self._pinned(), mock.patch("scouter.core.vocab.xmp_named", return_value=True):
+        # Task 10: the real hue rows now declare a default; the refusal path
+        # still exists for any row that declares neither, so force None.
+        with self._pinned(), self._with_default(None), \
+             mock.patch("scouter.core.vocab.xmp_named", return_value=True):
             with self.assertRaises(ValueUnknown) as cm:
                 moves.say.__wrapped__("warm the highlights", commit=False, job="job-test")
         refused = cm.exception.detail["refused"]

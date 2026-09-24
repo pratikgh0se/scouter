@@ -254,7 +254,7 @@
       "iop/colorbalancergb/shadows hue"
     ],
     "concept": "grading",
-    "default": null,
+    "default": 0.0,
     "display_scale": 1.0,
     "hi": 360.0,
     "lo": 0.0,
@@ -329,7 +329,7 @@
       "iop/colorbalancergb/midtones hue"
     ],
     "concept": "grading",
-    "default": null,
+    "default": 0.0,
     "display_scale": 1.0,
     "hi": 360.0,
     "lo": 0.0,
@@ -404,7 +404,7 @@
       "iop/colorbalancergb/highlights hue"
     ],
     "concept": "grading",
-    "default": null,
+    "default": 0.0,
     "display_scale": 1.0,
     "hi": 360.0,
     "lo": 0.0,
