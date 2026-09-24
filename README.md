@@ -491,10 +491,17 @@ These are load-bearing. Read them before scripting against phase 2.
   run, well under the old fixed `cull.sharpness_floor` of 0.20, so nothing
   was ever picked on its own merits. `sharpness_floor` still exists in the
   config and in every proposal's `tolerances_used`, but only as a diagnostic
-  field now; it gates nothing. `cull propose` also renders every frame from a
-  sidecar-less scratch copy, so it always scores the frame as imported, never
-  its current edited history -- editing a hero no longer moves its burst's
-  pick to a different frame on the next `cull propose`.
+  field now; it gates nothing. A frame whose stats render FAILED, or that
+  has no capture time, is excluded from the percentile itself (review round
+  1 blocker: left in, a job with enough failed renders collapsed the
+  threshold toward 0.0, which a failed frame's own 0.0 stand-in then also
+  cleared -- proposing a pick on numbers Scouter never measured); a failed
+  frame is never proposed `pick_rating` regardless.
+
+  `cull propose` also renders every frame from a sidecar-less scratch copy,
+  so it always scores the frame as imported, never its current edited
+  history -- editing a hero no longer moves its burst's pick to a different
+  frame on the next `cull propose`.
 - **`library import` labels a mixed-body card from each file's own EXIF, and
   `--camera` filters rather than refuses.** A card holding more than one
   camera body used to be refused outright ("pass --camera to choose one"),

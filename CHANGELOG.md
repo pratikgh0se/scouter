@@ -89,3 +89,15 @@ vault; decision row 407).
   message) -- a table only ever reaches `<config_dir>/wb/<camera>.json` via
   `scouter wb calibrate` or a manual copy. Left for a real task (bundling
   and packaging the tables) rather than a bolt-on to `config init` here.
+
+### Fix round 1 (independent review)
+
+- **Blocker:** `cull propose`'s percentile threshold used to be computed
+  over EVERY frame, including ones whose stats render failed (`sharpness`
+  stand-in 0.0, never a real measurement) and ones with no capture time.
+  Probed: with 4/10 renders failed, ALL 6 real frames were proposed
+  `pick_rating` (100%, not the configured 60%); with 5/10 or all 10 failed,
+  the threshold collapsed to 0.0, and every frame -- including the failed
+  ones -- was proposed a pick. Both kinds of frame are now excluded from
+  the percentile, and a `stats_error` frame is never proposed `pick_rating`
+  regardless of what the threshold computes to.

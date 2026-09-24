@@ -154,8 +154,21 @@ def _job_sharpness_threshold(frames: list[dict], cfg) -> float:
     THIS job's own sharpness numbers, so a singleton clears it exactly when
     it is in the sharpest `sharpness_keep_top_pct` fraction of the job --
     never an absolute number tuned on a different set of frames.
+
+    Review round 1 blocker: `stats_error` frames carry the neutral stand-in
+    `sharpness = 0.0` (never a real measurement -- propose()'s own comment),
+    and a frame with no capture time is never proposed a rating change at
+    all (`_build_proposals`'s no-time branch). Both are excluded from the
+    distribution here: probed with 4/10 real renders failed, the un-excluded
+    version proposed ALL 6 real frames pick_rating (100%, not the configured
+    60%); with 5/10 or all 10 failed, the threshold collapsed to 0.0 and
+    every frame -- including the failed ones -- was proposed pick_rating 2.
     """
-    values = [f["sharpness"] for f in frames if "sharpness" in f]
+    values = [
+        f["sharpness"]
+        for f in frames
+        if "sharpness" in f and "stats_error" not in f and f.get("captured_at")
+    ]
     keep_top_pct = min(max(cfg.cull.sharpness_keep_top_pct, 0.0), 1.0)
     return _percentile(values, 1.0 - keep_top_pct)
 
@@ -234,6 +247,17 @@ def _propose_one(
     # a flagged frame is capped here, never lowered below `keep_rating` --
     # there is nothing below it to fall to.
     if flagged:
+        candidate = min(candidate, cfg.cull.keep_rating)
+
+    # Review round 1 blocker: `sharpness` on a `stats_error` frame is the
+    # neutral stand-in 0.0 (propose()'s own comment: "never a guess dressed
+    # up as a measurement"), never a real number -- so it must never win a
+    # burst comparison or clear the singleton threshold either, no matter
+    # what the threshold collapsed to (`_job_sharpness_threshold` excludes
+    # these frames from the percentile now, but this is the hard guarantee:
+    # even a 0.0 threshold, or a burst where every OTHER member also
+    # failed, can never raise this frame to `pick_rating`).
+    if "stats_error" in frame:
         candidate = min(candidate, cfg.cull.keep_rating)
 
     if frame["rating_now"] > candidate:

@@ -14,27 +14,34 @@ from scouter.config import Config
 from scouter.core import cull
 
 
-def _singleton_frames(sharpness_values: list[float]) -> list[dict]:
+def _singleton_frames(
+    sharpness_values: list[float], *, failed_indices: set[int] = frozenset()
+) -> list[dict]:
     """One frame per value, each 10 minutes apart so `_group_bursts` never
     joins any two of them -- every frame is judged by the singleton branch,
-    the one E12 D1 is about."""
+    the one E12 D1 is about. `failed_indices` (0-based, into
+    `sharpness_values`) marks a frame as `stats_error` -- its `sharpness`
+    then IS the neutral stand-in `propose()` would have set (0.0), never a
+    real measurement."""
     frames = []
     for i, sharp in enumerate(sharpness_values, start=1):
         minute = i * 10
-        frames.append(
-            {
-                "seq": i,
-                "path": f"/tmp/e12/frame-{i}.orf",
-                "image_id": i,
-                "captured_at": f"2026-01-01 {minute // 60:02d}:{minute % 60:02d}:00",
-                "subsec": 0,
-                "camera": "cam",
-                "sharpness": sharp,
-                "clipped_high_pct": 0.0,
-                "luminance_mean": 100.0,
-                "rating_now": 0,
-            }
-        )
+        failed = (i - 1) in failed_indices
+        frame = {
+            "seq": i,
+            "path": f"/tmp/e12/frame-{i}.orf",
+            "image_id": i,
+            "captured_at": f"2026-01-01 {minute // 60:02d}:{minute % 60:02d}:00",
+            "subsec": 0,
+            "camera": "cam",
+            "sharpness": 0.0 if failed else sharp,
+            "clipped_high_pct": 0.0,
+            "luminance_mean": 100.0,
+            "rating_now": 0,
+        }
+        if failed:
+            frame["stats_error"] = {"code": "error", "message": "render failed"}
+        frames.append(frame)
     return frames
 
 
@@ -127,6 +134,62 @@ class JobRelativeThresholdTest(unittest.TestCase):
             for reason in p["reasons"]:
                 if "floor" in reason:
                     self.assertIn("diagnostic", reason)
+
+
+class StatsErrorExclusionTest(unittest.TestCase):
+    """Review round 1 blocker: `stats_error` frames carry the neutral
+    stand-in `sharpness = 0.0`, never a real measurement. Left in the
+    percentile, they either (with SOME real frames present) drag the
+    threshold down so far every real frame clears it, or (with enough of
+    them) collapse it to exactly 0.0 -- which a stats_error frame's own 0.0
+    sharpness then also clears, proposing pick_rating on numbers Scouter
+    never actually measured."""
+
+    def setUp(self) -> None:
+        self.cfg = Config()
+
+    def test_half_failed_does_not_inflate_or_corrupt_the_threshold(self) -> None:
+        # 6 real, evenly spaced across the E12-reported range; 4 failed
+        # (their own passed-in value is irrelevant -- _singleton_frames
+        # overrides it to the 0.0 stand-in).
+        real_values = [0.003 + i * (0.04 - 0.003) / 5 for i in range(6)]
+        sharpness_values = [0.9, 0.9, 0.9, 0.9] + real_values
+        frames = _singleton_frames(sharpness_values, failed_indices={0, 1, 2, 3})
+
+        proposals, _groups, threshold = cull._build_proposals(frames, self.cfg)
+
+        # The threshold must come from the 6 real values ONLY: the same
+        # number `test_e12_shape_does_not_reject_everything`-style math
+        # gives for a 6-value job at the default 60% keep.
+        self.assertAlmostEqual(threshold, real_values[2])
+
+        by_seq = {p["seq"]: p for p in proposals}
+        failed_seqs = {1, 2, 3, 4}  # 1-based seq for failed_indices {0,1,2,3}
+        real_seqs = set(range(5, 11))
+
+        for seq in failed_seqs:
+            self.assertEqual(
+                by_seq[seq]["rating_proposed"],
+                self.cfg.cull.keep_rating,
+                f"a stats_error frame (seq {seq}) must never be proposed a pick",
+            )
+        picks = {
+            seq for seq in real_seqs if by_seq[seq]["rating_proposed"] == self.cfg.cull.pick_rating
+        }
+        # The real 60%-keep-top math on 6 evenly spaced values: the top 4
+        # clear a 0.4-quantile threshold exactly at the 3rd value.
+        self.assertEqual(len(picks), 4, by_seq)
+
+    def test_all_failed_never_proposes_a_single_pick(self) -> None:
+        frames = _singleton_frames([0.9] * 10, failed_indices=set(range(10)))
+        proposals, _groups, threshold = cull._build_proposals(frames, self.cfg)
+        self.assertEqual(threshold, 0.0, "no real frame left to derive a percentile from")
+        for p in proposals:
+            self.assertEqual(
+                p["rating_proposed"],
+                self.cfg.cull.keep_rating,
+                "a threshold of 0.0 must not let a 0.0 stand-in clear it",
+            )
 
 
 if __name__ == "__main__":
