@@ -135,3 +135,10 @@ vault; decision row 407).
   adds a warning to the proposal when the job's p10-p90 sharpness spread is
   small, in either case; a `stats_error`/no-capture-time frame is excluded
   from the spread computation too, consistent with the blocker fix.
+- **Should-fix:** `darkroom undo-last`'s "noop" reason (row 408 B2) now
+  names the real cause, not just the symptom -- each call gets a fresh job
+  unless `$SCOUTER_JOB`/`job=` is pinned across calls; the MCP server
+  already pins one for you (phase 3 task 9's session job). `registry.call` also gives a "noop"
+  outcome a structured `error.fix` over every layer (it is a RESULT, not a
+  raised error, so it previously had nowhere else to put one) -- MCP now
+  surfaces the same actionable hint the CLI's exit code alone could not.

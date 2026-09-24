@@ -1260,23 +1260,29 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
         # Row 408, B2: this used to be unconditionally "dry_run" -- so a
         # REAL (non-dry) undo call with an empty journal reported
         # `outcome: dry_run` / `ok: true`, indistinguishable from a genuine
-        # preview. Before phase 3, every MCP call got its own job id
+        # preview. `registry.call` counts both "ok" and "dry_run" as
+        # success, so a real call that changed nothing looked identical to
+        # one that worked. Mirrors the `failed` branch just above: "dry_run"
+        # only when this call actually WAS a dry run; a real call gets
+        # "noop", which `ok = outcome in ("ok", "dry_run")` correctly
+        # excludes from success.
+        # Review round 1, should-fix (row 408 B2): named the REAL cause, not
+        # just the symptom -- every MCP call got its own job id
         # (`paths.current_job()`: `job-<UTC second>-<pid>`) unless the
         # caller pinned one, so the journal a fresh call's undo_last looked
-        # at was always empty -- phase 3 task 9's MCP session job
+        # at was always empty. Phase 3 task 9's MCP session job
         # (`scouter/mcp/server.py::_pin_session_job`) closes that for good
-        # by pinning `SCOUTER_JOB` once per server process, so this now only
-        # fires for a bare CLI/Python call that never pins `SCOUTER_JOB`/
-        # `job=` across calls, or a genuinely empty journal.
-        # `registry.call` counts both "ok" and "dry_run" as success, so a
-        # real call that changed nothing looked identical to one that
-        # worked. Mirrors the `failed` branch just above: "dry_run" only
-        # when this call actually WAS a dry run; a real call gets "noop",
-        # which `ok = outcome in ("ok", "dry_run")` correctly excludes from
-        # success.
+        # by pinning `SCOUTER_JOB` once per server process, so this now
+        # only fires for a bare CLI/Python call that never pins
+        # `SCOUTER_JOB`/`job=` across calls, or a genuinely empty journal.
         return UndoResult(
             outcome="dry_run" if dry_run else "noop",
-            reason=f"nothing to undo: journal for {job} is empty",
+            reason=(
+                f"nothing to undo: journal for {job} is empty -- a bare CLI/Python "
+                "call gets a fresh job per call unless $SCOUTER_JOB (CLI) or job= "
+                "(MCP/Python) is pinned across calls; the MCP server already pins "
+                "one for you (phase 3 task 9's session job)"
+            ),
         )
 
     # Blocker 6 / fix round 3, item 1: a `module.reset` entry can never be

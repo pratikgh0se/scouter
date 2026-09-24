@@ -546,6 +546,10 @@ class DarkroomCoreTest(_DarkroomFixture):
         result = darkroom.undo_last()
         self.assertEqual(result.outcome, "noop")
         self.assertIn("nothing to undo", result.reason or "")
+        # Review round 1, should-fix (row 408 B2): the reason names the
+        # REAL cause (a fresh job id per call), not just the symptom.
+        self.assertIn("SCOUTER_JOB", result.reason or "")
+        self.assertIn("phase 3", result.reason or "")
 
         dry_result = darkroom.undo_last(dry_run=True)
         self.assertEqual(dry_result.outcome, "dry_run")
@@ -559,6 +563,26 @@ class DarkroomCoreTest(_DarkroomFixture):
         from scouter.errors import exit_code_for
 
         self.assertNotIn(exit_code_for(envelope.outcome), (0, 5))
+        # Review round 1, should-fix: a "noop" RESULT (not a raised
+        # ScouterError) still gets a structured error.fix over every
+        # layer -- MCP has nowhere else to surface an actionable hint.
+        self.assertIsNotNone(envelope.error)
+        self.assertEqual(envelope.error["code"], "noop")
+        self.assertTrue(envelope.error["fix"])
+        self.assertIn("SCOUTER_JOB", envelope.error["fix"])
+
+    def test_mcp_layer_also_gets_the_noop_error_fix(self) -> None:
+        import json
+
+        from scouter.mcp.server import ScouterServer
+
+        payload = json.loads(
+            ScouterServer().call("darkroom_undo_last", {"job": "job-test"})
+        )
+        self.assertEqual(payload["outcome"], "noop")
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "noop")
+        self.assertTrue(payload["error"]["fix"])
 
     def test_undo_last_names_the_failed_entry_when_that_is_all_there_is(self) -> None:
         """Should-fix 4: a journal that is not empty, but whose only entry

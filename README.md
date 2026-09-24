@@ -561,7 +561,14 @@ These are load-bearing. Read them before scripting against phase 2.
   success indistinguishable from a genuine preview. It now reports
   `outcome: "noop"` (exit `23`) for a real call with nothing to undo; a
   true dry run still reports `dry_run` as before (row 408 B2, editor
-  benchmark).
+  benchmark). The reason names the real cause, not just the symptom: each
+  call gets a fresh job unless `$SCOUTER_JOB` (CLI) or `job=` (MCP/Python)
+  is pinned across calls, so a fresh call's `undo_last` looks at an empty
+  journal by default; the MCP server already pins one for you (phase 3
+  task 9's session job), so this now only bites a bare CLI/Python call
+  that never pins one. A "noop" also carries a structured
+  `error.fix` over every layer (review round 1) -- it is a RESULT, not a
+  raised error, so it would otherwise have had nowhere else to put one.
 - **`darkroom enable`/`darkroom reset` refuse an unpinned module before any
   bridge call.** They used to send `iop/<module>` for any string; an
   unrecognised path wedges darktable's Lua worker for the rest of the
