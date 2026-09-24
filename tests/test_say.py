@@ -25,14 +25,25 @@ class SayTest(_MovesFixture):
         self.assertAlmostEqual(r.moves[0]["target"], 1.3, places=5)
 
     def test_contrast_routes_to_filmic_when_filmic_is_the_tone_mapper(self) -> None:
+        # Task 10 pinned filmic's contrast path and slot; the fixture has no
+        # filmicrgb entry and the row declares no neutral, so the routed move
+        # is refused value_unknown (it reached filmic, not sigmoid).
         with mock.patch("scouter.core.moves.route_tone", return_value="filmicrgb"):
-            with self.assertRaises(NotPinned) as cm:
+            with self.assertRaises(ValueUnknown) as cm:
                 moves.say.__wrapped__("less contrast", job="job-test")
-        self.assertEqual(cm.exception.detail["refused"][0]["module"], "filmicrgb")
+        self.assertIn("filmicrgb.contrast", cm.exception.message)
+        self.assertEqual(self.sets(), [])
 
     def test_a_phrase_with_any_unreachable_move_is_refused_whole(self) -> None:
-        with self.assertRaises(NotPinned) as cm:
-            moves.say.__wrapped__("teal and orange", job="job-test")
+        # Task 10 pinned every teal-and-orange row; unpin them to keep the
+        # P3-R4 all-or-nothing refusal covered.
+        teal = [("colorbalancergb", p) for p in
+                ("shadows_hue", "shadows_chroma", "highlights_hue", "highlights_chroma")]
+        with mock.patch.dict(dtbridge.ACTION_PATHS):
+            for key in teal:
+                del dtbridge.ACTION_PATHS[key]
+            with self.assertRaises(NotPinned) as cm:
+                moves.say.__wrapped__("teal and orange", job="job-test")
         self.assertEqual(len(cm.exception.detail["refused"]), 4)
         self.assertEqual(self.sets(), [], "nothing may land before the pre-validation")
         # Fix round 1, important: the whole phrase's moves here are all
@@ -41,9 +52,30 @@ class SayTest(_MovesFixture):
         # `darkroom.current` lookup `_current_image()` would otherwise make.
         self.assertEqual(self.bridge.calls, [])
 
+    def test_one_unpinned_sub_move_refuses_teal_and_orange_whole(self) -> None:
+        with mock.patch.dict(dtbridge.ACTION_PATHS):
+            del dtbridge.ACTION_PATHS[("colorbalancergb", "highlights_chroma")]
+            with self.assertRaises(NotPinned) as cm:
+                moves.say.__wrapped__("teal and orange", job="job-test")
+        self.assertEqual([r["param"] for r in cm.exception.detail["refused"]],
+                         ["highlights_chroma"])
+        self.assertEqual(self.sets(), [])
+
+    def test_teal_and_orange_runs_whole_once_every_sub_move_is_pinned(self) -> None:
+        """Task 10 ruling: with every sub-move pinned and the hue rows'
+        darktable default declared, the phrase lands on an image with no
+        colour-balance history as ONE group, and undoes as one."""
+        r = moves.say.__wrapped__("teal and orange", commit=False, job="job-test")
+        self.assertEqual(r.outcome, "ok")
+        self.assertEqual(len(r.moves), 4)
+        self.assertEqual({e.group for e in journal.read_all("job-test")}, {r.group})
+        undone = darkroom.undo_last.__wrapped__(job="job-test")
+        self.assertEqual(len(undone.undone_group), 4)
+
     def test_absolute_only_phrase_is_value_unknown(self) -> None:
+        # Task 10: "more saturation" is live now; tint has no readable value.
         with self.assertRaises(ValueUnknown):
-            moves.say.__wrapped__("more saturation", job="job-test")
+            moves.say.__wrapped__("more magenta", job="job-test")
 
     def test_unknown_phrase_is_usage_with_suggestions(self) -> None:
         with self.assertRaises(UsageError) as cm:
@@ -104,8 +136,20 @@ class SetMoveBeforeTest(_MovesFixture):
         row = dataclasses.replace(vocab.spec(*self.HUE), default=default)
         return mock.patch.dict(vocab._BY_KEY, {self.HUE: row})
 
+    def test_the_hue_rows_declare_darktables_default(self) -> None:
+        """Task 10 ruling: every colour balance rgb hue row declares 0.0
+        (darktable's module default), so hue phrases run without history."""
+        from scouter.core import vocab
+
+        hues = [s for s in vocab.PARAMS if s.wraps]
+        self.assertEqual(len(hues), 3)
+        self.assertEqual({s.default for s in hues}, {0.0})
+
     def test_no_neutral_and_no_default_refuses_before_any_write(self) -> None:
-        with self._pinned(), mock.patch("scouter.core.vocab.xmp_named", return_value=True):
+        # Task 10: the real hue rows now declare a default; the refusal path
+        # still exists for any row that declares neither, so force None.
+        with self._pinned(), self._with_default(None), \
+             mock.patch("scouter.core.vocab.xmp_named", return_value=True):
             with self.assertRaises(ValueUnknown) as cm:
                 moves.say.__wrapped__("warm the highlights", commit=False, job="job-test")
         refused = cm.exception.detail["refused"]

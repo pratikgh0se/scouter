@@ -51,8 +51,13 @@ class ParamSpec:
     #: column), declared only where it is known. Final review #1a ruling: a
     #: `set` move whose before value is unreadable journals this as its
     #: before (source "default") when the row has no `neutral`; a row with
-    #: neither refuses the move `value_unknown`. No row declares one yet.
+    #: neither refuses the move `value_unknown`. Task 10: the colour balance
+    #: rgb hue rows declare 0.0 (darktable's module default).
     default: float | None = None
+
+
+#: darktable's colorbalancergb default for every hue param (degrees).
+_CB_HUE_DEFAULT = 0.0
 
 
 def _cb(param: str, ui: str, unit: str, lo: float, hi: float, step: float, concept: str,
@@ -64,24 +69,36 @@ def _cb(param: str, ui: str, unit: str, lo: float, hi: float, step: float, conce
         display_scale=100.0 if unit == "%" else 1.0, lo=lo, hi=hi, step=step,
         value_source="xmp", neutral=None if wraps else neutral, wraps=wraps,
         concept=concept, why=why, watch=watch, candidate_paths=candidates,
+        # Phase 3 task 10 ruling: a hue row declares darktable's module
+        # default (0.0 degrees, read from the sidecar darktable itself wrote
+        # for a freshly enabled colour balance rgb, tests/fixtures/
+        # colorbalancergb.xmp slots 2/5/8), so "warm the highlights" can set
+        # a hue on an image with no colour-balance history and still be
+        # undone to what the module really held.
+        default=_CB_HUE_DEFAULT if wraps else None,
     )
 
 
-def _zone(zone: str, section: str, label: str) -> tuple[ParamSpec, ParamSpec, ParamSpec]:
+def _zone(zone: str, section: str, label: str,
+          short: str | None = None) -> tuple[ParamSpec, ParamSpec, ParamSpec]:
     base = f"iop/colorbalancergb/{section}"
     flat = f"iop/colorbalancergb/{label}"
+    # Task 10 host probe: `power/<x>` answered but `shadows lift/<x>` and
+    # `highlights gain/<x>` (and the flat forms) answered nan, so the short
+    # section word (`lift`, `gain`) is tried first for those two zones.
+    lead = (f"iop/colorbalancergb/{short}",) if short else ()
     return (
         _cb(f"{zone}_luminance", f"4 ways › {section} › luminance", "%", -0.25, 0.25, 0.02,
             "color_balance", f"lifts or lowers only the {label}",
             "noise in the darkest areas" if zone == "shadows" else
             ("clipping in the brightest areas" if zone == "highlights" else "skin"),
-            (f"{base}/luminance", f"{flat} luminance")),
+            (*(f"{b}/luminance" for b in lead), f"{base}/luminance", f"{flat} luminance")),
         _cb(f"{zone}_hue", f"4 ways › {section} › hue", "°", 0.0, 360.0, 10.0,
             "grading", f"picks the tint colour for the {label}",
-            "neutral greys in that range", (f"{base}/hue", f"{flat} hue"), wraps=True),
+            "neutral greys in that range", (*(f"{b}/hue" for b in lead), f"{base}/hue", f"{flat} hue"), wraps=True),
         _cb(f"{zone}_chroma", f"4 ways › {section} › chroma", "%", 0.0, 0.3, 0.02,
             "grading", f"sets how strong the {label} tint is",
-            "greys in that range turning coloured", (f"{base}/chroma", f"{flat} chroma")),
+            "greys in that range turning coloured", (*(f"{b}/chroma" for b in lead), f"{base}/chroma", f"{flat} chroma")),
     )
 
 
@@ -123,9 +140,9 @@ PARAMS: tuple[ParamSpec, ...] = (
     _cb("global_chroma", "master › global chroma", "%", -0.5, 0.5, 0.05,
         "chroma_saturation", "changes colourfulness at constant brightness",
         "bright saturated colours going neon", ("iop/colorbalancergb/global chroma",)),
-    *_zone("shadows", "shadows lift", "shadows"),
+    *_zone("shadows", "shadows lift", "shadows", "lift"),
     *_zone("midtones", "power", "midtones"),
-    *_zone("highlights", "highlights gain", "highlights"),
+    *_zone("highlights", "highlights gain", "highlights", "gain"),
     ParamSpec("filmicrgb", "white_relative_exposure", "filmic rgb › scene › white relative exposure",
               "EV", 1.0, 2.0, 10.0, 0.25, "xmp", None, False, "tone_mapper",
               "sets which scene brightness maps to pure white", "clipped highlights",

@@ -276,7 +276,7 @@ def _set_recording_before(module: str, param: str, target: float, *, instance: i
     entry's before. The engine is untouched: this only patches the journal.
 
     Final review #1b: `set_param` can land the write (`journal.complete`)
-    and THEN raise `CommitTimeout` from its commit. The entry exists and is
+    and THEN raise `CommitTimeout` (or, task 10, any ScouterError) from its commit. The entry exists and is
     undoable -- so the patch must happen on that path too, before the
     timeout is re-raised; skipping it wedged every later `undo_last` on
     "seq N ... never readable". `seq` is taken before the call, so a no-op
@@ -287,7 +287,13 @@ def _set_recording_before(module: str, param: str, target: float, *, instance: i
     seq = journal.next_seq(job)
     try:
         result = set_fn(module, param, target, instance=instance, commit=commit, job=job)
-    except CommitTimeout:
+    except ScouterError:
+        # Phase 3 task 10 (parked final-review issue): not only CommitTimeout
+        # -- ANY Scouter error raised after the write landed (a BridgeTimeout
+        # or WrongView from `history.commit`) left `before.value` None and
+        # wedged every later `undo_last`. `_patch_before` only touches an
+        # entry whose `after` is set, so a write that never landed is left
+        # exactly as the engine wrote it.
         if fallback is not None:
             _patch_before(job, seq, module, param, fallback)
         raise

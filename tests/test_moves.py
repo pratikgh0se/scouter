@@ -158,6 +158,28 @@ class AdjustTest(_MovesFixture):
         self.assertAlmostEqual(self.sets()[-1]["value"], 0.0)
         self.assertTrue(journal.read_all("job-test")[-1].undone)
 
+    def test_neutral_patch_survives_any_bridge_error_after_the_write_landed(self) -> None:
+        """Task 10 (parked final-review issue): a non-CommitTimeout error
+        from the commit (here BridgeTimeout) after the write landed must
+        still journal the neutral as before, or `undo_last` wedges."""
+        from scouter.errors import BridgeTimeout
+
+        def bridge_dies_on_change(job, image, *, strategy="auto", attempts=None,
+                                  expect_change=True):
+            if expect_change:
+                raise BridgeTimeout("bridge went away mid-commit")
+            return CommitResult(committed=True, changed=False, warnings=[])
+
+        with mock.patch("scouter.core.darkroom._commit", side_effect=bridge_dies_on_change):
+            with self.assertRaises(BridgeTimeout):
+                moves.adjust.__wrapped__("colorbalancergb", "contrast", 0.05, job="job-test")
+        entry = journal.read_all("job-test")[-1]
+        self.assertEqual(entry.after, {"value": 0.05}, "the write landed")
+        self.assertEqual((entry.before.get("value"), entry.before.get("source")), (0.0, "neutral"))
+        darkroom.undo_last.__wrapped__(single=True, job="job-test")
+        self.assertAlmostEqual(self.sets()[-1]["value"], 0.0)
+        self.assertTrue(journal.read_all("job-test")[-1].undone)
+
     def test_a_write_that_never_landed_is_not_patched(self) -> None:
         """#1b: the patch only applies to a landed entry -- a bridge failure
         (journal.fail, `after` None) is left exactly as the engine wrote it."""
@@ -203,19 +225,22 @@ class AdjustTest(_MovesFixture):
         self.assertEqual(len(self.sets()), 1)
 
     def test_absolute_only_refuses_value_unknown_before_any_write(self) -> None:
+        # Task 10 pinned sigmoid.skew's slot; tint has no XMP value source.
         with self.assertRaises(ValueUnknown) as cm:
-            moves.adjust.__wrapped__("sigmoid", "skew", 0.1, job="job-test")
-        self.assertIn("darkroom set sigmoid skew", cm.exception.fix)
+            moves.adjust.__wrapped__("temperature", "tint", 0.05, job="job-test")
+        self.assertIn("darkroom set temperature tint", cm.exception.fix)
         self.assertEqual(self.bridge.calls, [])
 
     def test_candidate_refuses_not_pinned_before_any_bridge_call(self) -> None:
-        with self.assertRaises(NotPinned):
+        # Task 10 pinned every candidate row; unpin one to keep this covered.
+        with mock.patch.dict(dtbridge.ACTION_PATHS), self.assertRaises(NotPinned):
+            del dtbridge.ACTION_PATHS[("colorbalancergb", "shadows_luminance")]
             moves.adjust.__wrapped__("colorbalancergb", "shadows_luminance", 0.02, job="job-test")
         self.assertEqual(self.bridge.calls, [])
 
     def test_hue_wraps_modulo_360(self) -> None:
         hue = ("colorbalancergb", "shadows_hue")
-        with mock.patch.dict(dtbridge.ACTION_PATHS, {hue: "iop/colorbalancergb/shadows lift/hue"}), \
+        with mock.patch.dict(dtbridge.ACTION_PATHS, {hue: "iop/colorbalancergb/lift/hue"}), \
              mock.patch("scouter.core.vocab.xmp_named", return_value=True), \
              mock.patch("scouter.core.moves.read_current", return_value=(350.0, "xmp", None)):
             r = moves.adjust.__wrapped__(*hue, 20.0, commit=False, job="job-test")
@@ -266,7 +291,7 @@ class GetTest(_MovesFixture):
         self.assertTrue(any("not known-fresh" in w for w in r.warnings))
 
     def test_get_reports_null_with_a_reason_instead_of_refusing(self) -> None:
-        r = moves.get.__wrapped__("sigmoid", "skew", job="job-test")
+        r = moves.get.__wrapped__("temperature", "tint", job="job-test")
         self.assertIsNone(r.value)
         self.assertEqual(r.status, "absolute_only")
 

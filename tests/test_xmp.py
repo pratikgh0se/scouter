@@ -189,3 +189,32 @@ class ColorbalancergbTest(unittest.TestCase):
                 [round(v, 4) for v in entry.decoded["floats"]],
                 "the value set through the bridge must appear in the float vector",
             )
+
+
+class Phase3HostSlotsTest(unittest.TestCase):
+    """Phase 3 task 10: every slot the host run pinned by the sentinel method
+    decodes by name from the sidecar darktable itself wrote (run 3)."""
+
+    FIXTURE = FIXTURES / "phase3-host.xmp"
+    EXPECTED = {
+        "sigmoid": {"skew": 0.16, "contrast": 1.4},
+        "colorbalancergb": {
+            "shadows_luminance": 0.161, "shadows_chroma": 0.153, "shadows_hue": 41.0,
+            "midtones_luminance": 0.149, "midtones_chroma": 0.141, "midtones_hue": 44.0,
+            "highlights_luminance": 0.137, "highlights_chroma": 0.129, "highlights_hue": 47.0,
+            "global_chroma": 0.165, "global_saturation": 0.173, "global_vibrance": 0.169,
+        },
+        "filmicrgb": {"black_relative_exposure": -9.94, "white_relative_exposure": 4.96,
+                      "contrast": 1.451},
+        "colorzones": {"strength": 0.16},
+    }
+
+    def test_every_pinned_slot_decodes_by_name(self) -> None:
+        parsed = xmp.parse(self.FIXTURE.read_text())
+        for module, values in self.EXPECTED.items():
+            entry = max((e for e in parsed.entries if e.operation == module),
+                        key=lambda e: e.num)
+            self.assertIsNone(entry.reason, module)
+            for name, value in values.items():
+                with self.subTest(param=f"{module}.{name}"):
+                    self.assertAlmostEqual(entry.decoded[name], value, places=4)

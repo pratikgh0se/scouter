@@ -5,6 +5,29 @@ branch, which fixes defects found by the E12 live evaluation against real
 darktable (`Knowledge/Scouter - E12 live evaluation 2026-09-24.md` in the
 vault; decision row 407).
 
+## Unreleased (phase-3-task10: host run)
+
+- Phase 3 task 10 host run on darktable 5.4.1 (details in
+  `docs/measurements.md`, "Phase 3 host run"). All 15 candidate vocabulary
+  rows answered their host probe, and their action paths are pinned in
+  `dtbridge.ACTION_PATHS`. 17 XMP slots are pinned by the sentinel method in
+  `xmp.LAYOUTS`: colour balance rgb v5, sigmoid v3 skew, new filmic rgb v6
+  and color zones v5 layouts. `scouter vocab list` now shows 22 live, 1
+  absolute_only (tint), 1 unreachable (color zones curves), 0 candidate.
+- Colour balance rgb hue rows declare darktable's module default (0°), so
+  "warm the highlights", "cool the shadows" and "teal and orange" run on an
+  image with no colour-balance history and undo back to 0°.
+- `moves._set_recording_before` now records the neutral/default before-value
+  on ANY Scouter error raised after the write landed, not only
+  `CommitTimeout`, so a bridge timeout mid-commit no longer wedges
+  `undo last`.
+- Host probe method: it waits 20 s after darktable comes up and proves a
+  known path answers before it judges a candidate. Probing earlier reported
+  every path, including pinned ones, as a wedge.
+- Open finding: a one-move `darkroom say` has a median of 4.1 s with the
+  pre-commit bounce, which misses the 3.5 s target. With `--trust-sidecar`
+  the median is 1.4 s.
+
 ## Unreleased (fix/e12-findings)
 
 - CLI/README drift (D2): `cull propose`, `outliers list` and `export release`

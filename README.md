@@ -653,13 +653,19 @@ shows which words work today.
 - **Relative white balance needs the camera's measured table and assumes
   tint 1.0.** Without a table: `value_unknown`, naming `scouter wb
   calibrate`.
-- **`darkroom adjust` bounces the view once before it reads** (about 1 s),
+- **`darkroom adjust`/`darkroom say` bounce the view once before they read**,
   because a hand-moved slider is invisible on disk until darktable commits.
-  `--trust-sidecar` skips this for scripts that own the darkroom.
+  On the 2026-09-24 host run that bounce made a one-move `darkroom say` take
+  a median **4.1 s** (target 3.5 s, missed); with `--trust-sidecar` (no
+  pre-commit bounce, for scripts that own the darkroom) the median was
+  **1.4 s**.
 - **Undoing a preset application is refused.** darktable's Lua API cannot
   remove history items. Use the history panel.
-- **Color zones' zone curves are unreachable.** Only its global mix is a
-  candidate.
+- **Color zones' zone curves are unreachable.** Only its global mix
+  (`colorzones strength`) is reachable.
+- **White balance tint stays `absolute_only`.** darktable stores it only as
+  channel coefficients, so there is no value to move relatively; set it with
+  `darkroom set temperature tint <value>`.
 - **Presets are darktable styles.** They are not Lightroom presets, and
   applying one always appends.
 - **A relative move with no sidecar at all refuses `value_unknown`**, rather
@@ -670,13 +676,14 @@ shows which words work today.
   even when darktable does not confirm the commit afterwards.
 - **A move whose current value cannot be read, on a row that declares no
   neutral or darktable default, refuses `value_unknown`** before anything is
-  written, so Scouter never makes an edit it could not undo. That affects
-  the colour-grade hue settings in "warm the highlights", "cool the shadows"
-  and "teal and orange": the hue rows have no neutral, declare no default
-  yet, and their XMP slots are not decoded yet. So once the host run pins
-  their action paths, those phrases still refuse until the hue slots are
-  pinned or the rows declare darktable's default. `darkroom set` can still
-  set a hue, but `undo last` cannot restore the value before it.
+  written, so Scouter never makes an edit it could not undo. The colour-grade
+  hue rows declare darktable's own module default (0°), so "warm the
+  highlights", "cool the shadows" and "teal and orange" run on an image with
+  no colour-balance history and undo back to 0°.
+- **"teal and orange" lands whole or not at all on pinning.** All four of its
+  moves are pinned today. If any were unpinned the whole phrase would refuse
+  `not_pinned` before any write; a bridge failure after a move has landed is
+  reported `partial` (exit 9), and the landed moves still undo as one group.
 - **`preset.apply` refuses with `no_sidecar`** when the image's history
   cannot be read before the style is sent. Once darktable confirms the style
   is applied, the result is reported as applied. When the history count on
@@ -690,29 +697,38 @@ shows which words work today.
 - **Applying a preset to the open image reports its timing as `cpu_ms`.**
   That is CPU time, not wall-clock time, and it covers the whole trip out of
   the darkroom and back, not just the moment the style is applied.
-- **Colour-grade and most vocabulary rows stay `candidate`/`not_pinned`**
-  until the task 10 host probe pins their action paths and XMP slots — until
-  then `darkroom adjust`/`darkroom say` refuse them honestly rather than
-  guessing.
-- **The Lua plugin was exercised by the harness on Lua 5.5.1 only.**
-  darktable itself ships Lua 5.4, so the host run (below) is the real check,
-  not this repo's unit harness.
+- **22 of 24 vocabulary rows are `live`** after the task 10 host run
+  (below): tint is `absolute_only` and color zones' curves `unreachable`.
+- **The Lua `darkroom.apply_style` bounce ran in darktable 5.4.1 itself** on
+  the host run (preset round trip passed); the unit harness is Lua 5.5.1.
 - Exit codes: `0` ok · `1` error · `2` usage · `3` bridge_timeout ·
   `4` wrong_view · `5` confirmation required · `6` not_in_darkroom ·
   `7` cli_wrote_nothing · `8` db_locked · `9` style_partial ·
   `10` commit_timeout · `20` value_unknown · `21` not_pinned
 
-## Phase 3 host run (task 10): WAITING FOR GO
+## Phase 3 host run (task 10), 2026-09-24
 
-The host run (`tests/test_host_phase3.py`) is not yet written or run. It is
-task 10 of `docs/superpowers/plans/2026-09-24-scouter-phase3.md`. It is only
-done after Pratik says go.
+Run on darktable 5.4.1 against a scratch copy of the hero ORF
+(`tests/test_host_phase3.py`; results in `docs/measurements.md`, "Phase 3
+host run").
 
-Until then `dtbridge.ACTION_PATHS` and `xmp.LAYOUTS` are not extended, so
-every candidate row above refuses `not_pinned` rather than guessing at an
-action path or XMP slot.
+- **Action paths.** All 15 candidate rows answered non-nan, one darktable
+  launch per candidate, and were pinned in `dtbridge.ACTION_PATHS`. The 4-ways
+  shadows and highlights rows use darktable's short section words
+  (`lift/…`, `gain/…`); the midtones rows use `power/…`.
+- **XMP slots.** The sentinel method pinned 17 slots across colour balance
+  rgb v5, sigmoid v3 (skew), filmic rgb v6 and color zones v5
+  (`xmp.LAYOUTS`, fixture `tests/fixtures/phase3-host.xmp`).
+- **Signs.** All three matched the spec, and no phrase was flipped. Black
+  level +0.01 darkens, tint 0.9 lowers r/b, and "warm the highlights" raises
+  r/b.
+- **Preset round trip** (save, list, apply to the open image, delete)
+  passed.
+- **Timing.** A one-move `darkroom say` has a median of 4.1 s with the
+  pre-commit bounce, which misses the 3.5 s target, so the host timing test
+  fails. With `--trust-sidecar` the median is 1.4 s.
 
-When Pratik says go, darktable must be closed first and the hero ORF present:
+To re-run it, close darktable first and have the hero ORF present:
 
 ```sh
 SCOUTER_HOST_TESTS=1 uv run --extra dev python -m pytest tests/test_host_phase3.py -q -s

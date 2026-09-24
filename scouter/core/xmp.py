@@ -61,9 +61,12 @@ LAYOUTS: dict[tuple[str, int], dict] = {
         # Ruling 6: only slot 0 (`contrast`) is a proven name. The other 13
         # floats are exposed as unnamed f1..f13 (decode_module numbers them
         # by their 0-based slot index) -- no invented field names.
-        "named_slots": {0: "contrast"},
+        # Phase 3 task 10 host run, 2026-09-24: skew sentinel 0.16 appeared
+        # at exactly one slot (1), as the editor benchmark's 0.2 did (f1).
+        "named_slots": {0: "contrast", 1: "skew"},
         "float_count": 14,
-        "verified": "tests/fixtures/P6281348.ORF.xmp num 12 -> contrast 1.4",
+        "verified": "tests/fixtures/P6281348.ORF.xmp num 12 -> contrast 1.4; "
+                    "tests/fixtures/phase3-host.xmp -> skew 0.16",
     },
     ("temperature", 4): {
         "size": 20,
@@ -86,9 +89,39 @@ LAYOUTS: dict[tuple[str, int], dict] = {
     # controller ruling 6: a field is only named when its meaning is proven).
     ("colorbalancergb", 5): {
         "size": 132,
-        "named_slots": {31: "contrast"},
+        # Phase 3 task 10 host run, 2026-09-24 (sentinel method, one launch):
+        # each sentinel appeared at exactly one float slot. 19 matches the
+        # editor benchmark's finding (global saturation = f19).
+        "named_slots": {
+            0: "shadows_luminance", 1: "shadows_chroma", 2: "shadows_hue",
+            3: "midtones_luminance", 4: "midtones_chroma", 5: "midtones_hue",
+            6: "highlights_luminance", 7: "highlights_chroma", 8: "highlights_hue",
+            17: "global_chroma", 19: "global_saturation", 29: "global_vibrance",
+            31: "contrast",
+        },
         "float_count": 33,
-        "verified": "tests/fixtures/colorbalancergb.xmp (task 12 host probe)",
+        "verified": "tests/fixtures/colorbalancergb.xmp (task 12 host probe); "
+                    "tests/fixtures/phase3-host.xmp (phase 3 task 10)",
+    },
+    # Phase 3 task 10 host run, 2026-09-24: filmic rgb v6 (116 bytes, 29
+    # four-byte slots). Sentinels 4.96 (white relative exposure) and 1.451
+    # (contrast) each appeared at exactly one slot.
+    ("filmicrgb", 6): {
+        "size": 116,
+        # black: sentinel -9.94 at exactly one slot (1), second launch.
+        "named_slots": {1: "black_relative_exposure", 2: "white_relative_exposure",
+                        14: "contrast"},
+        "float_count": 29,
+        "verified": "tests/fixtures/phase3-host.xmp (phase 3 task 10)",
+    },
+    # Phase 3 task 10 host run, 2026-09-24: color zones v5 (520 bytes = 130
+    # four-byte slots; some are ints, which only the unnamed slots expose).
+    # The mix ("strength") sentinel 0.16 appeared at exactly one slot (127).
+    ("colorzones", 5): {
+        "size": 520,
+        "named_slots": {127: "strength"},
+        "float_count": 130,
+        "verified": "tests/fixtures/phase3-host.xmp (phase 3 task 10)",
     },
 }
 
