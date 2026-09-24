@@ -1290,11 +1290,14 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             if isinstance(before_end, int) and isinstance(after_end, int)
             else "some"
         )
+        # Fix round 1 (controller ruling, spec over plan): this text must
+        # match spec §8.4 exactly -- no "cannot undo preset '<name>':" prefix
+        # (the name still travels in `detail["style"]` below, just not in
+        # the sentence itself).
         reason = (
-            f"cannot undo preset '{(entry.after or {}).get('style', '?')}': a style application "
-            f"appended {items} history item(s), and darktable's Lua API cannot remove history "
-            "items. In darktable, click the history item just below the style's first item and "
-            "compress history, or press Ctrl-Z"
+            f"a style application appended {items} history item(s); darktable's Lua API "
+            "cannot remove history items. In darktable, click the history item just below "
+            "the style's first item and compress history, or press Ctrl-Z"
         )
         if dry_run:
             return UndoResult(

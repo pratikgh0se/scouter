@@ -25,7 +25,7 @@ from scouter import __version__, config, metrics, paths
 from scouter.core import darkroom, dtbridge, explain, journal, style
 from scouter.core.moves import EDUCATIVE_ARG
 from scouter.core.style import _now_z
-from scouter.errors import CommitTimeout, ScouterError, UsageError
+from scouter.errors import CommitTimeout, NoSidecar, NotInDarkroom, ScouterError, UsageError
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
 from scouter.types import PresetListResult, PresetResult, StyleSetResult
@@ -217,6 +217,43 @@ def _require_style(name: str) -> None:
                          detail={"name": name, "suggestions": suggestions})
 
 
+def _same_image(image: str | int, current: dtbridge.ResolvedImage) -> bool:
+    """Fix round 1 (controller ruling): a caller can name the open image in
+    any form that resolves to it -- a bare id, or a path in a different
+    (relative, symlinked, `.`/`..`-laden) spelling than `darkroom.current`
+    happens to report. An exact string match (the original implementation)
+    would send a relative/alternate path down the LIBRARY path instead of the
+    bounce, which is the in-memory-overwrite risk §8.3 exists to avoid. A
+    numeric-looking `image` compares by id; anything else compares resolved
+    (`Path.resolve()`) paths, falling back to a plain string match if
+    resolution itself raises (e.g. a path component does not exist)."""
+    s = str(image)
+    if s.lstrip("+-").isdigit():
+        try:
+            return int(s) == int(current.image_id)
+        except (TypeError, ValueError):
+            return False
+    try:
+        return Path(s).expanduser().resolve() == Path(current.path).expanduser().resolve()
+    except OSError:
+        return s == current.path
+
+
+def _current_image_or_none() -> dtbridge.ResolvedImage | None:
+    """`darkroom._current_image()`, tolerant of nothing being loaded.
+
+    Fix round 1 (blocker): the library path (§8.3) never touches the view
+    and must work with no darkroom image loaded at all -- the caller named
+    ANOTHER image explicitly. Only the open-image path actually needs
+    `_current_image()`'s hard refusal, so that refusal is deferred until
+    `apply` knows the target really is (or is meant to be) the open image.
+    """
+    try:
+        return darkroom._current_image()
+    except NotInDarkroom:
+        return None
+
+
 @metrics.instrumented("preset.apply")
 def apply(name: str, image: str | int | None = None, *, educative: str | None = None,
           dry_run: bool = False, job: str | None = None) -> PresetResult:
@@ -230,17 +267,33 @@ def apply(name: str, image: str | int | None = None, *, educative: str | None = 
                             plan=[{"action": "preset.apply", "name": name, "image": image}],
                             reason="dry run: no darktable calls were made")
     _require_style(name)
-    current = darkroom._current_image()
-    target_is_open = image is None or str(image) in (str(current.image_id), current.path)
+    # Fix round 1: the library path (image given, and not the open one) must
+    # never require a darkroom image at all -- look it up tolerantly, and
+    # only demand one once we know the target really is the open image
+    # (image is None, or it resolves to the one currently loaded).
+    current = _current_image_or_none() if image is not None else darkroom._current_image()
+    target_is_open = image is None or (current is not None and _same_image(image, current))
     if not target_is_open:
         applied = getattr(style.apply, "__wrapped__", style.apply)(image, name, job=job)
         return PresetResult(image_id=applied.image_id, path=applied.path, name=name,
                             action="apply", applied_to="library", warnings=applied.warnings,
                             explain=explain.preset_lines("apply", name, [], applied.applied,
                                                          level=level, job=job))
+    assert current is not None  # target_is_open guarantees this
     darkroom._require_job_image(job, current.image_id)
     dtbridge.require_darkroom()
     before = _history_end(current.path)
+    if before is None:
+        # Fix round 1 (controller ruling): sending the style anyway and then
+        # always reporting commit_timeout is a phantom outcome -- the real
+        # problem is that Scouter cannot read the sidecar's history_end AT
+        # ALL yet, not that a real apply's advance was never confirmed.
+        # Refuse before any bridge call, with the honest fix.
+        raise NoSidecar(
+            f"cannot apply {name!r} to {current.path}: its history is not yet readable "
+            "(no committed sidecar to verify the advance against)",
+            detail={"path": current.path, "name": name},
+        )
     entry = journal.begin(job, verb="preset.apply", image_id=current.image_id, path=current.path,
                           module="", param="", instance=0, before={"history_end": before})
     try:
@@ -250,7 +303,7 @@ def apply(name: str, image: str | int | None = None, *, educative: str | None = 
         journal.fail(job, entry.seq, outcome=f"error:{e.code}")
         raise
     after = _history_end(current.path)
-    if before is None or after is None or after <= before:
+    if after is None or after <= before:
         journal.fail(job, entry.seq, outcome="error:commit_timeout")
         raise CommitTimeout(
             f"style {name!r} was sent but the sidecar's history did not advance",
