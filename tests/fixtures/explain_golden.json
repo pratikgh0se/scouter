@@ -1,0 +1,38 @@
+{
+  "brief": {
+    "colorbalancergb.contrast": "color balance rgb › master › contrast up +5% (-45% → -40%): adds or removes contrast around middle grey, after the tone mapper; watch that it does not fight the sigmoid contrast.",
+    "colorbalancergb.global_chroma": "color balance rgb › master › global chroma up +5% (-45% → -40%): changes colourfulness at constant brightness; watch bright saturated colours going neon.",
+    "colorbalancergb.global_saturation": "color balance rgb › master › global saturation up +5% (-45% → -40%): changes colourfulness and darkens strong colours slightly, which reads natural; watch skin and skies for over-cooked colour.",
+    "colorbalancergb.global_vibrance": "color balance rgb › master › global vibrance up +5% (-45% → -40%): boosts the least colourful pixels most; watch already-saturated areas, which should barely move.",
+    "colorbalancergb.highlights_chroma": "color balance rgb › 4 ways › highlights gain › chroma up +2% (2% → 4%): sets how strong the highlights tint is; watch greys in that range turning coloured.",
+    "colorbalancergb.highlights_hue": "color balance rgb › 4 ways › highlights gain › hue up +10° (10° → 20°): picks the tint colour for the highlights; watch neutral greys in that range.",
+    "colorbalancergb.highlights_luminance": "color balance rgb › 4 ways › highlights gain › luminance up +2% (-23% → -21%): lifts or lowers only the highlights; watch clipping in the brightest areas.",
+    "colorbalancergb.midtones_chroma": "color balance rgb › 4 ways › power › chroma up +2% (2% → 4%): sets how strong the midtones tint is; watch greys in that range turning coloured.",
+    "colorbalancergb.midtones_hue": "color balance rgb › 4 ways › power › hue up +10° (10° → 20°): picks the tint colour for the midtones; watch neutral greys in that range.",
+    "colorbalancergb.midtones_luminance": "color balance rgb › 4 ways › power › luminance up +2% (-23% → -21%): lifts or lowers only the midtones; watch skin.",
+    "colorbalancergb.shadows_chroma": "color balance rgb › 4 ways › shadows lift › chroma up +2% (2% → 4%): sets how strong the shadows tint is; watch greys in that range turning coloured.",
+    "colorbalancergb.shadows_hue": "color balance rgb › 4 ways › shadows lift › hue up +10° (10° → 20°): picks the tint colour for the shadows; watch neutral greys in that range.",
+    "colorbalancergb.shadows_luminance": "color balance rgb › 4 ways › shadows lift › luminance up +2% (-23% → -21%): lifts or lowers only the shadows; watch noise in the darkest areas.",
+    "colorzones.strength": "color zones › mix up +10% (10% → 20%): scales every colour-zone adjustment at once; watch the zones you set in darktable.",
+    "exposure.black": "exposure › black level correction up +0.005 (-0.095 → -0.09): moves the point that renders as pure black; watch the darkest areas: a few thousandths is a visible change.",
+    "exposure.exposure": "exposure › exposure up +0.3 EV (-2.7 EV → -2.4 EV): brightens or darkens the whole frame evenly, before any tone mapping; watch the highlights for clipping and the shadows for noise.",
+    "filmicrgb.black_relative_exposure": "filmic rgb › scene › black relative exposure up +0.25 EV (-13.75 EV → -13.5 EV): sets which scene brightness maps to pure black; watch blocked shadows.",
+    "filmicrgb.contrast": "filmic rgb › look › contrast up +0.1 (0.6 → 0.7): steepens or flattens the middle of the tone curve; watch shadow and highlight detail at the two ends.",
+    "filmicrgb.white_relative_exposure": "filmic rgb › scene › white relative exposure up +0.25 EV (2.25 EV → 2.5 EV): sets which scene brightness maps to pure white; watch clipped highlights.",
+    "sigmoid.contrast": "sigmoid › contrast up +0.1 (0.6 → 0.7): steepens or flattens the middle of the tone curve; watch shadow and highlight detail at the two ends.",
+    "sigmoid.skew": "sigmoid › skew up +0.1 (-0.9 → -0.8): shifts where the tone curve spends its contrast, toward shadows or highlights; watch whether the midtones still sit where you want them.",
+    "temperature.temperature": "white balance › temperature up +300 K (2300 K → 2600 K): tells darktable the light was bluer or redder, so the picture turns warmer or cooler; watch neutral greys and skin.",
+    "temperature.tint": "white balance › tint up +0.05 (0.55 → 0.6): trades green against magenta in the light; watch skin and foliage."
+  },
+  "concepts": {
+    "black_level": "[Black level] Black level correction moves the point that renders as pure black. Deeper blacks add density; lifting them gives a faded, matte look. It is a strong control: a few thousandths are visible.",
+    "chroma_saturation": "[Chroma, saturation, vibrance] Chroma is colourfulness independent of brightness; saturation also darkens as colour increases, which reads more natural on skin; vibrance boosts the least colourful pixels most. Small numbers go a long way: 5 % is a visible move.",
+    "color_balance": "[Color balance rgb] Color balance rgb is darktable's colour-grading module. Master sliders act on the whole image; the 4-ways tab grades shadows (lift), midtones (power) and highlights (gain) separately, each with luminance, hue and chroma.",
+    "color_zones": "[Color zones] Color zones adjusts hue, chroma and lightness by the colour a pixel already has (for example, only the blues). Scouter can reach only its global mix; the zone curves need darktable's own editor.",
+    "exposure": "[Scene-referred exposure] Exposure scales all the light in the scene by the same factor, measured in EV (one EV doubles or halves it). In darktable's scene-referred workflow you set it first, so the subject sits at a sensible brightness, and let the tone mapper handle the extremes.",
+    "grading": "[Colour grading] A grade gives a look by tinting shadows and highlights differently, classically cool shadows and warm highlights. Hue picks the tint, chroma picks how much; keep chroma low and judge on a neutral grey or skin.",
+    "presets": "[Styles as presets] A darktable style is a saved list of module settings. Applying one appends those settings to an image's history, so it acts like a filter you can stack; it never replaces what is there, and each application is visible in the history panel.",
+    "tone_mapper": "[Tone mapping] Sigmoid (or filmic rgb) squeezes the scene's wide range of light into what a screen can show. Its contrast slider sets how steep that curve is in the middle: more contrast separates midtones but pushes shadows and highlights toward the ends.",
+    "white_balance": "[White balance] White balance tells darktable what colour the light was. Raising the temperature slider says the light was bluer, so darktable compensates and the picture turns warmer; tint trades green against magenta. Get it right before any creative colour."
+  }
+}
