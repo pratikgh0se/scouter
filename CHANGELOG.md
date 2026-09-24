@@ -84,3 +84,8 @@ vault; decision row 407).
   neither is in scope here (B7 needs a real bridge signal that does not
   exist, B1 needs a launch-state isolation harness this branch does not
   have).
+- Documented, not fixed: `config init` does not install any WB calibration
+  table (E12 D9's remaining half, after fix 4 addressed the A7 refusal
+  message) -- a table only ever reaches `<config_dir>/wb/<camera>.json` via
+  `scouter wb calibrate` or a manual copy. Left for a real task (bundling
+  and packaging the tables) rather than a bolt-on to `config init` here.

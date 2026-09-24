@@ -428,7 +428,12 @@ These are load-bearing. Read them before scripting against phase 2.
   — says so in the same reason too, exactly like the no-table case does on
   its own: neither fact is allowed to hide the other (E12 row 407). `outliers
   list` says which test actually ran (`wb_test: "kelvin" | "ratio"`) and
-  falls back to the always-available coefficient ratio.
+  falls back to the always-available coefficient ratio. A table only ever
+  reaches `<config_dir>/wb/<camera>.json` two ways: `scouter wb calibrate`
+  writes it there itself, or you copy one there by hand (E12 D9) --
+  `config init` does not install any table, including the repo's own
+  committed fixtures, so a camera you have already calibrated once still
+  needs its table copied into every new config directory.
 - **Scouter cannot move darktable's darkroom onto a frame imported in the same
   session.** Measured five times on darktable 5.4.1 (`docs/measurements.md`,
   phase 2 fact 4): `display_image` returns without error and the darkroom
