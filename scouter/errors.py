@@ -237,6 +237,16 @@ class NotPinned(ScouterError):
     )
 
 
+class DarktableUnresponsive(ScouterError):
+    """Watchdog design 2.2: a call timed out AND the 5 s health ping failed."""
+
+    code = "darktable_unresponsive"
+    fix = (
+        "darktable stopped answering (Lua worker or GTK main loop wedged); quit it "
+        "(Force Quit if needed) and relaunch, or enable `watchdog.auto_heal`."
+    )
+
+
 #: Process exit codes. 0/1/2 follow shell convention; the rest are one per error
 #: class, so a shell script can branch on the failure without parsing JSON.
 EXIT_CODES: dict[str, int] = {
@@ -276,6 +286,8 @@ EXIT_CODES: dict[str, int] = {
     # originally claimed 21; renumbered to the next free value after
     # "state_locked" took 22.
     "noop": 23,
+    # Watchdog (spec 6): a timed-out call whose health ping also failed.
+    "darktable_unresponsive": 24,
 }
 
 ERROR_CLASSES: tuple[type[ScouterError], ...] = (
@@ -297,6 +309,7 @@ ERROR_CLASSES: tuple[type[ScouterError], ...] = (
     ValueUnknown,
     NotPinned,
     StateLocked,
+    DarktableUnresponsive,
 )
 
 

@@ -163,6 +163,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="with --probe-main-thread: also do a darkroom -> lighttable -> darkroom "
         "round trip through darktable's switch-views commands (start in the darkroom)",
     )
+    doctor.add_argument(
+        "--ping",
+        dest="ping",
+        action="store_true",
+        help="print only the watchdog line; exit 0 when darktable answers, 1 when not",
+    )
     doctor.set_defaults(_verb=None, _args=[])
 
     setup_parser = groups.add_parser(
@@ -282,9 +288,28 @@ def _doctor() -> dict:
     # the BRIDGE. A config that has never been written is the correct state
     # for a fresh install, and `doctor` exiting non-zero for it would make
     # the first thing a new user runs look broken.
+    _doctor_watchdog(report)
     _doctor_config(report)
-    report["ok"] = report["bridge"] == "ok"
+    report["ok"] = report["bridge"] == "ok" and report.get("watchdog") != "unresponsive"
     return report
+
+
+def _doctor_watchdog(report: dict) -> None:
+    """Watchdog design 2.5: ping state, gui_ready, the darktable pid and who
+    launched it. Report lines only."""
+    from scouter.core import dtbridge, dtprocess
+
+    h = dtbridge.health()
+    report["watchdog"] = h["state"]
+    report["watchdog_line"] = f"watchdog: ping {h['state']} ({h.get('ping_ms')} ms)"
+    report["gui_ready"] = h.get("gui_ready")
+    report["gui_ready_line"] = f"gui_ready: {str(h.get('gui_ready')).lower()} " \
+        f"({h.get('gui_ready_source') or '-'})"
+    owned = dtprocess.owned_pid()
+    running = dtprocess.running_pids()
+    pid = owned or (running[0] if running else None)
+    who = "launched by scouter" if owned else ("user" if pid else "-")
+    report["darktable_pid_line"] = f"darktable pid: {pid or '-'} ({who})"
 
 
 def _doctor_config(report: dict) -> None:
@@ -397,6 +422,14 @@ def main(argv: list[str] | None = None) -> int:
             return emit({"verb": "doctor", "ok": False, "error": e.to_dict()}, 1)
         print(render_probe_table(probe))
         return 0
+
+    if namespace.group == "doctor" and getattr(namespace, "ping", False):
+        from scouter.core import dtbridge
+
+        h = dtbridge.health()
+        return emit({"verb": "doctor", "watchdog": h["state"], "ping_ms": h.get("ping_ms"),
+                     "ok": h["state"] != "unresponsive"},
+                    0 if h["state"] != "unresponsive" else 1)
 
     if namespace.group == "doctor":
         report = _doctor()

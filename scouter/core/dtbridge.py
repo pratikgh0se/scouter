@@ -197,7 +197,13 @@ def call(method: str, params: dict | None = None, timeout: float | None = None) 
     """One bridge call, with the bridge's own failures mapped to error classes."""
     try:
         return get_bridge().call(method, params or {}, timeout=timeout)
-    except (BridgeTimeoutError, BridgePluginNotInstalledError) as e:
+    except BridgeTimeoutError as e:
+        if method != "darktable_mcp.diag":  # never ping from inside the ping
+            h = health()
+            if h["state"] == "unresponsive":
+                raise _unresponsive(method, h) from e
+        raise BridgeTimeout(str(e), detail={"method": method}) from e
+    except BridgePluginNotInstalledError as e:
         raise BridgeTimeout(str(e), detail={"method": method}) from e
     except BridgeError as e:
         message = str(e)
@@ -235,6 +241,28 @@ def health(timeout: float = HEALTH_TIMEOUT_S) -> dict:
     return {"state": "starting" if ready is False else "alive",
             "ping_ms": int(1000 * (time.monotonic() - t0)), "gui_ready": ready,
             "gui_ready_source": d.get("gui_ready_source")}
+
+
+def _unresponsive(method: str, h: dict):
+    from scouter.errors import DarktableUnresponsive
+
+    pid, ours = None, False
+    try:
+        from scouter.core import dtprocess
+
+        pid = dtprocess.owned_pid()
+        ours = pid is not None
+        if pid is None:
+            running = dtprocess.running_pids()
+            pid = running[0] if running else None
+    except Exception:  # noqa: BLE001 - detail is best effort
+        pass
+    return DarktableUnresponsive(
+        f"darktable did not answer {method} and the {HEALTH_TIMEOUT_S:g} s health ping "
+        "failed too",
+        detail={"pid": pid, "launched_by_scouter": ours, "last_method": method,
+                "ping_ms": h.get("ping_ms")},
+    )
 
 
 def current_view() -> str:
