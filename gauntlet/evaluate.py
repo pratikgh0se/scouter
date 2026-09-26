@@ -360,6 +360,44 @@ def _check_envelope(i: int, ch: Check, obs: Observation) -> CheckResult:
     return CheckResult(i, ch.metric, ok, got, t.get("value"))
 
 
+def _check_boundary(i: int, ch: Check, obs: Observation) -> CheckResult:
+    """Soft-range boundary probe (2026-09-26 fix pass, item 2): pass when the
+    decoded value landed exactly where it was asked (no clamp needed) OR it
+    landed at the declared bound AND the envelope's `data.clamped` says so.
+    `target["request"]` is an absolute value; `target["delta"]` resolves
+    against the case's own before-snapshot (a phrase's `by N`, whose start
+    point the generator does not know) with `target["lo"]`/`target["hi"]`
+    giving the bound to clamp toward. Landing anywhere else -- including
+    at the bound without reporting it -- fails."""
+    t = ch.target or {}
+    unit = t.get("unit", "ratio")
+    tol = t.get("tol")
+    snaps = obs.extra.get("snapshots") or [_params(obs.before), _params(obs.after)]
+    before, after = snaps[0], snaps[-1]
+    key_ = t["key"]
+    got = after.get(key_)
+    if got is None:
+        return CheckResult(i, "boundary", False, None, t, note="param unreadable")
+    if "request" in t:
+        requested = t["request"]
+    else:
+        b = _num(before.get(key_))
+        if b is None:
+            return CheckResult(i, "boundary", False, got, t, note="before unreadable")
+        requested = b + t["delta"]
+    bound = t.get("bound")
+    if bound is None and t.get("lo") is not None and t.get("hi") is not None:
+        bound = min(max(requested, t["lo"]), t["hi"])
+    landed_request = _same(unit, got, requested, tol)
+    landed_bound = bound is not None and _same(unit, got, bound, tol)
+    idx = ch.step if ch.step is not None else -1
+    clamped = False
+    if obs.calls and -len(obs.calls) <= idx < len(obs.calls):
+        clamped = bool(_dig(obs.calls[idx].envelope or {}, "data.clamped"))
+    ok = landed_request or (landed_bound and clamped)
+    return CheckResult(i, "boundary", ok, got, {"request": requested, "bound": bound})
+
+
 def _check_file(i: int, ch: Check, obs: Observation) -> CheckResult:
     name = (ch.target or {}).get("name", "")
     files = obs.extra.get("files")
@@ -388,6 +426,8 @@ def run_check(i: int, ch: Check, obs: Observation) -> CheckResult:
         return _check_chart(i, ch, obs)
     if ch.metric in ("envelope", "extra"):
         return _check_envelope(i, ch, obs)
+    if ch.metric == "boundary":
+        return _check_boundary(i, ch, obs)
     if ch.metric == "file":
         return _check_file(i, ch, obs)
     if ch.metric == "text":

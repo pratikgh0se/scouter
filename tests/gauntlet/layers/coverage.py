@@ -12,6 +12,8 @@ from tests.gauntlet.layers.common import (
     BODIES,
     BUDGET_MOVE,
     BUDGET_SAY,
+    CALIBRATED_BODIES,
+    boundary_check,
     clamp_reported,
     frame,
     key,
@@ -68,8 +70,38 @@ def _row(mv: phrases.Move) -> vocab.ParamSpec:
         vocab.spec(mv.module, mv.param)
 
 
+def _default(s: vocab.ParamSpec) -> float | None:
+    """The frame's own starting value for `s`, when the vocabulary declares
+    one (darktable's module default, or Scouter's neutral -- the hero frame
+    starts at darktable defaults, so either names the same point)."""
+    if s.default is not None:
+        return s.default
+    if s.neutral is not None:
+        return s.neutral
+    return None
+
+
+def _at_baseline(s: vocab.ParamSpec, value: float) -> bool:
+    """Item 1: does requesting `value` ask for what the param already holds
+    at the hero frame's start (wrap-aware for hue)? When it does, an honest
+    write is a noop, not a silent failure."""
+    base = _default(s)
+    if base is None:
+        return False
+    if s.wraps:
+        return abs((value % 360.0) - (base % 360.0)) < 1e-9
+    return abs(value - base) < 1e-9
+
+
 def _mid(s: vocab.ParamSpec) -> float:
-    return round((s.lo + s.hi) / 2, 6)
+    """The midpoint of `s`'s range -- moved off the default when the range
+    is symmetric around it (item 1: `set_mid` must be a real move; `neutral`
+    is the probe allowed to legitimately equal the default)."""
+    m = round((s.lo + s.hi) / 2, 6)
+    if _at_baseline(s, m):
+        base = _default(s) or 0.0
+        m = round((base + s.hi) / 2, 6)
+    return m
 
 
 def _neutral(s: vocab.ParamSpec) -> float:
@@ -78,6 +110,23 @@ def _neutral(s: vocab.ParamSpec) -> float:
     if s.default is not None:
         return s.default
     return round(s.lo + (s.hi - s.lo) / 4, 6)
+
+
+#: Item 4b: the WB calibration table's sampled Kelvin range (measured for
+#: the em10iii body, `~/.config/scouter/wb/em10iii.json`; read once to pick
+#: these constants, never at generation time). Kelvin decodes honestly only
+#: inside a table's sampled range -- even on a calibrated body -- so
+#: `temperature.temperature`'s own boundary probes (set_lo/set_hi and their
+#: +-step siblings) are narrowed to land inside it; outside it they would
+#: read back `None`, which is not what a boundary probe is for.
+WB_SAMPLED_K = (3000.0, 12000.0)
+
+
+def _probe_lo_hi(s: vocab.ParamSpec) -> tuple[float, float]:
+    if (s.module, s.param) == ("temperature", "temperature"):
+        lo, hi = WB_SAMPLED_K
+        return lo + s.step, hi - s.step
+    return s.lo, s.hi
 
 
 def _case(cid: str, body: str, tier: str, steps: list, expect: Expect, *,
@@ -94,8 +143,15 @@ def _adjust(s: vocab.ParamSpec, delta: float):
     return step("darkroom_adjust", BUDGET_MOVE, module=s.module, param=s.param, delta=delta)
 
 
-def _side(s: vocab.ParamSpec) -> dict:
-    return sidecar(s.module, s.param, s.unit)
+def _side(s: vocab.ParamSpec, *, changed: bool = True) -> dict:
+    return sidecar(s.module, s.param, s.unit, changed=changed)
+
+
+def _wb_relative_ok(s: vocab.ParamSpec, body: str) -> bool:
+    """Item 4a: a Kelvin-RELATIVE move (adjust/nudge, a warmer/cooler
+    phrase) needs a calibration table to read the param's current value;
+    an absolute `set` does not."""
+    return s.value_source != "wb_table" or body in CALIBRATED_BODIES
 
 
 def _tint_reset() -> list:
@@ -111,47 +167,75 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
     out: list[Case] = []
     pre = _tint_reset() if (s.module, s.param) == ("temperature", "temperature") else []
     o = len(pre)
-    values = [("set_lo", s.lo, "P0"), ("set_hi", s.hi, "P0"), ("set_mid", _mid(s), "P0"),
+    plo, phi = _probe_lo_hi(s)
+    relative_ok = _wb_relative_ok(s, body)
+    values = [("set_lo", plo, "P0"), ("set_hi", phi, "P0"), ("set_mid", _mid(s), "P0"),
               ("set_neutral", _neutral(s), "P1")]
     for label, v, tier in values:
+        if label == "set_hi" and s.wraps:
+            # item 1: 360 wraps to 0, the module default -- move it off, so
+            # `set_hi` stays a real probe distinct from `set_lo`/`set_neutral`.
+            v = s.hi - s.step
+        at_base = _at_baseline(s, v)
         out.append(_case(cid(label), body, tier, [*pre, _set(s, v)],
-                         Expect("edit", [m1_equals(s.module, s.param, v, s.unit)], _side(s))))
-    for label, v in (("set_lo_minus", s.lo - s.step), ("set_hi_plus", s.hi + s.step)):
+                         Expect("edit", [m1_equals(s.module, s.param, v, s.unit)],
+                                _side(s, changed=not at_base))))
+    for label, v in (("set_lo_minus", plo - s.step), ("set_hi_plus", phi + s.step)):
         if s.wraps:
             want = v % 360.0
             out.append(_case(cid(label), body, "P1", [*pre, _set(s, v)],
                              Expect("edit", [m1_equals(s.module, s.param, want, s.unit)],
                                     _side(s))))
         else:
-            want = s.lo if v < s.lo else s.hi
+            bound = plo if v < plo else phi
             out.append(_case(cid(label), body, "P1", [*pre, _set(s, v)],
-                             Expect("edit", [m1_equals(s.module, s.param, want, s.unit),
-                                             clamp_reported()], _side(s)),
+                             Expect("edit", [boundary_check(s.module, s.param, s.unit,
+                                                             request=v, bound=bound)],
+                                    _side(s)),
                              meta={"accept_refusal": True}))
     for n in (1, -1, 3, -3):
-        chk = m1_delta(s.module, s.param, n * s.step, s.unit, s.step)
-        chk.target["from"] = 1 + o
-        out.append(_case(cid(_signed("adjust", n)), body, "P0" if abs(n) == 1 else "P1",
-                         [*pre, _set(s, _mid(s)), _adjust(s, n * s.step)],
-                         Expect("edit", [chk], _side(s))))
+        tier = "P0" if abs(n) == 1 else "P1"
+        if relative_ok:
+            chk = m1_delta(s.module, s.param, n * s.step, s.unit, s.step)
+            chk.target["from"] = 1 + o
+            out.append(_case(cid(_signed("adjust", n)), body, tier,
+                             [*pre, _set(s, _mid(s)), _adjust(s, n * s.step)],
+                             Expect("edit", [chk], _side(s))))
+        else:
+            # item 4a: no calibration table to read the current Kelvin from
+            # -> an honest `value_unknown` refusal, with no prep write (a
+            # prep set would leave the sidecar changed, and an honest
+            # refusal needs it untouched for `_honest_tool_refusal` to see).
+            out.append(_case(cid(_signed("adjust", n)), body, tier, [_adjust(s, n * s.step)],
+                             Expect("edit", []), meta={"accept_refusal": True}))
     if s.wraps:
         over = _case(cid("adjust_overflow"), body, "P1",
                      [*pre, _set(s, s.hi - s.step), _adjust(s, 3 * s.step)],
                      Expect("edit", [m1_equals(s.module, s.param, (s.hi + 2 * s.step) % 360,
                                                s.unit)], _side(s)))
-    else:
+    elif relative_ok:
         over = _case(cid("adjust_overflow"), body, "P1",
                      [*pre, _set(s, s.hi - s.step), _adjust(s, 3 * s.step)],
                      Expect("edit", [m1_equals(s.module, s.param, s.hi, s.unit),
                                      clamp_reported()], _side(s)))
+    else:
+        over = _case(cid("adjust_overflow"), body, "P1", [_adjust(s, 3 * s.step)],
+                     Expect("edit", []), meta={"accept_refusal": True})
     out.append(over)
     for n in (1, -1):
-        chg = Check("M1", kind="changed", sign=n, target={"key": k, "unit": s.unit, "from": 1 + o})
-        out.append(_case(cid(_signed("nudge", n)), body, "P1",
-                         [*pre, _set(s, _mid(s)),
-                          step("darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param,
-                               steps=n)],
-                         Expect("edit", [chg], _side(s))))
+        if relative_ok:
+            chg = Check("M1", kind="changed", sign=n,
+                       target={"key": k, "unit": s.unit, "from": 1 + o})
+            out.append(_case(cid(_signed("nudge", n)), body, "P1",
+                             [*pre, _set(s, _mid(s)),
+                              step("darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param,
+                                   steps=n)],
+                             Expect("edit", [chg], _side(s))))
+        else:
+            out.append(_case(cid(_signed("nudge", n)), body, "P1",
+                             [step("darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param,
+                                   steps=n)],
+                             Expect("edit", []), meta={"accept_refusal": True}))
     units = {k: s.unit}
     out.append(_case(cid("undo_after_set"), body, "P0",
                      [*pre, _set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)],
@@ -256,20 +340,37 @@ def _phrase_expect(p: phrases.Phrase, sign: float = 1.0) -> Expect:
     return Expect("edit", checks, {"changed": True})
 
 
+#: Item 4a: these two phrases' only move is a Kelvin-relative temperature
+#: adjust, so on a body with no calibration table they refuse honestly the
+#: same way the bare adjust/nudge cases do (spec item 4).
+WB_RELATIVE_PHRASE_KEYS = frozenset({"warmer", "cooler"})
+
+
+def _wb_phrase_meta(p: phrases.Phrase, body: str) -> dict | None:
+    if p.key in WB_RELATIVE_PHRASE_KEYS and not _wb_relative_ok(vocab.spec("temperature",
+                                                                            "temperature"), body):
+        return {"accept_refusal": True}
+    return None
+
+
 def phrase_cases(body: str) -> list[Case]:
     out = []
     for p in phrases.PHRASES:
         syn = p.synonyms[0]
         forms = [("bare", syn, "P0"), ("touch", f"{syn} a touch", "P1"),
                  ("lot", f"{syn} a lot", "P1")]
+        wb_meta = _wb_phrase_meta(p, body)
         for label, text, tier in forms:
+            exp = Expect("edit", []) if wb_meta else _phrase_expect(p)
             out.append(_case(case_id(PREFIX, "phrase", p.key, body, label), body, tier,
-                             [step("darkroom_say", BUDGET_SAY, phrase=text)], _phrase_expect(p)))
+                             [step("darkroom_say", BUDGET_SAY, phrase=text)], exp, meta=wb_meta))
         row = _row(p.moves[0])
         by, amount = EXPLICIT_BY_UNIT.get(row.unit, ("0.2", 0.2))
         text = f"{syn} by {by}"
         one = len(p.moves) == 1 and p.moves[0].kind == "adjust"
-        if p.key in TINT_KEYS:
+        if wb_meta:
+            exp = Expect("edit", [])
+        elif p.key in TINT_KEYS:
             exp = Expect("typed_error", codes=["value_unknown"])
         elif not one:
             exp = Expect("typed_error", codes=["usage"])
@@ -277,14 +378,17 @@ def phrase_cases(body: str) -> list[Case]:
             exp = _phrase_expect(p)
         else:
             sgn = 1 if p.moves[0].notches > 0 else -1
-            exp = Expect("edit", [m1_delta(row.module, row.param, sgn * amount, row.unit,
-                                           row.step)], sidecar(row.module, row.param, row.unit))
+            exp = Expect("edit", [boundary_check(row.module, row.param, row.unit,
+                                                 delta=sgn * amount, lo=row.lo, hi=row.hi)],
+                         sidecar(row.module, row.param, row.unit))
         out.append(_case(case_id(PREFIX, "phrase", p.key, body, "explicit"), body, "P1",
-                         [step("darkroom_say", BUDGET_SAY, phrase=text)], exp))
+                         [step("darkroom_say", BUDGET_SAY, phrase=text)], exp, meta=wb_meta))
     for p in phrases.PHRASES:
+        wb_meta = _wb_phrase_meta(p, body)
         for syn in p.synonyms:
+            exp = Expect("edit", []) if wb_meta else _phrase_expect(p)
             out.append(_case(case_id(PREFIX, "synonym", p.key, syn, body), body, "P1",
-                             [step("darkroom_say", BUDGET_SAY, phrase=syn)], _phrase_expect(p)))
+                             [step("darkroom_say", BUDGET_SAY, phrase=syn)], exp, meta=wb_meta))
     return out
 
 
