@@ -70,9 +70,21 @@ def parity_pair(session, case, step, obs) -> CallRecord:
     session.staged.frames["hero"] = cli_copy
     cli_args = substitute(step.args["args"], session, [])
     session.staged.frames["hero"] = hero
-    p = subprocess.run([sys.executable, "-m", "scouter", *cli_argv(verb_id, cli_args)],
-                       env=session.staged.env, capture_output=True, text=True,
-                       timeout=step.budget_s + 30)
+    argv = [sys.executable, "-m", "scouter", *cli_argv(verb_id, cli_args)]
+    try:
+        p = subprocess.run(argv, env=session.staged.env, capture_output=True, text=True,
+                           timeout=step.budget_s + 30)
+    except subprocess.TimeoutExpired:
+        obs.blocked = "hang: scouter cli exceeded budget"
+        obs.hang_evidence.append(f"parity_pair: scouter cli {verb_id} exceeded "
+                                 f"{step.budget_s + 30:.0f}s")
+        obs.extra["envelopes_match"] = False
+        obs.extra["parity_diffs"] = ["timeout"]
+        return CallRecord("parity_pair", step.args, error="timeout", write=step.write)
+    except OSError as e:
+        obs.extra["envelopes_match"] = False
+        obs.extra["parity_diffs"] = ["transport"]
+        return CallRecord("parity_pair", step.args, error=f"transport: {e}", write=step.write)
     try:
         cli_env = json.loads(p.stdout)
     except ValueError:

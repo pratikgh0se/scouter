@@ -90,6 +90,35 @@ def test_isolate_refresh_blocked_is_returned_as_observation(corpus, tmp_path, mo
     assert obs.blocked.startswith("session:") and dt.launches == 3
 
 
+def test_virtual_tool_exception_blocks_as_harness_error(corpus, tmp_path, monkeypatch):
+    def boom(session, case, step, obs):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setitem(execute.VIRTUAL, "boom_tool", boom)
+    s = _session(corpus, tmp_path).open()
+    case = Case(id="c5", layer="scenarios", tier="P0", mode="tool",
+                steps=[Step("boom_tool", {}, 8.0, False)],
+                expect=Expect("edit"), body="olympus", frame_role="hero")
+    obs = execute.run_tool_case(s, case)
+    assert obs.blocked == "harness_error: boom_tool: RuntimeError: kaboom"
+    assert obs.calls == []
+
+
+def test_virtual_tool_park_propagates(corpus, tmp_path, monkeypatch):
+    from gauntlet.adapter import Park
+
+    def park(session, case, step, obs):
+        raise Park("usage limit")
+
+    monkeypatch.setitem(execute.VIRTUAL, "park_tool", park)
+    s = _session(corpus, tmp_path).open()
+    case = Case(id="c6", layer="scenarios", tier="P0", mode="tool",
+                steps=[Step("park_tool", {}, 8.0, False)],
+                expect=Expect("edit"), body="olympus", frame_role="hero")
+    with pytest.raises(Park):
+        execute.run_tool_case(s, case)
+
+
 def test_contaminated_frame_is_restaged(corpus, tmp_path, monkeypatch):
     dt = FakeDt()
     s = _session(corpus, tmp_path, dt).open()

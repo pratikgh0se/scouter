@@ -4,11 +4,12 @@ snapshot/stats, the steps with placeholders, after snapshot/stats."""
 from __future__ import annotations
 
 import re
+import subprocess
 import time
 from pathlib import Path
 
 from gauntlet import chart
-from gauntlet.adapter import CallRecord, Observation
+from gauntlet.adapter import CallRecord, Observation, Park
 from gauntlet.case import Case
 from tests.gauntlet import observe
 from tests.gauntlet.corpus import guard
@@ -123,7 +124,18 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
     for st in case.steps:
         args = substitute(st.args, session, obs.calls)
         if st.tool in VIRTUAL:
-            rec = VIRTUAL[st.tool](session, case, st, obs)
+            try:
+                rec = VIRTUAL[st.tool](session, case, st, obs)
+            except Park:
+                raise
+            except subprocess.TimeoutExpired:
+                obs.blocked = f"hang: {st.tool} exceeded budget"
+                obs.hang_evidence.append(f"{st.tool}: no answer in {st.budget_s + 30:.0f}s "
+                                         "(subprocess timeout)")
+                break
+            except Exception as e:  # noqa: BLE001 - a virtual tool crash must not crash the case
+                obs.blocked = f"harness_error: {st.tool}: {type(e).__name__}: {e}"
+                break
         else:
             rec = session.call(st.tool, args, st.budget_s, write=st.write)
         obs.calls.append(rec)
