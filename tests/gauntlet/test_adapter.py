@@ -279,3 +279,68 @@ def test_isolate_process_pins_the_library_db(pinned_env):
     adapter_mod.isolate_process(root)
     assert os.environ["SCOUTER_DARKTABLE_LIBRARY_DB"] == str(root / "library" / "library.db")
     assert os.environ["SCOUTER_CACHE"] == str(root / "cache")
+
+
+# -- final fix I1: resume after a killed run ---------------------------------
+
+def _fake_owned(pid_ok):
+    """owned_pid stand-in: accepts the record at the CURRENT owner_path() only
+    when its pid is `pid_ok` (never runs ps, never signals)."""
+    def owned():
+        try:
+            pid = json.loads(dtprocess.owner_path().read_text())["pid"]
+        except (OSError, ValueError, KeyError):
+            return None
+        return pid if pid == pid_ok else None
+    return owned
+
+
+def test_resume_adopts_a_killed_sessions_owner_record(pinned_env):
+    """A killed run left its darktable's owner record in a session cache; on
+    resume that darktable must read as ours (quit), not foreign (block all)."""
+    runs = pinned_env / "runs"
+    run = RunDir(runs, "stamp").ensure()
+    stale = run.sessions_dir / "coverage" / "001-olympus" / "cache"
+    live = run.sessions_dir / "coverage" / "002-sony_a7" / "cache"
+    for d, pid in ((stale, 111), (live, 777)):
+        d.mkdir(parents=True)
+        (d / dtprocess.OWNER_FILE).write_text(json.dumps({"pid": pid}))
+    process_cache = runs / adapter_mod.PROCESS_DIR / "cache"
+    process_cache.mkdir(parents=True)
+    adopted = adapter_mod.adopt_leftover_owner(run, process_cache, owned_pid=_fake_owned(777))
+    assert adopted == live / dtprocess.OWNER_FILE
+    assert json.loads((process_cache / dtprocess.OWNER_FILE).read_text())["pid"] == 777
+
+
+def test_resume_without_a_live_leftover_changes_nothing(pinned_env):
+    runs = pinned_env / "runs"
+    run = RunDir(runs, "stamp").ensure()
+    stale = run.sessions_dir / "coverage" / "001-olympus" / "cache"
+    stale.mkdir(parents=True)
+    (stale / dtprocess.OWNER_FILE).write_text(json.dumps({"pid": 111}))
+    process_cache = runs / adapter_mod.PROCESS_DIR / "cache"
+    process_cache.mkdir(parents=True)
+    assert adapter_mod.adopt_leftover_owner(run, process_cache,
+                                            owned_pid=_fake_owned(777)) is None
+    assert not (process_cache / dtprocess.OWNER_FILE).exists()
+
+
+def test_open_session_adopts_before_the_first_body(pinned_env, monkeypatch):
+    seen = []
+    monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals", lambda: {})
+    monkeypatch.setattr(adapter_mod, "adopt_leftover_owner",
+                        lambda run, cache, **kw: seen.append((run.root, cache)))
+    a = ScouterAdapter(pinned_env / "runs")
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+    a.open_session("parity", run)
+    assert seen == [(run.root, pinned_env / "runs" / adapter_mod.PROCESS_DIR / "cache")]
+
+
+def test_resumed_session_dirs_number_after_the_highest(pinned_env, fake_corpus):
+    """A resumed run must not reuse an old NNN-body dir (edited sidecars/library)."""
+    _, run, _, _ = _routed(pinned_env, fake_corpus)
+    (run.sessions_dir / "coverage" / "007-olympus").mkdir(parents=True)
+    (run.sessions_dir / "coverage" / "003-sony_a7").mkdir(parents=True)
+    _, _, routed, _ = _routed(pinned_env, fake_corpus)
+    s = routed._session("olympus")
+    assert s.root.name == "008-olympus"

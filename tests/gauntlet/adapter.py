@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from collections import Counter
 from pathlib import Path
@@ -83,6 +84,57 @@ def point_cache(cache: Path, *gauntlet_roots: Path, carry: bool = True) -> None:
         shutil.copyfile(old, new)
 
 
+def adopt_leftover_owner(run, process_cache: Path, *, owned_pid=None) -> Path | None:
+    """(final fix I1): after a killed run, the owner record of the darktable it
+    left running sits in the killed session's cache (it reaches the process
+    cache only through abort/close). Point the process cache at the newest
+    session record that owned_pid() still accepts, so the next session quits
+    that darktable as ours instead of refusing it as foreign. Returns the
+    adopted record, or None (the process cache is then left as it was)."""
+    from scouter.core import dtprocess
+
+    owned_pid = owned_pid or dtprocess.owned_pid
+    process_cache.mkdir(parents=True, exist_ok=True)
+    os.environ["SCOUTER_CACHE"] = str(process_cache)
+    target = process_cache / dtprocess.OWNER_FILE
+    if owned_pid() is not None:
+        return None  # the process record is already live and ours
+    original = target.read_bytes() if target.exists() else None
+
+    def mtime(p: Path) -> float:
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    records = sorted(Path(run.sessions_dir).glob(f"*/*/cache/{dtprocess.OWNER_FILE}"),
+                     key=mtime, reverse=True)
+    for rec in records:
+        try:
+            shutil.copyfile(rec, target)
+        except OSError:
+            continue
+        if owned_pid() is not None:
+            return rec
+    if original is None:
+        target.unlink(missing_ok=True)
+    else:
+        target.write_bytes(original)
+    return None
+
+
+_SESSION_DIR = re.compile(r"^(\d+)-")
+
+
+def highest_session_n(layer_dir: Path) -> int:
+    """(final fix I1): the highest NNN of `<layer_dir>/NNN-body` (0 if none)."""
+    try:
+        names = [p.name for p in layer_dir.iterdir() if p.is_dir()]
+    except OSError:
+        return 0
+    return max((int(m.group(1)) for n in names if (m := _SESSION_DIR.match(n))), default=0)
+
+
 def tag_sourced_components(cases: list[Case]) -> list[Case]:
     """Add `sourced_component` to every sourced looks check tag (carry 2)."""
     for c in cases:
@@ -112,7 +164,9 @@ class RoutedSession:
         self.run = run
         self.current = None
         self.agent = None  # the AgentSession of the running agent case (final fix C1)
-        self.n = 0
+        # (final fix I1): a resumed run numbers after the dirs already there,
+        # never reusing one whose sidecars/library an earlier session edited.
+        self.n = highest_session_n(run.sessions_dir / layer)
         self.session_factory = session_factory or self._scouter_session
         self.agent_factory = agent_factory or self._agent_session
 
@@ -303,6 +357,7 @@ class ScouterAdapter:
         if layer == "offline":
             return OfflineSession()
         isolate_process(self.runs_root / PROCESS_DIR)
+        adopt_leftover_owner(run, self.runs_root / PROCESS_DIR / "cache")
         self._record_originals(run.root)
         if layer == "install":
             # The runner may reopen (hard cap, rotation): hand back the same
