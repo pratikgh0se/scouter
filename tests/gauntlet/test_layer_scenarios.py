@@ -17,3 +17,10 @@ def test_r0001_plan():
     r1 = next(c for c in tool if c.id == "scn-r0001-olympus-tool")
     assert r1.steps[0].args["phrase"] == "brighter by 1 ev" and r1.frame_role == "dark"
     assert r1.steps[1].args["phrase"] == "brighter a bit"  # the follow-up
+
+
+def test_out_impossible_partial_carry_roadmap_key():
+    tool, agent = scenarios.generate(taxonomy.load())
+    for c in tool + agent:
+        if c.meta["class"] in ("out", "impossible", "partial"):
+            assert c.meta.get("roadmap_key"), c.id

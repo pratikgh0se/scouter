@@ -128,8 +128,8 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
                 steps.extend(cap_step(c, req, cmap, bit=True) for c in plan.capabilities)
         if plan.klass == "partial":
             un = _unserved_modules(req, tax)
+            meta["roadmap_key"] = (un or [{"id": "unknown"}])[0]["id"]
             if un:
-                meta["roadmap_key"] = un[0]["id"]
                 steps.append(step("darkroom_say", BUDGET_SAY, phrase=un[0]["phrases"][0]))
                 checks.append(Check("envelope", step=len(steps) - 1, target={
                     "path": "ok", "op": "eq", "value": False}))
