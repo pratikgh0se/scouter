@@ -36,6 +36,14 @@ Exit 0 and a clean markdown table when every changed test file discriminates
 and no static flag fired; exit 1 and the table naming what didn't otherwise.
 stdlib only for the checking logic - `pytest` itself is scouter's existing
 test dependency (pyproject.toml), not a new one this script adds.
+
+Every internal `pytest` subprocess (`run_pytest`) uses a deterministic
+per-call timeout, `max(180, 10 * len(node_ids))` seconds (round 11,
+`pytest_timeout_budget`) - no per-file markers or overrides. A selection of
+N test ids scales its own budget instead of sharing one fixed 180s ceiling
+regardless of size, which this repo's OWN 48-test self-suite (below) can
+exceed when a merge_gate run over a large range selects nearly all of them
+as "new/changed" at once.
 """
 import argparse
 import ast
@@ -347,15 +355,31 @@ def classify_pytest_outcome(rc, out):
     return "error_runner"
 
 
-def run_pytest(root, node_ids, python, timeout=180):
+def pytest_timeout_budget(node_ids):
+    """Round 11: `max(180, 10 * len(node_ids))` seconds - deterministic,
+    scales with the selection, no per-file markers or overrides. Fixed at
+    180s regardless of selection size, `run_pytest` timed out on this repo's
+    OWN 48-test self-suite when a merge_gate run over a large, 14-branch
+    range selected nearly all of them at once as "new/changed" (a genuine
+    resource limit, not a logic bug - see round 10's report) - a selection
+    of N ids realistically needs on the order of N * (a worst-case per-test
+    second), not a constant."""
+    return max(180, 10 * len(node_ids))
+
+
+def run_pytest(root, node_ids, python, timeout=None):
     """Run exactly `node_ids` with `-k "not host"` (host tests need real
     darktable and never run in this check) under `python` (from
     `gate_python`, NEVER a bare "python3" - see `gate_python`'s docstring).
-    Returns (rc, out); rc 5 means "every selected test was filtered out by
-    -k", distinct from a real pass or a real failure - callers must not read
-    it as either."""
+    `timeout` defaults to `pytest_timeout_budget(node_ids)` (round 11) - a
+    caller only overrides it in a test that deliberately wants a SHORT
+    timeout to exercise the timeout path itself. Returns (rc, out); rc 5
+    means "every selected test was filtered out by -k", distinct from a real
+    pass or a real failure - callers must not read it as either."""
     if not node_ids:
         return 0, "no tests selected"
+    if timeout is None:
+        timeout = pytest_timeout_budget(node_ids)
     argv = [python, "-m", "pytest", *node_ids, "-k", "not host", "-q"]
     return sh(argv, cwd=root, timeout=timeout)
 
