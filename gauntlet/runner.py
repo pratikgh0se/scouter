@@ -3,6 +3,7 @@ park-and-resume. Product behaviour lives in the adapter's Session."""
 
 from __future__ import annotations
 
+import inspect
 import threading
 import time
 from dataclasses import dataclass, field
@@ -19,7 +20,8 @@ PARK_MAX_WAIT_S = 6 * 3600
 NON_PASS = ("partial", "fail")
 #: (fix round 1, I1): open_session can hang (a stuck product launch) or raise
 #: (a launch failure); it must never do either untyped, so it goes through
-#: the same hard-cap machinery as a case.
+#: the same hard-cap machinery as a case. (pre-night-1 N1): an adapter may
+#: raise it with an optional `session_open_cap_s` attribute.
 SESSION_OPEN_CAP_S = 180.0
 #: (fix round 1, I2): abort()/close() are best-effort cleanup, not part of
 #: the case's own budget; capped and swallowed so a broken cleanup path
@@ -70,12 +72,20 @@ def _call_with_cap(fn, cap_s: float):
     return box["value"]
 
 
+def _accepts(fn, name: str) -> bool:
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(p.kind is p.VAR_KEYWORD for p in params.values())
+
+
 class Runner:
     def __init__(self, adapter: Adapter, run: RunDir, *, commit: str = "",
                  clock=time.monotonic, sleep=time.sleep, wall=time.time,
                  session_max_cases: int = SESSION_MAX_CASES,
                  session_max_s: float = SESSION_MAX_S,
-                 session_open_cap_s: float = SESSION_OPEN_CAP_S,
+                 session_open_cap_s: float | None = None,
                  max_consecutive_open_failures: int = MAX_CONSECUTIVE_OPEN_FAILURES) -> None:
         self.adapter = adapter
         self.run = run.ensure()
@@ -87,7 +97,9 @@ class Runner:
         self.policy = adapter.policy()
         self.session_max_cases = session_max_cases
         self.session_max_s = session_max_s
-        self.session_open_cap_s = session_open_cap_s
+        if session_open_cap_s is None:
+            session_open_cap_s = getattr(adapter, "session_open_cap_s", SESSION_OPEN_CAP_S)
+        self.session_open_cap_s = float(session_open_cap_s)
         self.max_consecutive_open_failures = max_consecutive_open_failures
 
     def _select(self, cases: list[Case], layer: str, *, resume: bool, only_failed: bool,
@@ -178,19 +190,38 @@ class Runner:
             return e.reason
         return str(reason) if reason else None
 
-    def _open_session(self, layer: str):
+    def _open_session(self, layer: str, case: Case):
         """Open a session under the same hard-cap machinery as a case (fix
-        round 1, I1). Returns (session, None) or (None, reason)."""
+        round 1, I1). Returns (session, None) or (None, reason).
+
+        (pre-night-1 N2): an adapter whose open_session takes `next_case` is
+        told the case the session opens for. (N1): an open past the cap calls
+        the adapter's optional `abort_open()` so its in-flight launch is
+        killed, not orphaned."""
+        fn = self.adapter.open_session
+        kw = {"next_case": case} if _accepts(fn, "next_case") else {}
         try:
-            session = _call_with_cap(lambda: self.adapter.open_session(layer, self.run),
+            session = _call_with_cap(lambda: fn(layer, self.run, **kw),
                                      self.session_open_cap_s)
             return session, None
         except RefuseRun as e:
             raise _Refused(e.reason) from e
         except _Timeout as e:
-            return None, str(e)
+            return None, "; ".join([str(e), *self._safe_abort_open()])
         except Exception as e:  # noqa: BLE001 - a launch failure is a case result
             return None, f"{type(e).__name__}: {e}"
+
+    def _safe_abort_open(self) -> list[str]:
+        """(pre-night-1 N1): best-effort, capped, never raises."""
+        fn = getattr(self.adapter, "abort_open", None)
+        if fn is None:
+            return ["abort_open: not provided by the adapter"]
+        try:
+            return [f"abort_open: {_call_with_cap(fn, SESSION_CLOSE_CAP_S)}"]
+        except _Timeout as e:
+            return [f"abort_open timed out: {e}"]
+        except Exception as e:  # noqa: BLE001 - never let cleanup kill the run
+            return [f"abort_open failed: {type(e).__name__}: {e}"]
 
     def _safe_close(self, session) -> None:
         """close() is best-effort: capped, and a failure only reaches the log
@@ -228,7 +259,7 @@ class Runner:
                     if session is not None:
                         old, session = session, None
                         self._safe_close(old)
-                    session, open_err = self._open_session(layer)
+                    session, open_err = self._open_session(layer, case)
                     if session is None:
                         consecutive_open_failures += 1
                         obs = Observation(blocked=f"session_open: {open_err}",

@@ -17,6 +17,7 @@ class FakeDt:
         self.launches = 0
         self.launched = []
         self.terminated = []
+        self.killed = []
         self.terminate_ok = terminate_ok
 
     def foreign(self):
@@ -34,6 +35,10 @@ class FakeDt:
 
     def health(self):
         return self._health
+
+    def kill_launched(self, rec):
+        self.killed.append(rec)
+        return True
 
     def terminate(self, *, responsive=None):
         self.terminated.append(responsive)

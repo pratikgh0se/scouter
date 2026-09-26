@@ -463,3 +463,117 @@ def test_eager_open_failure_raises_to_the_runner_and_leaves_no_session(pinned_en
     with pytest.raises(sess.SessionBlocked):
         a.open_session("coverage", run)
     assert dtprocess.owner_path().parent == pinned_env / "runs" / adapter_mod.PROCESS_DIR / "cache"
+
+
+# -- pre-night-1 N1/N2/N3 ------------------------------------------------------
+
+class _Proc:
+    def __init__(self, pid):
+        self.pid, self.killed = pid, False
+
+    def poll(self):
+        return 0 if self.killed else None
+
+    def kill(self):
+        self.killed = True
+
+
+def test_scouter_open_cap_covers_a_cold_launch():
+    assert ScouterAdapter.session_open_cap_s == 420.0
+
+
+def test_abort_open_with_nothing_opening_is_a_typed_no_op(tmp_path):
+    res = ScouterAdapter(tmp_path / "runs").abort_open()
+    assert res["ok"] is True and res["killed"] == []
+
+
+def test_abort_open_kills_only_its_own_in_flight_session(pinned_env, fake_corpus, monkeypatch):
+    """N1: an open past the runner's cap is aborted from the runner thread: the
+    MCP child still initialising and the darktable this session launched are
+    killed by their recorded pids; the late open thread then neither re-reads
+    the (by now foreign) owner record nor resets SCOUTER_CACHE."""
+    import threading
+
+    monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals", lambda: {})
+    a = ScouterAdapter(pinned_env / "runs")
+    a._corpus = fake_corpus
+    run = _write_run(pinned_env, [_case("coverage")])
+    entered, release = threading.Event(), threading.Event()
+    dt = FakeDt()
+    dt.launch = lambda frame, library, log: "rec-777"
+    proc = _Proc(9001)
+    box = {}
+
+    def mcp_factory(env, cwd):
+        box["s"]._mcp_pending = type("C", (), {"proc": proc})()
+        entered.set()
+        release.wait(5)
+        return FakeMcp()
+
+    def factory(corpus, root, body, run_root):
+        box["s"] = sess.ScouterSession(corpus, root, body, dt=dt, run_root=run_root,
+                                       mcp_factory=mcp_factory)
+        return box["s"]
+    a.session_factory = factory
+    def opener():
+        try:
+            box["routed"] = a.open_session("coverage", run)
+        except BaseException as e:  # noqa: BLE001
+            box["err"] = e
+    t = threading.Thread(target=opener)
+    t.start()
+    assert entered.wait(5)
+    res = a.abort_open()
+    assert res["ok"] and 9001 in res["killed"] and proc.killed
+    assert dt.killed == ["rec-777"] and len(dt.terminated) == 1
+    monkeypatch.setenv("SCOUTER_CACHE", "/next/session/cache")  # the next open's
+    release.set()
+    t.join(5)
+    assert not t.is_alive() and isinstance(box.get("err"), sess.SessionBlocked)
+    assert len(dt.terminated) == 1  # the late thread never re-read the owner record
+    assert dt.killed == ["rec-777", "rec-777"]  # ...but re-killed its own pid
+    assert __import__("os").environ["SCOUTER_CACHE"] == "/next/session/cache"
+
+
+def test_open_session_opens_the_body_of_the_case_the_runner_names(pinned_env, fake_corpus,
+                                                                 monkeypatch):
+    """N2: under --case / --only-failed the first case without a result is not
+    necessarily the one the runner runs next."""
+    monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals", lambda: {})
+    a = ScouterAdapter(pinned_env / "runs")
+    a._corpus = fake_corpus
+    run = _write_run(pinned_env, [_case("coverage", "olympus"), _case("coverage", "sony_a7")])
+    a.session_factory = lambda corpus, root, body, run_root: sess.ScouterSession(
+        corpus, root, body, dt=FakeDt(), run_root=run_root, mcp_factory=lambda e, c: FakeMcp())
+    routed = a.open_session("coverage", run, next_case=_case("coverage", "sony_a7"))
+    assert routed.current.body == "sony_a7"
+
+
+def test_an_abort_before_the_agent_exists_still_reaches_it(pinned_env, fake_corpus):
+    """N3: abort() landing after the product session opened but before the
+    agent handle was assigned must still stop that agent's claude turns."""
+    from gauntlet.adapter import Observation
+
+    a, run, routed, _ = _routed(pinned_env, fake_corpus, layer="scenarios_agent")
+
+    class Agent:
+        def __init__(self):
+            self.aborted = False
+            self.stopped = False
+
+        def stop_claude(self):
+            self.stopped = True
+
+        def run_case(self, case):
+            box["aborted_at_run"] = self.aborted
+            return Observation()
+
+    box = {}
+
+    def agent_factory(inner):
+        routed.abort()  # the runner's hard cap lands here
+        box["agent"] = Agent()
+        return box["agent"]
+    routed.agent_factory = agent_factory
+    routed.run_case(_case("scenarios_agent"))
+    assert box["aborted_at_run"] is True

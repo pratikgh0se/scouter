@@ -97,7 +97,14 @@ class Adapter(Protocol):
     layer that has cases to run; a returned reason (or a raised RefuseRun)
     stops the run with status `blocked: <reason>` and writes no case result.
     `harness_allowance_s(case) -> float` (final fix I7): seconds added to the
-    case's hard cap for the harness's own work inside a case (default 0)."""
+    case's hard cap for the harness's own work inside a case (default 0).
+    `session_open_cap_s: float` (pre-night-1 N1): the open_session hard cap
+    (default runner.SESSION_OPEN_CAP_S).
+    `abort_open() -> dict` (N1): called from the runner thread when an open
+    exceeds that cap; kills only what the in-flight open launched and
+    returns a typed result ({"ok", "killed", ...}) for the evidence.
+    `open_session(layer, run, next_case=None)` (N2): when accepted, the
+    runner passes the case the session opens for."""
 
     name: str
 
