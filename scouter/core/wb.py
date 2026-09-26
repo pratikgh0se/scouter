@@ -294,24 +294,54 @@ def _ratio(coeffs: list[float]) -> float:
     return float(coeffs[0]) / b
 
 
+def _quad_interp(xs: list[float], ys: list[float], x: float) -> float:
+    """Lagrange quadratic through exactly 3 points `(xs[i], ys[i])`, evaluated
+    at `x`. `xs` must be 3 distinct values (guaranteed here by strictly
+    monotonic Kelvin -> strictly monotonic mired)."""
+    x0, x1, x2 = xs
+    y0, y1, y2 = ys
+    l0 = (x - x1) * (x - x2) / ((x0 - x1) * (x0 - x2))
+    l1 = (x - x0) * (x - x2) / ((x1 - x0) * (x1 - x2))
+    l2 = (x - x0) * (x - x1) / ((x2 - x0) * (x2 - x1))
+    return y0 * l0 + y1 * l1 + y2 * l2
+
+
 def _off_curve(samples: list[dict], k: float, coeffs: list[float] | None) -> float | None:
     """Relative distance between the observed g-normalised (r, b) and the
-    table's (r, b) interpolated at Kelvin `k`. None when coeffs are absent."""
+    table's (r, b) at Kelvin `k`. None when coeffs are absent, or fewer than
+    2 samples (a single-point table has no curve to be off of).
+
+    Fix round 1 (I2): a straight chord between the two bracketing samples
+    bends away from the table's own (smoothly curved, roughly quadratic in
+    mireds) shape enough to false-refuse a correct reading near the low end
+    of a 1000 K-step table. With >= 3 samples, interpolates a quadratic in
+    mireds (1e6 / K) through the 3 samples nearest `k`; with exactly 2
+    samples, falls back to the old linear-in-Kelvin chord (nothing else to
+    fit a quadratic through).
+    """
     if not coeffs or len(coeffs) < 3 or not coeffs[1]:
         return None
+    if len(samples) < 2:
+        return None
     r_obs, b_obs = coeffs[0] / coeffs[1], coeffs[2] / coeffs[1]
-    ks = [p["kelvin"] for p in samples]
-    i = max(0, min(len(ks) - 2, next((j for j in range(len(ks) - 1) if ks[j] <= k <= ks[j + 1]),
-                                    len(ks) - 2)))
-    lo, hi = samples[i], samples[i + 1]
-    f = 0.0 if hi["kelvin"] == lo["kelvin"] else (k - lo["kelvin"]) / (hi["kelvin"] - lo["kelvin"])
 
     def norm(p: dict) -> tuple[float, float]:
         c = p["coeffs"]
         return c[0] / c[1], c[2] / c[1]
 
-    (rl, bl), (rh, bh) = norm(lo), norm(hi)
-    r_t, b_t = rl + f * (rh - rl), bl + f * (bh - bl)
+    if len(samples) == 2:
+        lo, hi = samples[0], samples[1]
+        span = hi["kelvin"] - lo["kelvin"]
+        f = 0.0 if span == 0 else (k - lo["kelvin"]) / span
+        (rl, bl), (rh, bh) = norm(lo), norm(hi)
+        r_t, b_t = rl + f * (rh - rl), bl + f * (bh - bl)
+    else:
+        m = 1e6 / k
+        nearest = sorted(samples, key=lambda p: abs(1e6 / p["kelvin"] - m))[:3]
+        nearest = sorted(nearest, key=lambda p: p["kelvin"])
+        ms = [1e6 / p["kelvin"] for p in nearest]
+        rs, bs = zip(*(norm(p) for p in nearest))
+        r_t, b_t = _quad_interp(ms, list(rs), m), _quad_interp(ms, list(bs), m)
     return ((r_obs - r_t) ** 2 + (b_obs - b_t) ** 2) ** 0.5 / (r_t ** 2 + b_t ** 2) ** 0.5
 
 
