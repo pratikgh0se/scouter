@@ -5,6 +5,50 @@ branch, which fixes defects found by the E12 live evaluation against real
 darktable (`Knowledge/Scouter - E12 live evaluation 2026-09-24.md` in the
 vault; decision row 407).
 
+## Unreleased (fix/adjust-commit)
+
+Row 430 (host acceptance run on darktable 5.4.1, 2026-09-26): row 429's
+`no_bounce` default never actually commits on this host.
+
+- Root cause: `no_bounce`'s proof of a commit was the sidecar's mtime/size
+  changing. The rating touch (its last rung) always rewrites the XMP from
+  library.db, whether or not the preceding "synchronize selection" DB flush
+  landed the darkroom's in-memory edit. On this host the flush did not land
+  it, so every `no_bounce` "commit" rewrote the *old* history with a fresh
+  timestamp -- the file changed, nothing landed. `history.commit`'s own
+  readback used the same mtime/size test, so `committed=true` was reported
+  even though the value on disk was unchanged. Surfaced by the row 429
+  acceptance run (`20260926t073011z`): white-balance calibrate refused as
+  non-monotone on both Sony bodies, the benchmark scored olympus 10/27 and
+  sony 0/27, and 12 tasks came back `reported_ok_unverified`.
+- Fix: a commit now counts only when the XMP's history fingerprint changed
+  (`history_end`, `history_current_hash`, the `<darktable:history>` and
+  `<darktable:masks_history>` blocks), not just the file's mtime/size.
+  `commit_no_bounce` (Lua) compares the fingerprint before and after and
+  reports `sidecar_written=false` with an explanatory detail when only the
+  file date moved; `auto` then falls back to `view_bounce_action`, the path
+  that actually commits. `history.commit` (Python) polls until the history
+  fingerprint changes, not the mtime; on timeout it reports
+  `detail.sidecar_rewritten_history_unchanged` instead of a false
+  `committed=true`.
+- Nine commit test doubles modelled a "commit" as an identical rewrite, which
+  was the bug itself; they now change `history_current_hash`
+  (`tests.scouter_fakes.with_new_history_hash`). New coverage: a Lua
+  dispatcher test models a flush that silently does nothing plus a rating
+  touch that rewrites the same history, and asserts `no_bounce` reports
+  false and `auto` falls back to the bounce;
+  `test_a_metadata_only_rewrite_is_not_a_commit` covers the Python side.
+  1433 passed, 23 skipped.
+- Live check (run dir `adjust-check/runs/20260926t080536z`), PASS: a
+  `darkroom_say` "brighter by 1 ev" move took 4.6 s wall and landed
+  (exposure 0.7 -> 1.7, history 11 -> 12); a module enable took 0.9 s
+  (history 12 -> 13); `darkroom_open` took 1.0 s; 0 new crash reports (9
+  before, 9 after). The effective commit today is the view bounce, roughly
+  1-3 s more per write than row 429's (false) `no_bounce` figures. Enabling
+  an already-enabled module now waits out the 5 s readback poll.
+- README and docs/measurements.md corrected to stop claiming `no_bounce`
+  commits, and to give the honest speed figures above.
+
 ## Unreleased (fix/bounce-main-thread)
 
 Row 429 (host probe on darktable 5.4.1, 2026-09-26, then this change):

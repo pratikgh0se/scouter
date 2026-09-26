@@ -487,12 +487,19 @@ records a forced-bounce loop beside it.
 
 ## Commit strategies on the host (row 429, 2026-09-26)
 
+**Superseded by row 430: `no_bounce` does not commit on 5.4.1.** The table
+below took "the XMP file changed" (mtime/size) as proof of a commit. On this
+host `no_bounce`'s DB flush did not land the darkroom's in-memory edit; the
+XMP was rewritten with the *old* history and a fresh timestamp, so every row
+marked `XMP changed: yes` was a false positive. See row 430 below for the
+corrected numbers and the fix (a2b9640).
+
 darktable 5.4.1, one ORF in the bench library, an exposure edit before each
 commit, `history.commit` wall time from the bridge call:
 
 | strategy | wall times (s) | XMP changed | notes |
 |---|---|---|---|
-| `no_bounce` | 1.17 (first of the session), 0.16 | yes | select=y, synchronize_selection_db_flush=y, rating touch rewrote the XMP |
+| `no_bounce` | 1.17 (first of the session), 0.16 | yes (metadata-only rewrite, history unchanged -- see row 430) | select=y, synchronize_selection_db_flush=y, rating touch rewrote the XMP |
 | `view_bounce_action` | 0.75, 0.80, 1.07 | yes | both legs via `global/switch views/*`, no crash |
 | `view_bounce` (old proxy transport) | refused at once | no | nan: lua-owned action pressed from Lua; transport removed |
 | `sidecar_action` | - | no | nan from the darkroom (copy_history is lighttable-only) |
@@ -505,4 +512,33 @@ Expected from here (not yet re-measured end to end): a commit costs
 one `darkroom say` move stays well under the 3.5 s target with the sidecar
 trusted (row 427's guard; 1.37 s median measured with `trust_sidecar`). The
 acceptance run (row 429, part B) re-measures both.
+
+**This expectation did not hold** -- see row 430.
+
+## Commit strategies on the host, corrected (row 430, 2026-09-26)
+
+The row 429 acceptance run (`20260926t073011z`) surfaced the false positive:
+white-balance calibrate was refused as non-monotone on both Sony bodies, the
+benchmark scored olympus 10/27 and sony 0/27, and 12 tasks came back
+`reported_ok_unverified`. Root cause: `no_bounce`'s "proof" of a commit was a
+sidecar mtime/size check, which a metadata-only rewrite also satisfies. Fix
+(a2b9640, merged to main at f2fbab1): a commit counts only when the XMP's
+history fingerprint (history_end, history_current_hash, the
+`<darktable:history>`/`<darktable:masks_history>` blocks) actually changed;
+`no_bounce` now reports "not written" on a metadata-only rewrite, and `auto`
+falls back to `view_bounce_action`.
+
+Live check after the fix (run dir
+`/Users/pratik/Pictures/ScouterScratch/adjust-check/runs/20260926t080536z`), PASS:
+
+| operation | wall time (s) | history (before -> after) | on-disk value |
+|---|---|---|---|
+| `darkroom_say` "brighter by 1 ev" | 4.6 | 11 -> 12 | exposure 0.7 -> 1.7 |
+| module enable (already-enabled module skipped, then a real enable) | 0.9 | 12 -> 13 | -- |
+| `darkroom_open` | 1.0 | -- | -- |
+
+Zero crashes (9 before the run, 9 after). The effective commit today is the
+view bounce, which costs about 1-3 s more per write than row 429's (false)
+0.2-1.1 s `no_bounce` figure. Enabling an already-enabled module now waits
+out the 5 s readback poll before resolving.
 

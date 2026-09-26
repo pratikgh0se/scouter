@@ -240,25 +240,34 @@ item rather than rewriting history — so your own Ctrl-Z still works.
 
 These are load-bearing, not incidental — read them before scripting against Scouter:
 
-- **The commit trigger: `no_bounce` first, a view bounce as the fallback.**
+- **The commit trigger: `no_bounce` first, a view bounce as the fallback --
+  but `no_bounce` does not land the edit on darktable 5.4.1 (row 430).**
   darktable writes the XMP sidecar only when the history is flushed (leaving
   the darkroom, switching image, autosave, "synchronize selection") -- not per
-  slider move (phase 0 finding 3). Since row 429 `history commit`'s default
-  (`--strategy auto`) is `no_bounce`: select exactly the image, press the
-  darkroom's "synchronize selection" (flushes history to library.db), and
+  slider move (phase 0 finding 3). `history commit`'s default
+  (`--strategy auto`) tries `no_bounce` first: select exactly the image, press
+  the darkroom's "synchronize selection" (flushes history to library.db), and
   re-assign the image's rating (darktable rewrites the XMP from the DB) --
-  the view never moves. When that does not change the sidecar, auto falls
-  back to `view_bounce_action`: out to the lighttable and back through
-  darktable's own "switch views" commands. Host-measured on darktable 5.4.1
-  (row 429): `no_bounce` 1.17 s on the first commit of a session, 0.16 s
-  warm; `view_bounce_action` 0.75-1.07 s. Either way the commit is confirmed
-  by watching the sidecar itself, never assumed. darktable writes a sidecar
-  only when the history actually changed, so a write asking for the value the
-  image already has produces no write; Scouter resolves that by reading the
-  value back and says so in a warning, and still reports `commit_timeout`
-  when the value genuinely is not there. `--strategy` forces any one
-  strategy (`no_bounce`, `view_bounce_action`, `view_bounce` -- the same
-  bounce on the plugin's default transport -- or `sidecar_action`).
+  the view never moves. Row 429 took "the sidecar file changed" (mtime/size)
+  as proof that this committed. It does not: on this host the "synchronize
+  selection" flush did not carry the darkroom's in-memory edit into
+  library.db, so the rating touch rewrote the XMP with the *old* history and
+  a fresh timestamp -- the file changed, nothing landed. The fix (row 430,
+  a2b9640): a commit counts only when the XMP's history fingerprint itself
+  changed; `no_bounce` now reports "not written" on a metadata-only rewrite,
+  and `auto` falls back to `view_bounce_action`: out to the lighttable and
+  back through darktable's own "switch views" commands. That view bounce is
+  the commit that actually lands an edit today, and it costs roughly 1-3 s
+  more per write than row 429's (false) `no_bounce` numbers -- see row 430 in
+  `docs/measurements.md` for the live-check timings. Either way the commit is
+  confirmed by watching the sidecar's history, never assumed from the file's
+  mtime/size. darktable writes a sidecar only when the history actually
+  changed, so a write asking for the value the image already has produces no
+  write; Scouter resolves that by reading the value back and says so in a
+  warning, and still reports `commit_timeout` when the value genuinely is not
+  there. `--strategy` forces any one strategy (`no_bounce`,
+  `view_bounce_action`, `view_bounce` -- the same bounce on the plugin's
+  default transport -- or `sidecar_action`).
 - **Row 418 crash: closed (row 429).** The editor benchmark (row 408 B1)
   measured the FIRST `history commit` after a fresh darktable launch
   intermittently wedging the bridge (5 of 13 sessions: no MCP answer in 30 s,
@@ -754,10 +763,13 @@ shows which words work today.
   since Scouter's last commit -- darktable writes nothing until the darkroom
   is left. Pass `--bounce` (MCP `bounce: true`) after touching sliders
   yourself; `--trust-sidecar` still skips the bounce unconditionally.
-  `darkroom get` never bounces unless `--bounce`. Since row 429 that
-  pre-read commit is `history commit --strategy auto`, i.e. `no_bounce` (no
-  view switch; 0.16-1.17 s host-measured) with the view bounce only as its
-  fallback, so the ~2.7 s above is the old cost, not today's.
+  `darkroom get` never bounces unless `--bounce`. That pre-read commit is
+  `history commit --strategy auto`, which tries `no_bounce` (no view switch)
+  first, but row 430 found `no_bounce` does not land the edit on darktable
+  5.4.1 -- it only rewrites the sidecar's metadata, which `auto` now detects
+  and falls back to `view_bounce_action` for. So the real cost today is the
+  view bounce, roughly 1-3 s (row 430), not the sub-second `no_bounce` figure
+  row 429 reported, and not the older ~2.7 s bounce either.
 - **Undoing a preset application is refused.** darktable's Lua API cannot
   remove history items. Use the history panel.
 - **Color zones' zone curves are unreachable.** Only its global mix
@@ -848,9 +860,12 @@ did not, or could not, settle.
   you moved yourself in darktable since then is invisible until darktable
   writes the sidecar; pass `--bounce` (MCP `bounce: true`) after hand edits.
   The guarded default's timing is not host-measured yet (row 415 measured
-  4.12 s with the old bounce every time, 1.37 s without). Expected since row
-  429: one move well under 3.5 s, a commit 0.2-1.1 s (`no_bounce`, falling
-  back to `view_bounce_action`); the row 429 acceptance run measures it.
+  4.12 s with the old bounce every time, 1.37 s without). Row 429 expected a
+  commit at 0.2-1.1 s via `no_bounce`, but the row 429 acceptance run found
+  `no_bounce` never actually commits on this host (row 430): the honest
+  figure is a commit via `view_bounce_action`, roughly 1-3 s, with one move
+  end to end (row 430's live check) at 4.6 s -- still well under the 5 s poll
+  ceiling.
 - **`scouter setup` does not register the MCP server.** It prints the `claude
   mcp add` command and never reads or writes Claude Code's config. Right
   after installing the plugin, `doctor` is not ok until darktable restarts.
@@ -939,10 +954,14 @@ as one group. For an exact value, Claude uses `darkroom_set`
 `darkroom_adjust`. `darkroom_get` reads a value back.
 
 **Speed.** One phrase measured ~1.4 s on the host with the pre-read bounce
-skipped (2026-09-24; the guarded default below is not host-measured yet). The
-first move on a photo in a session also makes darktable write its pending
-edits first (one commit, 0.2-1.2 s since row 429; it used to be a ~2.7 s view
-bounce). If you moved sliders **by hand** in darktable
+skipped (2026-09-24; the guarded default below is not host-measured yet). A
+commit only counts once the sidecar's history actually changed (row 430:
+`no_bounce`'s old "sidecar file changed" check was fooled by a metadata-only
+rewrite, so it never landed the edit on darktable 5.4.1); the commit that
+actually lands an edit today is the view bounce, roughly 1-3 s, not the
+sub-second `no_bounce` figure row 429 reported. A live check (row 430) had
+one `darkroom_say` move take 4.6 s wall end to end, still well under the
+5 s poll ceiling. If you moved sliders **by hand** in darktable
 since Scouter's last move, say so ("I changed the exposure myself"): Claude
 passes `bounce: true` so Scouter reads your values, not the stale sidecar.
 
