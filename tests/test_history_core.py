@@ -5,7 +5,7 @@ from pathlib import Path
 
 from scouter.core import dtbridge, history
 from scouter.errors import CommitTimeout
-from tests.scouter_fakes import FakeBridge, TempCache
+from tests.scouter_fakes import FakeBridge, TempCache, with_new_history_hash
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "P6281348.ORF.xmp"
 
@@ -103,7 +103,7 @@ class HistoryCommitTest(unittest.TestCase):
 
         def commit(_params: dict) -> dict:
             time.sleep(0.01)
-            self.sidecar.write_text(text)  # a real rewrite bumps the mtime
+            self.sidecar.write_text(with_new_history_hash(text))  # a real rewrite bumps the mtime
             return {
                 "strategy_used": "sidecar_action",
                 "ok": True,
@@ -115,6 +115,33 @@ class HistoryCommitTest(unittest.TestCase):
         result = history.commit(image=str(self.raw), timeout_s=2.0)
         self.assertTrue(result.committed)
         self.assertEqual(result.strategy_used, "sidecar_action")
+
+    def test_a_metadata_only_rewrite_is_not_a_commit(self) -> None:
+        # Row 430 (bench 20260926t073459z E1/W1/S2): the no_bounce rating
+        # touch re-synched the XMP from a library.db the darkroom never
+        # flushed to -- new change_timestamp, new mtime, SAME history -- and
+        # every relative move reported committed=true with the edit missing.
+        # A rewrite whose history is byte-identical must not count.
+        text = self.sidecar.read_text()
+        self.assertIn('darktable:change_timestamp="', text)
+        touched = text.replace('darktable:change_timestamp="', 'darktable:change_timestamp="9', 1)
+
+        def commit(_params: dict) -> dict:
+            time.sleep(0.01)
+            self.sidecar.write_text(touched)
+            return {
+                "strategy_used": "no_bounce",
+                "ok": True,
+                "view_after": "darkroom",
+                "cpu_ms": 10,
+                "sidecar_written": True,
+            }
+
+        dtbridge.set_bridge(FakeBridge({**self.base, "history.commit": commit}))
+        with self.assertRaises(CommitTimeout) as ctx:
+            history.commit(image=str(self.raw), timeout_s=0.3)
+        why = ctx.exception.detail.get("sidecar_rewritten_history_unchanged")
+        self.assertIn("history", str(why))
 
     def test_commit_times_out_with_the_strategy_in_the_detail(self) -> None:
         dtbridge.set_bridge(
@@ -159,7 +186,7 @@ class HistoryCommitTest(unittest.TestCase):
 
         def commit(_params: dict) -> dict:
             time.sleep(0.01)
-            self.sidecar.write_text(text)
+            self.sidecar.write_text(with_new_history_hash(text))
             return {
                 "strategy_used": "view_bounce",
                 "ok": True,
@@ -199,7 +226,7 @@ class HistoryCommitTest(unittest.TestCase):
 
         def commit(_params: dict) -> dict:
             time.sleep(0.01)
-            self.sidecar.write_text(text)
+            self.sidecar.write_text(with_new_history_hash(text))
             return {
                 "strategy_used": "sidecar_action",
                 "ok": True,
@@ -217,7 +244,7 @@ class HistoryCommitTest(unittest.TestCase):
 
         def commit(_params: dict) -> dict:
             time.sleep(0.01)
-            self.sidecar.write_text(text)
+            self.sidecar.write_text(with_new_history_hash(text))
             return {
                 "strategy_used": "sidecar_action",
                 "ok": True,
@@ -259,7 +286,7 @@ class HistoryCommitTest(unittest.TestCase):
 
         def commit(_params: dict) -> dict:
             time.sleep(0.01)  # guarantee the mtime ticks
-            self.sidecar.write_text(text)
+            self.sidecar.write_text(with_new_history_hash(text))
             return {
                 "strategy_used": "sidecar_action",
                 "ok": True,

@@ -1708,6 +1708,30 @@ local function wait_for_sidecar(path, before, budget_ms)
   end
 end
 
+-- The part of a sidecar that IS the edit: history_end, the history hash and
+-- the history / masks_history blocks. Row 430: a metadata-only rewrite (the
+-- no_bounce rating touch re-synching the XMP from a library.db the darkroom
+-- never flushed to) moves change_timestamp -- so mtime and size -- while the
+-- history stays byte-identical. Comparing this, not the stat signature, is
+-- what tells "the edit reached the sidecar" from "the sidecar was touched".
+-- A file with none of these markers (not a darktable XMP) is compared whole.
+-- nil when the file cannot be read.
+local function sidecar_history_signature(path)
+  if type(path) ~= "string" or path == "" then return nil end
+  local f = io.open(path, "r")
+  if not f then return nil end
+  local text = f:read("*a") or ""
+  f:close()
+  local parts = {}
+  local function add(v) if v then parts[#parts + 1] = v end end
+  add(text:match('darktable:history_end="[^"]*"'))
+  add(text:match('darktable:history_current_hash="[^"]*"'))
+  add(text:match("<darktable:masks_history>.-</darktable:masks_history>"))
+  add(text:match("<darktable:history>.-</darktable:history>"))
+  if #parts == 0 then return text end
+  return table.concat(parts, "\n")
+end
+
 -- ---- Commit WITHOUT a view switch (row 422 alternative) -------------------
 --
 -- Source-verified against darktable 5.4.1, the pieces a no-bounce commit can
@@ -1754,7 +1778,7 @@ local function selection_is_exactly(image)
   return true, nil
 end
 
-local function commit_no_bounce(image, before, sidecar)
+local function commit_no_bounce(image, before, sidecar, history_before)
   local steps = {}
   local function step(name, ok, detail)
     table.insert(steps, {step = name, ok = ok, detail = detail})
@@ -1808,14 +1832,32 @@ local function commit_no_bounce(image, before, sidecar)
   end
 
   local written, waited = nil, 0
+  local detail = nil
   if sidecar then
     written, waited = wait_for_sidecar(sidecar, before)
     step("sidecar_changed", written, tostring(waited) .. "ms")
+    if written == false then
+      detail = "the sidecar did not change within " .. waited .. "ms"
+    elseif history_before ~= nil then
+      -- Row 430: the rating touch rewrites the XMP from library.db whether
+      -- or not the flush above carried the darkroom's edit there, so a new
+      -- mtime proves only that the file was touched. The edit is committed
+      -- only when the history itself changed; otherwise auto must fall back
+      -- to the bounce, which writes the in-memory history for real.
+      local history_after = sidecar_history_signature(sidecar)
+      local history_changed = history_after ~= history_before
+      step("history_changed", history_changed, history_changed and "history differs"
+           or "sidecar rewritten with an unchanged history (metadata only)")
+      if not history_changed then
+        written = false
+        detail = "the sidecar was rewritten after " .. waited .. "ms but its history is "
+          .. "unchanged: the synchronize-selection flush did not carry the darkroom's "
+          .. "edit into library.db, so the rating touch re-wrote the old history"
+      end
+    end
   end
   return {ok = written == true, steps = steps, view = current_view_name(),
-          written = written, waited = waited,
-          detail = written == false and ("the sidecar did not change within " .. waited .. "ms")
-                   or nil}
+          written = written, waited = waited, detail = detail}
 end
 
 -- The only strategies history.commit understands. Anything else is a
@@ -1851,7 +1893,8 @@ local function run_no_bounce(p, started)
   local target = commit_target(p)
   local nb_sidecar = image_sidecar_path(target)
   local nb_before = nb_sidecar and sidecar_signature(nb_sidecar) or nil
-  local r = commit_no_bounce(target, nb_before, nb_sidecar)
+  local nb_history = nb_sidecar and sidecar_history_signature(nb_sidecar) or nil
+  local r = commit_no_bounce(target, nb_before, nb_sidecar, nb_history)
   return {
     strategy_used = "no_bounce",
     ok = r.ok,
