@@ -73,10 +73,13 @@ class _DarkroomFixture(unittest.TestCase):
         # unpatched seam is exercised separately in DarkroomCommitSeamTest
         # (fix round 2, should-fix 8).
         self.commit_calls: list[tuple] = []
+        # Row 461 (review Important 2): what each commit was told to expect.
+        self.commit_modules: list[str | None] = []
 
-        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True):
+        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
             self.commit_calls.append((job, image, strategy, attempts, expect_change))
             self._land_sent()
+            self.commit_modules.append(expect_module)
             return CommitResult(committed=True, changed=expect_change, warnings=[])
 
         self._commit_patcher = mock.patch("scouter.core.darkroom._commit", side_effect=fake_commit)
@@ -139,6 +142,7 @@ class DarkroomCoreTest(_DarkroomFixture):
         job, image, strategy, _attempts, expect_change = self.commit_calls[0]
         self.assertEqual((job, image, strategy), ("job-test", 12, "auto"))
         self.assertTrue(expect_change, "a real change (2.0 != fixture's 1.55) expects a change")
+        self.assertEqual(self.commit_modules, ["exposure"], "row 434: the commit expects exposure")
         entry = journal.latest_open("job-test")
         assert entry is not None
         self.assertTrue(entry.commit)
@@ -410,8 +414,11 @@ class DarkroomCoreTest(_DarkroomFixture):
     def test_enable_accepts_every_whitelisted_module(self) -> None:
         for module in dtbridge.MODULE_WHITELIST:
             with self.subTest(module=module):
+                self.commit_modules.clear()
                 result = darkroom.enable(module=module)
                 self.assertNotEqual(result.outcome, "error:usage")
+                self.assertTrue(set(self.commit_modules) <= {module},
+                                f"enable commits expect {module}: {self.commit_modules}")
 
     def test_enable_has_no_confirm_kwarg(self) -> None:
         """Ruling 9: `darkroom.enable` is not gated and takes no `confirm`."""
@@ -432,6 +439,7 @@ class DarkroomCoreTest(_DarkroomFixture):
         self.assertAlmostEqual(last["value"], 1.5500002, places=5)
         self.assertIsNone(journal.latest_open("job-test"))
         self.assertEqual(len(self.commit_calls), 1)
+        self.assertEqual(self.commit_modules, ["exposure"], "the undo commit expects exposure")
 
     def test_undo_last_refuses_when_another_image_is_loaded(self) -> None:
         """Blocker 1: undo_last reads `darkroom.current` and REFUSES on a
@@ -502,6 +510,7 @@ class DarkroomCoreTest(_DarkroomFixture):
         self.assertIn("module.disable", self.bridge.methods_called())
         assert result.undone is not None
         self.assertEqual(len(self.commit_calls), 1)
+        self.assertEqual(self.commit_modules, ["exposure"], "the disable commit expects exposure")
 
     def test_undo_last_of_enable_is_a_noop_when_already_enabled_before(self) -> None:
         entry = journal.begin(
@@ -898,7 +907,7 @@ class DarkroomCommitSeamTest(unittest.TestCase):
             if self.sent.get("value") is not None:
                 # Row 433: darktable's rewrite carries the value it was sent.
                 text = with_param_value(text, "exposure", "exposure", self.sent["value"])
-            sidecar.write_text(with_new_history_hash(text))
+            sidecar.write_text(with_new_history_hash(text, p.get("expect_module")))
             future = time.time() + 2
             os.utime(sidecar, (future, future))
             return {
@@ -1000,3 +1009,28 @@ class StatusUnpinnedModuleTest(unittest.TestCase):
         self.assertEqual(result.view, "darkroom")
         self.assertEqual(result.positions, {})
         self.assertTrue(any("only the view" in w for w in result.warnings))
+
+
+class CommitWiringTest(unittest.TestCase):
+    """Row 461 (review Important 2): every darkroom writer tells its commit
+    which module it touched. An AST scan of darkroom.py, so dropping
+    `expect_module=` from any call site fails here even though the fakes
+    accept the call either way. moves.py/presets.py flushes are multi-module
+    and rely on rule 1 (history_end must not go back), tested in
+    tests/test_history_expected.py."""
+
+    def test_every_commit_call_in_darkroom_passes_expect_module(self) -> None:
+        import ast
+
+        src = Path(darkroom.__file__).read_text()
+        missing = []
+        seen = 0
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in (
+                "_commit", "_commit_with_readback"
+            ):
+                seen += 1
+                if not any(k.arg == "expect_module" for k in node.keywords):
+                    missing.append(f"{node.func.id} at darkroom.py:{node.lineno}")
+        self.assertGreaterEqual(seen, 8, "the scan found the commit call sites")
+        self.assertEqual(missing, [], "commit calls without expect_module")

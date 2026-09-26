@@ -47,7 +47,7 @@ class PresetSaveTest(_PresetFixture):
         r = presets.save.__wrapped__("harbour-warm", job="job-test")
         self.assertEqual(self.extract_calls[0]["modules"], ["exposure", "sigmoid"])
         self.assertEqual(r.modules, ["exposure", "sigmoid"])
-        self.assertEqual(self.commits[0], (1, False), "flush before extracting")
+        self.assertEqual(self.commits[0], (1, False, None), "flush before extracting")
 
     def test_flush_timeout_is_a_warning(self) -> None:
         """Final review #4: a CommitTimeout from the flush is downgraded to a

@@ -503,6 +503,137 @@ def _history_fingerprint(sidecar: Path) -> str | None:
     return "\n".join(parts) if parts else text
 
 
+_LI_RX = re.compile(r"<rdf:li\s.*?/>", re.S)
+_NUM_RX = re.compile(r'darktable:num="(\d+)"')
+_OP_RX = re.compile(r'darktable:operation="([^"]*)"')
+_END_RX = re.compile(r'darktable:history_end="(\d+)"')
+_HISTORY_BLOCK_RX = re.compile(r"<darktable:history>(.*?)</darktable:history>", re.S)
+
+
+def _history_items(fingerprint: str | None) -> tuple[int | None, dict[int, str]]:
+    if fingerprint is None:
+        return None, {}
+    m = _END_RX.search(fingerprint)
+    block = _HISTORY_BLOCK_RX.search(fingerprint)
+    items: dict[int, str] = {}
+    for li in _LI_RX.findall(block.group(1) if block else ""):
+        num = _NUM_RX.search(li)
+        if num:
+            items[int(num.group(1))] = li
+    return (int(m.group(1)) if m else None), items
+
+
+def _history_end_went_back(before: str | None, after: str | None) -> str | None:
+    """Row 461 rule 1, on EVERY commit (with or without `expect_module`): a
+    sidecar whose history_end went back was rewritten from an older
+    library.db state and is never a commit. The reason, or `None`.
+    Mirrors the Lua plugin's `history_end_went_back`.
+    Enforcer: tests/test_history_expected.py (StaleRewriteTest)."""
+    before_end, _ = _history_items(before)
+    after_end, _ = _history_items(after)
+    if before_end is not None and after_end is not None and after_end < before_end:
+        return (
+            f"history_end went back from {before_end} to {after_end}: the sidecar was "
+            "rewritten from an older library.db state, not from this edit"
+        )
+    return None
+
+
+def _restore_sidecar(sidecar: Path, text: str) -> bool:
+    """Put the pre-commit sidecar back (temp file + rename, never torn)."""
+    tmp = sidecar.with_name(sidecar.name + ".scouter-restore")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(sidecar)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        return False
+    return True
+
+
+_HASH_RX = re.compile(r'darktable:history_current_hash="([^"]*)"')
+
+
+def _restore_if_still_stale(
+    sidecar: Path, snapshot: str, stale_hash: str | None, expect_module: str | None
+) -> str:
+    """Put the pre-commit sidecar back only while the stale rewrite is still
+    on disk (row 461 fix round 2, race guard). Returns:
+
+    - "healed": a good write landed meanwhile (darktable autosave, a
+      bounce) -- history_end >= the pre-commit one, the file is no longer
+      the stale rewrite, and its newest item is `expect_module` (any, when
+      none is given). Left alone.
+    - "restored": still the stale rewrite (same history hash as
+      `stale_hash`; without one, history_end still behind the snapshot).
+    - "left": neither; not ours to overwrite. "failed": the write-back failed.
+
+    Mirrors the Lua plugin's `restore_if_still_stale`.
+    Enforcer: tests/test_history_expected.py (RestoreRaceGuardTest).
+    """
+    try:
+        current = sidecar.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "left"
+    cur_hash_m = _HASH_RX.search(current)
+    cur_hash = cur_hash_m.group(1) if cur_hash_m else None
+    pre_end, _ = _history_items(snapshot)
+    cur_end, cur_items = _history_items(current)
+    went_back = _history_end_went_back(snapshot, current) is not None
+    still_stale = cur_hash == stale_hash if stale_hash is not None else went_back
+    if not still_stale and cur_end is not None and (pre_end is None or cur_end >= pre_end):
+        newest = cur_items.get(cur_end - 1)
+        op = _OP_RX.search(newest) if newest else None
+        if not expect_module or (op is not None and op.group(1) == expect_module):
+            return "healed"
+    if not still_stale:
+        return "left"
+    return "restored" if _restore_sidecar(sidecar, snapshot) else "failed"
+
+
+def _history_advanced_as_expected(
+    before: str | None, after: str | None, expect_module: str
+) -> tuple[bool, str | None]:
+    """Did the sidecar history move the way THIS write expects? `(ok, why)`.
+
+    Row 434 (gauntlet night1-20260926, 15 cases; e.g.
+    cov-phrase-faded_blacks-olympus-touch, history_end 112 -> 92 with the
+    params of a case three moves earlier, reported ok): no_bounce's rating
+    touch rewrote the XMP from a library.db many edits behind the darkroom.
+    The history DID change -- backwards -- so "changed" (row 430) accepted
+    it. A rewrite is this write's commit only when history_end did not go
+    back, the newest active item (num = history_end - 1) is `expect_module`,
+    and that item is not identical to what the sidecar held at that num.
+
+    Mirrors the Lua plugin's `history_advanced_as_expected`; this copy is
+    the Python side's own look at the sidecar after the bridge answered.
+    Enforcer: tests/test_history_expected.py (with the intent examples in
+    tests/intent/history_commit_expected.json) and the "row 434" blocks in
+    tests/lua/test_dispatcher.lua. The value-level oracle is the write
+    verbs' read-back of the param (row 433, fix/htc-applied-verify).
+    """
+    after_end, after_items = _history_items(after)
+    if after_end is None:
+        return False, "the rewritten sidecar has no readable history_end"
+    before_end, before_items = _history_items(before)
+    if before_end is not None and after_end < before_end:
+        return False, (
+            f"history_end went back from {before_end} to {after_end}: the sidecar was "
+            "rewritten from an older library.db state, not from this edit"
+        )
+    newest = after_items.get(after_end - 1)
+    if newest is None:
+        return False, f"the rewritten sidecar has no history item {after_end - 1}"
+    op = _OP_RX.search(newest)
+    if (op.group(1) if op else None) != expect_module:
+        return False, (
+            f"the newest history item is {op.group(1) if op else None}, not {expect_module}"
+        )
+    if before_items.get(after_end - 1) == newest:
+        return False, f"the newest {expect_module} history item is unchanged"
+    return True, None
+
+
 @metrics.instrumented("history.commit")
 def commit(
     image: str | int | None = None,
@@ -513,7 +644,38 @@ def commit(
     expect_change: bool | None = None,
     job: str | None = None,
 ) -> CommitResult:
+    """The public `history.commit` verb: `commit_expecting` with no write to
+    expect (a hand edit, or a batch), so any history change counts.
+    See `commit_expecting` for the full contract."""
+    return commit_expecting(
+        image, timeout_s=timeout_s, strategy=strategy, attempts=attempts,
+        expect_change=expect_change, job=job,
+    )
+
+
+def commit_expecting(
+    image: str | int | None = None,
+    *,
+    timeout_s: float = 5.0,
+    strategy: str = "auto",
+    attempts: int = DEFAULT_COMMIT_ATTEMPTS,
+    expect_change: bool | None = None,
+    job: str | None = None,
+    expect_module: str | None = None,
+) -> CommitResult:
     """Make darktable write this image's history to its sidecar, then verify.
+
+    Uninstrumented: write verbs (`darkroom._commit`) call it so one verb call
+    still emits exactly one metrics event.
+
+    `expect_module` (row 434): the darktable operation the write being
+    committed touched. With it, a sidecar rewrite counts as the commit only
+    when its history advanced as that write expects
+    (`_history_advanced_as_expected`), both in the plugin (so auto falls
+    back to the view bounce past a stale no_bounce rewrite) and in the poll
+    below. Without it, any history change counts, as before. A false "not
+    as expected" costs a CommitTimeout, which every darkroom writer already
+    resolves by reading the value back (`_commit_with_readback`).
 
     `attempts`/`expect_change` (task 12): a caller who already knows this
     write may be a no-op -- `darkroom.set_param`'s pre-check, when the
@@ -535,10 +697,9 @@ def commit(
     Row 431 (bench 20260926t083159z: `history_commit` on an unedited frame,
     `timeout_s=10`, never answered). `expect_change=None` (the default)
     means: expect a change only when Scouter journalled an uncommitted write
-    for this image. With none pending, darktable gets one no_bounce look
-    (which still commits an edit it has already flushed to library.db) and
-    no bounce; if the history did not move, the answer is `noop=True`
-    within ~2s. Pass `expect_change=True` to force the full bounce (e.g. an
+    for this image. With none pending, darktable gets one look (on 5.4.x,
+    since row 461, a single view bounce; elsewhere one no_bounce look and no
+    bounce); if the history did not move, the answer is `noop=True`. Pass `expect_change=True` to force the full bounce (e.g. an
     edit made by hand in darktable seconds ago). And `timeout_s` now bounds
     the WHOLE call: the plugin gets `budget_ms` a little under it, and the
     bridge wait itself is capped at what is left.
@@ -565,11 +726,20 @@ def commit(
     sidecar = xmp.sidecar_path(resolved.path)
     before_ns, before_size = _sidecar_signature(sidecar)
     before_history = _history_fingerprint(sidecar) if sidecar.exists() else None
+    # Row 461: the pre-commit copy, restored if a no_bounce rewrite is stale
+    # and the plugin could not put it back itself.
+    try:
+        snapshot: str | None = sidecar.read_text(encoding="utf-8") if sidecar.exists() else None
+    except OSError:
+        snapshot = None
     metadata_only_rewrites = 0
+    stale_rewrite: str | None = None
 
     if strategy not in COMMIT_STRATEGIES:
         raise UsageError(f"unknown strategy {strategy!r} (valid: {', '.join(COMMIT_STRATEGIES)})")
     params = {"strategy": strategy, "attempts": attempts, "expect_change": expect_change}
+    if expect_module:
+        params["expect_module"] = expect_module
     if strategy in ("no_bounce", "auto"):
         # no_bounce acts on a named image (selection + DB flush + XMP write)
         # rather than whatever the darkroom has loaded, so it is told which.
@@ -611,6 +781,43 @@ def commit(
 
     def _watermark() -> None:
         watermark_write(job, resolved.image_id, resolved.xmp_path)
+
+    if result.get("stale_rewrite"):
+        # Row 461: the plugin saw the sidecar rewritten with a history that is
+        # not this edit (history_end went back, or not the expected module).
+        # Refused on every path -- never a no-op, never a commit, never a
+        # watermark. The second look is ours: re-read the sidecar.
+        # Round 2: on any strategy (the bounce path too), and race-guarded.
+        if result.get("stale_rewrite_restored"):
+            outcome = "restored"
+        elif result.get("stale_rewrite_healed"):
+            outcome = "healed"
+        elif snapshot is not None:
+            outcome = _restore_if_still_stale(
+                sidecar, snapshot, result.get("stale_hash"), expect_module
+            )
+        else:
+            outcome = "left"
+        restored = outcome == "restored"
+        raise CommitTimeout(
+            f"stale_rewrite: darktable rewrote {sidecar} with an older history, not this "
+            f"edit ({result.get('detail')}); "
+            + {"restored": "the pre-commit sidecar was restored",
+               "healed": "a good write landed meanwhile, so the sidecar was left alone"}.get(
+                outcome, "the sidecar was NOT restored"),
+            fix="leave and re-enter the darkroom (the bounce writes the in-memory history), "
+            "then read the history back",
+            detail={
+                "strategy_used": strategy_used,
+                "image_id": resolved.image_id,
+                "xmp": str(sidecar),
+                "stale_rewrite": result.get("detail"),
+                "stale_rewrite_restored": restored,
+                "stale_rewrite_healed": outcome == "healed",
+                "sidecar_end_now": _history_items(_history_fingerprint(sidecar))[0],
+                "ms": int((time.monotonic() - started) * 1000),
+            },
+        )
 
     if probe_only and ok and sidecar_written is False:
         return CommitResult(
@@ -668,6 +875,19 @@ def commit(
             nonlocal metadata_only_rewrites
             metadata_only_rewrites += 1
             return None
+        after_history = _history_fingerprint(sidecar)
+        why = _history_end_went_back(before_history, after_history)
+        as_expected = why is None
+        if as_expected and expect_module:
+            as_expected, why = _history_advanced_as_expected(
+                before_history, after_history, expect_module
+            )
+        if not as_expected:
+            # Rows 434/461: rewritten, but not with this edit -- keep polling
+            # (the fallback bounce may still land) and never report it.
+            nonlocal stale_rewrite
+            stale_rewrite = why
+            return None
         warnings: list[str] = []
         if view_after != "darkroom":
             warnings.append(
@@ -719,6 +939,8 @@ def commit(
                 if metadata_only_rewrites
                 else None
             ),
+            "sidecar_rewritten_not_this_edit": stale_rewrite,
+            "stale_rewrite": stale_rewrite,
         },
     )
 

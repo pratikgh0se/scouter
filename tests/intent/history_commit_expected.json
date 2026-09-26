@@ -1,0 +1,26 @@
+{
+  "subject": "history.commit expect_module check (row 434): scouter.core.history._history_advanced_as_expected and the Lua plugin's history_advanced_as_expected",
+  "source_run": "gauntlet night1-20260926 (approved recorded run), per-case JSON under ~/Pictures/ScouterScratch/gauntlet/night1-20260926/cases/; triage cluster P-stale-history-reported-ok. history_end values, values and targets are recorded; the [op, value] \"newest\" pairs are reconstructed from the flat params (the case JSON stores no history items), and history_end alone decides the four refusals",
+  "examples": [
+    {"case": "cov-phrase-faded_blacks-olympus-touch", "expect_module": "exposure",
+     "before": {"history_end": 112, "newest": ["exposure", "black=-0.000244"]},
+     "after": {"history_end": 92, "newest": ["exposure", "black=0.0098"]},
+     "right": false, "why": "sidecar went back to the state of cov-phrase-deeper_blacks-olympus-lot (end 92, black 0.0098); reported ok, target was -0.0027"},
+    {"case": "cov-phrase-faded_blacks-olympus-lot", "expect_module": "exposure",
+     "before": {"history_end": 119, "newest": ["exposure", "black=-0.000244"]},
+     "after": {"history_end": 117, "newest": ["exposure", "black=-0.000244"]},
+     "right": false, "why": "history_end regressed 119 -> 117; value unchanged, target -0.0102"},
+    {"case": "cov-phrase-more_contrast-sony_a7-lot", "expect_module": "sigmoid",
+     "before": {"history_end": 74, "newest": ["sigmoid", "contrast=1.5"]},
+     "after": {"history_end": 67, "newest": ["sigmoid", "contrast=1.5"]},
+     "right": false, "why": "history_end regressed 74 -> 67; applied 1.5, target 1.7"},
+    {"case": "cov-phrase-warmer-olympus-bare", "expect_module": "temperature",
+     "before": {"history_end": 116, "newest": ["temperature", "K=4925"]},
+     "after": {"history_end": 61, "newest": ["sigmoid", "contrast=1.6"]},
+     "right": false, "why": "sidecar went back to the state of cov-phrase-more_contrast-olympus-bare (end 61, sigmoid.contrast 1.6)"},
+    {"case": "cov-phrase-more_contrast-olympus-lot", "expect_module": "sigmoid",
+     "before": {"history_end": 74, "newest": ["exposure", "exposure=0.7"]},
+     "after": {"history_end": 75, "newest": ["sigmoid", "contrast=1.7"]},
+     "right": true, "why": "scored pass: one new sigmoid item, contrast 1.5 -> 1.7 as asked"}
+  ]
+}

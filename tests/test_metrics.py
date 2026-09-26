@@ -271,12 +271,15 @@ class WriteVerbSingleEventTest(unittest.TestCase):
 
         text = self.sidecar.read_text()
 
-        def fake_commit(_params: dict) -> dict:
+        def fake_commit(params: dict) -> dict:
             time.sleep(0.01)  # guarantee the mtime tick
             # a real rewrite, like darktable's own -- carrying the value
             # that was set (row 433: an unchanged value is an unverified write)
             self.sidecar.write_text(
-                with_new_history_hash(with_param_value(text, "exposure", "exposure", 1.2))
+                with_new_history_hash(
+                    with_param_value(text, "exposure", "exposure", 1.2),
+                    params.get("expect_module"),
+                )
             )
             return {
                 "strategy_used": "sidecar_action",

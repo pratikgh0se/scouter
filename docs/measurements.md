@@ -487,6 +487,15 @@ records a forced-bounce loop beside it.
 
 ## Commit strategies on the host (row 429, 2026-09-26)
 
+**Superseded on darktable 5.4.x by row 461: `auto` no longer tries
+`no_bounce` there.** Gauntlet night1-20260926 recorded 15 no_bounce rewrites
+from an older library.db state (history_end went back: 112 -> 92, 139 ->
+112, 145 -> 35, 154 -> 41, 313 -> 231). The row 430 "history changed" check
+accepted them as commits. So `auto` = `view_bounce_action` only on 5.4.x. Every path
+refuses a history_end that went back (`stale_rewrite`), and a stale
+`no_bounce` rewrite restores the pre-commit sidecar. `no_bounce` is not
+safe to use on 5.4.1 and is kept only as an explicit strategy.
+
 **Superseded by row 430: `no_bounce` does not commit on 5.4.1.** The table
 below took "the XMP file changed" (mtime/size) as proof of a commit. On this
 host `no_bounce`'s DB flush did not land the darkroom's in-memory edit; the
@@ -516,6 +525,9 @@ acceptance run (row 429, part B) re-measures both.
 **This expectation did not hold** -- see row 430.
 
 ## Commit strategies on the host, corrected (row 430, 2026-09-26)
+
+**Superseded on 5.4.x by row 461** (see the note under row 429): the
+`auto` fallback order described here no longer applies there.
 
 The row 429 acceptance run (`20260926t073011z`) surfaced the false positive:
 white-balance calibrate was refused as non-monotone on both Sony bodies, the

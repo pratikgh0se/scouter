@@ -83,8 +83,10 @@ class SayTest(_MovesFixture):
         self.assertIn("warmer", cm.exception.detail["suggestions"])
 
     def test_one_pre_commit_for_the_whole_phrase(self) -> None:
+        # `say` moves may span several modules, so its pre-commit expects
+        # none in particular (unlike `adjust`'s single-module bounce).
         moves.say.__wrapped__("brighter", commit=False, job="job-test")
-        self.assertEqual(self.commits, [(1, False)])
+        self.assertEqual(self.commits, [(1, False, None)])
 
     def test_dry_run_resolves_without_darktable(self) -> None:
         r = moves.say.__wrapped__("warmer", dry_run=True, job="job-test")
@@ -176,7 +178,7 @@ class SetMoveBeforeTest(_MovesFixture):
         from scouter.errors import CommitTimeout
         from scouter.types import CommitResult
 
-        def timeout_on_change(job, image, *, strategy="auto", attempts=None, expect_change=True):
+        def timeout_on_change(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
             if expect_change:
                 raise CommitTimeout("sidecar never advanced")
             return CommitResult(committed=True, changed=False, warnings=[])

@@ -48,7 +48,7 @@ class PresetApplyTest(_MovesFixture):
     def test_history_not_yet_advanced_commits_once_then_completes(self) -> None:
         self.history_end = iter([14, 14, 16])
         r = presets.apply.__wrapped__("harbour-warm", job="job-test")
-        self.assertEqual(self.commits, [(None, True)])
+        self.assertEqual(self.commits, [(None, True, None)])
         self.assertEqual(r.history_end_after, 16)
         self.assertIsNone(journal.read_all("job-test")[-1].outcome)
 

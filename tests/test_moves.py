@@ -43,8 +43,8 @@ class _MovesFixture(unittest.TestCase):
         dtbridge.set_bridge(self.bridge)
         self.commits: list[tuple] = []
 
-        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True):
-            self.commits.append((attempts, expect_change))
+        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
+            self.commits.append((attempts, expect_change, expect_module))
             return CommitResult(committed=True, changed=expect_change, warnings=[])
 
         patcher = mock.patch("scouter.core.darkroom._commit", side_effect=fake_commit)
@@ -71,7 +71,17 @@ class AdjustTest(_MovesFixture):
 
     def test_pre_commit_is_one_expect_no_change_bounce(self) -> None:
         moves.adjust.__wrapped__("exposure", "exposure", 0.3, commit=False, job="job-test")
-        self.assertEqual(self.commits[0], (1, False))
+        self.assertEqual(self.commits[0], (1, False, "exposure"))
+
+    def test_pre_commit_passes_the_module_the_writer_expects(self) -> None:
+        # Row 461 follow-up: the applied-verify pre-commit bounce must name
+        # its module too, exactly like every other writer's `_commit` call
+        # (`_try_commit`, `_commit_with_readback`, ...) -- otherwise a stale
+        # rewrite from an unrelated module's history item is accepted as
+        # this move's own pre-commit, the same hole row 434/461 closed for
+        # the real commit.
+        moves.adjust.__wrapped__("colorbalancergb", "contrast", 0.05, commit=False, job="job-test")
+        self.assertEqual(self.commits[0][2], "colorbalancergb")
 
     def test_trust_sidecar_skips_the_pre_commit(self) -> None:
         moves.adjust.__wrapped__("exposure", "exposure", 0.3, commit=False,
@@ -142,7 +152,7 @@ class AdjustTest(_MovesFixture):
         "seq N ... never readable"."""
         from scouter.errors import CommitTimeout
 
-        def timeout_on_change(job, image, *, strategy="auto", attempts=None, expect_change=True):
+        def timeout_on_change(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
             if expect_change:
                 raise CommitTimeout("sidecar never advanced")
             return CommitResult(committed=True, changed=False, warnings=[])
@@ -165,7 +175,7 @@ class AdjustTest(_MovesFixture):
         from scouter.errors import BridgeTimeout
 
         def bridge_dies_on_change(job, image, *, strategy="auto", attempts=None,
-                                  expect_change=True):
+                                  expect_change=True, expect_module=None):
             if expect_change:
                 raise BridgeTimeout("bridge went away mid-commit")
             return CommitResult(committed=True, changed=False, warnings=[])

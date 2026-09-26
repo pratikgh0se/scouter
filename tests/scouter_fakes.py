@@ -316,15 +316,35 @@ class FakeCli:
 _history_commits = {"n": 0}
 
 
-def with_new_history_hash(text: str) -> str:
+def with_new_history_hash(text: str, module: str | None = None) -> str:
     """`text` as darktable writes it after a REAL commit: same decoded values,
     a new `history_current_hash` (same length, so the size is unchanged).
 
     Row 430: `history.commit` proves a commit by the sidecar's HISTORY
     changing, not by its mtime moving, so a commit double that only rewrites
     identical text models the metadata-only rewrite bug, not a commit.
+
+    `module` (row 434): the commit carries a write to that module, so the
+    history also gains a newest item for it (history_end + 1) -- what a
+    `history.commit(expect_module=...)` accepts as this write's commit.
     """
     import re
+
+    if module:
+        end_m = re.search(r'darktable:history_end="(\d+)"', text)
+        assert end_m, "fixture sidecar has no history_end"
+        end = int(end_m.group(1))
+        top = re.search(
+            r'<rdf:li\s(?:(?!/>).)*?darktable:num="%d"(?:(?!/>).)*?/>' % (end - 1), text, re.S
+        )
+        assert top, f"fixture sidecar has no history item {end - 1}"
+        item = re.sub(r'darktable:num="\d+"', f'darktable:num="{end}"', top.group(0))
+        item = re.sub(r'darktable:operation="[^"]*"', f'darktable:operation="{module}"', item)
+        item = re.sub(r'darktable:params="[^"]*"', f'darktable:params="commit{end}"', item)
+        close = text.index("</darktable:history>")
+        seq_close = text.rindex("</rdf:Seq>", 0, close)
+        text = text[:seq_close] + " " + item + "\n    " + text[seq_close:]
+        text = text.replace(end_m.group(0), f'darktable:history_end="{end + 1}"', 1)
 
     _history_commits["n"] += 1
     fresh = f"{_history_commits['n']:032x}"

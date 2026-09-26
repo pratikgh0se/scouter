@@ -25,14 +25,19 @@ FIXTURE = Path(__file__).resolve().parent / "fixtures" / "P6281348.ORF.xmp"
 FIXTURE_EXPOSURE_VALUE = 1.5500002
 
 
-def _write_sidecar(sidecar: Path, original_text: str, sent: dict | None = None) -> None:
+def _write_sidecar(
+    sidecar: Path,
+    original_text: str,
+    sent: dict | None = None,
+    module: str | None = None,
+) -> None:
     time.sleep(0.01)  # guarantee the mtime tick
     text = original_text
     if sent and sent.get("value") is not None:
         # Row 433: a real commit carries the value darktable was sent; a
         # rewrite that kept the old value is a write that did not land.
         text = with_param_value(text, "exposure", "exposure", sent["value"])
-    sidecar.write_text(with_new_history_hash(text))
+    sidecar.write_text(with_new_history_hash(text, module))
     future = time.time() + 2
     os.utime(sidecar, (future, future))
 
@@ -72,7 +77,7 @@ def _commit_handler(sidecar: Path, original_text: str, *, outcome: str = "auto",
         ok = True
         if outcome == "auto":
             if expect_change:
-                _write_sidecar(sidecar, original_text, sent)
+                _write_sidecar(sidecar, original_text, sent, params.get("expect_module"))
                 written = True
         elif outcome == "never_write":
             ok = not expect_change
@@ -81,7 +86,7 @@ def _commit_handler(sidecar: Path, original_text: str, *, outcome: str = "auto",
                 sidecar.unlink(missing_ok=True)
                 ok = not expect_change
             else:
-                _write_sidecar(sidecar, original_text, sent)
+                _write_sidecar(sidecar, original_text, sent, params.get("expect_module"))
                 written = True
         else:
             raise AssertionError(f"unknown _commit_handler outcome: {outcome!r}")
