@@ -244,3 +244,116 @@ def test_extra_and_envelope_ops():
                                         "tol": 0.5})]
     case = _edit_case(checks, None, kind="workflow", steps=[Step("t")])
     assert evaluate(case, obs, POLICY).outcome == "verified"
+
+
+# ---- fix round 1 regressions (t5-r1-findings.md, probes from probe5.py)
+
+
+def test_c1_sidecar_expectation_is_enforced_without_checks():
+    case = _edit_case([], {"changed": True})
+    assert evaluate(case, _obs(_err("internal"), _snap("a"), _snap("a")),
+                    POLICY).outcome == "failed"
+    moved = evaluate(case, _obs(_ok(), _snap("a"), _snap("b")), POLICY)
+    assert (moved.score, moved.outcome) == ("pass", "verified")
+    assert evaluate(case, _obs(_ok(), _snap("a"), _snap("a")), POLICY).score == "fail"
+    assert evaluate(case, _obs(_err("bridge_timeout"), _snap("a"), _snap("a")),
+                    POLICY).outcome == "blocked"
+    assert evaluate(case, Observation(before=_snap("a"), after=_snap("a")),
+                    POLICY).outcome == "failed"
+    agent = _edit_case([], {"changed": True}, mode="agent", steps=[])
+    v = evaluate(agent, Observation(agent_text="Brightened it by a stop.", before=_snap("a"),
+                                    after=_snap("a")), POLICY)
+    assert v.score == "fail"
+
+
+def test_c1_edit_without_checks_or_sidecar_needs_review():
+    v = evaluate(_edit_case([], None), _obs(_ok(), _snap("a"), _snap("b")), POLICY)
+    assert (v.score, v.outcome) == ("partial", "needs_review")
+    assert "unverifiable" in v.notes[0]
+
+
+def test_c2_agent_refuse_claim_only_is_silent():
+    case = _edit_case(kind="refuse", mode="agent", steps=[])
+    v = evaluate(case, Observation(agent_text="Done, I've removed the person.",
+                                   before=_snap("a"), after=_snap("a")), POLICY)
+    assert v.outcome == "silent_failure"
+
+
+def test_i1_substitute_that_fails_its_checks_fails():
+    chk = Check("M1", kind="equals", target={"key": "k", "value": 5.0})
+    case = _edit_case([chk], kind="refuse", mode="agent", steps=[], meta={"substitute_ok": True})
+    v = evaluate(case, Observation(agent_text="I can't do that.", before=_snap("a", k=0.0),
+                                   after=_snap("b", k=1.0)), POLICY)
+    assert v.score == "fail"
+    good = evaluate(case, Observation(agent_text="I can't do that.", before=_snap("a", k=0.0),
+                                      after=_snap("b", k=5.0)), POLICY)
+    assert good.outcome == "correct_refusal"
+
+
+def test_i2_tool_refuse_ok_without_change_is_silent():
+    case = _edit_case(kind="refuse", steps=[Step("darkroom_say", write=True)])
+    v = evaluate(case, _obs(_ok(), _snap("a"), _snap("a")), POLICY)
+    assert v.outcome == "silent_failure"
+    wrote = evaluate(case, _obs(_ok(), _snap("a"), _snap("b")), POLICY)
+    assert wrote.outcome == "unexpected_edit"
+
+
+def test_i3_frac_floor_is_scaled():
+    chk = Check("M5", stat="C", region="frame", sign=1, kind="frac",
+                target={"value": 0.08, "tol": 0.08})
+    obs = _obs(_ok(), _snap("a"), _snap("b"), stats_before={"frame": {"C": 20.0}},
+               stats_after={"frame": {"C": 21.6}})
+    assert evaluate(_edit_case([chk], {"changed": True}), obs, POLICY).outcome == "verified"
+
+
+def test_i4_non_numeric_params_compare_exactly():
+    chk = Check("M1", kind="restored", target={"keys": ["m.mode"]})
+    obs = Observation(calls=[CallRecord("darkroom_undo_last", {}, _ok(), write=True)],
+                      before=_snap("a", **{"m.mode": "A"}), after=_snap("b", **{"m.mode": "B"}))
+    case = _edit_case([chk], None, kind="workflow", steps=[Step("darkroom_undo_last", write=True)])
+    assert evaluate(case, obs, POLICY).outcome == "silent_failure"
+    same = Observation(calls=obs.calls, before=_snap("a", **{"m.mode": "A"}),
+                       after=_snap("b", **{"m.mode": "A"}))
+    assert evaluate(case, same, POLICY).outcome == "verified"
+
+
+def test_i5_missing_measurements_fail():
+    undo = [Step("darkroom_undo_last", write=True)]
+    base = dict(calls=[CallRecord("darkroom_undo_last", {}, _ok(), write=True)],
+                before=_snap("a"), after=_snap("b"))
+    for chk in (Check("M9"), Check("file", target={"name": "out.jpg"}),
+                Check("text", target={"regex": "error", "present": False})):
+        v = evaluate(_edit_case([chk], None, kind="workflow", steps=undo),
+                     Observation(**base), POLICY)
+        assert v.score == "fail" and v.checks[0].note == "unmeasured", chk
+
+
+def test_i6_accept_refusal_needs_a_named_fix():
+    chk = Check("M1", kind="equals", target={"key": "k", "value": 1.0})
+    case = _edit_case([chk], {"changed": True, "key": "k"}, meta={"accept_refusal": True})
+    env = {"ok": False, "error": {"code": "usage", "fix": "", "message": ""}}
+    assert evaluate(case, _obs(env, _snap("a"), _snap("a")), POLICY).score == "fail"
+
+
+def test_i7_typed_error_after_half_applied_write_fails():
+    case = Case(id="c", layer="x", tier="P0", mode="tool",
+                steps=[Step("s", write=True), Step("s", write=True)],
+                expect=Expect("typed_error", codes=["value_unknown"]))
+    obs = Observation(calls=[CallRecord("s", {}, _ok(), write=True),
+                             CallRecord("s", {}, _err("value_unknown"), write=True)],
+                      before=_snap("a", k=0.0), after=_snap("b", k=1.0))
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "failed" and "half-applied" in v.notes[0]
+
+
+def test_i8_a_uses_m1_key_and_b_uses_reported_key():
+    chk = Check("M1", kind="equals", target={"key": "k", "value": 1.0})
+    v = evaluate(_edit_case([chk], None), _obs(_ok(), _snap("a", k=0.0), _snap("a", k=0.0)),
+                 POLICY)
+    assert v.outcome == "silent_failure" and v.silent_failure.startswith("a:")
+    env = _ok({"module": "exposure", "param": "exposure"})
+    wrong = evaluate(_edit_case([], {"changed": True, "key": "sigmoid.contrast"}),
+                     _obs(env, _snap("a", **{"exposure.exposure": 0.7, "sigmoid.contrast": 1.5}),
+                          _snap("b", **{"exposure.exposure": 0.7, "sigmoid.contrast": 1.8})),
+                     POLICY)
+    assert wrong.silent_failure.startswith("b: reported exposure.exposure")

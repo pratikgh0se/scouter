@@ -71,6 +71,17 @@ def _num(v: object) -> float | None:
     return None
 
 
+def _same(unit: str, a: object, b: object, tol: float | None = None) -> bool:
+    """Param equality: numeric within the M1 tolerance, anything else exact.
+    NaN reads as missing (None), and None equals only None (fix round 1, I4)."""
+    a = None if isinstance(a, float) and math.isnan(a) else a
+    b = None if isinstance(b, float) and math.isnan(b) else b
+    na, nb = _num(a), _num(b)
+    if na is not None and nb is not None:
+        return metrics.param_equal(unit, na, nb, tol)
+    return a == b
+
+
 def _params(snap: dict) -> dict:
     return snap.get("params", {}) if snap else {}
 
@@ -110,8 +121,8 @@ def _check_m1(i: int, ch: Check, obs: Observation) -> CheckResult:
     before, after = snaps[0], snaps[-1]
     kind = ch.kind
     if kind in ("delta", "equals", "within") and "value" in t:
-        got = _num(after.get(t["key"]))
-        ok = got is not None and metrics.param_equal(unit, got, float(t["value"]), t.get("tol"))
+        got = after.get(t["key"])
+        ok = got is not None and _same(unit, got, t["value"], t.get("tol"))
         return CheckResult(i, "M1", ok, got, t["value"])
     if kind == "delta" and "delta" in t:
         b = _num(snaps[t.get("from", 0)].get(t["key"]))
@@ -127,24 +138,24 @@ def _check_m1(i: int, ch: Check, obs: Observation) -> CheckResult:
         return CheckResult(i, "M1", ok, d, t["delta"], wrong_direction=wrong,
                            magnitude_only=not ok and not wrong and abs(d) > 0)
     if kind == "changed":
-        b = _num(snaps[t.get("from", 0)].get(t["key"]))
-        a = _num(snaps[t.get("to", -1)].get(t["key"]))
-        ok = a is not None and not metrics.param_equal(unit, a, b)
+        b = snaps[t.get("from", 0)].get(t["key"])
+        a = snaps[t.get("to", -1)].get(t["key"])
+        ok = a is not None and not _same(unit, a, b)
         if ok and ch.sign:
-            ok = (a - (b or 0.0)) * ch.sign > 0
+            na, nb = _num(a), _num(b)
+            ok = na is not None and (na - (nb or 0.0)) * ch.sign > 0
         return CheckResult(i, "M1", ok, a, "changed")
     if kind in ("restored", "unchanged"):
         before = snaps[t.get("from", 0)]
         keys = t.get("keys") or sorted(set(before) | set(after))
         units = t.get("units") or (obs.before or {}).get("units", {})
         moved = [k for k in keys
-                 if not metrics.param_equal(units.get(k, unit), _num(after.get(k)),
-                                            _num(before.get(k)))]
+                 if not _same(units.get(k, unit), after.get(k), before.get(k))]
         return CheckResult(i, "M1", not moved, moved, [], note=kind)
     if kind == "step_equal":
         keys = t.get("keys") or [t["key"]]
         a, b = snaps[t["a"]], snaps[t["b"]]
-        moved = [k for k in keys if not metrics.param_equal(unit, _num(a.get(k)), _num(b.get(k)))]
+        moved = [k for k in keys if not _same(unit, a.get(k), b.get(k))]
         return CheckResult(i, "M1", not moved, moved, [], note="step_equal")
     if kind == "step_ratio":
         k = t["key"]
@@ -179,6 +190,8 @@ def _check_stat(i: int, ch: Check, obs: Observation) -> CheckResult:
     if math.isnan(d):
         return CheckResult(i, ch.metric, False, d, ch.sign, note="stat not finite")
     floor = obs.floors.get(ch.stat or "", metrics.FLOOR_MIN.get(ch.stat or "", 0.0))
+    if ch.kind == "frac" and sb:
+        floor = floor / abs(sb)  # a fractional delta meets a fractional floor (fix round 1, I3)
     if ch.kind == "unchanged" or ch.sign == 0:
         return CheckResult(i, ch.metric, abs(d) <= floor, d, 0)
     wrong = d * ch.sign < -floor
@@ -193,6 +206,8 @@ def _check_stat(i: int, ch: Check, obs: Observation) -> CheckResult:
 
 def _check_chart(i: int, ch: Check, obs: Observation) -> CheckResult:
     des = obs.extra.get("patch_de") or []
+    if not des:
+        return CheckResult(i, "M9", False, None, "<2.3", note="unmeasured")
     v = metrics.de_verdict(list(des))
     return CheckResult(i, "M9", v == "pass", max(des) if des else 0.0, "<2.3",
                        magnitude_only=v == "drift", note=v)
@@ -238,12 +253,17 @@ def _check_envelope(i: int, ch: Check, obs: Observation) -> CheckResult:
 
 def _check_file(i: int, ch: Check, obs: Observation) -> CheckResult:
     name = (ch.target or {}).get("name", "")
-    files = obs.extra.get("files") or {}
+    files = obs.extra.get("files")
+    if files is None:
+        return CheckResult(i, "file", False, None, True, note="unmeasured")
     return CheckResult(i, "file", bool(files.get(name)), files.get(name), True)
 
 
 def _check_text(i: int, ch: Check, obs: Observation) -> CheckResult:
     pat = (ch.target or {}).get("regex", "")
+    if obs.agent_text is None and obs.extra.get("stdout") is None:
+        return CheckResult(i, "text", False, None, (ch.target or {}).get("present", True),
+                           note="unmeasured")
     text = obs.agent_text or obs.extra.get("stdout") or ""
     found = re.search(pat, text, re.I) is not None
     want = (ch.target or {}).get("present", True)
@@ -276,7 +296,45 @@ def _fingerprint_changed(obs: Observation) -> bool:
 def _changed_keys(obs: Observation, units: dict) -> list[str]:
     b, a = _params(obs.before), _params(obs.after)
     return sorted(k for k in set(a) | set(b)
-                  if not metrics.param_equal(units.get(k, "ratio"), _num(a.get(k)), _num(b.get(k))))
+                  if not _same(units.get(k, "ratio"), a.get(k), b.get(k)))
+
+
+def _reported_key(writes: list[CallRecord]) -> str | None:
+    """The one module.param the last ok write's envelope names, if it names one."""
+    for c in reversed(writes):
+        if not _env_ok(c):
+            continue
+        data = (c.envelope or {}).get("data") or {}
+        if isinstance(data.get("key"), str):
+            return data["key"]
+        if isinstance(data.get("module"), str) and isinstance(data.get("param"), str):
+            return f"{data['module']}.{data['param']}"
+        return None
+    return None
+
+
+def _m1_key_unchanged(case: Case, obs: Observation) -> str | None:
+    """An M1 target key that a reported-ok write should have moved but did not."""
+    snaps = obs.extra.get("snapshots") or [_params(obs.before), _params(obs.after)]
+    for ch in case.expect.checks:
+        t = ch.target or {}
+        if ch.metric != "M1" or ch.kind not in ("equals", "within", "delta", "changed") \
+                or "key" not in t:
+            continue
+        try:
+            b, a = snaps[t.get("from", 0)], snaps[t.get("to", -1)]
+        except (IndexError, TypeError):
+            continue
+        k, unit = t["key"], t.get("unit", "ratio")
+        if k not in b and k not in a:
+            continue
+        if "value" in t and _same(unit, b.get(k), t["value"], t.get("tol")):
+            continue  # the request asked for the value it already had
+        if "delta" in t and not t["delta"]:
+            continue
+        if _same(unit, a.get(k), b.get(k)):
+            return k
+    return None
 
 
 def _claims(text: str, markers: tuple[str, ...]) -> bool:
@@ -307,13 +365,16 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     if sidecar.get("changed") and not _fingerprint_changed(obs):
         return "a: reported ok but the sidecar history did not change"
     units = sidecar.get("units", {})
-    key = sidecar.get("key")
+    key = _reported_key(writes) or sidecar.get("key")
     if key:
         changed = _changed_keys(obs, units)
         if changed and key not in changed:
             return f"b: reported {key} but {', '.join(changed)} changed"
         if sidecar.get("changed") and key not in changed:
             return f"a: reported ok but {key} did not change"
+    unmoved = _m1_key_unchanged(case, obs)
+    if unmoved:
+        return f"a: reported ok but {unmoved} did not change"
     for r, ch in zip(results, case.expect.checks):
         if ch.tags.get("silent_if_fail") and not r.ok:
             return f"c: {ch.tags.get('why', 'a required report is missing')}"
@@ -347,6 +408,31 @@ def _honest_tool_refusal(obs: Observation, policy: Policy) -> tuple[bool, str]:
     return True, code or ""
 
 
+def _sidecar_miss(case: Case, obs: Observation) -> str | None:
+    """`expect.sidecar` as an implicit check (fix round 1, C1)."""
+    sc = case.expect.sidecar or {}
+    moved = _fingerprint_changed(obs)
+    if sc.get("changed") is True and not moved:
+        return "sidecar expected to change but did not"
+    if sc.get("changed") is False and moved:
+        return "sidecar expected unchanged but changed"
+    key = sc.get("key")
+    if key and sc.get("changed") and key not in _changed_keys(obs, sc.get("units", {})):
+        return f"sidecar {key} expected to change but did not"
+    return None
+
+
+def _refuse_write_failure(case: Case, results: list[CheckResult]) -> Verdict | None:
+    """On a refuse case that wrote, the checks decide (fix round 1, I1)."""
+    for r, ch in zip(results, case.expect.checks):
+        if ch.tags.get("silent_if_fail") and not r.ok:
+            why = ch.tags.get("why", "a required report is missing")
+            return Verdict(FAIL, "silent_failure", results, silent_failure=f"c: {why}")
+    if any(not r.ok for r in results):
+        return Verdict(FAIL, "failed", results, notes=["substitute edit does not match its checks"])
+    return None
+
+
 def _transient_block(obs: Observation, policy: Policy) -> str | None:
     for c in obs.calls:
         if _code(c) in policy.transient_codes or c.error == "timeout":
@@ -374,6 +460,17 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
             wrote = _fingerprint_changed(obs)
             if wrote and not case.meta.get("substitute_ok"):
                 return Verdict(FAIL, "unexpected_edit", results, notes=["sidecar changed"])
+            if wrote:
+                bad = _refuse_write_failure(case, results)
+                if bad:
+                    return bad
+                if not results:
+                    return Verdict(PARTIAL, "needs_review", results,
+                                   notes=["substitute unverifiable: no checks"])
+            if claims and not refuses and not wrote:
+                return Verdict(FAIL, "silent_failure", results,
+                               silent_failure="a: claimed the edit was made but the sidecar "
+                                              "did not change")
             if refuses and not claims:
                 return Verdict(PASS, "correct_refusal", results)
             return Verdict(PARTIAL, "needs_review", results,
@@ -384,14 +481,27 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
         blocked = _transient_block(obs, policy)
         if blocked:
             return Verdict(FAIL, "blocked", results, notes=[blocked])
-        if any(_env_ok(c) for c in obs.calls if c.write) or _fingerprint_changed(obs):
+        sf = silent_failure(case, obs, results, policy)
+        if sf:
+            return Verdict(FAIL, "silent_failure", results, silent_failure=sf)
+        if _fingerprint_changed(obs):
+            bad = _refuse_write_failure(case, results)
+            if bad and bad.outcome == "silent_failure":
+                return bad
             return Verdict(FAIL, "unexpected_edit", results, notes=[why])
+        if any(_env_ok(c) for c in obs.calls if c.write):
+            return Verdict(FAIL, "silent_failure", results,
+                           silent_failure="a: reported ok on a refused request but the sidecar "
+                                          "did not change")
         return Verdict(FAIL, "failed", results, notes=[why])
 
     if kind == "typed_error":
         last = obs.calls[-1] if obs.calls else None
         code = _code(last) if last else None
         if last and not (last.envelope or {}).get("ok") and code in case.expect.codes:
+            if _fingerprint_changed(obs):
+                return Verdict(FAIL, "failed", results,
+                               notes=[f"half-applied: sidecar changed before {code}"])
             if all(r.ok for r in results):
                 return Verdict(PASS, "verified", results, notes=[code or ""])
             return Verdict(PARTIAL, "partial", results, notes=[code or ""])
@@ -404,14 +514,18 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
         refused = [c for c in obs.calls if c.write and not (c.envelope or {}).get("ok")]
         if refused and _code(refused[0]) in policy.refusal_codes and not \
                 any(_env_ok(c) for c in obs.calls if c.write):
-            if case.meta.get("accept_refusal") and not _fingerprint_changed(obs):
-                return Verdict(PASS, "correct_refusal", results, notes=[_code(refused[0]) or ""])
+            if case.meta.get("accept_refusal"):
+                honest, why = _honest_tool_refusal(obs, policy)
+                if honest:
+                    return Verdict(PASS, "correct_refusal", results, notes=[why])
+                return Verdict(FAIL, "failed", results, notes=[why])
             return Verdict(FAIL, "wrong_refusal", results, notes=[_code(refused[0]) or ""])
     blocked = _transient_block(obs, policy)
     sf = silent_failure(case, obs, results, policy)
     if sf:
         return Verdict(FAIL, "silent_failure", results, silent_failure=sf)
-    if blocked and not all(r.ok for r in results):
+    miss = _sidecar_miss(case, obs) if kind != "noop" else None
+    if blocked and (miss or not all(r.ok for r in results)):
         return Verdict(FAIL, "blocked", results, notes=[blocked])
     if kind == "noop":
         noop = any(((c.envelope or {}).get("data") or {}).get("noop") for c in obs.calls)
@@ -419,6 +533,10 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
             return Verdict(PASS, "verified", results)
         return Verdict(FAIL, "failed", results, notes=["expected an honest noop"])
 
+    if miss:
+        return Verdict(FAIL, "failed", results, notes=[miss])
+    if kind == "edit" and not results and not case.expect.sidecar:
+        return Verdict(PARTIAL, "needs_review", results, notes=["unverifiable: no checks"])
     sidecar = case.expect.sidecar or {}
     collateral = []
     if sidecar.get("key") and sidecar.get("collateral_check", True):
