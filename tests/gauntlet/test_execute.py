@@ -67,6 +67,18 @@ def test_flatten_drops_unnamed_slots_and_adds_enabled():
     assert flat["units"]["sigmoid.__enabled"] == "bool"
 
 
+def test_flatten_carries_the_param_meta_the_evaluator_reads():
+    """Night-1 evaluator fixes: module defaults (bug 3), WB derived keys and the
+    coeff_g2 null equivalence (bug 4) ride on every snapshot, like units."""
+    flat = observe.flatten({"fingerprint": "f", "modules": {}})
+    assert flat["defaults"]["colorbalancergb.highlights_chroma"] == 0.0
+    assert flat["defaults"]["colorbalancergb.shadows_hue"] == 0.0
+    assert "exposure.exposure" not in flat["defaults"]  # no known default: never assumed
+    assert "temperature.coeff_r" in flat["derived"]["temperature.tint"]
+    assert "temperature.coeff_g2" in flat["derived"]["temperature.temperature"]
+    assert flat["null_equiv"] == {"temperature.coeff_g2": 0.0}
+
+
 def test_ensure_frame_blocked_is_returned_as_observation(corpus, tmp_path):
     bad = FakeMcp({"darkroom_open": {"ok": False, "outcome": "error",
                                      "error": {"code": "not_found"}, "data": {}}})

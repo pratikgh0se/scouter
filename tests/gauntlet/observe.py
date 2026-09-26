@@ -22,6 +22,38 @@ def units() -> dict[str, str]:
     return {k: ("ratio" if v in ("—",) else v) for k, v in out.items()}
 
 
+#: The stored white-balance keys temperature.temperature (Kelvin, via the body's
+#: WB table) and temperature.tint are decoded from (bug 4 of the night-1
+#: evaluator fixes): a move reported on either owns all of them.
+WB_STORED = ("temperature.coeff_r", "temperature.coeff_g", "temperature.coeff_b",
+             "temperature.coeff_g2", "temperature.preset")
+
+
+def defaults() -> dict[str, float]:
+    """{key: darktable module default} from vocab (`default`, else `neutral`);
+    rows declaring neither are left out (the evaluator then never treats them
+    as at-default)."""
+    from scouter.core import vocab
+
+    out = {}
+    for s in vocab.PARAMS:
+        v = s.default if s.default is not None else s.neutral
+        if v is not None:
+            out[f"{s.module}.{s.param}"] = v
+    return out
+
+
+def param_meta() -> dict:
+    """Product param knowledge the evaluator reads off each snapshot
+    (gauntlet/evaluate.py docstring): defaults, derived keys, null equivalents.
+    `coeff_g2` is inf/unused on these bodies: it decodes 0.0 on a fresh
+    history and None (inf) after a WB write, which is not a change."""
+    return {"defaults": defaults(),
+            "derived": {"temperature.temperature": [*WB_STORED, "temperature.tint"],
+                        "temperature.tint": [*WB_STORED, "temperature.temperature"]},
+            "null_equiv": {"temperature.coeff_g2": 0.0}}
+
+
 def flatten(snap: dict, kelvin=None) -> dict:
     """{fingerprint, history_end, params: {"op.param": value}, units}. Unnamed
     float slots (f0..fN) are dropped; `op.__enabled` is 1/0; the temperature
@@ -42,7 +74,7 @@ def flatten(snap: dict, kelvin=None) -> dict:
     u = units()
     u.update({k: "bool" for k in params if k.endswith(".__enabled")})
     return {"fingerprint": snap.get("fingerprint", ""), "history_end": snap.get("history_end", 0),
-            "params": params, "units": u}
+            "params": params, "units": u, **param_meta()}
 
 
 def snapshot(raw_path: Path, kelvin=None) -> dict:

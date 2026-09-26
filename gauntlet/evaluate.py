@@ -2,7 +2,22 @@
 
 Pure: `evaluate(case, observation, policy)` -> `Verdict`. The product adapter
 supplies the observation (snapshots, stats, envelopes, agent text) and the
-policy (refusal codes, transient codes, text markers)."""
+policy (refusal codes, transient codes, text markers).
+
+Product param knowledge rides on the before/after snapshot dicts next to
+`units` (all optional, all supplied by the adapter; the engine never imports
+the product):
+  `defaults`   {key: module default}; a key the adapter does not know has no
+               default and never compares equal to an absent module.
+  `derived`    {reported key: [stored keys it is decoded from]}; a move reported
+               on the key owns those keys (e.g. a Kelvin read from WB coeffs).
+  `null_equiv` {key: value}; an undecodable reading (None) of the key and this
+               value mean the same thing (e.g. an unused coefficient).
+
+Two equalities, never mixed (night-1 fix, bug 2):
+  "did it land?"   `_same`: numeric within the M1 tolerance (spec 5.1).
+  "did it change?" `_differs`: a strict float32-safe epsilon, so a one-notch
+                   move smaller than the landed tolerance still counts."""
 
 from __future__ import annotations
 
@@ -95,6 +110,80 @@ def _params(snap: dict) -> dict:
     return snap.get("params", {}) if snap else {}
 
 
+#: "Did it change?" epsilon: float32 carries ~7 significant digits, so a
+#: stored value round-trips within ~6e-8 relative; 1e-6 abs + 1e-6 rel is well
+#: above that noise and far below any real step (spec 5.1 steps >= 0.005).
+CHANGE_ABS, CHANGE_REL = 1e-6, 1e-6
+
+
+def _meta(obs: Observation, name: str) -> dict:
+    """Adapter-supplied param knowledge on the snapshots (see module docstring)."""
+    for snap in (obs.before, obs.after):
+        v = (snap or {}).get(name)
+        if isinstance(v, dict):
+            return v
+    return {}
+
+
+def _units(obs: Observation, extra: dict | None = None) -> dict:
+    return {**((obs.before or {}).get("units") or {}), **(extra or {})}
+
+
+def _differs(unit: str, a: object, b: object, null_equiv: object = None) -> bool:
+    """Strict change test (night-1 fix, bug 2): numeric beyond a float32-safe
+    epsilon (hue wrap-aware), anything else by inequality. NaN reads as None;
+    `null_equiv` is a value that an undecodable (None) reading also means."""
+    a = None if isinstance(a, float) and math.isnan(a) else a
+    b = None if isinstance(b, float) and math.isnan(b) else b
+    if null_equiv is not None:
+        a = null_equiv if a is None else a
+        b = null_equiv if b is None else b
+    na, nb = _num(a), _num(b)
+    if na is not None and nb is not None:
+        d = abs(na - nb)
+        if unit in ("°", "deg"):
+            d = abs((na - nb + 180.0) % 360.0 - 180.0)
+        return d > CHANGE_ABS + CHANGE_REL * max(abs(na), abs(nb))
+    return a != b
+
+
+def _diff_keys(b: dict, a: dict, units: dict, null_equiv: dict) -> list[str]:
+    return sorted(k for k in set(a) | set(b)
+                  if _differs(units.get(k, "ratio"), a.get(k), b.get(k), null_equiv.get(k)))
+
+
+def _module(key: str) -> str:
+    return key.split(".", 1)[0]
+
+
+def _module_absent(params: dict, module: str) -> bool:
+    return not any(v is not None for k, v in params.items() if _module(k) == module)
+
+
+def _module_at_default(params: dict, module: str, defaults: dict) -> bool:
+    """The module is in the history enabled with every key at its known default:
+    equivalent to the module being absent. An unknown default is a mismatch."""
+    keys = [k for k in params if _module(k) == module]
+    if not keys:
+        return False
+    for k in keys:
+        v = params[k]
+        if k.endswith(".__enabled"):
+            if v != 1:
+                return False
+        elif k not in defaults or _differs("ratio", v, defaults[k]):
+            return False
+    return True
+
+
+def _absent_equiv(before: dict, after: dict, key: str, defaults: dict) -> bool:
+    """None-before vs a value after for a key whose module was absent before and
+    is at its defaults after (night-1 fix, bug 3)."""
+    m = _module(key)
+    return before.get(key) is None and after.get(key) is not None \
+        and _module_absent(before, m) and _module_at_default(after, m, defaults)
+
+
 def _env_ok(c: CallRecord) -> bool:
     env = c.envelope or {}
     return bool(env.get("ok")) and env.get("outcome", "ok") not in NOOP_OUTCOMES \
@@ -149,7 +238,7 @@ def _check_m1(i: int, ch: Check, obs: Observation) -> CheckResult:
     if kind == "changed":
         b = snaps[t.get("from", 0)].get(t["key"])
         a = snaps[t.get("to", -1)].get(t["key"])
-        ok = a is not None and not _same(unit, a, b)
+        ok = a is not None and _differs(unit, a, b, _meta(obs, "null_equiv").get(t["key"]))
         if ok and ch.sign:
             na, nb = _num(a), _num(b)
             ok = na is not None and (na - (nb or 0.0)) * ch.sign > 0
@@ -157,9 +246,20 @@ def _check_m1(i: int, ch: Check, obs: Observation) -> CheckResult:
     if kind in ("restored", "unchanged"):
         before = snaps[t.get("from", 0)]
         keys = t.get("keys") or sorted(set(before) | set(after))
+        # a derived key is restored only when the stored keys it is decoded
+        # from are (bug 4): an undecodable Kelvin (None == None) proves nothing
+        keys = list(keys) + sorted(_owned(list(keys), obs) - set(keys))
         units = t.get("units") or (obs.before or {}).get("units", {})
-        moved = [k for k in keys
-                 if not _same(units.get(k, unit), after.get(k), before.get(k))]
+        defaults, null_equiv = _meta(obs, "defaults"), _meta(obs, "null_equiv")
+
+        def eq(k: str) -> bool:
+            a, b = after.get(k), before.get(k)
+            if k in null_equiv:
+                a = null_equiv[k] if a is None else a
+                b = null_equiv[k] if b is None else b
+            return _same(units.get(k, unit), a, b) or _absent_equiv(before, after, k, defaults)
+
+        moved = [k for k in keys if not eq(k)]
         return CheckResult(i, "M1", not moved, moved, [], note=kind)
     if kind == "step_equal":
         keys = t.get("keys") or [t["key"]]
@@ -303,13 +403,40 @@ def _fingerprint_changed(obs: Observation) -> bool:
 
 
 def _changed_keys(obs: Observation, units: dict) -> list[str]:
-    b, a = _params(obs.before), _params(obs.after)
-    return sorted(k for k in set(a) | set(b)
-                  if not _same(units.get(k, "ratio"), a.get(k), b.get(k)))
+    """Keys whose value changed before -> after (strict epsilon, bug 2)."""
+    return _diff_keys(_params(obs.before), _params(obs.after), _units(obs, units),
+                      _meta(obs, "null_equiv"))
 
 
-def _reported_keys(writes: list[CallRecord]) -> list[str] | None:
-    """The module.param keys the last ok write's envelope reports moving.
+def _step_snaps(obs: Observation) -> list[dict] | None:
+    """Per-step snapshots aligned with obs.calls (snaps[i + 1] is the state after
+    call i), or None when the adapter recorded none or they do not line up."""
+    snaps = obs.extra.get("snapshots")
+    if isinstance(snaps, list) and len(snaps) == len(obs.calls) + 1:
+        return snaps
+    return None
+
+
+def _step_changed(obs: Observation, snaps: list[dict], i: int, units: dict) -> bool:
+    """Did call i itself change params (snaps[i] -> snaps[i + 1], strict)?"""
+    return bool(_diff_keys(snaps[i] or {}, snaps[i + 1] or {}, _units(obs, units),
+                           _meta(obs, "null_equiv")))
+
+
+def _owned(keys: list[str], obs: Observation) -> set[str]:
+    """Reported keys plus the stored keys each is derived from (bug 4)."""
+    derived = _meta(obs, "derived")
+    out = set(keys)
+    for k in keys:
+        out.update(derived.get(k) or ())
+    return out
+
+
+def _reported_keys(writes: list[CallRecord], every: bool = False) -> list[str] | None:
+    """The module.param keys the last ok write's envelope reports moving, or
+    with `every` the union over every ok write that names something (night-1
+    fix, bug 2: rule (b) must not call a change reported by an earlier write
+    of a multi-write case "a different param").
 
     A multi-move envelope (darkroom_say) reports its moves' module.param,
     noop and uncommitted moves excluded; a single-move one its data.module/data.param.
@@ -317,21 +444,30 @@ def _reported_keys(writes: list[CallRecord]) -> list[str] | None:
     there ("warmer"), which is not a module.param (smoke S1-A). An envelope
     that names something but no param gives [] (skip rule (b)); one that
     names nothing gives None (the case's sidecar key may stand in)."""
-    for c in reversed(writes):
+    out: set[str] | None = None
+    for c in (writes if every else reversed(writes)):
         if not _env_ok(c):
             continue
         data = (c.envelope or {}).get("data") or {}
         moves = data.get("moves")
         if isinstance(moves, list) and moves:
-            return sorted({f"{m['module']}.{m['param']}" for m in moves
-                           if isinstance(m, dict) and not m.get("noop")
-                           and m.get("committed") is not False
-                           and isinstance(m.get("module"), str)
-                           and isinstance(m.get("param"), str)})
-        if isinstance(data.get("module"), str) and isinstance(data.get("param"), str):
-            return [f"{data['module']}.{data['param']}"]
-        return [] if "key" in data else None
-    return None
+            found = {f"{m['module']}.{m['param']}" for m in moves
+                     if isinstance(m, dict) and not m.get("noop")
+                     and m.get("committed") is not False
+                     and isinstance(m.get("module"), str)
+                     and isinstance(m.get("param"), str)}
+        elif isinstance(data.get("module"), str) and isinstance(data.get("param"), str):
+            found = {f"{data['module']}.{data['param']}"}
+        elif "key" in data:
+            found = set()
+        elif every:
+            continue
+        else:
+            return None
+        out = found if out is None else out | found
+        if not every:
+            break
+    return None if out is None else sorted(out)
 
 
 def _all_moves_noop(c: CallRecord) -> bool:
@@ -360,7 +496,7 @@ def _m1_key_unchanged(case: Case, obs: Observation) -> str | None:
             continue  # the request asked for the value it already had
         if "delta" in t and not t["delta"]:
             continue
-        if _same(unit, a.get(k), b.get(k)):
+        if not _differs(unit, a.get(k), b.get(k), _meta(obs, "null_equiv").get(k)):
             return k
     return None
 
@@ -374,6 +510,42 @@ def _refuses(text: str, markers: tuple[str, ...]) -> bool:
     return any(m in low for m in markers)
 
 
+def _is_noop(c: CallRecord) -> bool:
+    env = c.envelope or {}
+    return bool(env.get("ok")) and bool((env.get("data") or {}).get("noop"))
+
+
+def _noop_rule(case: Case, obs: Observation, units: dict) -> str | None:
+    """Spec 1 (f), attributed per step (night-1 fix, bug 1). With per-step
+    snapshots a noop answer is a silent failure only when ITS OWN step changed
+    params; without them only when every write answered noop and the sidecar
+    changed. "Noop for a request that needed a change" fires only when no write
+    in the case produced the change."""
+    idx = [i for i, c in enumerate(obs.calls) if c.write]
+    noop = [i for i in idx if _is_noop(obs.calls[i])]
+    allnoop = [i for i in idx if _all_moves_noop(obs.calls[i])]
+    snaps = _step_snaps(obs)
+    silent = set(noop) | set(allnoop)
+    whole = _fingerprint_changed(obs) or bool(_changed_keys(obs, units))
+    if snaps is not None:
+        noop_changed = [i for i in noop if _step_changed(obs, snaps, i, units)]
+        allnoop_changed = [i for i in allnoop if _step_changed(obs, snaps, i, units)]
+        produced = any(_step_changed(obs, snaps, i, units) for i in idx if i not in silent)
+    else:
+        every = bool(idx) and set(idx) <= silent
+        noop_changed = noop if every and _fingerprint_changed(obs) else []
+        allnoop_changed = allnoop if every and whole else []
+        produced = whole and any(i not in silent for i in idx)
+    if noop_changed:
+        return "f: answered noop but the sidecar changed"
+    if noop and not produced and case.expect.kind == "edit" and \
+            (case.expect.sidecar or {}).get("changed"):
+        return "f: answered noop for a request that needed a change"
+    if allnoop_changed:
+        return "f: every move answered noop but the sidecar changed"
+    return None
+
+
 def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
                    policy: Policy) -> str | None:
     """Spec 1 conditions (a)-(f). Only asked when the product reported success."""
@@ -381,31 +553,27 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     reported = any(_env_ok(c) for c in writes)
     if case.mode == "agent" and obs.agent_text:
         reported = reported or _claims(obs.agent_text, policy.claim_markers)
-    noop_calls = [c for c in writes if (c.envelope or {}).get("ok")
-                  and ((c.envelope or {}).get("data") or {}).get("noop")]
-    if noop_calls and _fingerprint_changed(obs):
-        return "f: answered noop but the sidecar changed"
-    if noop_calls and case.expect.kind == "edit" and (case.expect.sidecar or {}).get("changed"):
-        return "f: answered noop for a request that needed a change"
-    if any(_all_moves_noop(c) for c in writes) and \
-            (_fingerprint_changed(obs) or _changed_keys(obs, (case.expect.sidecar or {})
-                                                       .get("units", {}))):
-        return "f: every move answered noop but the sidecar changed"
+    sidecar = case.expect.sidecar or {}
+    units = sidecar.get("units", {})
+    rule_f = _noop_rule(case, obs, units)
+    if rule_f:
+        return rule_f
     if not reported:
         return None
-    sidecar = case.expect.sidecar or {}
     if sidecar.get("changed") and not _fingerprint_changed(obs):
         return "a: reported ok but the sidecar history did not change"
-    units = sidecar.get("units", {})
+    fallback = [sidecar["key"]] if sidecar.get("key") else []
     keys = _reported_keys(writes)
-    if keys is None:
-        keys = [sidecar["key"]] if sidecar.get("key") else []
+    keys = fallback if keys is None else keys
+    every = _reported_keys(writes, every=True)
+    every = fallback if every is None else every
+    changed = _changed_keys(obs, units)
+    if every and changed and not _owned(every, obs) & set(changed):
+        return f"b: reported {', '.join(every)} but {', '.join(changed)} changed"
     if keys:
-        changed = _changed_keys(obs, units)
         named = ", ".join(keys)
-        if changed and not set(keys) & set(changed):
-            return f"b: reported {named} but {', '.join(changed)} changed"
-        if sidecar.get("changed") and not set(keys) & set(changed):
+        owned = _owned(keys, obs)
+        if sidecar.get("changed") and not owned & set(changed):
             return f"a: reported ok but {named} did not change"
         # per key: every committed, non-noop move the snapshots can see must have moved
         seen = set(_params(obs.before)) | set(_params(obs.after))
@@ -457,7 +625,8 @@ def _sidecar_miss(case: Case, obs: Observation) -> str | None:
     if sc.get("changed") is False and moved:
         return "sidecar expected unchanged but changed"
     key = sc.get("key")
-    if key and sc.get("changed") and key not in _changed_keys(obs, sc.get("units", {})):
+    if key and sc.get("changed") and \
+            not _owned([key], obs) & set(_changed_keys(obs, sc.get("units", {}))):
         return f"sidecar {key} expected to change but did not"
     return None
 
@@ -580,8 +749,14 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     sidecar = case.expect.sidecar or {}
     collateral = []
     if sidecar.get("key") and sidecar.get("collateral_check", True):
-        allowed = set(sidecar.get("allowed", [])) | {sidecar["key"]}
-        collateral = [k for k in _changed_keys(obs, sidecar.get("units", {})) if k not in allowed]
+        allowed = _owned(list(sidecar.get("allowed", [])) + [sidecar["key"]], obs)
+        before = _params(obs.before)
+        # a module absent before that the reported write introduced brings its
+        # sibling keys with it (night-1 fix, bug 3)
+        introduced = {_module(k) for k in allowed if _module_absent(before, _module(k))}
+        collateral = [k for k in _changed_keys(obs, sidecar.get("units", {}))
+                      if k not in allowed
+                      and not (before.get(k) is None and _module(k) in introduced)]
     ok_all = all(r.ok for r in results)
     if ok_all and not collateral:
         over = [c.tool for c, s in zip(obs.calls, case.steps) if c.wall_s > s.budget_s]

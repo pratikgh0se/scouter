@@ -440,3 +440,404 @@ def test_smoke_r1_a_is_per_reported_key():
     v = evaluate(_edit_case([], {"changed": True}),
                  _obs(unc, _snap("a", **before), _snap("b", **after)), POLICY)
     assert v.outcome == "verified", v.silent_failure
+
+
+# ------------------------------------------------ night-1 evaluator fixes (htc-fix-evaluator)
+# Shapes below are taken from real night-1 case JSONs (gauntlet/night1-20260926).
+
+
+def _steps_obs(envs, snaps, *, before_meta=None, fps=("a", "b"), tools=None):
+    """An observation with one write call per env and per-step snapshots
+    (snaps[0] = before, snaps[i + 1] = after step i)."""
+    tools = tools or ["darkroom_set"] * len(envs)
+    meta = before_meta or {}
+    return Observation(
+        calls=[CallRecord(t, {}, e, wall_s=1.0, write=True) for t, e in zip(tools, envs)],
+        before={"fingerprint": fps[0], "history_end": 1, "params": dict(snaps[0]), **meta},
+        after={"fingerprint": fps[1], "history_end": 2, "params": dict(snaps[-1]), **meta},
+        extra={"snapshots": [dict(s) for s in snaps]})
+
+
+def _cb(**kw):
+    """colorbalancergb as darktable writes it on first use: every key at 0."""
+    keys = ("contrast", "global_chroma", "global_saturation", "global_vibrance",
+            "highlights_chroma", "highlights_hue", "highlights_luminance", "midtones_chroma",
+            "midtones_hue", "midtones_luminance", "shadows_chroma", "shadows_hue",
+            "shadows_luminance")
+    out = {"colorbalancergb.__enabled": 1, **{f"colorbalancergb.{k}": 0.0 for k in keys}}
+    out.update({f"colorbalancergb.{k}": v for k, v in kw.items()})
+    return out
+
+
+CB_DEFAULTS = {k: 0.0 for k in _cb() if not k.endswith("__enabled")}
+WB_KEYS = ["temperature.coeff_r", "temperature.coeff_g", "temperature.coeff_b",
+           "temperature.coeff_g2", "temperature.preset"]
+WB_META = {"derived": {"temperature.temperature": WB_KEYS + ["temperature.tint"],
+                       "temperature.tint": WB_KEYS + ["temperature.temperature"]},
+           "null_equiv": {"temperature.coeff_g2": 0.0}}
+
+
+def _mv(module, param, noop=False, **data):
+    return _ok({"module": module, "param": param, "noop": noop, **data})
+
+
+# ---- bug 1: rule (f) attributes the change per step
+
+
+def test_fix1_noop_setup_step_then_real_adjust_is_not_f():
+    """cov-colorbalancergb.contrast-olympus-adjust_up1: step 0 sets the value
+    already there (honest noop), step 1 adjusts it; the change is step 1's."""
+    k = "colorbalancergb.contrast"
+    chk = Check("M1", kind="delta", target={"delta": 0.05, "from": 1, "key": k, "step": 0.05,
+                                            "tol": 0.005, "unit": "%"})
+    case = _edit_case([chk], {"allowed": [], "changed": True, "key": k, "units": {k: "%"}},
+                      steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)])
+    obs = _steps_obs([_mv("colorbalancergb", "contrast", noop=True),
+                      _mv("colorbalancergb", "contrast")],
+                     [_cb(), _cb(), _cb(contrast=0.05000001937150955)],
+                     tools=["darkroom_set", "darkroom_adjust"])
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "verified", v.silent_failure
+
+
+def test_fix1_noop_step_that_itself_changed_the_sidecar_is_still_f():
+    k = "colorbalancergb.contrast"
+    case = _edit_case([], {"changed": True, "key": k},
+                      steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)])
+    obs = _steps_obs([_mv("colorbalancergb", "contrast", noop=True),
+                      _mv("colorbalancergb", "contrast")],
+                     [_cb(), _cb(contrast=0.02), _cb(contrast=0.07)])
+    v = evaluate(case, obs, POLICY)
+    assert v.silent_failure == "f: answered noop but the sidecar changed"
+
+
+def test_fix1_without_snapshots_f_fires_only_when_every_write_answered_noop():
+    k = "colorbalancergb.contrast"
+    case = _edit_case([], {"changed": True, "key": k},
+                      steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)])
+    obs = _steps_obs([_mv("colorbalancergb", "contrast", noop=True),
+                      _mv("colorbalancergb", "contrast")], [_cb(), _cb(contrast=0.05)])
+    obs.extra = {}
+    assert evaluate(case, obs, POLICY).outcome == "verified"
+    # a sole noop write that changed the sidecar is still flagged
+    solo = _edit_case([], {"changed": False})
+    obs = _steps_obs([_mv("colorbalancergb", "contrast", noop=True)],
+                     [_cb(), _cb(contrast=0.05)])
+    obs.extra = {}
+    assert evaluate(solo, obs, POLICY).silent_failure == "f: answered noop but the sidecar changed"
+
+
+def test_fix1_noop_for_a_needed_change_only_when_no_write_made_it():
+    k = "colorbalancergb.contrast"
+    side = {"changed": True, "key": k}
+    # the sole answer is noop and nothing changed: still f
+    obs = _steps_obs([_mv("colorbalancergb", "contrast", noop=True)], [_cb(), _cb()],
+                     fps=("a", "a"))
+    v = evaluate(_edit_case([], side), obs, POLICY)
+    assert v.silent_failure == "f: answered noop for a request that needed a change"
+    # a later write produced the change: not this rule
+    two = _edit_case([], side, steps=[Step("darkroom_set", write=True),
+                                      Step("darkroom_adjust", write=True)])
+    obs = _steps_obs([_mv("colorbalancergb", "contrast", noop=True),
+                      _mv("colorbalancergb", "contrast")],
+                     [_cb(), _cb(), _cb(contrast=0.05)])
+    assert evaluate(two, obs, POLICY).outcome == "verified"
+    # ...but if the later write reported ok and changed nothing, it is still silent
+    obs = _steps_obs([_mv("colorbalancergb", "contrast", noop=True),
+                      _mv("colorbalancergb", "contrast")], [_cb(), _cb(), _cb()],
+                     fps=("a", "a"))
+    assert evaluate(two, obs, POLICY).outcome == "silent_failure"
+
+
+def test_fix1_all_moves_noop_is_attributed_per_step_too():
+    say_noop = _say_env([_move("temperature", "temperature", noop=True)])
+    real = _mv("exposure", "exposure")
+    case = _edit_case([], {"changed": True}, steps=[Step("darkroom_say", write=True),
+                                                    Step("darkroom_set", write=True)])
+    obs = _steps_obs([say_noop, real], [{"exposure.exposure": 0.7}, {"exposure.exposure": 0.7},
+                                        {"exposure.exposure": 1.0}])
+    assert evaluate(case, obs, POLICY).outcome == "verified"
+    obs = _steps_obs([say_noop, real], [{"exposure.exposure": 0.7}, {"exposure.exposure": 0.9},
+                                        {"exposure.exposure": 1.0}])
+    v = evaluate(case, obs, POLICY)
+    assert v.silent_failure.startswith("f: every move answered noop"), v.silent_failure
+
+
+# ---- bug 2: "did it change?" uses a strict float epsilon, not the M1 landed tolerance
+
+
+def test_fix2_one_notch_black_adjust_is_a_change():
+    """cov-exposure.black-olympus-adjust_up1: -0.000244 -> 0.0 -> 0.005."""
+    k = "exposure.black"
+    chk = Check("M1", kind="delta", target={"delta": 0.005, "from": 1, "key": k, "step": 0.005,
+                                            "tol": 0.0005, "unit": "ratio"})
+    case = _edit_case([chk], {"allowed": [], "changed": True, "key": k, "units": {k: "ratio"}},
+                      steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)])
+    obs = _steps_obs([_mv("exposure", "black"), _mv("exposure", "black")],
+                     [{k: -0.000244140625}, {k: 0.0}, {k: 0.005000005941838026}])
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "verified", v.silent_failure
+
+
+def test_fix2_one_degree_hue_nudge_is_a_change():
+    """cov-colorbalancergb.highlights_hue-olympus-nudge_up1: 180 -> 181."""
+    k = "colorbalancergb.highlights_hue"
+    chk = Check("M1", kind="changed", sign=1, target={"from": 1, "key": k, "unit": "°"})
+    case = _edit_case([chk], {"allowed": [], "changed": True, "key": k, "units": {k: "°"}},
+                      steps=[Step("darkroom_set", write=True), Step("darkroom_nudge", write=True)])
+    obs = _steps_obs([_mv("colorbalancergb", "highlights_hue"),
+                      _mv("colorbalancergb", "highlights_hue")],
+                     [_cb(), _cb(highlights_hue=180.0), _cb(highlights_hue=180.99998474121094)])
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "verified", (v.silent_failure, v.checks)
+
+
+def test_fix2_a_param_that_truly_did_not_move_is_still_a():
+    k = "exposure.black"
+    chk = Check("M1", kind="changed", target={"key": k, "unit": "ratio"})
+    case = _edit_case([chk], {"changed": True, "key": k})
+    # history grew (fingerprint changed) but the value is bit-identical
+    obs = _steps_obs([_mv("exposure", "black")], [{k: 0.005}, {k: 0.005}])
+    v = evaluate(case, obs, POLICY)
+    assert v.silent_failure == "a: reported ok but exposure.black did not change"
+    # a float32 round-trip of the same value is not a change either
+    obs = _steps_obs([_mv("exposure", "black")], [{k: 0.05}, {k: 0.050000011920928955}])
+    assert evaluate(case, obs, POLICY).outcome == "silent_failure"
+    # a hue wrap 360 -> 0 is not a change
+    h = "colorbalancergb.shadows_hue"
+    hc = Check("M1", kind="changed", target={"key": h, "unit": "°"})
+    obs = _steps_obs([_mv("colorbalancergb", "shadows_hue")], [{h: 360.0}, {h: 0.0}])
+    assert evaluate(_edit_case([hc], {"changed": True, "key": h, "units": {h: "°"}}), obs,
+                    POLICY).outcome == "silent_failure"
+
+
+def test_fix2_multi_say_uses_every_reported_key():
+    """cov-p2-deeper_blacks-more_vibrance-olympus: two says, two undos, two says;
+    the last say reports exposure.black, but global_vibrance (reported by an
+    earlier ok say) also changed. Not a (b)."""
+    b, gv = "exposure.black", "colorbalancergb.global_vibrance"
+    blacks = _say_env([_move("exposure", "black")], key="deeper_blacks")
+    vib = _say_env([_move("colorbalancergb", "global_vibrance")], key="more_vibrance")
+    undo = _ok({})
+    s0 = {b: -0.000244140625, gv: 0.0}
+    s1 = {b: 0.0048, gv: 0.0}
+    s2 = {b: 0.0048, gv: 0.05}
+    s4 = {b: -0.0002, gv: 0.0}
+    s5 = {b: -0.0002, gv: 0.05}
+    s6 = {b: 0.0048, gv: 0.05}
+    chk = Check("M1", kind="step_equal", target={"a": 2, "b": 6, "keys": [b, gv]})
+    case = _edit_case([chk], None, kind="property", steps=[Step("darkroom_say", write=True)] * 6)
+    obs = _steps_obs([blacks, vib, undo, undo, vib, blacks], [s0, s1, s2, s1, s4, s5, s6],
+                     tools=["darkroom_say", "darkroom_say", "darkroom_undo_last",
+                            "darkroom_undo_last", "darkroom_say", "darkroom_say"])
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "verified", v.silent_failure
+
+
+def test_fix2_change_on_an_unrelated_preexisting_param_is_still_b_and_collateral():
+    b, sc = "exposure.black", "sigmoid.contrast"
+    case = _edit_case([], {"changed": True, "key": b})
+    obs = _steps_obs([_mv("exposure", "black")], [{b: 0.0, sc: 1.5}, {b: 0.0, sc: 1.505}])
+    assert evaluate(case, obs, POLICY).silent_failure == \
+        "b: reported exposure.black but sigmoid.contrast changed"
+    chk = Check("M1", kind="equals", target={"key": b, "value": 0.01, "unit": "ratio"})
+    obs = _steps_obs([_mv("exposure", "black")], [{b: 0.0, sc: 1.5}, {b: 0.01, sc: 1.505}])
+    v = evaluate(_edit_case([chk], {"changed": True, "key": b}), obs, POLICY)
+    assert v.outcome == "collateral" and v.notes == [sc]
+
+
+# ---- bug 3: a module the write introduces is not collateral; default == absent
+
+
+def test_fix3_module_introduced_by_the_write_is_not_collateral():
+    """cov-colorbalancergb.global_saturation-sony_a7-set_hi: the module was not
+    in the history; the write adds it with every sibling at 0."""
+    k = "colorbalancergb.global_saturation"
+    chk = Check("M1", kind="equals", target={"key": k, "unit": "%", "value": 0.5})
+    case = _edit_case([chk], {"allowed": [], "changed": True, "key": k, "units": {k: "%"}})
+    obs = _steps_obs([_mv("colorbalancergb", "global_saturation")],
+                     [{"exposure.exposure": 0.7}, {"exposure.exposure": 0.7,
+                                                   **_cb(global_saturation=0.5)}])
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "verified", (v.outcome, v.notes)
+
+
+def test_fix3_filmic_introduced_with_nonzero_siblings_is_not_collateral():
+    """cov-filmicrgb.contrast-olympus-adjust_overflow."""
+    k = "filmicrgb.contrast"
+    chk = Check("M1", kind="equals", target={"key": k, "unit": "ratio", "value": 3.0})
+    case = _edit_case([chk], {"allowed": [], "changed": True, "key": k, "units": {k: "ratio"}},
+                      steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)])
+    filmic = {"filmicrgb.__enabled": 1, "filmicrgb.black_relative_exposure": -7.65,
+              "filmicrgb.white_relative_exposure": 4.56}
+    obs = _steps_obs([_mv("filmicrgb", "contrast"), _mv("filmicrgb", "contrast")],
+                     [{}, {**filmic, k: 2.9000000953674316}, {**filmic, k: 3.0}])
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "verified", (v.outcome, v.notes)
+
+
+def test_fix3_siblings_of_a_module_already_present_are_still_collateral():
+    k = "colorbalancergb.global_saturation"
+    chk = Check("M1", kind="equals", target={"key": k, "unit": "%", "value": 0.5})
+    case = _edit_case([chk], {"allowed": [], "changed": True, "key": k})
+    obs = _steps_obs([_mv("colorbalancergb", "global_saturation")],
+                     [_cb(), _cb(global_saturation=0.5, contrast=0.1)])
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "collateral" and v.notes == ["colorbalancergb.contrast"]
+    # a DIFFERENT module introduced by the write is collateral too
+    obs = _steps_obs([_mv("colorbalancergb", "global_saturation")],
+                     [_cb(), {**_cb(global_saturation=0.5), "filmicrgb.__enabled": 1,
+                              "filmicrgb.contrast": 1.0}])
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "collateral" and v.notes == ["filmicrgb.__enabled", "filmicrgb.contrast"]
+    # the module IS present before, but this sibling key is not in the snapshot:
+    # the write did not introduce the module, so the sibling appearing is
+    # collateral (pins the `_module_absent` guard; without it the absent-before
+    # sibling would be excused as part of an "introduced" module)
+    obs = _steps_obs([_mv("colorbalancergb", "global_saturation")],
+                     [{k: 0.0}, {k: 0.5, "colorbalancergb.contrast": 0.1}])
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "collateral" and v.notes == ["colorbalancergb.contrast"]
+
+
+def _undo_case(k):
+    chk = Check("M1", kind="restored", target={"from": 0, "keys": [k], "units": {k: "%"}})
+    return _edit_case([chk], None, kind="workflow",
+                      steps=[Step("darkroom_adjust", write=True),
+                             Step("darkroom_undo_last", write=True)])
+
+
+def test_fix3_undo_back_to_the_module_default_is_restored():
+    """cov-colorbalancergb.highlights_chroma-olympus-undo_after_adjust: before the
+    module is absent; after undo it is present at its default (0.0)."""
+    k = "colorbalancergb.highlights_chroma"
+    snaps = [{}, _cb(highlights_chroma=0.019999999552965164), _cb()]
+    obs = _steps_obs([_mv("colorbalancergb", "highlights_chroma"), _ok({})], snaps,
+                     before_meta={"defaults": CB_DEFAULTS},
+                     tools=["darkroom_adjust", "darkroom_undo_last"])
+    v = evaluate(_undo_case(k), obs, POLICY)
+    assert v.outcome == "verified", (v.silent_failure, v.checks)
+
+
+def test_fix3_undo_that_leaves_a_non_default_or_unknown_default_still_fails():
+    k = "colorbalancergb.highlights_chroma"
+    tools = ["darkroom_adjust", "darkroom_undo_last"]
+    envs = [_mv("colorbalancergb", "highlights_chroma"), _ok({})]
+    # the undone key is left at a non-default value
+    obs = _steps_obs(envs, [{}, _cb(highlights_chroma=0.02), _cb(highlights_chroma=0.02)],
+                     before_meta={"defaults": CB_DEFAULTS}, tools=tools)
+    assert evaluate(_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
+    # the key is at default but a sibling is not: the module is not "as if absent"
+    obs = _steps_obs(envs, [{}, _cb(highlights_chroma=0.02), _cb(contrast=0.1)],
+                     before_meta={"defaults": CB_DEFAULTS}, tools=tools)
+    assert evaluate(_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
+    # the module is disabled after undo: not equivalent to absent
+    obs = _steps_obs(envs, [{}, _cb(highlights_chroma=0.02),
+                            {**_cb(), "colorbalancergb.__enabled": 0}],
+                     before_meta={"defaults": CB_DEFAULTS}, tools=tools)
+    assert evaluate(_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
+    # no defaults known: conservative, still a mismatch
+    obs = _steps_obs(envs, [{}, _cb(highlights_chroma=0.02), _cb()], tools=tools)
+    assert evaluate(_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
+    # module present before: None-before rule does not apply at all
+    obs = _steps_obs(envs, [_cb(highlights_chroma=0.1), _cb(highlights_chroma=0.12), _cb()],
+                     before_meta={"defaults": CB_DEFAULTS}, tools=tools)
+    assert evaluate(_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
+
+
+# ---- bug 4: temperature/tint are derived from the stored WB coefficients
+
+
+def test_fix4_tint_set_moves_the_coefficients_it_is_derived_from():
+    """cov-temperature.tint-sony_a7-set_0.8 (no Kelvin decode on this body)."""
+    case = _edit_case([], {"changed": True})
+    obs = _steps_obs([_mv("temperature", "tint", previous=None, applied=None)],
+                     [{"temperature.coeff_b": 2.32421875, "temperature.coeff_g2": 0.0,
+                       "temperature.coeff_r": 1.61328125, "temperature.preset": 4},
+                      {"temperature.coeff_b": 2.8568811416625977, "temperature.coeff_g2": None,
+                       "temperature.coeff_r": 2.43988299369812, "temperature.preset": 2}],
+                     before_meta=WB_META)
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "verified", v.silent_failure
+    # olympus: the derived Kelvin moves too (cov-temperature.tint-olympus-set_1.1)
+    obs = _steps_obs([_mv("temperature", "tint")],
+                     [{"temperature.coeff_b": 1.8203125, "temperature.coeff_g2": 0.0,
+                       "temperature.coeff_r": 1.9140625, "temperature.preset": 4,
+                       "temperature.temperature": 4924.615011773081},
+                      {"temperature.coeff_b": 1.7376030683517456, "temperature.coeff_g2": None,
+                       "temperature.coeff_r": 1.7524051666259766, "temperature.preset": 2,
+                       "temperature.temperature": 4788.635454379341}], before_meta=WB_META)
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "verified", v.silent_failure
+
+
+def test_fix4_temperature_set_is_not_collateral_on_its_coefficients():
+    """cov-temperature.temperature-olympus-set_hi."""
+    k = "temperature.temperature"
+    chk = Check("M1", kind="equals", target={"key": k, "unit": "K", "value": 12000.0})
+    case = _edit_case([chk], {"allowed": [], "changed": True, "key": k, "units": {k: "K"}},
+                      steps=[Step("darkroom_set", write=True), Step("darkroom_set", write=True)])
+    s = [{"temperature.coeff_b": 1.8203125, "temperature.coeff_g2": 0.0,
+          "temperature.coeff_r": 1.9140625, "temperature.preset": 4, k: 4924.615011773081},
+         {"temperature.coeff_b": 1.8782345056533813, "temperature.coeff_g2": None,
+          "temperature.coeff_r": 2.0358850955963135, "temperature.preset": 2, k: 5000},
+         {"temperature.coeff_b": 1.2534654140472412, "temperature.coeff_g2": None,
+          "temperature.coeff_r": 2.7179274559020996, "temperature.preset": 2, k: 12000}]
+    obs = _steps_obs([_mv("temperature", "tint"), _mv("temperature", "temperature")], s,
+                     before_meta=WB_META)
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "verified", (v.outcome, v.notes)
+
+
+def test_fix4_wb_ownership_does_not_hide_real_problems():
+    # a temperature report that moved an unrelated param is still (b)
+    case = _edit_case([], {"changed": True})
+    obs = _steps_obs([_mv("temperature", "temperature")],
+                     [{"temperature.coeff_r": 1.9, "sigmoid.contrast": 1.5},
+                      {"temperature.coeff_r": 1.9, "sigmoid.contrast": 1.6}], before_meta=WB_META)
+    assert evaluate(case, obs, POLICY).silent_failure == \
+        "b: reported temperature.temperature but sigmoid.contrast changed"
+    # a warmer move that renders cooler still fails its M4 stat check (c)
+    chk = Check("M4", stat="rb", region="frame", sign=1)
+    obs = _steps_obs([_mv("temperature", "temperature")],
+                     [{"temperature.coeff_r": 1.9, "temperature.coeff_g2": 0.0},
+                      {"temperature.coeff_r": 2.1, "temperature.coeff_g2": None}],
+                     before_meta=WB_META)
+    obs.stats_before, obs.stats_after = {"frame": {"rb": 1.0}}, {"frame": {"rb": 0.8}}
+    v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
+    assert v.silent_failure.startswith("c: M4 rb moved"), v.silent_failure
+    # coeff_g2 0.0 -> None alone is not a change, so the history-only write is still (a)
+    obs = _steps_obs([_mv("temperature", "temperature")],
+                     [{"temperature.coeff_r": 1.9, "temperature.coeff_g2": 0.0},
+                      {"temperature.coeff_r": 1.9, "temperature.coeff_g2": None}],
+                     before_meta=WB_META)
+    v = evaluate(_edit_case([], {"changed": True, "key": "temperature.coeff_r"}), obs, POLICY)
+    assert v.silent_failure is not None and v.silent_failure.startswith("a:"), v.silent_failure
+
+
+def test_fix4_derived_key_is_restored_only_when_its_coefficients_are():
+    """cov-temperature.temperature-sony_a7-undo_after_set: Kelvin is undecodable on
+    this body (None before and after), the undo refused and the coefficients
+    stayed at the 7000 K values; None == None must not read as restored."""
+    k = "temperature.temperature"
+    chk = Check("M1", kind="restored", target={"from": 1, "keys": [k], "units": {k: "K"}})
+    case = _edit_case([chk], None, kind="workflow",
+                      steps=[Step("darkroom_set", write=True), Step("darkroom_set", write=True),
+                             Step("darkroom_undo_last", write=True)])
+    s1 = {"temperature.coeff_b": 2.3526809215545654, "temperature.coeff_g2": None,
+          "temperature.coeff_r": 1.6502976417541504, "temperature.preset": 2}
+    s2 = {"temperature.coeff_b": 1.1910351514816284, "temperature.coeff_g2": None,
+          "temperature.coeff_r": 2.8313372135162354, "temperature.preset": 2}
+    s0 = {"temperature.coeff_b": 2.32421875, "temperature.coeff_g2": 0.0,
+          "temperature.coeff_r": 1.61328125, "temperature.preset": 4}
+    tools = ["darkroom_set", "darkroom_set", "darkroom_undo_last"]
+    envs = [_mv("temperature", "tint"), _mv("temperature", "temperature"),
+            _err("unsupported_undo")]
+    v = evaluate(case, _steps_obs(envs, [s0, s1, s2, s2], before_meta=WB_META, tools=tools),
+                 POLICY)
+    assert v.score == "fail" and not v.checks[0].ok, v
+    # an undo that put the coefficients back is restored (coeff_g2 None == None)
+    ok_undo = [*envs[:2], _ok({})]
+    v = evaluate(case, _steps_obs(ok_undo, [s0, s1, s2, s1], before_meta=WB_META, tools=tools),
+                 POLICY)
+    assert v.outcome == "verified", v
