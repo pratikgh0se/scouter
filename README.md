@@ -754,7 +754,10 @@ shows which words work today.
   since Scouter's last commit -- darktable writes nothing until the darkroom
   is left. Pass `--bounce` (MCP `bounce: true`) after touching sliders
   yourself; `--trust-sidecar` still skips the bounce unconditionally.
-  `darkroom get` never bounces unless `--bounce`.
+  `darkroom get` never bounces unless `--bounce`. Since row 429 that
+  pre-read commit is `history commit --strategy auto`, i.e. `no_bounce` (no
+  view switch; 0.16-1.17 s host-measured) with the view bounce only as its
+  fallback, so the ~2.7 s above is the old cost, not today's.
 - **Undoing a preset application is refused.** darktable's Lua API cannot
   remove history items. Use the history panel.
 - **Color zones' zone curves are unreachable.** Only its global mix
@@ -845,7 +848,9 @@ did not, or could not, settle.
   you moved yourself in darktable since then is invisible until darktable
   writes the sidecar; pass `--bounce` (MCP `bounce: true`) after hand edits.
   The guarded default's timing is not host-measured yet (row 415 measured
-  4.12 s with the bounce every time, 1.37 s without).
+  4.12 s with the old bounce every time, 1.37 s without). Expected since row
+  429: one move well under 3.5 s, a commit 0.2-1.1 s (`no_bounce`, falling
+  back to `view_bounce_action`); the row 429 acceptance run measures it.
 - **`scouter setup` does not register the MCP server.** It prints the `claude
   mcp add` command and never reads or writes Claude Code's config. Right
   after installing the plugin, `doctor` is not ok until darktable restarts.
@@ -861,9 +866,12 @@ did not, or could not, settle.
   cannot be removed through the Lua API at all. The 2 s settle before
   `outliers` is a measured-lag allowance (row 408 B7), not a sidecar-written
   signal. Not yet run on a real job.
-- **Still open from earlier rounds.** The first `history commit` after a fresh
-  darktable launch intermittently wedging the bridge (row 408 B1) and the E12
-  15-18 minute pre-verb stalls (D3) have no root cause yet.
+- **Earlier rounds.** The first `history commit` after a fresh darktable
+  launch intermittently wedging the bridge (row 408 B1) was the row 418
+  crash, closed in row 429 (see "The commit trigger" and "Row 418 crash" in
+  the honest limits above). The E12 15-18 minute pre-verb stalls (D3) share
+  that crash signature but were not re-run; treat them as open until the
+  acceptance run shows none.
 
 ## Editing with Scouter from Claude Code
 
@@ -933,7 +941,8 @@ as one group. For an exact value, Claude uses `darkroom_set`
 **Speed.** One phrase measured ~1.4 s on the host with the pre-read bounce
 skipped (2026-09-24; the guarded default below is not host-measured yet). The
 first move on a photo in a session also makes darktable write its pending
-edits first (one view bounce, ~2.7 s more). If you moved sliders **by hand** in darktable
+edits first (one commit, 0.2-1.2 s since row 429; it used to be a ~2.7 s view
+bounce). If you moved sliders **by hand** in darktable
 since Scouter's last move, say so ("I changed the exposure myself"): Claude
 passes `bounce: true` so Scouter reads your values, not the stale sidecar.
 
