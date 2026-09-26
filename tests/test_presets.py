@@ -1,4 +1,5 @@
 """Phase 3 task 7: save the session's edits as a named darktable style; list presets."""
+# mutation-check: targets-predate-range 55018012923d77440ffa3291dbf35b00a3a7fe15 -- presets.save's flush (_commit attempts=1, expect_change=False; 75f68fd) is untouched by this range; only the shared _MovesFixture commit tuple grew an expect_module slot. Proof: dropping attempts=1 in presets.py fails it.
 
 from __future__ import annotations
 

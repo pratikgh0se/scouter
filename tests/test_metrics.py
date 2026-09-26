@@ -1,3 +1,4 @@
+# mutation-check: targets-predate-range 55018012923d77440ffa3291dbf35b00a3a7fe15 -- the one-event-per-verb invariant (1d8115c) holds at base and head alike; this range only adapted the commit double (row 433 value, row 434 expect_module), so a revert cannot break it. Proof: wrapping darkroom._commit's commit_fn in metrics.instrumented fails it (2 != 1).
 import shutil
 import time
 import unittest
