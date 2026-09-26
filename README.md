@@ -378,6 +378,7 @@ scouter style   apply-set --name hero-harbour --job-slug harbour-wedding --exclu
 scouter outliers list --reference <hero> --job-slug harbour-wedding --pretty
 scouter export  release --job-slug harbour-wedding --preset client-proof --yes
 scouter export  verify --manifest <path>
+scouter job     run --job-slug harbour-wedding --preset hero-harbour --hero <hero> --yes   # the chain, below
 scouter backup  run --yes
 scouter backup  verify
 scouter wb      calibrate <scratch.orf> --yes   # measures this camera's Kelvin table

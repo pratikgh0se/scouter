@@ -638,3 +638,16 @@ class Envelope:
         if self.error is not None:
             out["error"] = self.error
         return out
+
+
+@dataclass
+class JobRunResult(Payload):
+    """`job.run`'s result (product close, row 427 item 5 prep). `steps` has
+    one row per step attempted or skipped -- `{step, verb, outcome, counts,
+    warnings, error?, reason?}` -- in chain order; `stopped_at` names the
+    step that refused or came back partial (the chain stops there)."""
+
+    job_slug: str = ""
+    steps: list[dict] = field(default_factory=list)
+    completed: int = 0
+    stopped_at: str | None = None

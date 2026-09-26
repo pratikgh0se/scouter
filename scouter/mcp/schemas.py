@@ -1031,6 +1031,39 @@ TOOL_SPECS: list[dict] = [
             ["name", "job_slug"],
         ),
     },
+    {
+        "name": "job_run",
+        "description": "Batch-edit a whole job in one call, in this order: cull (propose ratings "
+        "with the job-relative sharpness gate, then apply them), preset (append the hero preset "
+        "to every frame except `exclude` and the hero), outliers (frames outside tolerance "
+        "against the hero), export (export_release through `export_preset` with a manifest). "
+        "Each step reports its counts. Stops at the first step that refuses or comes back "
+        "partial and says where (outcome partial); earlier steps are not rolled back. Without "
+        "confirm=true it is a dry run: nothing is written, and the plan shows what each step "
+        "would touch. preset/outliers are skipped when no preset/hero is given.",
+        "inputSchema": _schema(
+            {"job_slug": {"type": "string", "description": "the job (library job slug)"},
+             "preset": {"type": "string",
+                        "description": "hero preset (darktable style) to apply to the set"},
+             "hero": IMAGE,
+             "exclude": {"type": "array", "items": {"type": "string"},
+                         "description": "paths or ids the preset step leaves out"},
+             "export_preset": {"type": "string",
+                               "enum": ["preview", "client-proof", "client-final", "print-tiff"],
+                               "default": "client-proof",
+                               "description": "export release preset"},
+             "min_rating": {"type": "integer", "minimum": -1, "maximum": 5,
+                            "description": "export selection floor for proof presets"},
+             "steps": {"type": "array",
+                       "items": {"type": "string",
+                                 "enum": ["cull", "preset", "outliers", "export"]},
+                       "description": "subset to run, in chain order (default: all)"},
+             "confirm": {"type": "boolean", "default": False,
+                         "description": "required: the chain writes ratings, styles, exports"},
+             "dry_run": DRY_RUN},
+            ["job_slug"],
+        ),
+    },
 ]
 
 

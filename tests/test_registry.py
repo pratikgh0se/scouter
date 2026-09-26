@@ -106,6 +106,7 @@ class LoadVerbsImportGuardTest(unittest.TestCase):
                     "wb",
                     "vocab",
                     "preset",
+                    "job",
                 },
             )
         finally:

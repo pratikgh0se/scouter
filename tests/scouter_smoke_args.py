@@ -120,6 +120,9 @@ SMOKE_ARGS: dict[str, dict] = {
     "preset.list": {},
     "preset.apply": {"name": "smoke", "dry_run": True},
     "preset.apply_job": {"name": "smoke", "job_slug": "smoke-job"},
+    # Product close: without confirm it only plans (child dry runs may refuse;
+    # a refusal is recorded in the plan, never raised).
+    "job.run": {"job_slug": "smoke-job", "steps": ["cull"]},
 }
 
 

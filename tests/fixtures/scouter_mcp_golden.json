@@ -748,6 +748,81 @@
     "name": "history_read"
   },
   {
+    "description": "Batch-edit a whole job in one call, in this order: cull (propose ratings with the job-relative sharpness gate, then apply them), preset (append the hero preset to every frame except `exclude` and the hero), outliers (frames outside tolerance against the hero), export (export_release through `export_preset` with a manifest). Each step reports its counts. Stops at the first step that refuses or comes back partial and says where (outcome partial); earlier steps are not rolled back. Without confirm=true it is a dry run: nothing is written, and the plan shows what each step would touch. preset/outliers are skipped when no preset/hero is given.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "default": false,
+          "description": "required: the chain writes ratings, styles, exports",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "exclude": {
+          "description": "paths or ids the preset step leaves out",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "export_preset": {
+          "default": "client-proof",
+          "description": "export release preset",
+          "enum": [
+            "preview",
+            "client-proof",
+            "client-final",
+            "print-tiff"
+          ],
+          "type": "string"
+        },
+        "hero": {
+          "description": "absolute path to the raw file, or a darktable image id",
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "job_slug": {
+          "description": "the job (library job slug)",
+          "type": "string"
+        },
+        "min_rating": {
+          "description": "export selection floor for proof presets",
+          "maximum": 5,
+          "minimum": -1,
+          "type": "integer"
+        },
+        "preset": {
+          "description": "hero preset (darktable style) to apply to the set",
+          "type": "string"
+        },
+        "steps": {
+          "description": "subset to run, in chain order (default: all)",
+          "items": {
+            "enum": [
+              "cull",
+              "preset",
+              "outliers",
+              "export"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "job_slug"
+      ],
+      "type": "object"
+    },
+    "name": "job_run"
+  },
+  {
     "description": "Copy, checksum, rename and register a memory card into the library. Refuses with backup_not_configured before reading a single file unless the backup gate passes (config.show reports its verdict). Always requires confirm=true: an import is always more than one file. Originals are copied read-only (chmod 0444) and verified with two independent sha256 passes; a darktable that is not running does not fail the import (film_roll_registered: false, retry with library.register).",
     "inputSchema": {
       "additionalProperties": false,
