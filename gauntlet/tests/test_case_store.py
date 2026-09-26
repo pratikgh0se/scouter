@@ -1,0 +1,113 @@
+import ast
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+from gauntlet.adapter import load_adapter
+from gauntlet.case import Case, Check, Expect, Step, case_id, from_jsonl, to_jsonl
+from gauntlet.store import RunDir, atomic_write_text, new_stamp
+
+ENGINE = Path(__file__).resolve().parents[1]
+
+
+def _case(i: str = "a") -> Case:
+    return Case(
+        id=case_id("cov", "exposure.exposure", "sony_a7", f"set_{i}"),
+        layer="coverage", tier="P0", mode="tool",
+        steps=[Step("darkroom_set", {"module": "exposure", "param": "exposure", "value": 1.0},
+                    budget_s=3.5, write=True)],
+        expect=Expect("edit", checks=[Check("M1", target={"key": "exposure.exposure",
+                                                          "value": 1.0, "unit": "EV"})]),
+        body="sony_a7", frame_role="hero",
+    )
+
+
+def test_case_id_is_slugged_and_stable():
+    assert case_id("scn", "r0001", "Olympus", "tool") == "scn-r0001-olympus-tool"
+    assert case_id("cov", "exposure.exposure", "sony a7", "set hi") == \
+        "cov-exposure.exposure-sony_a7-set_hi"
+
+
+def test_jsonl_round_trip_is_byte_identical():
+    cases = [_case("a"), _case("b")]
+    text = to_jsonl(cases)
+    again = to_jsonl(from_jsonl(text))
+    assert text == again
+    assert json.loads(text.splitlines()[0])["schema"] == "gauntlet-case/1"
+
+
+def test_bad_tier_mode_kind_refused():
+    with pytest.raises(ValueError):
+        Case(id="x", layer="l", tier="P9", mode="tool", steps=[], expect=Expect("edit"))
+    with pytest.raises(ValueError):
+        Case(id="x", layer="l", tier="P0", mode="gui", steps=[], expect=Expect("edit"))
+    with pytest.raises(ValueError):
+        Case(id="x", layer="l", tier="P0", mode="tool", steps=[], expect=Expect("maybe"))
+
+
+def test_budget_cap_counts_followups():
+    c = _case()
+    c.followups = [{"sentence": "more", "steps": [{"tool": "darkroom_say",
+                                                   "args": {"phrase": "brighter"},
+                                                   "budget_s": 8.0}]}]
+    assert c.budget_cap_s() == pytest.approx(3.5 + 30 + 8 + 30)
+
+
+def test_repro_defaults_to_the_engine_cli():
+    assert _case().repro.startswith("python -m gauntlet run --case cov-")
+
+
+def test_rundir_atomic_results_and_resume(tmp_path):
+    run = RunDir(tmp_path, "20260926t000000z").ensure()
+    run.write_cases([_case("a")])
+    assert run.read_cases()[0].id == _case("a").id
+    run.write_result("c1", {"id": "c1", "score": "pass"})
+    assert run.done_ids() == {"c1"}
+    assert run.read_result("c1")["score"] == "pass"
+    assert not list(run.cases_dir.glob("*.tmp"))
+
+
+def test_atomic_write_leaves_old_file_on_failure(tmp_path, monkeypatch):
+    p = tmp_path / "f.json"
+    atomic_write_text(p, "old")
+
+    def boom(*a, **k):
+        raise OSError("disk")
+
+    monkeypatch.setattr("os.replace", boom)
+    with pytest.raises(OSError):
+        atomic_write_text(p, "new")
+    assert p.read_text() == "old"
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_new_stamp_format():
+    s = new_stamp()
+    assert len(s) == 16 and s[8] == "t" and s.endswith("z")
+
+
+def test_load_adapter_needs_module_colon_factory():
+    with pytest.raises(ValueError):
+        load_adapter("gauntlet.case")
+
+
+def test_engine_is_stdlib_only_and_imports_no_product():
+    """Rows 436/437: the engine is reusable by Capsule Corp. Only stdlib and
+    `gauntlet.*` imports are allowed anywhere under gauntlet/ (tests included,
+    pytest excepted)."""
+    allowed = set(sys.stdlib_module_names) | {"gauntlet", "pytest"}
+    bad = []
+    for path in ENGINE.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names = [node.module]
+            for n in names:
+                if n.split(".")[0] not in allowed:
+                    bad.append(f"{path.relative_to(ENGINE)}: {n}")
+    assert bad == []
