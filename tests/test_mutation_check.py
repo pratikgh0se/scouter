@@ -1129,6 +1129,11 @@ class B4StaticNoAssertFollowsSameFileHelpers(unittest.TestCase):
             f, names, rev_cell, weak_cell, flags_cell = rows[0]
             self.assertIn("asserts via helper check_sum", flags_cell)
             self.assertNotIn("no assert in the function body", flags_cell)
+            # B5: the weaken step must also target the helper, not fall back
+            # to file-level (there is no other test/assertion in this file
+            # for a file-level fallback to land on anyway).
+            self.assertIn("FAIL (good)", weak_cell)
+            self.assertIn("weaken: helper check_sum assertion 1", weak_cell)
 
     def test_a_test_that_calls_nothing_with_a_real_assert_still_flags(self):
         with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
@@ -1146,6 +1151,132 @@ class B4StaticNoAssertFollowsSameFileHelpers(unittest.TestCase):
             self.assertIsNone(note)
             f, names, rev_cell, weak_cell, flags_cell = rows[0]
             self.assertIn("no assert in the function body", flags_cell)
+
+
+class B5WeakenTargetsTheHelperAssertions(unittest.TestCase):
+    """Fix round 12, B5 (HTC integration audit, htc/integration 9bdd740):
+    when a changed test asserts only via a same-file helper (the B4 shape),
+    the weaken mutation must land in the HELPER's own assertions - trying
+    each one in source order until one run fails - never the file-level
+    fallback, which can land on an assertion the range never even exercises.
+    RED (pre-fix): tests/intent/test_colorcal_warmth_intent.py read
+    "did not fail (BAD) [weaken: file-level fallback]" while flipping the
+    first assertEqual in the REAL helper (run_example) failed 2/6 generated
+    items (the auditor's own proof)."""
+
+    def test_helper_targeted_directly_when_it_is_the_only_assertion_source(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            base = commit_all(root, "base")
+            write_test(root,
+                       "import unittest\nfrom production import add\n\n\n"
+                       "class Checks(unittest.TestCase):\n"
+                       "    def check_sum(self, a, b, expected):\n"
+                       "        self.assertEqual(add(a, b), expected)\n\n"
+                       "    def test_add_via_helper(self):\n"
+                       "        self.check_sum(2, 3, 5)\n")
+            head = commit_all(root, "add a new test that only calls a same-class helper")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("weaken: helper check_sum assertion 1", weak_cell)
+            self.assertIn("FAIL (good)", weak_cell)
+            self.assertNotIn("file-level fallback", weak_cell)
+
+    def test_iterates_past_a_helper_assertion_the_selected_ids_never_reach(self):
+        """The helper's FIRST recognized assertion is dead code for every
+        selected id (guarded by `skip_first=True`, always passed by the one
+        new test) - mutating it changes nothing observable, so B5 must move
+        on to the helper's SECOND assertion (the one that actually governs
+        the test), not stop and report a false "did not fail (BAD)" after
+        trying only the first."""
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            base = commit_all(root, "base")
+            write_test(root,
+                       "import unittest\nfrom production import add\n\n\n"
+                       "class Checks(unittest.TestCase):\n"
+                       "    def check_sum(self, a, b, expected, skip_first=False):\n"
+                       "        if not skip_first:\n"
+                       "            self.assertEqual(a + 0, a)\n"
+                       "        self.assertEqual(add(a, b), expected)\n\n"
+                       "    def test_add_via_helper(self):\n"
+                       "        self.check_sum(2, 3, 5, skip_first=True)\n")
+            head = commit_all(root, "add a new test whose helper has a dead-code first assertion")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("FAIL (good)", weak_cell)
+            self.assertIn("weaken: helper check_sum assertion 2", weak_cell)
+
+
+class ScratchWorktreesNeverLeak(unittest.TestCase):
+    """Round 12 (HTC integration audit): the tool had leaked 388
+    `mutation-check-{revert,weaken}-*` scratch worktree entries into
+    scouter's own `.git` (346 prunable) - `remove_worktree`'s own git call
+    can fail silently (it swallows its exit code) and a process kill can
+    skip a `finally` outright, so `check_range` must ALSO run
+    `git worktree prune` unconditionally on every exit path (return,
+    exception, or KeyboardInterrupt), never rely on `remove_worktree` alone.
+    """
+
+    def test_no_leftover_worktree_entries_after_a_normal_run(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_BUGGY)
+            base = commit_all(root, "base")
+            (root / "production.py").write_text(PROD_FIXED)
+            write_test(root, DISCRIMINATING_TEST)
+            head = commit_all(root, "fix add() and add a discriminating test")
+
+            before = git(root, "worktree", "list", "--porcelain")
+            ok, rows, note = mc.check_range(root, base, head)
+            after = git(root, "worktree", "list", "--porcelain")
+
+            self.assertIsNone(note)
+            self.assertEqual(before, after,
+                              "check_range must leave `git worktree list` exactly as it found it")
+
+    def test_worktree_prune_runs_even_when_check_range_is_interrupted(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_BUGGY)
+            base = commit_all(root, "base")
+            (root / "production.py").write_text(PROD_FIXED)
+            write_test(root, DISCRIMINATING_TEST)
+            head = commit_all(root, "fix add() and add a discriminating test")
+
+            calls = []
+            real_sh = mc.sh
+
+            def raising_sh(argv, *a, **kw):
+                if argv[:2] == ["git", "worktree"] and "prune" not in argv:
+                    calls.append(list(argv))
+                if len(calls) == 1 and "add" in argv:
+                    # Let the FIRST scratch worktree get created, then blow up
+                    # partway through the run as a stand-in for a genuine
+                    # KeyboardInterrupt/SIGINT landing mid-check.
+                    result = real_sh(argv, *a, **kw)
+                    raise KeyboardInterrupt("simulated interrupt mid-run")
+                return real_sh(argv, *a, **kw)
+
+            before = git(root, "worktree", "list", "--porcelain")
+            with unittest.mock.patch.object(mc, "sh", side_effect=raising_sh):
+                with self.assertRaises(KeyboardInterrupt):
+                    mc.check_range(root, base, head)
+            after = git(root, "worktree", "list", "--porcelain")
+
+            self.assertEqual(before, after,
+                              "a git worktree prune) must run in check_range's own finally "
+                              "even when the run is interrupted, leaving no stale entry behind")
 
 
 class SkippedTestIsFlagged(unittest.TestCase):
