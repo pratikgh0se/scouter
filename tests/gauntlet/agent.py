@@ -127,6 +127,9 @@ class AgentSession:
                           stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True,
                           cwd=str(self.inner.root), start_new_session=True)
         self.proc = proc
+        if self.aborted:  # abort() ran between the check above and the handle
+            self.stop_claude()
+            raise AgentAborted("agent session aborted while a claude turn started")
         try:
             stdout, _ = proc.communicate(timeout=TURN_TIMEOUT_S)
         except subprocess.TimeoutExpired:
