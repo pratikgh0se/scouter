@@ -139,9 +139,12 @@ def call(verb_id: str, layer: str, **kwargs: Any) -> Envelope:
     job = validate_job(kwargs["job"]) if kwargs.get("job") else current_job()
     kwargs["job"] = job
 
+    from scouter.core import watchdog
+
     token = metrics.LAYER.set(layer)
+    healed = False
     try:
-        result = verb.fn(**kwargs)
+        result, healed = watchdog.run_with_heal(verb_id, lambda: verb.fn(**kwargs), job)
     except ScouterError as e:
         return Envelope(
             verb=verb_id,
@@ -157,6 +160,8 @@ def call(verb_id: str, layer: str, **kwargs: Any) -> Envelope:
         metrics.LAYER.reset(token)
 
     data = result.to_dict()
+    if healed:
+        data["healed"] = True  # spec 6: always reported; a heal is never silent
     outcome = data.get("outcome", "ok")
     # A verb's own result can carry outcome "dry_run" (ConfirmationRequired) as
     # well as "ok"; only those two count as success, everything else — an

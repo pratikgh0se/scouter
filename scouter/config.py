@@ -125,6 +125,15 @@ class CacheConfig:
 
 
 @dataclass(frozen=True)
+class WatchdogConfig:
+    """Spec 6 / watchdog design 2.3. Off by default and off in the gauntlet."""
+
+    auto_heal: bool = False
+    max_heals_per_job: int = 1
+    heal_budget_s: float = 60.0
+
+
+@dataclass(frozen=True)
 class Config:
     version: int = CONFIG_VERSION
     library_root: str | None = None
@@ -141,6 +150,7 @@ class Config:
     stats: StatsConfig = field(default_factory=StatsConfig)
     educative: str = "brief"
     cache: CacheConfig = field(default_factory=CacheConfig)
+    watchdog: WatchdogConfig = field(default_factory=WatchdogConfig)
 
     def camera_map(self) -> dict[str, str]:
         return dict(self.cameras)
@@ -164,6 +174,7 @@ SECTIONS = {
     "export": ("export", ExportConfig),
     "stats": ("stats", StatsConfig),
     "cache": ("cache", CacheConfig),
+    "watchdog": ("watchdog", WatchdogConfig),
 }
 TOP_KEYS = {"version", "library_root", "cameras", "educative", "_comment", *SECTIONS}
 
