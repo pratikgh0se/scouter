@@ -11526,7 +11526,7 @@ Controller procedure; each fix is an implementer task. Depends on: Task 35.
 
 - [ ] **Step 1: Triage every row of `fixlist.md`** into exactly one of `product_bug`, `harness_bug`, `taxonomy_error`, `vocab_gap`, `upstream`, `accepted` (spec §2.6). Silent failures, crashes and hangs first. `taxonomy_error` is fixed in the builder scripts (`tests/gauntlet/data/build_*.py`), never in the JSON by hand; `accepted` on a P0 case needs Pratik's OK (H2 is the known one). Record the verdicts in `fixlist.md`'s Triage column and commit it into the run dir (not the repo).
 
-- [ ] **Step 2: For each `product_bug` / `harness_bug`**, dispatch one implementer on its own branch and worktree: turn the failing case into a failing unit (or Lua) test first (TDD), fix, Fable reviews, merge gate. No `git stash`.
+- [ ] **Step 2: For each `product_bug` / `harness_bug`**, dispatch one implementer on its own branch and worktree: turn the failing case into a failing unit (or Lua) test first (TDD), fix, Fable reviews, merge gate (`make gate BASE=<merge-base> HEAD=<branch>` runs the test-honesty check, `tests/mutation_check.py` - row 459, `SCOUTER_SKIP_MUTATION_CHECK=1` skips it only explicitly and always logs a WARN). No `git stash`.
 
 - [ ] **Step 3: Rerun after each merge** (spec §2.6 rule 3) on the SAME stamp:
 
