@@ -20,6 +20,7 @@ file, so every readback goes through the real XMP decoder.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -180,13 +181,12 @@ class SilentFailureTest(_FakeDarktable):
         self.assertIn("did not change", cm.exception.message)
         self.assertEqual(cm.exception.code, "write_unverified")
 
-    def test_warmer_that_landed_within_the_model_offset_is_ok(self) -> None:
-        # darktable's Kelvin model and the measured table disagree by ~2.3%
-        # in r/b (night 1: 5225 K always reads back 5124 K). That is a landed
-        # move, not a failure.
+    def _warmer_landing_off_the_table_by(self, offset: float):
+        """Run a 300 K warmer whose coefficients DO change, landing at the
+        table's predicted r/b ratio times `(1 - offset)`."""
         before = darkroom._temperature_extra(str(self.raw), 0)
         target = 5399.05 + 300.0
-        want = wb.expected_ratio("em10iii", target) * (1 - 0.023)
+        want = wb.expected_ratio("em10iii", target) * (1 - offset)
         landed = dict(before["params"])
         landed["coeff_r"] = want * landed["coeff_b"]
         sent = {"n": 0}
@@ -201,8 +201,45 @@ class SilentFailureTest(_FakeDarktable):
         with mock.patch("scouter.core.darkroom._temperature_extra",
                         side_effect=lambda path, inst: {"params": landed, "params_hex": None}
                         if sent["n"] else before):
-            r = moves.adjust.__wrapped__("temperature", "temperature", 300.0, job="job-test")
+            return moves.adjust.__wrapped__("temperature", "temperature", 300.0, job="job-test")
+
+    def test_warmer_that_landed_within_the_model_offset_is_ok(self) -> None:
+        # darktable's Kelvin model and the measured table disagree by ~2.3%
+        # in r/b (night 1: 5225 K always reads back 5124 K). That is a landed
+        # move, not a failure.
+        r = self._warmer_landing_off_the_table_by(0.023)
         self.assertEqual(r.outcome, "ok")
+
+    def test_warmer_whose_coefficients_moved_to_the_wrong_ratio_is_write_unverified(self) -> None:
+        # The coefficients changed, but to a ratio 30% (grossly) or 5% (just
+        # past the tolerance, still inside one table step) away from what the
+        # table predicts at the target: that is not the move that was asked.
+        for offset in (0.30, 0.05):
+            with self.subTest(offset=offset):
+                with self.assertRaises(WriteUnverified) as cm:
+                    self._warmer_landing_off_the_table_by(offset)
+                self.assertEqual(cm.exception.code, "write_unverified")
+                self.assertIn("the measured table predicts", cm.exception.message)
+                self.assertEqual(cm.exception.detail["tolerance"], 0.03)
+
+    def test_wb_verify_tolerance_is_pinned_between_the_model_offset_and_one_table_step(
+            self) -> None:
+        # Source: the shipped measured table scouter/data/wb/em10iii.json
+        # (1000 K resolution, 3000-12000 K). Its smallest relative r/b change
+        # between adjacent samples is 11000 -> 12000 K (~3.9%). The tolerance
+        # must stay below that, or a landing one whole table step off would
+        # verify; and above darktable's measured Kelvin-model offset (~2.4%,
+        # night 1: 5225 K reads back 5124 K), or every real warmer fails.
+        table = Path(wb.__file__).resolve().parent.parent / "data" / "wb" / "em10iii.json"
+        samples = json.loads(table.read_text())["samples"]
+        ratios = [p["coeff_r"] / p["coeff_b"] for p in samples]
+        self.assertEqual([p["k"] for p in samples], list(range(3000, 12001, 1000)))
+        min_step = min(b / a - 1 for a, b in zip(ratios, ratios[1:]))
+        self.assertAlmostEqual(min_step, 0.0388, places=3)
+        self.assertEqual(moves._WB_VERIFY_TOLERANCE, 3 * wb._EXACT_TOLERANCE)
+        self.assertEqual(moves._WB_VERIFY_TOLERANCE, 0.03)
+        self.assertLess(moves._WB_VERIFY_TOLERANCE, min_step)
+        self.assertGreater(moves._WB_VERIFY_TOLERANCE, 0.024)
 
     def test_slider_rounding_is_not_a_mismatch(self) -> None:
         # darktable stores black -0.002744 as -0.0027 (its 4 displayed digits).

@@ -234,6 +234,11 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
 #: 5225 K set reads back 5124 K through the table, every time); three times
 #: the table's own "exact" tolerance (`wb._EXACT_TOLERANCE`, 1%) covers that
 #: with margin while still failing a 300 K move that did not happen (7%).
+#: Upper bound, from the table's resolution: the shipped measured table
+#: (`scouter/data/wb/em10iii.json`, 1000 K steps) changes r/b by at least
+#: ~3.9% between adjacent samples (11000 -> 12000 K), so 3% never verifies a
+#: landing a whole table step away. Pinned by
+#: `test_wb_verify_tolerance_is_pinned_between_the_model_offset_and_one_table_step`.
 _WB_VERIFY_TOLERANCE = 3 * wb._EXACT_TOLERANCE
 
 
