@@ -160,10 +160,31 @@ Add the MCP server to your client's config alongside (or instead of) `darktable`
 ### Setup
 
 ```sh
-pip install -e '.[dev]'
-darktable-mcp install-plugin        # copies the Lua plugin, then RESTART darktable
-scouter doctor                      # darktable, plugin, current view, cache paths
+uv sync --extra dev                 # or: python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+.venv/bin/python -m scouter setup   # installs the Lua plugin (persistently), checks doctor,
+                                    # prints the `claude mcp add` line
+# restart darktable, open a photo in the darkroom, then:
+scouter setup --check               # every item ok? exit 0; anything missing? exit 1, changes nothing
 ```
+
+`scouter setup` is idempotent and does, in order:
+
+| Item | What it does | `--check` reports |
+|---|---|---|
+| `plugin` | writes the packaged `darktable_mcp.lua` where the bridge reads it (`~/.config/darktable/lua/`, or `$DARKTABLE_MCP_PLUGIN_PATH`) and **leaves it installed** -- no uninstall on exit, unlike the host tests | `ok` / `missing` / `stale` (an older plugin) |
+| `luarc` | adds `require "darktable_mcp"` to `~/.config/darktable/luarc` once, keeping every other line | `ok` / `missing` |
+| `wb_tables` | copies the measured white-balance tables shipped in `scouter/data/wb/` (today: `em10iii`) into `<config_dir>/wb/` when that camera has none; never overwrites one | `ok` / `missing`, plus any other calibrated bodies |
+| `config` | reported only: `scouter config init` writes it, because the backup gate is yours to arm. Single-frame editing works without it | `ok` / `missing` (not required) |
+| `doctor` | the bridge half of `scouter doctor`: darktable running, plugin loaded, answering | `ok` / `bridge_timeout` / ... |
+
+It then prints the exact `claude mcp add` command and the equivalent JSON
+(see "Editing with Scouter from Claude Code" below). It never reads or writes
+Claude Code's own config; registering is one command you run yourself.
+The exit code is `0` when every required item is ok. Right after a fresh
+install `doctor` is not ok until darktable is restarted -- the `next` list in
+the output says so.
+
+`darktable-mcp install-plugin` still exists and writes the same two files.
 
 darktable must be **running**, with the image open in the **darkroom**: slider
 actions exist only there, and `scouter` says so (`wrong_view`, exit code 4)
@@ -179,8 +200,7 @@ never lands and `scouter` reports `commit_timeout` (exit 10) rather than
 claiming a write it cannot see.
 
 The plugin loads through `~/.config/darktable/luarc` (`require "darktable_mcp"`),
-same as the original `darktable-mcp` tools — `darktable-mcp install-plugin`
-writes both the plugin file and that `luarc` line for you.
+same as the original `darktable-mcp` tools.
 
 ### A hero edit
 
@@ -733,6 +753,38 @@ To re-run it, close darktable first and have the hero ORF present:
 ```sh
 SCOUTER_HOST_TESTS=1 uv run --extra dev python -m pytest tests/test_host_phase3.py -q -s
 ```
+
+## Editing with Scouter from Claude Code
+
+### Register the server (once)
+
+`scouter setup` prints this line with your own paths. From this checkout it is:
+
+```
+claude mcp add --transport stdio --scope user --env PYTHONPATH=/Users/pratik/CodeBase/scouter scouter -- /Users/pratik/CodeBase/scouter/.venv/bin/python -m scouter.mcp.server
+```
+
+A stdio server, user scope (every project sees it), the repo's own venv
+python, absolute paths; `PYTHONPATH` pins this checkout even if the venv's
+editable install points at a worktree. The same server as JSON, for a
+project `.mcp.json` or Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "scouter": {
+      "type": "stdio",
+      "command": "/Users/pratik/CodeBase/scouter/.venv/bin/python",
+      "args": ["-m", "scouter.mcp.server"],
+      "env": {"PYTHONPATH": "/Users/pratik/CodeBase/scouter"}
+    }
+  }
+}
+```
+
+Check it with `claude mcp list` (it should show `scouter: ... - Connected`).
+Each server process pins one Scouter session job, so undo works across the
+whole conversation.
 
 ## Contributing
 
