@@ -1,4 +1,5 @@
 """Phase 3 task 8: apply a preset to the open image (bounce) or another image; to a job."""
+# mutation-check: targets-predate-range 55018012923d77440ffa3291dbf35b00a3a7fe15 -- presets.apply's one follow-up commit (f5f1e52) is untouched by this range; only the shared _MovesFixture commit tuple grew an expect_module slot. Proof: removing or flipping that _commit in presets.py fails it.
 
 from __future__ import annotations
 
