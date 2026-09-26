@@ -334,6 +334,28 @@ lua tests/lua/test_dispatcher.lua   # the Lua plugin's own harness, no darktable
 SCOUTER_HOST_TESTS=1 python3 -m pytest tests/test_host_phase2.py::Phase2EndToEndTest -q -s
 ```
 
+#### Test-honesty gate (`mutation_check`)
+
+`tests/mutation_check.py --base <sha> --head <sha>` (or `scripts/mutation_check.sh
+<base> <head>`, the entry point the HTC merge step calls) is the same
+test-honesty check capsule-corp's merge gate runs, mirrored here per
+capsule-corp decision row 459 / card t_a995978e: a new or changed test that
+can never fail proves nothing. For every new/changed test file in the range it
+(b) reverts the production change and requires at least one of that file's
+new/changed tests to fail, (c) weakens the first `assertEqual`/`assertTrue`/
+bare `==` inside one of those tests and requires the file to fail that way
+too, and (d) statically flags no-assert, a new `@pytest.mark.skip`/`skipif`/
+`xfail`, a bare `except: pass`, or `assertTrue(True)`. It runs with
+`-k "not host"` throughout, so a changed test that only a real-darktable
+(`host`) test covers reads `n/a`, never a failure. Exit non-zero (with the
+markdown table naming which file(s) didn't discriminate) is what a merge step
+should treat as a block. Self-tested against a tiny fixture repo built in
+tempfile: `tests/test_mutation_check.py`.
+
+(scouter has no `docs/ZENKAI.md` mirror of capsule-corp's reliability
+doctrine yet - this note lives here instead, per the same "note the repo
+section, README as fallback" instruction that seeded this script.)
+
 The host-only suite (`tests/test_host_integration.py`,
 `tests/test_commit_trigger_host.py`) launches the **real** darktable against
 `/Users/pratik/Pictures/EditingTrial/P6281348.ORF` and always quits it when
