@@ -24,6 +24,13 @@ from scouter.errors import ExifUnreadable
 MAKE, MODEL, DATETIME = 0x010F, 0x0110, 0x0132
 EXIF_IFD, DATETIME_ORIGINAL, SUBSEC_ORIGINAL = 0x8769, 0x9003, 0x9291
 EXPOSURE_TIME, F_NUMBER, ISO = 0x829A, 0x829D, 0x8827
+#: The standard TIFF/EXIF Orientation tag (row 437 fix round 1, I3): darktable's
+#: Lua `dt_lua_image_t` does not reliably expose a post-orientation width/height
+#: (per docs/superpowers/specs/2026-04-28-iter3-design.md's field survey), so a
+#: crop preset (which needs to know which axis is "up") reads it here instead,
+#: from the raw file itself -- the same source `darktable_mcp/tools/
+#: preview_tools.py` already trusts for auto-rotating previews.
+ORIENTATION = 0x0112
 
 #: 42 is the TIFF standard (ARW, DNG); 20306 (0x4F52) is Olympus ORF; 21330
 #: (0x5352) is the other ORF spelling in the wild; 85 (0x55) is Panasonic RW2.
@@ -48,6 +55,10 @@ class ExifTags:
     exposure_time: float | None = None
     f_number: float | None = None
     iso: int | None = None
+    #: The raw TIFF/EXIF Orientation value (1-8), or `None` when the tag is
+    #: absent. `None` and `1` both mean "normal, 0 degrees" to a caller --
+    #: kept distinct here only so a missing tag is visible, not guessed.
+    orientation: int | None = None
     source: str = "none"
 
 
@@ -129,6 +140,22 @@ def _subsec(blob: bytes | None) -> int:
         return 0
 
 
+#: Pure-rotation Orientation values -> degrees clockwise a viewer must apply
+#: to show the image upright. The other four values (2, 4, 5, 7) also mirror
+#: the frame, which a crop preset's left/right margins cannot be mapped
+#: through honestly, so they are deliberately absent here.
+_PURE_ROTATION = {1: 0, 3: 180, 6: 90, 8: 270}
+
+
+def rotation_degrees(orientation: int | None) -> int | None:
+    """0/90/180/270 for a pure-rotation Orientation value; `None` for a
+    mirrored one (2, 4, 5, 7) or anything outside 1-8. No tag at all (`None`)
+    is the camera's own default: 0 degrees, not "unknown"."""
+    if orientation is None:
+        return 0
+    return _PURE_ROTATION.get(orientation)
+
+
 def read_tags(path: str | Path, *, limit: int = 1 << 16) -> ExifTags:
     """Read up to `limit` bytes of `path` and walk its TIFF/EXIF header.
 
@@ -181,6 +208,11 @@ def read_tags(path: str | Path, *, limit: int = 1 << 16) -> ExifTags:
         typ, n, blob, _ = exif_ifd[ISO]
         if len(blob) >= 2:
             (iso,) = struct.unpack_from(endian + "H", blob, 0)
+    orientation = None
+    if ORIENTATION in ifd0:
+        typ, n, blob, _ = ifd0[ORIENTATION]
+        if len(blob) >= 2:
+            (orientation,) = struct.unpack_from(endian + "H", blob, 0)
 
     has_ifd0_data = make is not None or model is not None or ifd0_datetime is not None
     has_exif_data = (
@@ -206,6 +238,7 @@ def read_tags(path: str | Path, *, limit: int = 1 << 16) -> ExifTags:
         exposure_time=exposure_time,
         f_number=f_number,
         iso=iso,
+        orientation=orientation,
         source=source,
     )
 

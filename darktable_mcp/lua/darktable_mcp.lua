@@ -1416,6 +1416,16 @@ methods["darkroom.current"] = function()
   if not image then
     return {view = current_view_name(), source = source}
   end
+  -- `width`/`height` are the RAW stored dimensions (`dt_lua_image_t`'s own
+  -- fields), not a post-orientation or post-crop size: the field survey in
+  -- docs/superpowers/specs/2026-04-28-iter3-design.md found no `final_*`
+  -- or orientation attribute on the Lua image object, and this diff cannot
+  -- confirm one exists in the 5.4.1 API without a host run (Task 33 fix
+  -- round 1, I3). Scouter accounts for a portrait/landscape swap on the
+  -- Python side instead, from the raw file's own EXIF Orientation tag
+  -- (`scouter.core.exif.rotation_degrees`) -- confirm on the host during
+  -- Step 8 that this still matches what darktable itself shows for a
+  -- portrait frame, and extend this handler if a better field turns up.
   return {
     view = current_view_name(),
     image_id = tonumber(image.id),

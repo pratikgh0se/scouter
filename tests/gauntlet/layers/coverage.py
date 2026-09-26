@@ -66,12 +66,9 @@ def live_params() -> list[vocab.ParamSpec]:
     return [s for s in vocab.PARAMS if vocab.status(s) == "live" and s.param != "__enabled"]
 
 
-def _row(mv: phrases.Move) -> vocab.ParamSpec:
-    if mv.module == phrases.TONE:
-        return vocab.spec("sigmoid", "contrast")
-    if mv.module == "crop":
-        return vocab.spec("crop", "left")
-    return vocab.spec(mv.module, mv.param)
+# Fix round 1, M6: `phrases.row_for` is the single place that maps a
+# `@tone`/`crop` move to its representative vocabulary row.
+_row = phrases.row_for
 
 
 def _mid(s: vocab.ParamSpec) -> float:

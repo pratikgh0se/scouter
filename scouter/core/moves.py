@@ -13,7 +13,18 @@ from datetime import datetime
 from pathlib import Path
 
 from scouter import metrics
-from scouter.core import darkroom, dtbridge, explain, history, journal, phrases, vocab, wb, xmp
+from scouter.core import (
+    darkroom,
+    dtbridge,
+    exif,
+    explain,
+    history,
+    journal,
+    phrases,
+    vocab,
+    wb,
+    xmp,
+)
 from scouter.errors import CommitTimeout, NotPinned, ScouterError, UsageError, ValueUnknown
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
@@ -258,6 +269,11 @@ def before_fallback(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int,
     )
 
 
+#: The four crop rows a crop preset moves together (plan wording, spec §4.2:
+#: "a crop preset refuses not_pinned until all four crop rows are pinned").
+CROP_SIDES = ("left", "right", "top", "bottom")
+
+
 def crop_margins(target_aspect: float, width: int, height: int) -> dict[str, float]:
     """Centered crop margins (fractions of the frame) for `target_aspect` = w/h."""
     if width <= 0 or height <= 0 or target_aspect <= 0:
@@ -466,19 +482,27 @@ def adjust(module: str, param: str, delta: float, *, instance: int = 0, commit: 
 
 def _refusal(mv_module: str, param: str, kind: str) -> dict | None:
     if kind == "crop":
-        # A crop preset moves all four crop rows; the left row carries the
-        # gate status for the group (they are pinned or unpinned together).
-        s = vocab.spec("crop", "left")
-        module, param = "crop", "left"
-    else:
-        s = vocab.spec(mv_module, param)
-        module = mv_module
+        # Fix round 1, "the crop gate checks all four sides pinned": a crop
+        # preset moves all four crop rows, and the plan's own wording says
+        # it "refuses not_pinned until all four crop rows are pinned" -- a
+        # single `crop.left` stand-in let a preset pass the gate and then
+        # fail partway through on an unpinned side. Refuse on the first
+        # unpinned side found.
+        for side in CROP_SIDES:
+            s = vocab.spec("crop", side)
+            try:
+                gate(s, relative=True)
+            except ScouterError as e:
+                return {"module": "crop", "param": side, "code": e.code,
+                        "status": vocab.status(s), "message": e.message}
+        return None
+    s = vocab.spec(mv_module, param)
     if s is None:
-        return {"module": module, "param": param, "code": "usage", "status": "missing"}
+        return {"module": mv_module, "param": param, "code": "usage", "status": "missing"}
     try:
-        gate(s, relative=(kind in ("adjust", "toggle", "crop")))
+        gate(s, relative=(kind in ("adjust", "toggle")))
     except ScouterError as e:
-        return {"module": module, "param": param, "code": e.code, "status": vocab.status(s),
+        return {"module": mv_module, "param": param, "code": e.code, "status": vocab.status(s),
                 "message": e.message}
     return None
 
@@ -568,6 +592,24 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
                     if not (w and h):
                         raise ValueUnknown("the image size is unknown, so a crop preset "
                                            "cannot be placed", detail={"reason": "no width/height"})
+                    # Fix round 1, I3: `darkroom.current`'s width/height are the
+                    # RAW stored dimensions -- darktable's Lua image API does
+                    # not reliably expose a post-orientation size (see
+                    # scouter.core.exif.rotation_degrees's docstring), so a
+                    # portrait frame is read from the file's own EXIF
+                    # Orientation tag instead, the same source
+                    # darktable_mcp/tools/preview_tools.py already trusts for
+                    # auto-rotating previews. A mirrored orientation (2, 4, 5,
+                    # 7) has no honest left/right mapping, so it refuses.
+                    degrees = exif.rotation_degrees(exif.read_tags(resolved.path).orientation)
+                    if degrees is None:
+                        raise ValueUnknown(
+                            "the image's EXIF orientation is mirrored, so a crop preset "
+                            "cannot tell which edge is left",
+                            detail={"reason": "mirrored_orientation"},
+                        )
+                    if degrees in (90, 270):
+                        w, h = h, w
                     for side, v in crop_margins(float(mv.value), w, h).items():
                         r = _set_recording_before("crop", side, v, instance=0, commit=commit,
                                                   job=job, fallback=before_fallback(

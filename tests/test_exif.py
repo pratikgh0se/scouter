@@ -202,3 +202,59 @@ def test_datetime_offsets_round_trip():
         assert tags.captured_at == "2030-01-02 03:04:05"
     finally:
         tmp.unlink()
+
+
+def _build_orientation_header(orientation: int) -> bytes:
+    """A synthetic single-IFD little-endian TIFF header with one IFD0 entry:
+    Orientation (SHORT, count 1), inline in the entry's own value field."""
+    ifd0_offset = 8
+    endian = "<"
+    header = b"II"
+    header += struct.pack(endian + "H", 42)
+    header += struct.pack(endian + "I", ifd0_offset)
+    header += struct.pack(endian + "H", 1)  # IFD0: one entry
+    header += struct.pack(endian + "HHI", exif.ORIENTATION, 3, 1)  # SHORT, count 1
+    header += struct.pack(endian + "HH", orientation, 0)  # value, then padding
+    header += struct.pack(endian + "I", 0)  # next-IFD offset
+    return header
+
+
+def test_real_orf_header_orientation_is_normal():
+    tags = exif.read_tags(FIXTURE)
+    assert tags.orientation == 1
+    assert exif.rotation_degrees(tags.orientation) == 0
+
+
+def test_orientation_tag_round_trips():
+    for value in (1, 2, 3, 4, 5, 6, 7, 8):
+        tmp = FIXTURE.parent / f"_tmp_orientation_{value}.bin"
+        tmp.write_bytes(_build_orientation_header(value))
+        try:
+            tags = exif.read_tags(tmp)
+            assert tags.orientation == value
+        finally:
+            tmp.unlink()
+
+
+def test_missing_orientation_tag_is_none_not_a_guess():
+    header = _build_header(b"II", "<", 42, "ACME", "X100")  # no Orientation entry
+    tmp = FIXTURE.parent / "_tmp_no_orientation.bin"
+    tmp.write_bytes(header)
+    try:
+        tags = exif.read_tags(tmp)
+        assert tags.orientation is None
+    finally:
+        tmp.unlink()
+
+
+def test_rotation_degrees_pure_rotations():
+    assert exif.rotation_degrees(None) == 0  # no tag: the camera's own default
+    assert exif.rotation_degrees(1) == 0
+    assert exif.rotation_degrees(3) == 180
+    assert exif.rotation_degrees(6) == 90
+    assert exif.rotation_degrees(8) == 270
+
+
+def test_rotation_degrees_mirrored_or_unknown_is_none():
+    for value in (2, 4, 5, 7, 0, 9, 255):
+        assert exif.rotation_degrees(value) is None

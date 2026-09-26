@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from gauntlet.case import Case, Check, Expect, Step, case_id
-from scouter.core import phrases, vocab
+from scouter.core import phrases
 from tests.gauntlet.checkmap import plan_request
 from tests.gauntlet.taxonomy import Taxonomy
 
@@ -74,13 +74,14 @@ def generate(tax: Taxonomy) -> list[Case]:
         cases.append(_resolve_case(case_id(PREFIX, "req", r["id"]), r["sentence"], allowed,
                                    {"file": "requests.json", "id": r["id"]}))
     for p in phrases.PHRASES:
-        if p.moves[0].module == "@tone":
-            row = vocab.spec("sigmoid", "contrast")
-        elif p.moves[0].module == "crop":
-            row = vocab.spec("crop", "left")
-        else:
-            row = vocab.spec(p.moves[0].module, p.moves[0].param)
+        # Fix round 1, M6: `phrases.row_for` is the single place that maps a
+        # `@tone`/`crop` move to its representative vocabulary row.
+        row = phrases.row_for(p.moves[0])
         one_move = len(p.moves) == 1 and p.moves[0].kind == "adjust"
+        # Fix round 1, M3: a toggle/crop phrase has no adjust move for an
+        # intensity word to scale, so `resolve()` now reports intensity 1.0
+        # for it regardless of which intensity word (if any) was typed.
+        has_adjust = any(mv.kind == "adjust" for mv in p.moves)
         for syn in p.synonyms:
             forms = [("bare", syn, 1.0)]
             forms += [(w.replace(" ", "_"), f"{syn} {w}", f) for w, f in INTENSITY_WORDS.items()]
@@ -90,8 +91,9 @@ def generate(tax: Taxonomy) -> list[Case]:
                 if factor is None:
                     expect = {"explicit": True} if one_move else {"refused": "usage"}
                 else:
-                    expect = {"intensity": factor,
-                              "notches": [(mv.notches or 0) * factor if mv.kind == "adjust"
+                    eff = factor if has_adjust else 1.0
+                    expect = {"intensity": eff,
+                              "notches": [(mv.notches or 0) * eff if mv.kind == "adjust"
                                           else None for mv in p.moves]}
                 cases.append(Case(
                     id=cid, layer=LAYER, tier="P2", mode="offline",

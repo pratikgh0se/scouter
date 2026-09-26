@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from unittest import mock
 
-from scouter.core import darkroom, dtbridge, journal, moves
+from scouter.core import darkroom, dtbridge, exif, journal, moves
 from scouter.errors import NotPinned, UsageError, ValueUnknown
 from tests.test_moves import _MovesFixture
+
+CROP_PATHS = {("crop", side): f"iop/crop/{side}" for side in ("left", "right", "top", "bottom")}
 
 
 class SayTest(_MovesFixture):
@@ -288,3 +290,100 @@ class GroupUndoTest(_MovesFixture):
         self.assertEqual(result.outcome, "ok")
         self.assertEqual(len(result.undone_group), 3)
         self.assertTrue(all(e.undone for e in journal.read_all("job-test")))
+
+class LensToggleUndoTest(_MovesFixture):
+    """Row 437 fix round 1, C1: `say("turn off lens correction")` dispatches
+    to `darkroom.disable`, whose journal entry has no `before.value` -- the
+    generic set-undo branch used to raise "was never readable" on it and
+    leave the entry stuck as the newest open one forever."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.bridge.responses["module.enable"] = {
+            "module": "lens", "action": "enable", "nan": False, "view": "darkroom",
+        }
+        self.bridge.responses["module.disable"] = {
+            "module": "lens", "action": "disable", "nan": False, "view": "darkroom",
+        }
+
+    def test_lens_off_then_undo_last_does_not_wedge_the_journal(self) -> None:
+        r = moves.say.__wrapped__("turn off lens correction", commit=False, job="job-test")
+        self.assertEqual(r.key, "lens_off")
+        self.assertIn("module.disable", self.bridge.methods_called())
+        result = darkroom.undo_last.__wrapped__(job="job-test")
+        self.assertEqual(result.outcome, "ok")
+        self.assertEqual(len(result.undone_group), 1)
+        self.assertTrue(all(e.undone for e in journal.read_all("job-test")))
+        # The journal must not be stuck: a second call is a clean "nothing
+        # to undo" noop, not a repeat of the same "was never readable" error.
+        second = darkroom.undo_last.__wrapped__(job="job-test")
+        self.assertEqual(second.outcome, "noop")
+
+
+class CropPresetDispatchTest(_MovesFixture):
+    """Row 437 fix round 1: crop presets gate on all four crop rows and
+    account for EXIF orientation before computing margins (I3)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._pins = mock.patch.dict(dtbridge.ACTION_PATHS, CROP_PATHS)
+        self._pins.start()
+        self.addCleanup(self._pins.stop)
+        self._named = mock.patch("scouter.core.vocab.xmp_named", return_value=True)
+        self._named.start()
+        self.addCleanup(self._named.stop)
+
+    def _current(self, width: int, height: int) -> None:
+        self.bridge.responses["darkroom.current"] = {
+            "image_id": 12, "path": str(self.raw), "view": "darkroom",
+            "source": "action_images", "width": width, "height": height,
+        }
+
+    def _orientation(self, value: int | None):
+        return mock.patch(
+            "scouter.core.moves.exif.read_tags",
+            return_value=exif.ExifTags(byte_order="II", magic=42, orientation=value),
+        )
+
+    def test_crop_square_normal_orientation_uses_raw_dimensions_directly(self) -> None:
+        self._current(6000, 4000)
+        with self._orientation(1):
+            r = moves.say.__wrapped__("crop square", commit=False, job="job-test")
+        self.assertEqual(r.key, "crop_square")
+        self.assertEqual(len(r.moves), 4)
+        by_path = {p["path"]: p["value"] for p in self.sets()}
+        self.assertAlmostEqual(by_path["iop/crop/left"], 1 / 6, places=6)
+        self.assertAlmostEqual(by_path["iop/crop/right"], 5 / 6, places=6)
+        self.assertEqual((by_path["iop/crop/top"], by_path["iop/crop/bottom"]), (0.0, 1.0))
+
+    def test_crop_square_90_degree_orientation_swaps_width_and_height(self) -> None:
+        # The Lua-reported dimensions are the RAW, unoriented sensor size
+        # (6000x4000, "landscape" numbers); a 90-degree EXIF orientation
+        # means the frame actually displays as a 4000x6000 portrait, so the
+        # crop margins must be computed against the SWAPPED dimensions.
+        self._current(6000, 4000)
+        with self._orientation(6):
+            r = moves.say.__wrapped__("crop square", commit=False, job="job-test")
+        self.assertEqual(len(r.moves), 4)
+        by_path = {p["path"]: p["value"] for p in self.sets()}
+        self.assertAlmostEqual(by_path["iop/crop/top"], 1 / 6, places=6)
+        self.assertAlmostEqual(by_path["iop/crop/bottom"], 5 / 6, places=6)
+        self.assertEqual((by_path["iop/crop/left"], by_path["iop/crop/right"]), (0.0, 1.0))
+
+    def test_crop_mirrored_orientation_refuses_with_a_typed_reason(self) -> None:
+        self._current(6000, 4000)
+        with self._orientation(2):
+            with self.assertRaises(ValueUnknown) as cm:
+                moves.say.__wrapped__("crop square", commit=False, job="job-test")
+        self.assertEqual(cm.exception.detail.get("reason"), "mirrored_orientation")
+        self.assertEqual(self.sets(), [])
+
+    def test_crop_preset_refuses_not_pinned_unless_all_four_sides_are_pinned(self) -> None:
+        with mock.patch.dict(dtbridge.ACTION_PATHS):
+            del dtbridge.ACTION_PATHS[("crop", "bottom")]
+            with self.assertRaises(NotPinned) as cm:
+                moves.say.__wrapped__("crop square", commit=False, job="job-test")
+        self.assertEqual(cm.exception.detail["refused"][0]["param"], "bottom")
+        # Nothing may land before the pre-validation, including no
+        # darkroom.current lookup (mirrors the teal-and-orange test above).
+        self.assertEqual(self.bridge.calls, [])
