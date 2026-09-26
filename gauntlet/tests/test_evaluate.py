@@ -406,3 +406,37 @@ def test_smoke_s1a_multi_move_phrase_and_keyless_envelope():
     v = evaluate(_edit_case([], {"changed": True}),
                  _obs(mixed, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)), POLICY)
     assert v.silent_failure.startswith("b: reported exposure.exposure but"), v.silent_failure
+
+
+def test_smoke_r1_i1_all_noop_say_that_changed_the_sidecar_is_silent():
+    """Review I1: every move answered noop (e.g. clamped) yet params changed."""
+    allnoop = _say_env([_move("temperature", "temperature", noop=True)])
+    v = evaluate(_edit_case([], {"changed": True}),
+                 _obs(allnoop, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)), POLICY)
+    assert v.outcome == "silent_failure", v.outcome
+    assert v.silent_failure.startswith("f: every move answered noop but the sidecar changed")
+    # same fingerprint but a param changed still counts
+    v = evaluate(_edit_case([], None),
+                 _obs(allnoop, _snap("a", **WARM_BEFORE), _snap("a", **WARM_AFTER)), POLICY)
+    assert v.silent_failure.startswith("f: every move answered noop"), v.silent_failure
+    # an honest all-noop say that changed nothing is not a silent failure
+    v = evaluate(_edit_case([], None),
+                 _obs(allnoop, _snap("a", **WARM_BEFORE), _snap("a", **WARM_BEFORE)), POLICY)
+    assert v.silent_failure is None
+
+
+def test_smoke_r1_a_is_per_reported_key():
+    """Review minor (a): a committed non-noop move whose key did not change is an (a)
+    when the case expects a change, even if another reported key did change."""
+    two = _say_env([_move("temperature", "temperature"), _move("exposure", "exposure")])
+    before = {**WARM_BEFORE, "exposure.exposure": 0.7}
+    after = {**WARM_AFTER, "exposure.exposure": 0.7}
+    v = evaluate(_edit_case([], {"changed": True}),
+                 _obs(two, _snap("a", **before), _snap("b", **after)), POLICY)
+    assert v.silent_failure == "a: reported ok but exposure.exposure did not change"
+    # an uncommitted move is not a report of a change
+    unc = _say_env([_move("temperature", "temperature"),
+                    _move("exposure", "exposure", committed=False)])
+    v = evaluate(_edit_case([], {"changed": True}),
+                 _obs(unc, _snap("a", **before), _snap("b", **after)), POLICY)
+    assert v.outcome == "verified", v.silent_failure

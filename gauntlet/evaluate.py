@@ -303,7 +303,7 @@ def _reported_keys(writes: list[CallRecord]) -> list[str] | None:
     """The module.param keys the last ok write's envelope reports moving.
 
     A multi-move envelope (darkroom_say) reports its moves' module.param,
-    noop moves excluded; a single-move one its data.module/data.param.
+    noop and uncommitted moves excluded; a single-move one its data.module/data.param.
     `data.key` is never read as a param: darkroom_say puts the PHRASE key
     there ("warmer"), which is not a module.param (smoke S1-A). An envelope
     that names something but no param gives [] (skip rule (b)); one that
@@ -316,12 +316,20 @@ def _reported_keys(writes: list[CallRecord]) -> list[str] | None:
         if isinstance(moves, list) and moves:
             return sorted({f"{m['module']}.{m['param']}" for m in moves
                            if isinstance(m, dict) and not m.get("noop")
+                           and m.get("committed") is not False
                            and isinstance(m.get("module"), str)
                            and isinstance(m.get("param"), str)})
         if isinstance(data.get("module"), str) and isinstance(data.get("param"), str):
             return [f"{data['module']}.{data['param']}"]
         return [] if "key" in data else None
     return None
+
+
+def _all_moves_noop(c: CallRecord) -> bool:
+    """An ok envelope whose moves list is non-empty and every move answered noop."""
+    moves = ((c.envelope or {}).get("data") or {}).get("moves")
+    return (_env_ok(c) and isinstance(moves, list) and bool(moves)
+            and all(isinstance(m, dict) and m.get("noop") for m in moves))
 
 
 def _m1_key_unchanged(case: Case, obs: Observation) -> str | None:
@@ -370,6 +378,10 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
         return "f: answered noop but the sidecar changed"
     if noop_calls and case.expect.kind == "edit" and (case.expect.sidecar or {}).get("changed"):
         return "f: answered noop for a request that needed a change"
+    if any(_all_moves_noop(c) for c in writes) and \
+            (_fingerprint_changed(obs) or _changed_keys(obs, (case.expect.sidecar or {})
+                                                       .get("units", {}))):
+        return "f: every move answered noop but the sidecar changed"
     if not reported:
         return None
     sidecar = case.expect.sidecar or {}
@@ -386,6 +398,11 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
             return f"b: reported {named} but {', '.join(changed)} changed"
         if sidecar.get("changed") and not set(keys) & set(changed):
             return f"a: reported ok but {named} did not change"
+        # per key: every committed, non-noop move the snapshots can see must have moved
+        seen = set(_params(obs.before)) | set(_params(obs.after))
+        unmoved_keys = [k for k in keys if k in seen and k not in changed]
+        if sidecar.get("changed") and unmoved_keys:
+            return f"a: reported ok but {', '.join(unmoved_keys)} did not change"
     unmoved = _m1_key_unchanged(case, obs)
     if unmoved:
         return f"a: reported ok but {unmoved} did not change"

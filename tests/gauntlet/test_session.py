@@ -203,6 +203,7 @@ def test_smoke_s2_frame_imported_mid_session_relaunches_on_it(corpus, tmp_path):
     dark = s.staged.frames["dark"]
     assert s.ensure_frame("dark") == dark
     assert dt.launched == [s.staged.frames["hero"], dark] and s.current_frame == dark
+    assert dt.terminated == [False]  # the quit ladder ran before the relaunch
     assert [c[0] for c in mcp.calls] == ["darkroom_open", "darkroom_open"]
 
 
