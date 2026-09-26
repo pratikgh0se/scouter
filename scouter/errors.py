@@ -237,8 +237,14 @@ class NotPinned(ScouterError):
     )
 
 
-class DarktableUnresponsive(ScouterError):
-    """Watchdog design 2.2: a call timed out AND the 5 s health ping failed."""
+class DarktableUnresponsive(BridgeTimeout):
+    """Watchdog design 2.2: a call timed out AND the 5 s health ping failed
+    while a darktable process exists (fix round 1: a darktable that is not
+    running stays a plain `BridgeTimeout`).
+
+    A `BridgeTimeout` subclass so every existing `except BridgeTimeout` site
+    keeps its tolerant behaviour (import, style batches); its own code and
+    exit code (24) still say which of the two happened."""
 
     code = "darktable_unresponsive"
     fix = (

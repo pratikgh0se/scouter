@@ -278,6 +278,39 @@ class StyleSetTest(unittest.TestCase):
         )
         self.assertEqual(result.outcome, "partial")
 
+    def test_a_wedged_darktable_keeps_per_id_unknown_rows(self) -> None:
+        """Task 29 fix round 1 (I1): a batch whose call raises
+        DarktableUnresponsive (timed out, ping dead, darktable running) keeps
+        the BridgeTimeout per-id "unknown" handling and earlier successes."""
+        from scouter.core import dtprocess
+        from scouter.errors import DarktableUnresponsive
+
+        images = _images(self.root, 50)  # 2 batches at batch=25
+        script = _Script([_apply_all_ok, BridgeTimeoutError("darktable stopped responding")])
+        seen: list[BaseException] = []
+        real_call = dtbridge.call
+
+        def spy(method, params=None, timeout=None):
+            try:
+                return real_call(method, params, timeout)
+            except BaseException as e:
+                seen.append(e)
+                raise
+
+        bridge = _bridge(images, style_name="hero", apply=script)
+        bridge.raises["darktable_mcp.diag"] = BridgeTimeoutError("no answer")
+        dtbridge.set_bridge(bridge)
+        with mock.patch.object(dtprocess, "running_pids", return_value=[4242]), \
+                mock.patch.object(dtprocess, "owned_pid", return_value=None), \
+                mock.patch.object(dtbridge, "call", side_effect=spy):
+            result = style.apply_set(name="hero", images=list(images.values()), confirm=True,
+                                     batch=25)
+        self.assertTrue(any(isinstance(e, DarktableUnresponsive) for e in seen), seen)
+        self.assertEqual(result.outcome, "partial")
+        self.assertEqual(result.applied, 25)
+        unknown = {p["image_id"] for p in result.per_image if p["status"] == "unknown"}
+        self.assertEqual(unknown, set(list(images)[25:]))
+
     # -- fix round 1: batch-level ScouterError, not only BridgeTimeout ---
 
     def test_errors_branch_real_apply_failure(self) -> None:

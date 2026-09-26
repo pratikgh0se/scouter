@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 
 from scouter import __version__, paths, registry
@@ -306,9 +307,20 @@ def _doctor_watchdog(report: dict) -> None:
     report["gui_ready_line"] = f"gui_ready: {str(h.get('gui_ready')).lower()} " \
         f"({h.get('gui_ready_source') or '-'})"
     owned = dtprocess.owned_pid()
-    running = dtprocess.running_pids()
-    pid = owned or (running[0] if running else None)
-    who = "launched by scouter" if owned else ("user" if pid else "-")
+    try:
+        running: list[int] | None = dtprocess.running_pids()
+    except (OSError, subprocess.SubprocessError):
+        # Fix round 1 (I2): pgrep could not answer -- "unknown", never
+        # "none running", and never a traceback that loses the config lines.
+        running = None
+    if owned:
+        pid, who = owned, "launched by scouter"
+    elif running is None:
+        pid, who = "unknown", "pid lookup failed"
+    elif running:
+        pid, who = running[0], "user"
+    else:
+        pid, who = None, "-"
     report["darktable_pid_line"] = f"darktable pid: {pid or '-'} ({who})"
 
 
