@@ -18,7 +18,9 @@ default: temperature preset 4 + color calibration, daylight illuminant):
 2. sentinel: a set of the illuminant temperature lands at exactly one float
    slot, slot 36 = byte 144 of channelmixerrgb v3 (`xmp.LAYOUTS`) (§10.2);
 3. second oracle (Zenkai Z2): the rendered centre r/b ratio (`scout.stats`)
-   goes UP for a higher illuminant temperature and DOWN for a lower one;
+   goes UP for a higher illuminant temperature and DOWN for a lower one.
+   This is the step that VERIFIES route A's direction assumption (higher
+   illuminant K = warmer); until it passes, that sign is unverified;
 4. the WB module is untouched: temperature preset still 4 after both moves.
 """
 
@@ -104,9 +106,14 @@ class ColorCalWarmthHostTest(unittest.TestCase):
                 ratio = rb()
                 preset = darkroom.wb_preset(str(SCRATCH))
                 results[label] = (slots, ratio, preset, params)
+                # Review M2: log x/y too -- the fixture's stored (x, y) sits off
+                # the daylight locus, so a first slider move may also re-derive
+                # them (a green/magenta shift r/b alone would not show).
                 _record(f"{label}: set {k} K -> slots {slots} (expect [{SLOT}]), decoded "
-                        f"{params and params.get('temperature')}, r/b {base:.4f} -> {ratio:.4f}, "
-                        f"WB preset {preset}")
+                        f"{params and params.get('temperature')}, x/y "
+                        f"{before.get('x'):.4f}/{before.get('y'):.4f} -> "
+                        f"{params and params.get('x')}/{params and params.get('y')}, "
+                        f"r/b {base:.4f} -> {ratio:.4f}, WB preset {preset}")
             self.assertEqual(results["warmer"][0], [SLOT])
             self.assertEqual(results["cooler"][0], [SLOT])
             self.assertGreater(results["warmer"][1], base, "warmer must raise r/b")

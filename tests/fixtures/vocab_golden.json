@@ -142,7 +142,7 @@
     "lo": 2000.0,
     "module": "channelmixerrgb",
     "neutral": null,
-    "note": "used for warmer/cooler only while the white balance is in camera reference (late) mode; needs a daylight or planckian illuminant",
+    "note": "used for warmer/cooler only while the white balance is in camera reference (late) mode; needs a daylight or planckian illuminant; direction (higher K = warmer) unverified until the host probe",
     "param": "temperature",
     "pinned_path": null,
     "reachable": true,

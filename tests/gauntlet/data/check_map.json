@@ -182,5 +182,17 @@
     {"match": "too crunchy", "action": "undo"},
     {"match": "too smooth", "action": "undo"},
     {"match": "", "action": "repeat_bit"}
-  ]
+  ],
+  "wb_route_a": {
+    "about": "Route A (Scouter decision rows 458/461, fix/htc-wb-colorcal): on a frame whose white balance is in camera reference (late) mode (temperature preset 4), warmth moves color calibration's illuminant temperature and leaves the WB module alone. Applied by checkmap.wb_route_a_expect to coverage/scenario cases on such frames.",
+    "applies_when": {"key": "temperature.preset", "equals": 4},
+    "phrase_keys": ["warmer", "cooler"],
+    "param_keys": ["temperature.temperature"],
+    "m1_key": {"from": "temperature.temperature", "to": "channelmixerrgb.temperature", "unit": "K"},
+    "derived_keys": ["channelmixerrgb.x", "channelmixerrgb.y"],
+    "unchanged_keys": ["temperature.preset"],
+    "stat_check": "unchanged: M4 rb with the phrase's sign is the second oracle",
+    "until_pinned": {"pin": ["channelmixerrgb", "temperature"], "expect": "typed_error", "accept_codes": ["module_unavailable"]},
+    "direction_verified": false
+  }
 }

@@ -993,7 +993,13 @@ on a preset-4 image its `kelvin` is the white balance module's as-shot value,
 which warmth no longer moves. **Limit today:** the route's darktable action
 path (`iop/channelmixerrgb/temperature`) waits for its host probe
 (`tests/test_host_colorcal.py`), so the row is `candidate` and warmth on a
-preset-4 image still refuses `module_unavailable`. Speed is the same as any
+preset-4 image still refuses `module_unavailable`. **Unverified:** that a
+higher illuminant temperature renders warmer (the same sign as the white
+balance slider) is assumed from darktable's chromatic adaptation, not
+measured; the host probe's r/b check confirms it before the pin. Only color
+calibration instance 0 is read and targeted (a second, masked instance is
+not considered), and cooler moves below 4000 K on a daylight illuminant rely
+on darktable extrapolating the daylight formula. Speed is the same as any
 one-move phrase: one sidecar read decides the route, no extra darktable call
 (a direct `darkroom set` pays one extra `darkroom.current` lookup).
 

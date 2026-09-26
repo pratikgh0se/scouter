@@ -132,6 +132,11 @@ PARAMS: tuple[ParamSpec, ...] = (
     # instead (`darkroom.wb_route`). darktable's hard range is 1667-25000 K;
     # the clamp and the notch match the white-balance row. Only shown for a
     # daylight or planckian illuminant (2 / 6), which the route checks.
+    # UNVERIFIED until tests/test_host_colorcal.py step 3 passes: the sign
+    # (a higher illuminant K renders warmer, like the WB slider) is assumed
+    # from darktable's CAT semantics, not yet measured. The 2000 K floor is
+    # below the CIE daylight formula's 4000 K validity; darktable
+    # extrapolates there (unmeasured).
     ParamSpec("channelmixerrgb", "temperature",
               "color calibration › CAT › illuminant temperature", "K", 1.0,
               2000.0, 12000.0, 300.0, "xmp", None, False, "white_balance",
@@ -140,7 +145,8 @@ PARAMS: tuple[ParamSpec, ...] = (
               "neutral greys and skin",
               ("iop/channelmixerrgb/temperature",),
               note="used for warmer/cooler only while the white balance is in camera "
-                   "reference (late) mode; needs a daylight or planckian illuminant"),
+                   "reference (late) mode; needs a daylight or planckian illuminant; "
+                   "direction (higher K = warmer) unverified until the host probe"),
     _cb("contrast", "master › contrast", "%", -0.5, 0.5, 0.05, "color_balance",
         "adds or removes contrast around middle grey, after the tone mapper",
         "that it does not fight the sigmoid contrast"),

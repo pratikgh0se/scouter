@@ -25,6 +25,7 @@ from unittest import mock
 
 from scouter.core import darkroom, dtbridge, journal, moves, vocab, wb, xmp
 from scouter.errors import ModuleUnavailable
+from scouter.types import CommitResult
 from tests.test_moves import _MovesFixture
 from tests.test_wb_late_guard import _PRESET_2_HEX, _PRESET_4_HEX
 
@@ -144,6 +145,77 @@ class RouteSelectionTest(_RouteFixture):
         r = darkroom.wb_route(str(self.raw))
         self.assertEqual(r["route"], "unavailable")
         self.assertIn("not enabled", r["reason"])
+
+
+class ModuleMissingTest(_RouteFixture):
+    def test_no_color_calibration_entry_at_all_is_unavailable(self) -> None:
+        self.preset_4()
+        text = self.sidecar.read_text(encoding="utf-8")
+        start = text.index('     <rdf:li\n      darktable:num="7"')
+        end = text.index("/>", start) + 2
+        self.sidecar.write_text(text[:start] + text[end:], encoding="utf-8")
+        self.pin()
+        self.assertNotIn("channelmixerrgb", self.sidecar.read_text(encoding="utf-8"))
+        r = darkroom.wb_route(str(self.raw))
+        self.assertEqual(r["route"], "unavailable")
+        self.assertIn("not enabled", r["reason"])
+        with self.assertRaises(ModuleUnavailable):
+            moves.say.__wrapped__("warmer", job="job-test")
+        self.assertEqual(self.sets(), [])
+
+
+class PresetRevealedByTheBounceTest(_RouteFixture):
+    """Review I1: no sidecar before the pre-read bounce; the bounce writes a
+    preset-4 sidecar. The route must be chosen on what the bounce wrote, so
+    the value read is the illuminant's, never the WB table's Kelvin."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.preset_4()
+        self.pin()
+        text = self.sidecar.read_text(encoding="utf-8")
+        self.sidecar.unlink()
+
+        def bounce(job, image, *, strategy="auto", attempts=None, expect_change=True):
+            self.commits.append((attempts, expect_change))
+            self.sidecar.write_text(text, encoding="utf-8")
+            return CommitResult(committed=True, changed=False, warnings=[])
+
+        p = mock.patch("scouter.core.darkroom._commit", side_effect=bounce)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_adjust_reroutes_after_the_bounce(self) -> None:
+        r = moves.adjust.__wrapped__("temperature", "temperature", 300.0, commit=False,
+                                     job="job-test")
+        self.assertEqual(r.module, "channelmixerrgb")
+        self.assertEqual([s["path"] for s in self.sets()], [COLORCAL_PATH])
+        self.assertAlmostEqual(self.sets()[0]["value"], FIXTURE_ILLUMINANT_K + 300.0, places=2)
+        self.assertAlmostEqual(r.previous, FIXTURE_ILLUMINANT_K, places=3)
+        self.assert_wb_untouched()
+
+    def test_say_reroutes_after_the_bounce(self) -> None:
+        moves.say.__wrapped__("warmer", commit=False, job="job-test")
+        self.assertEqual([s["path"] for s in self.sets()], [COLORCAL_PATH])
+        self.assertAlmostEqual(self.sets()[0]["value"], FIXTURE_ILLUMINANT_K + 300.0, places=2)
+
+
+class NoRerouteInsideRelativeMovesTest(_RouteFixture):
+    """A relative verb has already chosen the route and read its value:
+    `set_param` must refuse, not re-route, a WB Kelvin it is handed then."""
+
+    def test_set_param_refuses_instead_of_rerouting(self) -> None:
+        self.preset_4()
+        self.pin()
+        token = darkroom.NO_WB_REROUTE.set(True)
+        try:
+            with self.assertRaises(ModuleUnavailable):
+                darkroom.set_param.__wrapped__("temperature", "temperature", 5200.0,
+                                               commit=False, job="job-test")
+        finally:
+            darkroom.NO_WB_REROUTE.reset(token)
+        self.assertEqual(self.sets(), [])
+        self.assertFalse(darkroom.NO_WB_REROUTE.get())
 
 
 class SayRoutedTest(_RouteFixture):

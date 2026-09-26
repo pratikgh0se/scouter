@@ -1,5 +1,5 @@
 {
-  "about": "Zenkai Rules Z1 intent examples for route A (warmth through colour calibration). Each example is a real input on the committed fixture tests/fixtures/P6281348.ORF.xmp (E-M10 III, darktable 5.4 sidecar) with the outcome a human calls right. Run by tests/intent/test_colorcal_warmth_intent.py. Enforced by review until mechanised by t_450535e2.",
+  "about": "Zenkai Rules Z1 intent examples for route A (warmth through colour calibration). Each example is a real input on the committed fixture tests/fixtures/P6281348.ORF.xmp (E-M10 III, darktable 5.4 sidecar) with the outcome a human calls right. Run by tests/intent/test_colorcal_warmth_intent.py. Enforced by review until mechanised by t_450535e2. The direction values (+1 warmer / -1 cooler on the illuminant K) are the brief's semantics and are UNVERIFIED on the render until tests/test_host_colorcal.py step 3 passes.",
   "subject": "scouter/core/darkroom.py wb_route + moves.say/adjust + darkroom.set_param + wb.kelvin",
   "examples": [
     {

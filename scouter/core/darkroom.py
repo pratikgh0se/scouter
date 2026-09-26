@@ -307,6 +307,15 @@ WB_PRESET_D65_LATE = 4
 WB_LATE_EXEMPT: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "scouter_wb_late_exempt", default=False)
 
+#: Set by the relative verbs (`moves.adjust`/`moves.say`) around their
+#: writes: they have already chosen the Kelvin route and read the value on
+#: it, so `set_param` must not re-route a `temperature.temperature` target
+#: to color calibration (that would land a WB-table Kelvin, read before a
+#: bounce revealed preset 4, as an absolute illuminant temperature). With it
+#: set, a preset-4 write the caller did not route is refused instead.
+NO_WB_REROUTE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "scouter_no_wb_reroute", default=False)
+
 
 def wb_preset(path: str, instance: int = 0) -> int | None:
     """The temperature module's decoded `preset`, from the sidecar, or `None`
@@ -324,6 +333,11 @@ def wb_preset(path: str, instance: int = 0) -> int | None:
 #: through colour calibration"): on a preset-4 image, Kelvin moves go to
 #: color calibration's CAT illuminant temperature and the white balance
 #: module is left untouched, so the late D65 correction stays on.
+#: UNVERIFIED: the direction (a higher illuminant K renders warmer, the same
+#: sign as the WB slider) is assumed from darktable's CAT semantics until
+#: tests/test_host_colorcal.py step 3 (measured r/b) passes on the host.
+#: Limit: only color calibration instance 0 is read and targeted; a second
+#: (masked) instance is not considered.
 COLORCAL_WB: tuple[str, str] = ("channelmixerrgb", "temperature")
 
 #: darktable 5.4 `dt_illuminant_t` (src/common/illuminants.h): the two
@@ -713,10 +727,12 @@ def set_param(
     if not WB_LATE_EXEMPT.get():
         if (module, param) == ("temperature", "temperature"):
             route = wb_route(resolved.path, instance)
-            if route["route"] == "color_calibration":
+            if route["route"] == "color_calibration" and not NO_WB_REROUTE.get():
                 # Route A: the same Kelvin, as color calibration's illuminant
                 # temperature; the WB module (preset 4) is not touched. One
-                # extra `darkroom.current` lookup in the inner call.
+                # extra `darkroom.current` lookup in the inner call, and the
+                # inner write is not a metrics event of its own: `plan` and
+                # metrics show the outer `darkroom.set` only.
                 result = set_param.__wrapped__(*COLORCAL_WB, value, instance=0,
                                                commit=commit, job=job)
                 result.warnings.append(wb_routed_note(route))
