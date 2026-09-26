@@ -245,3 +245,23 @@ def test_routed_abort_reaches_the_running_agent(tmp_path):
     routed.agent = A()
     routed.abort()
     assert stopped == [True] and routed.agent is None
+
+
+# -- final fix M4 ------------------------------------------------------------
+
+def test_agent_write_flag_uses_the_one_write_tool_set():
+    from gauntlet.adapter import Observation
+    from tests.gauntlet.layers.common import WRITE_TOOLS
+
+    names = sorted(WRITE_TOOLS | {"darkroom_get", "darkroom_open", "darkroom_status"})
+    obs = Observation()
+    agent.AgentSession._record_calls(
+        obs, [{"name": f"mcp__scouter__{n}", "input": {}, "result": "{}"} for n in names])
+    assert {c.tool for c in obs.calls if c.write} == set(WRITE_TOOLS)
+
+
+def test_mcp_config_pins_the_session_library(tmp_path):
+    staged = type("S", (), {"env": {"PYTHONPATH": ".", "SCOUTER_CACHE": "/c",
+                                    "SCOUTER_DARKTABLE_LIBRARY_DB": str(tmp_path / "l.db")}})()
+    env = agent.mcp_config(staged)["mcpServers"]["scouter"]["env"]
+    assert env["SCOUTER_DARKTABLE_LIBRARY_DB"] == str(tmp_path / "l.db")

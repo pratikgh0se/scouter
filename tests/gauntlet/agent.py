@@ -17,7 +17,7 @@ from pathlib import Path
 from gauntlet.adapter import CallRecord, Observation, Park
 from gauntlet.case import Case
 from tests.gauntlet import observe
-from tests.gauntlet.layers.common import AGENT_TURN_TIMEOUT_S
+from tests.gauntlet.layers.common import AGENT_TURN_TIMEOUT_S, WRITE_TOOLS
 from tests.gauntlet.session import SessionBlocked
 
 LIMIT_RE = re.compile(r"(usage limit|rate limit|limit reached|limit will reset|"
@@ -77,8 +77,11 @@ def mcp_config(staged) -> dict:
     """Registers ONLY scouter, with the session's isolated env."""
     import sys
 
+    # (final fix M4): the library is pinned too, as session.isolated_env pins it
+    # for the tool-mode MCP child -- never a running darktable's or the user's.
     env = {k: staged.env[k] for k in ("PYTHONPATH", "SCOUTER_CONFIG", "SCOUTER_CACHE",
-                                      "OBSIDIAN_VAULT_PATH", "SCOUTER_JOB") if k in staged.env}
+                                      "OBSIDIAN_VAULT_PATH", "SCOUTER_JOB",
+                                      "SCOUTER_DARKTABLE_LIBRARY_DB") if k in staged.env}
     return {"mcpServers": {"scouter": {"type": "stdio", "command": sys.executable,
                                        "args": ["-m", "scouter.mcp.server"], "env": env}}}
 
@@ -165,10 +168,9 @@ class AgentSession:
                 except ValueError:
                     env = {"ok": False, "outcome": "error:unparsed", "raw": c["result"][:300]}
             name = (c["name"] or "").removeprefix("mcp__scouter__")
+            # (final fix M4): the one write-tool set (layers.common.WRITE_TOOLS).
             obs.calls.append(CallRecord(name, c["input"] or {}, env,
-                                        write=name.startswith(("darkroom_set", "darkroom_adjust",
-                                                               "darkroom_say", "preset_",
-                                                               "darkroom_undo"))))
+                                        write=name in WRITE_TOOLS))
 
     def run_case(self, case: Case) -> Observation:
         t0 = self.clock()
