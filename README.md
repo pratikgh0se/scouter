@@ -1055,6 +1055,17 @@ Scouter refuses rather than guess. Each refusal names the fix.
 - **Overwriting history** is refused: darktable's Lua API only appends.
 
 
+## Zenkai Rules
+
+Scouter follows the Zenkai Rules, Capsule Corp's reliability doctrine (decision rows 454, 455),
+written after Scouter's commit path reported "committed" for weeks while nothing landed. Every
+tool and gauntlet check ships intent examples (Z1) and observes each fact through two independent
+oracles, such as the XMP sidecar plus the library database (Z2); ties follow intent rows > spec >
+contract > script > code (Z3); bypasses need an expiring override (Z4); the gauntlet runs a canary
+slice after every merge (Z5); and agents act alone only on reversible, in-spec choices (Z6). The
+text is in `docs/ZENKAI.md`, a checksummed mirror of the vault note
+`Knowledge/Capsule Corp - Zenkai Rules.md`; `tests/test_zenkai_mirror.py` fails if it drifts.
+
 ## Contributing
 
 Contributions welcome. Any change that reads or writes `library.db` directly will be rejected.
