@@ -70,15 +70,16 @@ def _restore(snap: dict) -> None:
 
 
 def _start_timer_on_call(session, v: dict) -> None:
-    """kill_during_call: start the kill timer when the fault step's call starts
-    (the first non-darkroom_open call; ensure_frame's open does not count), not
-    at arm time. `disarm` cancels it and restores `session.call`."""
+    """kill_during_call: start the kill timer when the fault step's OWN call
+    starts -- the first call of exactly `v["_kill_on_tool"]` -- never at arm
+    time and never on ensure_frame's darkroom_open or isolate()'s
+    darkroom_reset calls. `disarm` cancels it and restores `session.call`."""
     orig = session.call
     had_own = "call" in vars(session)
     v["_restore_call"] = (had_own, orig)
 
     def call(tool, *args, **kwargs):
-        if tool != "darkroom_open" and not v.get("_timer_started"):
+        if tool == v["_kill_on_tool"] and not v.get("_timer_started"):
             v["_timer_started"] = True
             v["_timer"].start()
         return orig(tool, *args, **kwargs)
@@ -86,9 +87,11 @@ def _start_timer_on_call(session, v: dict) -> None:
     session.call = call
 
 
-def arm(session, fault: str, v: dict | None = None) -> dict:
+def arm(session, fault: str, v: dict | None = None, *, step_tool: str | None = None) -> dict:
     """Arm `fault`. Every undo record lands in `v` as it is made, so a
-    `disarm(session, v)` after a partial arm (arm raised) undoes what was done."""
+    `disarm(session, v)` after a partial arm (arm raised) undoes what was done.
+    `step_tool` is the fault step's tool (kill_during_call times the kill from
+    that call)."""
     v = {} if v is None else v
     st = session.staged
     hero = st.frames["hero"]
@@ -97,7 +100,10 @@ def arm(session, fault: str, v: dict | None = None) -> dict:
         v["_relaunch"] = True
         session.dt.terminate()
     elif fault == "kill_during_call":
+        if not step_tool:
+            raise ValueError("kill_during_call needs the fault step's tool (step_tool=)")
         v["_relaunch"] = True
+        v["_kill_on_tool"] = step_tool
         timer = threading.Timer(KILL_DELAY_S, _owned_kill)
         timer.daemon = True
         v["_timer"] = timer
@@ -106,6 +112,7 @@ def arm(session, fault: str, v: dict | None = None) -> dict:
         v["_resume_sigcont"] = True  # before the signal: a raise still resumes
         _owned_kill(signal.SIGSTOP)  # frozen process: the bridge cannot answer
     elif fault == "relaunch_stale_job":
+        v["_relaunch"] = True  # a failed relaunch is retried by disarm
         session.relaunch()
     elif fault == "delete_sidecar":
         _snap(v, side)
@@ -157,6 +164,7 @@ def arm(session, fault: str, v: dict | None = None) -> dict:
         side.touch()
         os.utime(side, (time.time() + 86400 * 365,) * 2)
     elif fault == "cold_launch_commit":
+        v["_relaunch"] = True  # a failed relaunch is retried by disarm
         session.relaunch()  # the step then runs ~1 s after launch, before any settle
     elif fault == "wrong_wb_table":
         wb = Path(st.env["SCOUTER_CONFIG"]).parent / "wb"
@@ -266,16 +274,46 @@ def _fill(mount: Path) -> None:
             left -= n
 
 
+def _detach_image(img: Path) -> list[str]:
+    """Best effort: find `img` among attached images (`hdiutil info -plist`,
+    matched on image-path) and force-detach each of its whole-disk devices.
+    Never raises (the caller re-raises the original failure)."""
+    import plistlib
+
+    detached: list[str] = []
+    try:
+        info = plistlib.loads(_hdiutil("info", "-plist").stdout.encode())
+    except Exception:  # noqa: BLE001
+        return detached
+    want = os.path.realpath(img)
+    for image in info.get("images", []):
+        if os.path.realpath(image.get("image-path", "")) != want:
+            continue
+        devs = [e.get("dev-entry", "") for e in image.get("system-entities", [])]
+        devs = [d for d in devs if d]
+        if not devs:
+            continue
+        whole = min(devs, key=len)  # /dev/diskN, not its slices
+        try:
+            _hdiutil("detach", whole, "-force")
+            detached.append(whole)
+        except Exception:  # noqa: BLE001
+            pass
+    return detached
+
+
 def _small_disk(session, v: dict) -> None:
     img = session.root / "full.dmg"
     _hdiutil("create", "-ov", "-size", "50m", "-fs", "HFS+", "-volname", "HTCFULL", str(img))
-    out = _hdiutil("attach", str(img), "-nobrowse").stdout
+    try:
+        out = _hdiutil("attach", str(img), "-nobrowse").stdout
+    except BaseException:  # e.g. TimeoutExpired: the image may be attached anyway
+        _detach_image(img)
+        raise
     lines = out.strip().splitlines()
     mount = lines[-1].split("\t")[-1].strip() if lines else ""
     if not mount:
-        device = lines[0].split("\t")[0].strip() if lines else ""
-        if device:
-            _hdiutil("detach", device, "-force")
+        _detach_image(img)
         raise RuntimeError(f"hdiutil attach: no mount point in {out!r}")
     v["_detach"] = mount  # registered the moment attach succeeds
     v["full_disk"] = mount
@@ -305,7 +343,7 @@ def run_fault_case(session, case: Case) -> Observation:
     v: dict = {}
     obs: Observation | None = None
     try:
-        arm(session, fault, v)
+        arm(session, fault, v, step_tool=case.steps[0].tool if case.steps else None)
         session.staged.vars.update({k: val for k, val in v.items() if not k.startswith("_")})
         if v.get("_skip"):
             obs = Observation(blocked=f"skipped: {v['_skip']}")

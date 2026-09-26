@@ -190,15 +190,16 @@ def test_kill_timer_starts_at_the_step_and_is_cancelled_in_disarm(tmp_path, monk
                                                                    kills):
     monkeypatch.setattr(faults, "KILL_DELAY_S", 0.2)
     s = FakeSession(tmp_path)
-    v = faults.arm(s, "kill_during_call")
+    v = faults.arm(s, "kill_during_call", step_tool="darkroom_say")
     assert v["_relaunch"] and not v["_timer"].is_alive()
     s.call("darkroom_open", {}, 30.0)  # ensure_frame's open does not start it
+    s.call("darkroom_reset", {"module": "exposure"}, 12.0)  # nor isolate()'s resets
     assert not v["_timer"].is_alive()
     faults.disarm(s, v)
     time.sleep(0.4)
     assert kills == [] and s.relaunches == 1
     assert "call" not in vars(s)  # the wrapper is gone; the class method is back
-    v = faults.arm(s, "kill_during_call")
+    v = faults.arm(s, "kill_during_call", step_tool="darkroom_say")
     s.call("darkroom_say", {"phrase": "brighter"}, 12.0)
     assert v["_timer"].is_alive() or kills  # started relative to the call
     faults.disarm(s, v)
@@ -273,3 +274,90 @@ def test_file_mutating_faults_restored_byte_for_byte(tmp_path):
     v = faults.arm(s, "chmod_out_dir")
     faults.disarm(s, v)
     assert not (tmp_path / "denied").exists()
+
+
+def test_kill_during_call_needs_the_step_tool(tmp_path):
+    with pytest.raises(ValueError):
+        faults.arm(FakeSession(tmp_path), "kill_during_call")
+
+
+def test_r2_timer_starts_on_the_fault_step_not_on_isolate_resets(tmp_path, monkeypatch):
+    """Real run_tool_case: ensure_frame + isolate() (session.touched non-empty,
+    so darkroom_reset calls run) before R2's darkroom_say."""
+    from tests.gauntlet import observe
+
+    started_after: list = []
+
+    class FakeTimer:
+        def __init__(self, delay, fn):
+            self.alive = False
+
+        def start(self):
+            self.alive = True
+            started_after.append(list(s.tools))
+
+        def cancel(self):
+            self.alive = False
+
+        def join(self, timeout=None):
+            pass
+
+        def is_alive(self):
+            return self.alive
+
+    class ToolSession(FakeSession):
+        def __init__(self, tmp_path):
+            super().__init__(tmp_path)
+            self.touched = {"*"}
+            self.baselines, self.floors = {}, {}
+            self.previews_dir = tmp_path / "previews"
+
+        def ensure_frame(self, role):
+            return self.staged.frames[role]
+
+    monkeypatch.setattr(faults.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(observe, "snapshot", lambda *a, **k: {"params": {}, "units": {}})
+    monkeypatch.setattr(execute, "needs_stats", lambda case: False)
+    s = ToolSession(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R2"])
+    assert obs.blocked is None
+    resets = [t for t in s.tools if t == "darkroom_reset"]
+    assert resets and s.tools[-1] == "darkroom_say"
+    assert len(started_after) == 1
+    # started exactly as darkroom_say began: every reset had already run
+    assert started_after[0] == s.tools[:-1] and "darkroom_say" not in started_after[0]
+    assert "call" not in vars(s) and s.relaunches == 1
+
+
+def test_r18_attach_timeout_detaches_the_image(tmp_path, monkeypatch):
+    import plistlib
+    import subprocess
+
+    img = tmp_path / "full.dmg"
+    log: list = []
+    info = plistlib.dumps({"images": [
+        {"image-path": "/elsewhere/other.dmg",
+         "system-entities": [{"dev-entry": "/dev/disk5"}]},
+        {"image-path": str(img), "system-entities": [
+            {"dev-entry": "/dev/disk99s1", "mount-point": "/Volumes/HTCFULL"},
+            {"dev-entry": "/dev/disk99"}]}]}).decode()
+
+    def fake(*args, timeout=60):
+        log.append(args)
+        if args[0] == "attach":
+            raise subprocess.TimeoutExpired(["hdiutil", *args], timeout)
+        return SimpleNamespace(stdout=info if args[0] == "info" else "", returncode=0)
+    monkeypatch.setattr(faults, "_hdiutil", fake)
+    obs = faults.run_fault_case(FakeSession(tmp_path), _cases()["R18"])
+    assert obs.blocked.startswith("harness_bug: TimeoutExpired")
+    assert ("detach", "/dev/disk99", "-force") in log
+    assert not any(a[:2] == ("detach", "/dev/disk5") for a in log)
+
+
+@pytest.mark.parametrize("rid", ["R4", "H1"])  # relaunch_stale_job, cold_launch_commit
+def test_relaunch_faults_retry_relaunch_in_disarm(tmp_path, rid):
+    s = FakeSession(tmp_path, relaunch_error=SessionBlocked("relaunch: did not quit"))
+    obs = faults.run_fault_case(s, _cases()[rid])
+    assert obs.blocked == "session: relaunch: did not quit"
+    assert s.relaunches == 2  # arm's attempt + disarm's retry
+    assert obs.extra["disarm_errors"] == ["relaunch: SessionBlocked: relaunch: did not quit"]
