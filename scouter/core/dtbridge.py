@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import time
 from typing import Any
 
@@ -197,7 +198,15 @@ def call(method: str, params: dict | None = None, timeout: float | None = None) 
     """One bridge call, with the bridge's own failures mapped to error classes."""
     try:
         return get_bridge().call(method, params or {}, timeout=timeout)
-    except (BridgeTimeoutError, BridgePluginNotInstalledError) as e:
+    except BridgeTimeoutError as e:
+        if method != "darktable_mcp.diag":  # never ping from inside the ping
+            h = health()
+            if h["state"] == "unresponsive":
+                wedged = _unresponsive(method, h)
+                if wedged is not None:
+                    raise wedged from e
+        raise BridgeTimeout(str(e), detail={"method": method}) from e
+    except BridgePluginNotInstalledError as e:
         raise BridgeTimeout(str(e), detail={"method": method}) from e
     except BridgeError as e:
         message = str(e)
@@ -235,6 +244,37 @@ def health(timeout: float = HEALTH_TIMEOUT_S) -> dict:
     return {"state": "starting" if ready is False else "alive",
             "ping_ms": int(1000 * (time.monotonic() - t0)), "gui_ready": ready,
             "gui_ready_source": d.get("gui_ready_source")}
+
+
+def _unresponsive(method: str, h: dict):
+    """The typed error, or None when no darktable process exists.
+
+    Fix round 1 (I1): with darktable CLOSED every call times out and the ping
+    fails too, exactly like a wedged darktable. Only a darktable that is
+    actually running is "unresponsive"; a closed one keeps today's
+    `bridge_timeout` (exit 3, "start darktable"). A failed pid lookup is
+    "unknown", never "none running": it counts as running only when Scouter's
+    own launch record still matches a live process."""
+    from scouter.core import dtprocess
+    from scouter.errors import DarktableUnresponsive
+
+    try:
+        owned = dtprocess.owned_pid()
+    except Exception:  # noqa: BLE001 - best effort; no record means "not ours"
+        owned = None
+    try:
+        running: list[int] | None = dtprocess.running_pids()
+    except (OSError, subprocess.SubprocessError):
+        running = None  # unknown
+    if owned is None and not running:
+        return None
+    pid = owned if owned is not None else running[0]
+    return DarktableUnresponsive(
+        f"darktable did not answer {method} and the {HEALTH_TIMEOUT_S:g} s health ping "
+        "failed too",
+        detail={"pid": pid, "launched_by_scouter": owned is not None, "last_method": method,
+                "ping_ms": h.get("ping_ms")},
+    )
 
 
 def current_view() -> str:
