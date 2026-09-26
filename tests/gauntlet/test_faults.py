@@ -361,3 +361,25 @@ def test_relaunch_faults_retry_relaunch_in_disarm(tmp_path, rid):
     assert obs.blocked == "session: relaunch: did not quit"
     assert s.relaunches == 2  # arm's attempt + disarm's retry
     assert obs.extra["disarm_errors"] == ["relaunch: SessionBlocked: relaunch: did not quit"]
+
+
+@pytest.mark.parametrize("env,ok", [
+    ({"ok": True, "outcome": "ok", "data": {"healed": True}}, True),   # registry shape
+    ({"ok": True, "outcome": "ok", "data": {}}, False),                # no heal
+    ({"ok": False, "error": {"code": "darktable_unresponsive",
+                             "detail": {"healed": True}}}, False),     # healed, no retry
+])
+def test_watchdog_auto_heal_reads_healed_where_the_registry_puts_it(tmp_path, env, ok):
+    """(final fix I4): the registry reports a heal in data.healed (Envelope is
+    frozen; there is no top-level `healed`)."""
+    s, _, step = _wd(tmp_path, '{"watchdog": {}}')
+    s.call = lambda tool, args, budget_s, *, write=False: CallRecord(tool, args, env)
+    obs = Observation()
+    faults.watchdog_probe(s, None, step, obs)
+    assert obs.extra["scenario_ok"] is ok
+
+
+def test_healed_helper_reads_data_and_error_detail():
+    assert faults.healed({"data": {"healed": True}})
+    assert faults.healed({"ok": False, "error": {"detail": {"healed": True}}})
+    assert not faults.healed({"ok": True, "data": {}}) and not faults.healed(None)
