@@ -734,6 +734,14 @@ or no wb calibration table) and `21` `not_pinned` (the vocabulary word's
 action path has not been confirmed by a host probe). `scouter vocab list`
 shows which words work today.
 
+`26` `module_unavailable`: the module cannot take this write in the mode
+darktable holds it in, refused before anything is sent. Today that means
+white balance in darktable 5.4's "camera reference (late)" mode (the
+scene-referred default): moving temperature or tint through darktable's
+sliders would switch off the late D65 correction and turn the frame cooler
+whichever way you asked. In that mode darktable adjusts warmth in color
+calibration, which Scouter does not drive yet.
+
 ### Honest limits, phase 3
 
 - **Relative moves read values from the XMP, not from sliders.** A slider
