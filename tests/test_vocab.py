@@ -56,12 +56,14 @@ class VocabShapeTest(unittest.TestCase):
         # Task 10 (2026-09-24 host run) pinned all 15 candidate paths and
         # every XMP slot the sentinel method found, so only tint (no value
         # source) stays absolute_only and colorzones.curves unreachable.
+        # Task 34 (row 437) added denoiseprofile.strength and sharpen.amount
+        # as candidates, pending their own host probe (Task 34 Step 6).
         by = {}
         for s in vocab.PARAMS:
             by.setdefault(vocab.status(s), set()).add(f"{s.module}.{s.param}")
         self.assertEqual(by.get("absolute_only"), {"temperature.tint"})
         self.assertEqual(by.get("unreachable"), {"colorzones.curves"})
-        self.assertNotIn("candidate", by)
+        self.assertEqual(by.get("candidate"), {"denoiseprofile.strength", "sharpen.amount"})
         self.assertEqual(len(by["live"]), 22)
         for row in ("colorbalancergb.shadows_hue", "colorbalancergb.highlights_chroma",
                     "sigmoid.skew", "filmicrgb.contrast", "colorzones.strength"):

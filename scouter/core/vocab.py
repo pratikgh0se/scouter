@@ -24,7 +24,7 @@ from scouter.types import VocabResult
 STATUSES = ("live", "absolute_only", "candidate", "unreachable")
 CONCEPT_IDS = (
     "exposure", "tone_mapper", "white_balance", "color_balance", "chroma_saturation",
-    "grading", "black_level", "color_zones", "presets",
+    "grading", "black_level", "color_zones", "presets", "detail",
 )
 
 
@@ -163,6 +163,17 @@ PARAMS: tuple[ParamSpec, ...] = (
               "none", None, False, "color_zones", "", "", (), False,
               "zones are curve nodes, not sliders: no dt.gui.action sets a zone value; "
               "use color balance rgb's per-zone sliders (4 ways) instead"),
+    # Row 437 family 3 (detail). Candidates until the Task 34 host probe.
+    ParamSpec("denoiseprofile", "strength", "denoise (profiled) › strength", "ratio", 1.0,
+              0.0, 4.0, 0.1, "xmp", 1.0, False, "detail",
+              "how hard the profiled denoiser smooths noise for this camera and ISO",
+              "fine texture and skin: too much looks waxy",
+              ("iop/denoiseprofile/strength",)),
+    ParamSpec("sharpen", "amount", "sharpen › amount", "ratio", 1.0, 0.0, 2.0, 0.1,
+              "xmp", 0.5, False, "detail",
+              "adds edge contrast so detail looks crisper",
+              "halos along high-contrast edges and amplified noise",
+              ("iop/sharpen/amount",)),
 )
 
 _BY_KEY = {(s.module, s.param): s for s in PARAMS}

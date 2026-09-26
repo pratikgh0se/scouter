@@ -57,6 +57,11 @@ CONCEPTS: dict[str, tuple[str, str]] = {
                 "A darktable style is a saved list of module settings. Applying one appends those "
                 "settings to an image's history, so it acts like a filter you can stack; it never "
                 "replaces what is there, and each application is visible in the history panel."),
+    "detail": ("Denoise and sharpen",
+               "Profiled denoise smooths sensor noise using a per-camera, per-ISO profile; "
+               "sharpen adds edge contrast so detail reads crisper on screen. They pull in "
+               "opposite directions, so push one and watch the other: too much denoise looks "
+               "waxy, too much sharpening halos high-contrast edges and amplifies noise."),
 }
 
 
