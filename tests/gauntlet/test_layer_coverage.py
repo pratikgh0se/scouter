@@ -10,9 +10,9 @@ def _case(cid: str):
 
 def test_coverage_counts_and_p0_core():
     cases = coverage.generate()
-    assert len(cases) == coverage.expected_count() == 1316
-    assert len({c.id for c in cases}) == 1316
-    assert sum(c.tier == "P0" for c in cases) == 318
+    assert len(cases) == coverage.expected_count() == 1450
+    assert len({c.id for c in cases}) == 1450
+    assert sum(c.tier == "P0" for c in cases) == 334
     assert sum(c.body == "sony_nex5n" for c in cases) == 20
 
 

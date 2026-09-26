@@ -24,7 +24,7 @@ from scouter.types import VocabResult
 STATUSES = ("live", "absolute_only", "candidate", "unreachable")
 CONCEPT_IDS = (
     "exposure", "tone_mapper", "white_balance", "color_balance", "chroma_saturation",
-    "grading", "black_level", "color_zones", "presets", "finishing",
+    "grading", "black_level", "color_zones", "presets", "finishing", "geometry",
 )
 
 
@@ -227,6 +227,22 @@ PARAMS: tuple[ParamSpec, ...] = (
               "darkens (negative) or lightens (positive) the corners around the centre",
               "the frame edges: a strong vignette reads as a tunnel",
               ("iop/vignette/brightness",)),
+    # Row 437 family 2 (geometry). The lens toggle is a module on/off, live
+    # whenever `lens` is a whitelisted module (the benchmark enabled it on the
+    # host, L1/L2); rotation and crop margins wait for the Task 33 probe.
+    ParamSpec("lens", "__enabled", "lens correction › on/off", "bool", 1.0, 0.0, 1.0, 1.0,
+              "xmp", 0.0, False, "geometry",
+              "applies the lens profile: distortion, vignetting and chromatic aberration",
+              "straight lines near the edges"),
+    ParamSpec("ashift", "rotation", "rotate and perspective › rotation", "°", 1.0, -10.0, 10.0,
+              0.5, "xmp", 0.0, False, "geometry",
+              "rotates the whole frame to level a tilted horizon; the corners are cropped",
+              "the corners, which rotation crops away",
+              ("iop/ashift/rotation", "iop/ashift/rotate")),
+    *(ParamSpec("crop", side, f"crop › {side} margin", "ratio", 1.0, 0.0, 1.0, 0.01, "xmp",
+                0.0 if side in ("left", "top") else 1.0, False, "geometry",
+                f"moves the {side} edge of the crop", "what the new edge cuts off",
+                (f"iop/crop/{side}",)) for side in ("left", "right", "top", "bottom")),
 )
 
 _BY_KEY = {(s.module, s.param): s for s in PARAMS}
@@ -249,6 +265,8 @@ def xmp_named(module: str, param: str) -> bool:
 
 
 def status(s: ParamSpec) -> str:
+    if s.param == "__enabled":  # a module toggle: pinned by the module whitelist
+        return "live" if s.module in dtbridge.MODULE_WHITELIST else "candidate"
     if not s.reachable:
         return "unreachable"
     if (s.module, s.param) not in dtbridge.ACTION_PATHS:

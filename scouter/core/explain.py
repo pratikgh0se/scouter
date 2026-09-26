@@ -62,6 +62,11 @@ CONCEPTS: dict[str, tuple[str, str]] = {
                   "Grain adds visible texture that reads as film; a little goes a long way on "
                   "smooth skies and skin. Vignette darkens or lightens the corners around the "
                   "centre, drawing the eye inward or opening the frame back up."),
+    "geometry": ("Lens, rotation and crop",
+                 "Lens correction removes the profile's own distortion, vignetting and chromatic "
+                 "aberration -- turn it off only to see the raw optic. Rotation levels a tilted "
+                 "horizon, cropping the corners as it turns. A crop preset moves all four margins "
+                 "at once to centre a target aspect ratio inside the frame."),
 }
 
 

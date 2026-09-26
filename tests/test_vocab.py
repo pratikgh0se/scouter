@@ -40,20 +40,31 @@ class VocabShapeTest(unittest.TestCase):
             with self.subTest(row=f"{s.module}.{s.param}"):
                 self.assertNotIn((s.module, s.param), seen)
                 seen.add((s.module, s.param))
-                self.assertIn(s.unit, ("EV", "K", "ratio", "%", "°", "—"))
+                self.assertIn(s.unit, ("EV", "K", "ratio", "%", "°", "—", "bool"))
                 self.assertIn(s.value_source, ("xmp", "wb_table", "none"))
                 self.assertIn(s.concept, vocab.CONCEPT_IDS)
+                is_toggle = s.param == "__enabled"
                 if s.reachable:
                     self.assertLess(s.lo, s.hi)
                     self.assertGreater(s.step, 0)
-                    self.assertLessEqual(s.step, (s.hi - s.lo) / 4)
+                    # A toggle's one "notch" is the whole 0/1 flip, not a
+                    # quarter-range slider move -- it is pinned by the module
+                    # whitelist (vocab.status), never by ACTION_PATHS/candidates.
+                    if not is_toggle:
+                        self.assertLessEqual(s.step, (s.hi - s.lo) / 4)
                     self.assertTrue(s.why and s.watch)
-                if (s.module, s.param) not in dtbridge.ACTION_PATHS and s.reachable:
+                unpinned = (s.module, s.param) not in dtbridge.ACTION_PATHS
+                if unpinned and s.reachable and not is_toggle:
                     self.assertTrue(s.candidate_paths, "an unpinned reachable row needs candidates")
                 # grain.strength is stored internally 0-100 (already a percent),
                 # unlike the ratio-backed "%" rows, so it keeps display_scale 1.0.
                 if (s.module, s.param) != ("grain", "strength"):
                     self.assertEqual(s.display_scale, 100.0 if s.unit == "%" else 1.0)
+        # The toggle carve-outs above excuse exactly the rows Task 33 added as
+        # 0/1 flips, and each is a real bool row with a one-notch flip.
+        toggles = {(s.module, s.param): (s.unit, s.lo, s.hi, s.step)
+                   for s in vocab.PARAMS if s.param == "__enabled"}
+        self.assertEqual(toggles, {("lens", "__enabled"): ("bool", 0.0, 1.0, 1.0)})
 
     def test_statuses_after_the_task_10_pinning_run(self) -> None:
         # Task 10 (2026-09-24 host run) pinned all 15 candidate paths and
@@ -69,12 +80,16 @@ class VocabShapeTest(unittest.TestCase):
         # Task 32 (row 437) added grain.strength and vignette.brightness as
         # candidates pending their own host probe; Route A (decision rows
         # 458/461) adds channelmixerrgb.temperature the same way
-        # (tests/test_host_colorcal.py). All three still await a host probe.
+        # (tests/test_host_colorcal.py); Task 33 (row 437 family 2, geometry)
+        # adds ashift.rotation and the four crop margins, unpinned until their
+        # own probe -- lens.__enabled is live immediately (module whitelist,
+        # not a path/slot pin). All still await a host probe.
         self.assertEqual(
             by.get("candidate"),
-            {"grain.strength", "vignette.brightness", "channelmixerrgb.temperature"},
+            {"grain.strength", "vignette.brightness", "channelmixerrgb.temperature",
+             "ashift.rotation", "crop.left", "crop.right", "crop.top", "crop.bottom"},
         )
-        self.assertEqual(len(by["live"]), 22)
+        self.assertEqual(len(by["live"]), 23)
         for row in ("colorbalancergb.shadows_hue", "colorbalancergb.highlights_chroma",
                     "sigmoid.skew", "filmicrgb.contrast", "colorzones.strength"):
             self.assertIn(row, by["live"])

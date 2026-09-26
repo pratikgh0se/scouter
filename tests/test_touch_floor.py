@@ -121,7 +121,10 @@ class TouchFloorTest(unittest.TestCase):
                 continue
             with self.subTest(row=f"{spec.module}.{spec.param}"):
                 self.assertGreater(spec.step, 0)
-                self.assertLessEqual(spec.step, (spec.hi - spec.lo) / 4)
+                # A toggle's one "notch" is the whole 0/1 flip, not a
+                # quarter-range slider move (Task 33, row 437 family 2).
+                if spec.param != "__enabled":
+                    self.assertLessEqual(spec.step, (spec.hi - spec.lo) / 4)
 
 
 class LadderMonotonicTest(unittest.TestCase):
@@ -143,7 +146,7 @@ class LadderMonotonicTest(unittest.TestCase):
                 if mv.kind != "adjust" or not mv.notches:
                     continue
                 with self.subTest(phrase=phrase.key, module=mv.module, param=mv.param):
-                    spec = phrases._row(mv)
+                    spec = phrases.row_for(mv)
                     step = spec.step
                     n = abs(mv.notches)
                     touch_mag = n * touch_factor * step

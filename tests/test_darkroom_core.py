@@ -529,6 +529,50 @@ class DarkroomCoreTest(_DarkroomFixture):
         assert result.undone is not None
         self.assertTrue(result.undone["verified"])
 
+    def test_undo_last_of_disable_re_enables_when_it_was_enabled_before(self) -> None:
+        # Row 437 fix round 1, C1: a `module.disable` entry has no
+        # `before.value`, so before this fix it fell through to the
+        # generic set-undo branch and raised "was never readable" --
+        # leaving the entry as the newest open one and wedging every
+        # later `undo_last` in the job. Mirrors the enable test above.
+        entry = journal.begin(
+            "job-test",
+            verb="module.disable",
+            image_id=12,
+            path=str(self.raw),
+            module="exposure",
+            param="",
+            instance=0,
+            before={"source": "xmp", "enabled": True, "history_end": 14},
+        )
+        journal.complete("job-test", entry.seq, after={"action": "disable", "enabled": False})
+        result = darkroom.undo_last()
+        self.assertIn("module.enable", self.bridge.methods_called())
+        assert result.undone is not None
+        self.assertTrue(result.undone["verified"])
+        self.assertEqual(len(self.commit_calls), 1)
+        # The journal must not be stuck: a second call is a clean "nothing
+        # to undo" noop, not a repeat of the same failure.
+        second = darkroom.undo_last()
+        self.assertEqual(second.outcome, "noop")
+
+    def test_undo_last_of_disable_is_a_noop_when_already_disabled_before(self) -> None:
+        entry = journal.begin(
+            "job-test",
+            verb="module.disable",
+            image_id=12,
+            path=str(self.raw),
+            module="exposure",
+            param="",
+            instance=0,
+            before={"source": "xmp", "enabled": False, "history_end": 14},
+        )
+        journal.complete("job-test", entry.seq, after={"action": "disable", "enabled": False})
+        result = darkroom.undo_last()
+        self.assertNotIn("module.enable", self.bridge.methods_called())
+        assert result.undone is not None
+        self.assertTrue(result.undone["verified"])
+
     def test_undo_last_refuses_to_undo_a_reset(self) -> None:
         darkroom.reset(module="exposure", confirm=True)
         with self.assertRaises(ScouterError) as ctx:

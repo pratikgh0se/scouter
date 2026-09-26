@@ -1408,6 +1408,22 @@ def enable(
     )
 
 
+@metrics.instrumented("darkroom.disable")
+def disable(
+    module: str, *, instance: int = 0, dry_run: bool = False, job: str | None = None
+) -> ModuleResult:
+    """Disable a module (the plugin's `module.disable`). Not gated: re-enable undoes it."""
+    return _do_module_action(
+        "disable",
+        "module.disable",
+        module=module,
+        instance=instance,
+        dry_run=dry_run,
+        confirm=True,
+        job=job,
+    )
+
+
 @metrics.instrumented("darkroom.reset")
 def reset(
     module: str,
@@ -1956,6 +1972,42 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             "verified": verified,
         }
         mark_undone_ok = True
+    elif entry.verb == "module.disable":
+        # Mirrors the module.enable branch above (row 437 fix round 1, C1):
+        # a `disable` entry has no `before.value`, so it must never reach the
+        # generic set-undo `else` branch below -- that raised "was never
+        # readable" and left the entry as the newest open one, wedging every
+        # later `undo_last` in the job.
+        was_enabled_before = entry.before.get("enabled")
+        if not was_enabled_before:
+            # Was already disabled before Scouter's own `disable` call: that
+            # call was a no-op, so undoing it is a no-op too.
+            committed = False
+            warnings = [f"{entry.module} was already disabled before this write; nothing to undo"]
+            verified = True
+        else:
+            dtbridge.call("module.enable", {"module": entry.module, "instance": entry.instance})
+            committed, warnings, _noop = _commit_with_readback(
+                job,
+                entry.image_id,
+                xmp_path=str(xmp.sidecar_path(entry.path)),
+                confirm=lambda: _module_enabled(entry.path, entry.module, entry.instance) is True,
+                what=f"{entry.module} (enable)",
+                expect_module=entry.module,
+            )
+            verified = _module_enabled(entry.path, entry.module, entry.instance) is True
+            if not verified:
+                warnings.append(
+                    f"could not verify {entry.module} was enabled after undo (seq {entry.seq})"
+                )
+        undone = {
+            "verb": entry.verb,
+            "module": entry.module,
+            "param": entry.param,
+            "restored_to": None,
+            "verified": verified,
+        }
+        mark_undone_ok = True
     elif entry.module == "temperature":
         # Task 11: tiers 2/3/4 (design 11.3/11.4/11.5), tried in order.
         # `before_params` is `None` for a journal entry written before this
@@ -2272,6 +2324,15 @@ for verb in (
         writes=True,
         gated=False,
         summary="Enable a module.",
+    ),
+    Verb(
+        id="darkroom.disable",
+        group="darkroom",
+        fn=disable,
+        args=(MODULE_ARG, INSTANCE_ARG, DRY_RUN_ARG),
+        writes=True,
+        gated=False,
+        summary="Disable one module on the open image.",
     ),
     Verb(
         id="darkroom.reset",

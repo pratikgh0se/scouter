@@ -27,7 +27,7 @@ TONE_ROUTES = ["sigmoid", "filmicrgb"]
 class Move:
     module: str
     param: str
-    kind: str  # "adjust" | "set"
+    kind: str  # "adjust" | "set" | "toggle" | "crop"
     notches: float | None = None
     value: float | None = None
 
@@ -55,6 +55,14 @@ def _adj(module: str, param: str, notches: float) -> Move:
 
 def _set(module: str, param: str, value: float) -> Move:
     return Move(module, param, "set", value=value)
+
+
+def _toggle(module: str, on: bool) -> Move:
+    return Move(module, "__enabled", "toggle", value=1.0 if on else 0.0)
+
+
+def _crop(aspect: float) -> Move:
+    return Move("crop", "aspect", "crop", value=aspect)
 
 
 CB = "colorbalancergb"
@@ -124,6 +132,20 @@ PHRASES: tuple[Phrase, ...] = (
     Phrase("lighter_corners", ("lighter corners", "brighter corners", "weaker vignette",
                                "less vignette"),
            (_adj("vignette", "brightness", 1),)),
+    Phrase("lens_on", ("correct the lens", "lens correction", "turn on lens correction",
+                       "fix the distortion", "fix lens distortion", "remove chromatic aberration"),
+           (_toggle("lens", True),)),
+    Phrase("lens_off", ("turn off lens correction", "no lens correction"),
+           (_toggle("lens", False),)),
+    Phrase("rotate_right", ("rotate right", "rotate clockwise", "tilt right"),
+           (_adj("ashift", "rotation", 1),)),
+    Phrase("rotate_left", ("rotate left", "rotate counterclockwise", "rotate anticlockwise",
+                           "tilt left"), (_adj("ashift", "rotation", -1),)),
+    Phrase("crop_square", ("crop square", "square crop", "crop to 1:1", "make it square"),
+           (_crop(1.0),)),
+    Phrase("crop_4x5", ("crop to 4:5", "crop 4:5", "portrait crop for instagram"), (_crop(0.8),)),
+    Phrase("crop_16x9", ("crop to 16:9", "crop 16:9", "widescreen crop"), (_crop(16 / 9),)),
+    Phrase("crop_3x2", ("crop to 3:2", "crop 3:2"), (_crop(1.5),)),
 )
 
 _INDEX: dict[str, Phrase] = {syn: p for p in PHRASES for syn in p.synonyms}
@@ -144,9 +166,44 @@ _BY_RE = re.compile(r"\bby\s+([+-]?\d+(?:\.\d+)?)\s*(ev|k|%|°|deg|degrees)?(?=\
 _UNIT_ALIASES = {"ev": "EV", "k": "K", "%": "%", "°": "°", "deg": "°", "degrees": "°"}
 
 
+#: Fix round 1, M1: the subset of FILLER that is safe to strip from the ENDS
+#: only, before a verbatim lookup. Deliberately excludes "make it"/"make
+#: the image" etc: those are themselves inside a registered synonym ("make
+#: it square"), so stripping them here would eat the synonym, not wrap it.
+_OUTER_FILLER = ("please", "can you")
+
+
+def _strip_outer_filler(text: str) -> str:
+    """Strip `_OUTER_FILLER` phrases only from the ends, repeatedly, leaving
+    anything in the middle alone. A verbatim synonym that itself contains a
+    filler word ("make it square") must still match when it is wrapped in
+    an outer "please"/"can you" -- those sit at the edges, so they can be
+    peeled off without touching the synonym's own words."""
+    s = text.strip()
+    changed = True
+    while changed:
+        changed = False
+        for filler in _OUTER_FILLER:
+            start = re.sub(rf"^{re.escape(filler)}\b\s*", "", s)
+            if start != s:
+                s = start.strip()
+                changed = True
+                continue
+            end = re.sub(rf"\s*\b{re.escape(filler)}$", "", s)
+            if end != s:
+                s = end.strip()
+                changed = True
+    return s
+
+
 def normalise(text: str) -> str:
     text = text.lower().replace("color", "colour")
-    text = re.sub(r"[^a-z0-9.+%° -]", " ", text)
+    text = re.sub(r"[^a-z0-9.+%°: -]", " ", text)
+    # Fix round 1, I2: a colon survives only between two digits ("4:5"), the
+    # one place a crop-preset aspect needs it -- not trailing punctuation
+    # ("warmer:") or a mid-sentence pause ("warmer: please"), which main
+    # already resolved by dropping it.
+    text = re.sub(r"(?<!\d):|:(?!\d)", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -154,9 +211,17 @@ def _tone_spec() -> vocab.ParamSpec:
     return vocab.spec("sigmoid", "contrast")  # type: ignore[return-value]
 
 
-def _row(move: Move) -> vocab.ParamSpec:
+def row_for(move: Move) -> vocab.ParamSpec:
+    """The vocabulary row that best represents `move`, for display and shape
+    checks (never for gating: a crop move's gate checks all four crop rows,
+    not just this one -- see `_refusal`). Fix round 1, M6: the single place
+    that knows a `@tone` move stands for `sigmoid.contrast` and a `crop`
+    move stands for `crop.left`, so gauntlet's coverage/offline layers and
+    the phrase-row test don't each carry their own copy of this mapping."""
     if move.module == TONE:
         return _tone_spec()
+    if move.module == "crop":
+        return vocab.spec("crop", "left")  # type: ignore[return-value]
     return vocab.spec(move.module, move.param)  # type: ignore[return-value]
 
 
@@ -191,10 +256,22 @@ def resolve(text: str, amount: float | None = None) -> Resolution:
             core = pattern.sub(" ", core, count=1)
             factor = f
             break
-    for filler in FILLER:
-        core = re.sub(rf"\b{re.escape(filler)}\b", " ", core)
-    core = " ".join(t for t in core.split() if t not in _DROP_TOKENS)
-    phrase = _INDEX.get(core)
+    # A synonym registered verbatim wins outright (row 437: "make it square"
+    # would otherwise lose its own "make it" to the filler strip below).
+    phrase = _INDEX.get(core.strip())
+    if phrase is None:
+        # Fix round 1, M1: peel only OUTER filler words ("please make it
+        # square", "make it square please", "can you make it square") and
+        # retry the verbatim lookup before the full, position-agnostic strip
+        # below -- which would also eat "make it" out of the synonym itself.
+        outer = _strip_outer_filler(core)
+        if outer != core.strip():
+            phrase = _INDEX.get(outer)
+    if phrase is None:
+        for filler in FILLER:
+            core = re.sub(rf"\b{re.escape(filler)}\b", " ", core)
+        core = " ".join(t for t in core.split() if t not in _DROP_TOKENS)
+        phrase = _INDEX.get(core)
     if phrase is None:
         suggestions = difflib.get_close_matches(core, list(_INDEX), n=3, cutoff=0.6)
         raise UsageError(
@@ -211,6 +288,17 @@ def resolve(text: str, amount: float | None = None) -> Resolution:
             raise UsageError("amount must be a number in (0, 5]", detail={"amount": amount})
         factor = float(amount)
     if explicit is not None:
+        non_adjust_kinds = {mv.kind for mv in phrase.moves} - {"adjust"}
+        if non_adjust_kinds:
+            # Fix round 1, M2: a toggle/crop phrase has no numeric amount to
+            # be "by N" of -- say so directly, instead of the one-move-phrase
+            # count message ("'lens_on' makes 1 moves"), which is misleading
+            # here since the real reason is the kind, not the move count.
+            kind = "toggle" if "toggle" in non_adjust_kinds else "crop"
+            raise UsageError(
+                f"'by N' does not apply to {phrase.key!r}: a {kind} takes no amount",
+                detail={"phrase": text, "key": phrase.key, "kind": kind},
+            )
         adjusts = [mv for mv in phrase.moves if mv.kind == "adjust"]
         if len(phrase.moves) != 1 or len(adjusts) != 1:
             raise UsageError(
@@ -219,7 +307,7 @@ def resolve(text: str, amount: float | None = None) -> Resolution:
                 detail={"phrase": text, "key": phrase.key},
             )
         mv = adjusts[0]
-        row = _row(mv)
+        row = row_for(mv)
         number, unit = explicit
         if unit is not None and _UNIT_ALIASES[unit] != row.unit:
             raise UsageError(
@@ -234,6 +322,11 @@ def resolve(text: str, amount: float | None = None) -> Resolution:
         if mv.kind == "adjust" else mv
         for mv in phrase.moves
     )
+    # Fix round 1, M3: a toggle/crop phrase has no adjust move for an
+    # intensity word to scale -- "crop square a touch" must not report
+    # intensity 0.5 for a move that never changes with it.
+    if not any(mv.kind == "adjust" for mv in phrase.moves):
+        factor = 1.0
     return Resolution(text, norm, phrase.key, factor, False, moves)
 
 
@@ -243,7 +336,7 @@ def resolution_dict(res: Resolution) -> dict:
 
 
 def move_view(mv: Move) -> dict:
-    row = _row(mv)
+    row = row_for(mv)
     view = asdict(mv)
     if mv.kind == "adjust":
         view["delta"] = mv.value if mv.notches is None else mv.notches * row.step

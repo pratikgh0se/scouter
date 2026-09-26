@@ -94,6 +94,40 @@ class PhraseRulesTest(unittest.TestCase):
         with self.assertRaises(UsageError):
             phrases.resolve("warmer by 300k", amount=2)
 
+    def test_colon_survives_normalise_only_between_digits(self) -> None:
+        # Fix round 1, I2: a bare/trailing/mid-sentence colon must still
+        # resolve the way main did before the crop presets' "4:5" needed a
+        # colon kept at all.
+        self.assertEqual(phrases.resolve("warmer:").key, "warmer")
+        self.assertEqual(phrases.resolve("Make it warmer: please").key, "warmer")
+        self.assertAlmostEqual(phrases.resolve("crop to 4:5").moves[0].value, 0.8)
+
+    def test_outer_filler_words_do_not_break_a_synonym_that_contains_one(self) -> None:
+        # Fix round 1, M1: "make it square" is itself a registered synonym
+        # containing the filler word "make it" -- an outer "please"/"can
+        # you" must still resolve to it, not just the bare synonym.
+        for text in ("please make it square", "make it square please",
+                     "can you make it square"):
+            with self.subTest(text=text):
+                self.assertEqual(phrases.resolve(text).key, "crop_square")
+
+    def test_by_n_on_a_toggle_or_crop_names_the_kind_not_the_move_count(self) -> None:
+        # Fix round 1, M2: the message must say WHY ("a toggle/crop takes no
+        # amount"), not the misleading one-move-phrase count.
+        with self.assertRaises(UsageError) as cm:
+            phrases.resolve("correct the lens by 1")
+        self.assertIn("toggle", cm.exception.message)
+        with self.assertRaises(UsageError) as cm:
+            phrases.resolve("crop square by 1")
+        self.assertIn("crop", cm.exception.message)
+
+    def test_intensity_words_are_dropped_for_toggle_and_crop_phrases(self) -> None:
+        # Fix round 1, M3: the move for a toggle/crop phrase never changes
+        # with an intensity word, so the reported intensity must not pretend
+        # it does.
+        self.assertEqual(phrases.resolve("crop square a touch").intensity, 1.0)
+        self.assertEqual(phrases.resolve("correct the lens a lot").intensity, 1.0)
+
     def test_unknown_phrase_suggests_neighbours(self) -> None:
         with self.assertRaises(UsageError) as cm:
             phrases.resolve("warmmer")
@@ -103,11 +137,29 @@ class PhraseRulesTest(unittest.TestCase):
         self.assertEqual(phrases.resolve("less contrast").moves[0].module, phrases.TONE)
 
     def test_every_phrase_targets_a_vocabulary_row(self) -> None:
+        # The oracle is the vocabulary registry itself (`vocab.PARAMS`), not
+        # `phrases.row_for` (the code under test): every move's own row must
+        # be registered. A `@tone` move needs the contrast row on BOTH tone
+        # modules; a `crop` move (param `aspect`) needs all four crop sides.
+        registry = {(s.module, s.param): s for s in vocab.PARAMS}
+        crop_sides = [("crop", side) for side in ("left", "right", "top", "bottom")]
         for phrase in phrases.PHRASES:
             for mv in phrase.moves:
-                module = "sigmoid" if mv.module == phrases.TONE else mv.module
-                with self.subTest(key=phrase.key, move=f"{module}.{mv.param}"):
-                    self.assertIsNotNone(vocab.spec(module, mv.param))
+                with self.subTest(key=phrase.key, move=f"{mv.module}.{mv.param}"):
+                    if mv.module == phrases.TONE:
+                        needed = [("sigmoid", mv.param), ("filmicrgb", mv.param)]
+                        own = ("sigmoid", mv.param)
+                    elif mv.module == "crop":
+                        needed = crop_sides
+                        own = ("crop", "left")
+                    else:
+                        needed = [(mv.module, mv.param)]
+                        own = (mv.module, mv.param)
+                    for row in needed:
+                        self.assertIn(row, registry)
+                    # row_for (used by gauntlet's layers) must hand back that
+                    # registered row, never a stand-in
+                    self.assertIs(phrases.row_for(mv), registry[own])
 
     def test_synonyms_are_unique_across_phrases(self) -> None:
         seen: dict[str, str] = {}

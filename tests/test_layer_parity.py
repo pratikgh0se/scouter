@@ -16,6 +16,7 @@ EXPECTED_VERBS = {
     "darkroom.set",
     "darkroom.nudge",
     "darkroom.enable",
+    "darkroom.disable",
     "darkroom.reset",
     "darkroom.undo_last",
     "darkroom.status",
@@ -63,6 +64,13 @@ class ParityTest(unittest.TestCase):
 
     def test_the_registry_is_exactly_the_phase_1_verb_table(self) -> None:
         self.assertEqual(set(registry.load_verbs()), EXPECTED_VERBS)
+
+    def test_darkroom_disable_is_a_verb_on_the_cli(self) -> None:
+        # Task 33 added `darkroom.disable` (the lens toggle's off move).
+        verbs = registry.load_verbs()
+        self.assertIn("darkroom.disable", verbs)
+        v = verbs["darkroom.disable"]
+        self.assertEqual((v.group, v.cli_command), ("darkroom", "disable"))
 
     def test_the_cli_exposes_every_verb(self) -> None:
         parser = build_parser()
