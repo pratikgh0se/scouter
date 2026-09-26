@@ -45,12 +45,16 @@ def run_bulk_case(session, case: Case) -> Observation:
     session.staged.vars["card"] = str(card)
     session.staged.vars["job_slug"] = f"htc-{case.id}"[-40:]
     obs = Observation()
+    # (final fix M1): the kill timer must never outlive its case (it could
+    # SIGKILL darktable in a later case); set in `finally`.
+    stop_killer = threading.Event()
     try:
         before = {str(f): observe.snapshot(f).get("fingerprint") for f in frames}
         kill_at = case.meta.get("kill_after_frame")
         killer = None
         if kill_at:
-            killer = threading.Thread(target=_kill_after, args=(session, kill_at), daemon=True)
+            killer = threading.Thread(target=_kill_after, args=(session, kill_at),
+                                      kwargs={"stop": stop_killer}, daemon=True)
             killer.start()
         try:
             for st in case.steps:
@@ -77,6 +81,7 @@ def run_bulk_case(session, case: Case) -> Observation:
         obs.extra["exactly_once"] = _exactly_once(frames)
         obs.extra["stats_ok_n"] = min(STATS_SAMPLE, obs.extra["changed_n"])
     finally:
+        stop_killer.set()
         delete_card(card)
     obs.wall_s = time.monotonic() - t0
     return obs
@@ -97,8 +102,10 @@ def _exactly_once(frames: list[Path]) -> bool:
     return True
 
 
-def _kill_after(session, frame_n: int, poll_s: float = 1.0, cap_s: float = 1800) -> None:
-    """SIGKILL the OWNED darktable once the job journal reports frame `frame_n`."""
+def _kill_after(session, frame_n: int, poll_s: float = 1.0, cap_s: float = 1800,
+                stop: threading.Event | None = None) -> None:
+    """SIGKILL the OWNED darktable once the job journal reports frame `frame_n`;
+    returns without signalling once `stop` is set (final fix M1)."""
     import os
     import signal
 
@@ -106,10 +113,13 @@ def _kill_after(session, frame_n: int, poll_s: float = 1.0, cap_s: float = 1800)
 
     events = Path(session.staged.env["SCOUTER_CACHE"]) / "events.jsonl"
     t0 = time.monotonic()
-    while time.monotonic() - t0 < cap_s:
+    stop = stop or threading.Event()
+    while time.monotonic() - t0 < cap_s and not stop.is_set():
         if events.exists() and events.read_text(errors="replace").count('"frame"') >= frame_n:
+            if stop.is_set():
+                return
             pid = dtprocess.owned_pid()
             if pid:
                 os.kill(pid, signal.SIGKILL)
             return
-        time.sleep(poll_s)
+        stop.wait(poll_s)
