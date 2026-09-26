@@ -215,6 +215,10 @@ def build(run: RunDir, adapter: Adapter, cases: list[Case], results: list[dict],
     refused = sum(_outcome(r) == "correct_refusal" for r in p0)
     missing = len(missing_ids)
     gates_ok = all(row["p1_ok"] and all(g["ok"] for g in row["check_gates"]) for row in layers)
+    #: (Task 28 fix round 1, I1): an adapter may name product sign-off items
+    #: that fail the bar (e.g. originals changed); optional, default none.
+    blockers_fn = getattr(adapter, "signoff_blockers", None)
+    blockers = list(blockers_fn(run)) if blockers_fn else []
     signoff = {
         "crashes": len(crashes), "silent_failures": len(silent), "hangs": len(hangs),
         #: (fix round 1, I4): zero P0 cases must not read as a met bar.
@@ -222,9 +226,10 @@ def build(run: RunDir, adapter: Adapter, cases: list[Case], results: list[dict],
         "p1_gates_ok": gates_ok, "cases_missing": missing, "missing_ids": missing_ids,
         "orphan_result_ids": orphan_ids, "blocked": blocked_counts,
         "release_bar_met": not crashes and not silent and not hangs and p0_total > 0
-        and p0_pass == p0_total and gates_ok and missing == 0,
+        and p0_pass == p0_total and gates_ok and missing == 0 and not blockers,
+        "blockers": blockers,
         "contact_sheet_reviewed": "[ ] (Pratik ticks by hand)",
-        "lines": adapter.signoff_lines(),
+        "lines": adapter.signoff_lines(run),
     }
     return {
         "schema": "gauntlet-report/1", "stamp": run.stamp, "adapter": adapter.name,
@@ -256,6 +261,8 @@ def markdown(rep: dict) -> str:
          *[f"  - `{i}`" for i in s8["missing_ids"]],
          f"- Orphan result files (stale, not in cases.jsonl): {len(s8['orphan_result_ids'])}",
          *[f"  - `{i}`" for i in s8["orphan_result_ids"]],
+         f"- Adapter blockers: {len(s8.get('blockers', []))}",
+         *[f"  - {b}" for b in s8.get("blockers", [])],
          f"- Contact sheet reviewed: {s8['contact_sheet_reviewed']}",
          *[f"- {x}" for x in s8["lines"]], "",
          "## S1 Headline", "",

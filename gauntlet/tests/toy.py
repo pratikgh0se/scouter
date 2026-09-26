@@ -75,7 +75,7 @@ class ToyAdapter:
     def crash_reports_since(self, t: float) -> list[str]:
         return [f"toy-{i}.ips" for i in range(self.crashes)]
 
-    def signoff_lines(self) -> list[str]:
+    def signoff_lines(self, run=None) -> list[str]:
         return ["toy originals unchanged: yes"]
 
     def generation_notes(self, cases: list[Case]) -> str:
