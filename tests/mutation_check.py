@@ -251,6 +251,34 @@ def is_collection_error(out):
 NO_MODULE_RE = re.compile(r"No module named '([\w.]+)'")
 CANNOT_IMPORT_RE = re.compile(r"cannot import name '(\w+)' from '([\w.]+)'")
 
+# Fix round 5: an explicit, auditable opt-out for a test file whose subject
+# predates the range entirely (new tests for old code - fix round 4's
+# no-production-change heuristic already catches the common "some unrelated
+# file changed too" shape via imports, but a human author can assert this
+# directly and cite WHY, which the table then shows a reviewer). Bound to a
+# specific base sha so it cannot silently outlive the range it was written
+# for.
+MARKER_RE = re.compile(
+    r"^#\s*mutation-check:\s*targets-predate-range\s+([0-9a-fA-F]{7,40})\s+--\s*(.+?)\s*$",
+    re.MULTILINE)
+
+
+def extract_marker(source, top_lines=20):
+    """(marker_sha, reason) from a top-of-file `# mutation-check:
+    targets-predate-range <sha> -- <reason>` comment, or None. Only the first
+    `top_lines` are scanned - "top-of-file", not "anywhere in the file" (a
+    marker buried mid-file would be too easy to miss in review)."""
+    if not source:
+        return None
+    head_block = "\n".join(source.splitlines()[:top_lines])
+    m = MARKER_RE.search(head_block)
+    return (m.group(1), m.group(2)) if m else None
+
+
+def resolve_sha(repo, ref):
+    rc, out = sh(["git", "rev-parse", f"{ref}^{{commit}}"], cwd=repo)
+    return out.strip() if rc == 0 else None
+
 
 def _prod_module_candidates(path):
     """(dotted, attr, package) for a production .py file path - `dotted` is
@@ -278,11 +306,71 @@ def new_module_import_error(out, new_prod_files):
     for f in new_prod_files:
         dotted, attr, package = _prod_module_candidates(f)
         if m1 and (m1.group(1) == dotted or dotted.startswith(m1.group(1) + ".")
-                   or m1.group(1).startswith(dotted + ".")):
+                   or m1.group(1).startswith(dotted + ".")
+                   # Fix round 4 (window-5 gate run, gate-w5.txt): a test file
+                   # that hacks sys.path to import a submodule by its bare
+                   # stem gets "No module named '<stem>'", not the dotted
+                   # path - match the bare stem too.
+                   or m1.group(1) == attr):
             return True
         if m2 and m2.group(1) == attr and m2.group(2) in (package, dotted.rsplit(".", 1)[0] if "." in dotted else ""):
             return True
     return False
+
+
+def _import_names(source):
+    """Set of module-name strings a test file's `import`/`from ... import`
+    statements reference - the full dotted path, every dotted prefix, and the
+    bare last component (the last covers a `sys.path` hack that imports a
+    submodule by its bare stem, same as `new_module_import_error`'s bare-stem
+    match). A bare relative import (`from . import x`, no module name) is
+    skipped - too ambiguous to resolve without walking the package tree, and
+    skipping it only means this file falls through to running the revert
+    check as before (never a false n/a)."""
+    names = set()
+    try:
+        tree = ast.parse(source or "")
+    except SyntaxError:
+        return names
+
+    def add_dotted(dotted):
+        names.add(dotted)
+        parts = dotted.split(".")
+        names.add(parts[-1])
+        for i in range(1, len(parts)):
+            names.add(".".join(parts[:i]))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                add_dotted(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level and not node.module:
+                continue
+            base = node.module or ""
+            if base:
+                add_dotted(base)
+            for alias in node.names:
+                names.add(alias.name)
+                if base:
+                    names.add(f"{base}.{alias.name}")
+    return names
+
+
+def references_prod_file(test_import_names, prod_file):
+    """True when `test_import_names` (from `_import_names`) plausibly
+    references `prod_file` - matched the same generous way
+    `new_module_import_error` matches a missing-module message, since both
+    are working from the same "a name the test imports vs. a file path"
+    mismatch."""
+    dotted, attr, package = _prod_module_candidates(prod_file)
+    candidates = {dotted, attr}
+    if package:
+        candidates.add(package)
+    parts = dotted.split(".")
+    for i in range(1, len(parts) + 1):
+        candidates.add(".".join(parts[:i]))
+    return bool(test_import_names & candidates)
 
 
 def apply_weakening(text, func_ranges):
@@ -330,16 +418,28 @@ def static_flags(source, lineno, end_lineno):
     return flags
 
 
-def _cell(state):
+def _cell(state, why=None):
     """`state` is None (n/a), True (failed - good), False (did not fail - bad),
-    "error" (collection error - not discriminating, fix round 1) or
-    "new_module" (the only failure is the reverted file not existing yet -
-    fix round 2; n/a, not a fail, and not counted against the gate - the
-    weaken column carries the requirement instead)."""
+    "error" (collection error - not discriminating, fix round 1),
+    "new_module" (the reverted file doesn't exist yet - fix round 2),
+    "no_prod_change" (none of the production files changed in this range are
+    imported by this test file - fix round 4), "targets_predate_range" (an
+    explicit, sha-bound marker says so - fix round 5, `why` is the marker's
+    reason) or "marker_mismatch" (a marker is present but its sha does not
+    match this gate's --base - fix round 5, never silently ignored). Every
+    state but plain True/False and marker_mismatch is n/a, not a fail, and
+    not counted against the gate - the weaken column carries the
+    requirement instead."""
     if state is None:
         return "n/a"
     if state == "new_module":
         return "n/a (new module)"
+    if state == "no_prod_change":
+        return "n/a (no production change)"
+    if state == "targets_predate_range":
+        return f"n/a (targets predate range: {why})"
+    if state == "marker_mismatch":
+        return f"marker mismatch (BAD): {why}" if why else "marker mismatch (BAD)"
     if state == "error":
         return "ERROR (not discriminating)"
     return "FAIL (good)" if state else "did not fail (BAD)"
@@ -378,7 +478,29 @@ def check_range(repo, base, head):
 
     # ---- (b) revert-mutation, one worktree, production reverted to base ----
     revert_by_file = {}
-    if prod_files:
+
+    # Fix round 5: an explicit, sha-bound marker overrides everything else
+    # below, for exactly the files that carry it - checked first, and
+    # regardless of whether any production file changed at all, so a
+    # wrong-sha marker is caught (never silently ignored) even on a range
+    # with no production changes.
+    resolved_base = resolve_sha(repo, base)
+    for f in per_file_funcs:
+        marker = extract_marker(show_file(repo, head, f))
+        if marker is None:
+            continue
+        marker_sha, reason = marker
+        resolved_marker = resolve_sha(repo, marker_sha)
+        if resolved_marker and resolved_base and resolved_marker == resolved_base:
+            revert_by_file[f] = ("targets_predate_range", reason)
+        else:
+            revert_by_file[f] = ("marker_mismatch",
+                                  f"marker names {marker_sha}, gate --base is {base} ({reason})")
+            ok = False
+
+    remaining = {f: v for f, v in per_file_funcs.items() if f not in revert_by_file}
+
+    if prod_files and remaining:
         new_prod_files = [f for f in prod_files if file_status(repo, base, head, f) == "A"]
         with tempfile.TemporaryDirectory(prefix="mutation-check-revert-") as tmp:
             wt = make_worktree(repo, head, Path(tmp))
@@ -386,7 +508,17 @@ def check_range(repo, base, head):
                 for f in prod_files:
                     status = file_status(repo, base, head, f)
                     revert_to_base(repo, base, wt, f, status)
-                for f, (status, funcs) in per_file_funcs.items():
+                for f, (status, funcs) in remaining.items():
+                    # Fix round 4: this test file may not even be ABOUT any of
+                    # the production files this range changed (e.g. new tests
+                    # added for pre-existing code) - reverting production it
+                    # never touches can never discriminate it, and reading
+                    # that as "did not fail (BAD)" would be a false alarm.
+                    test_imports = _import_names(show_file(repo, head, f))
+                    if not any(references_prod_file(test_imports, pf) for pf in prod_files):
+                        revert_by_file[f] = ("no_prod_change",
+                                              "no production file changed in this range is imported by this test file")
+                        continue
                     ids = sorted({node_id(f, cls, name) for cls, name, _, _ in funcs})
                     rc, out = run_pytest(wt, ids)
                     if is_collection_error(out):
@@ -409,7 +541,7 @@ def check_range(repo, base, head):
             finally:
                 remove_worktree(repo, wt)
     else:
-        for f in per_file_funcs:
+        for f in remaining:
             revert_by_file[f] = (None, "no production .py file changed in this range - (b) skipped")
 
     # ---- (c) assertion-weakening, per file, same HEAD worktree reused ----
@@ -453,7 +585,7 @@ def check_range(repo, base, head):
         rev_ok, rev_why = revert_by_file.get(f, (None, "-"))
         weak_ok, weak_why = weaken_by_func.get(f, (None, "-"))
         flags = static_by_file.get(f, [])
-        rev_cell = _cell(rev_ok)
+        rev_cell = _cell(rev_ok, rev_why)
         weak_cell = _cell(weak_ok)
         flags_cell = "; ".join(flags) if flags else "none"
         rows.append((f, names, rev_cell, weak_cell, flags_cell))

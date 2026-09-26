@@ -391,6 +391,189 @@ class SharedProductionModulePlusNewModule(unittest.TestCase):
             self.assertIn("FAIL (good)", weak_cell)
 
 
+class NoProductionChangeForThisTestFile(unittest.TestCase):
+    """Fix round 4 (window-5 gate run, gate-w5.txt): a changed test file whose
+    SUBJECT module(s) have no production change in this range - e.g. new
+    tests added for pre-existing, untouched code, while some UNRELATED
+    production file also changed - must not read "did not fail (BAD)" just
+    because *some* production file changed in the range. Detected via the
+    test file's own imports vs. the set of changed production files."""
+
+    def test_new_tests_for_unchanged_code_read_n_a_no_production_change(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)  # never changes
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - a\n")  # buggy, unrelated
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: production.py (already correct) + buggy unrelated.py")
+
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
+            write_test(root, DISCRIMINATING_TEST)
+            head = commit_all(root, "fix unrelated.py; add new tests for production.py, which did not change")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertTrue(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertEqual(rev_cell, "n/a (no production change)")
+            self.assertIn("FAIL (good)", weak_cell)
+
+    def test_cli_exit_code_zero(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - a\n")
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base")
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
+            write_test(root, DISCRIMINATING_TEST)
+            head = commit_all(root, "fix unrelated.py; new tests for untouched production.py")
+
+            p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
+                                 "--base", base, "--head", head, "--repo", str(root)],
+                                capture_output=True, text=True)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertIn("n/a (no production change)", p.stdout)
+
+
+class NewModuleUnderATestDirectoryNotItselfATest(unittest.TestCase):
+    """Fix round 4, second half (window-5 gate run): a NEW production file
+    that lives under a test directory but is not a test module itself (e.g. a
+    tool under `tests/`) is still a new module for the new-module rule -
+    including when a test imports it via a `sys.path` hack and a bare-stem
+    name."""
+
+    def test_a_new_tool_under_tests_imported_by_bare_stem_reads_n_a_new_module(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: no toolkit.py yet")
+
+            # A new NON-test .py file under tests/ (a tool, not test_*.py).
+            (root / "tests" / "toolkit.py").write_text("def triple(x):\n    return x * 3\n")
+            write_test(root,
+                       "import sys\nfrom pathlib import Path\n\n"
+                       "sys.path.insert(0, str(Path(__file__).resolve().parent))\n"
+                       "import toolkit\n\n\n"
+                       "def test_triple():\n"
+                       "    assert toolkit.triple(3) == 9\n")
+            head = commit_all(root, "add tests/toolkit.py (a tool, not a test) and cover it by bare-stem import")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertTrue(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertEqual(rev_cell, "n/a (new module)")
+            self.assertIn("FAIL (good)", weak_cell)
+
+
+class TargetsPredateRangeMarker(unittest.TestCase):
+    """Fix round 5: an explicit, auditable `# mutation-check:
+    targets-predate-range <base-sha> -- <reason>` top-of-file marker. A
+    matching sha reads n/a with the reason shown; any other use (wrong sha)
+    is reported, never silently ignored."""
+
+    def test_a_marker_matching_base_reads_n_a_with_the_reason_and_requires_weaken(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)  # pre-existing, correct, never changes
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - a\n")
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: production.py already correct, buggy unrelated.py")
+
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
+            marked_test = (
+                f"# mutation-check: targets-predate-range {base} -- "
+                "new tests for pre-existing production.py, killed 3 hand mutants\n"
+                + DISCRIMINATING_TEST)
+            write_test(root, marked_test)
+            head = commit_all(root, "fix unrelated.py; add marked tests for untouched production.py")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertTrue(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertEqual(rev_cell, "n/a (targets predate range: new tests for pre-existing "
+                                        "production.py, killed 3 hand mutants)")
+            self.assertIn("FAIL (good)", weak_cell)
+
+    def test_a_marker_with_the_wrong_sha_is_reported_not_silently_ignored(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - a\n")
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base")
+
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
+            wrong_sha = "0" * 40
+            marked_test = (
+                f"# mutation-check: targets-predate-range {wrong_sha} -- stale marker\n"
+                + DISCRIMINATING_TEST)
+            write_test(root, marked_test)
+            head = commit_all(root, "fix unrelated.py; test file carries a marker for the wrong base")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("marker mismatch (BAD)", rev_cell)
+
+    def test_cli_exit_code_zero_with_a_matching_marker(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - a\n")
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base")
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
+            marked_test = (f"# mutation-check: targets-predate-range {base} -- pre-existing coverage\n"
+                            + DISCRIMINATING_TEST)
+            write_test(root, marked_test)
+            head = commit_all(root, "fix unrelated.py; add marked tests")
+
+            p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
+                                 "--base", base, "--head", head, "--repo", str(root)],
+                                capture_output=True, text=True)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertIn("targets predate range: pre-existing coverage", p.stdout)
+
+    def test_cli_exit_code_nonzero_with_a_mismatched_marker(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - a\n")
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base")
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
+            wrong_sha = "1" * 40
+            marked_test = (f"# mutation-check: targets-predate-range {wrong_sha} -- stale marker\n"
+                            + DISCRIMINATING_TEST)
+            write_test(root, marked_test)
+            head = commit_all(root, "fix unrelated.py; stale marker")
+
+            p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
+                                 "--base", base, "--head", head, "--repo", str(root)],
+                                capture_output=True, text=True)
+            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+            self.assertIn("marker mismatch (BAD)", p.stdout)
+
+    def test_extract_marker_only_scans_the_top_of_the_file(self):
+        buried = "\n".join([f"# line {i}" for i in range(30)]) + \
+            "\n# mutation-check: targets-predate-range abc1234 -- too late, buried\n"
+        self.assertIsNone(mc.extract_marker(buried))
+        top = "# mutation-check: targets-predate-range abc1234 -- right at the top\nimport os\n"
+        self.assertEqual(mc.extract_marker(top), ("abc1234", "right at the top"))
+
+
 class SkippedTestIsFlagged(unittest.TestCase):
     def test_xfail_mark_on_a_new_test_is_a_static_flag(self):
         with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
