@@ -64,8 +64,21 @@ def generate(tax: Taxonomy) -> list[Case]:
     owner = tax.phrase_module()
     for i, text in enumerate(tax.unique_phrases()):
         mod = owner[text]
-        allowed = _module_keys(mod) if mod in SERVED_MODULES else []
-        cases.append(_resolve_case(case_id(PREFIX, "tax", f"{i:03d}"), text, allowed,
+        allowed = set(_module_keys(mod) if mod in SERVED_MODULES else [])
+        # Item 3: `allowed` built purely from the taxonomy's OWNING module is
+        # too narrow -- a taxonomy phrase can be, verbatim, a synonym the
+        # vocabulary's own phrase grammar already knows (e.g. "deeper
+        # shadows" is filed under module `sigmoid` in the taxonomy but is a
+        # `deepen_shadows` synonym; "warmer" is filed under
+        # `channelmixerrgb` but is a `warmer` synonym). That resolution is
+        # correct regardless of which module the taxonomy happens to credit
+        # it to, so it is always allowed. A phrase that is NOT one of its
+        # own synonyms gets nothing extra here -- an unrelated resolution
+        # still fails.
+        own_key = _key_for_phrase(text)
+        if own_key:
+            allowed.add(own_key)
+        cases.append(_resolve_case(case_id(PREFIX, "tax", f"{i:03d}"), text, sorted(allowed),
                                    {"file": "taxonomy-modules.json", "module": mod}))
     cap_keys = _capability_keys(tax.check_map)
     for r in tax.requests:

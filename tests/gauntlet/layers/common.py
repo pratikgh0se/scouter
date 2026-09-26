@@ -7,6 +7,18 @@ from gauntlet.case import Check, Step
 from tests.gauntlet.checkmap import PartCheck
 
 BODIES = ("olympus", "sony_a7")
+#: Bodies with a `scouter wb calibrate` table under `~/.config/scouter/wb/`
+#: (item 4a of the 2026-09-26 generator fix pass). Declared explicitly here
+#: rather than probed at generation time (the generator must stay pure, and
+#: must not read the operator's home directory): only `olympus` (em10iii)
+#: has a measured table today; `sony_a7` (A7) does not. A Kelvin-RELATIVE
+#: temperature move (adjust, nudge, a warmer/cooler phrase) on an
+#: uncalibrated body cannot read its current Kelvin from the coefficient
+#: ratio and honestly refuses `value_unknown` naming `scouter wb calibrate`
+#: (`scouter/core/moves.py:read_current` -> `wb.kelvin`). An absolute `set`
+#: is unaffected: it sends Kelvin straight to darktable, no round trip
+#: through the calibration table.
+CALIBRATED_BODIES = frozenset({"olympus"})
 #: Every MCP tool that can change the sidecar, the library or the disk.
 WRITE_TOOLS = frozenset({
     "darkroom_set", "darkroom_nudge", "darkroom_enable", "darkroom_reset", "darkroom_undo_last",
@@ -56,6 +68,38 @@ def m1_restored(keys: list[str], units: dict[str, str], from_step: int = 0) -> C
 def clamp_reported() -> Check:
     return Check("envelope", target={"path": "data.clamped", "op": "truthy"},
                  tags={"silent_if_fail": True, "why": "value clamped without saying so"})
+
+
+def boundary_check(module: str, param: str, unit: str, *, request: float | None = None,
+                   delta: float | None = None, bound: float | None = None,
+                   lo: float | None = None, hi: float | None = None,
+                   tol: float | None = None) -> Check:
+    """Soft-range boundary probe (spec 3.1's lo-step/hi+step, and an explicit
+    phrase amount beyond a param's range): the world is honest whether or not
+    it clamps. Pass when the decoded value equals the request (landed, no
+    clamp needed) OR it equals the bound the target lands at AND the
+    envelope's `data.clamped` says so; landing away from the request without
+    reporting a clamp stays a silent failure. `request` is an absolute value
+    known at generation time (a `set`); `delta` (with `lo`/`hi`) is resolved
+    against the case's own before-snapshot at evaluation time (a phrase's
+    `by N`, where the starting value is the live frame's, not the
+    generator's). See `gauntlet.evaluate._check_boundary`."""
+    t: dict = {"key": key(module, param), "unit": UNITS[unit]}
+    if request is not None:
+        t["request"] = request
+    if delta is not None:
+        t["delta"] = delta
+    if bound is not None:
+        t["bound"] = bound
+    if lo is not None:
+        t["lo"] = lo
+    if hi is not None:
+        t["hi"] = hi
+    if tol is not None:
+        t["tol"] = tol
+    return Check("boundary", target=t, tags={
+        "silent_if_fail": True,
+        "why": "value moved away from the request without reporting a clamp"})
 
 
 def stat_check(p: PartCheck) -> Check:
