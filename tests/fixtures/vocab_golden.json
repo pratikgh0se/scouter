@@ -132,6 +132,30 @@
     "wraps": false
   },
   {
+    "candidate_paths": [
+      "iop/channelmixerrgb/temperature"
+    ],
+    "concept": "white_balance",
+    "default": null,
+    "display_scale": 1.0,
+    "hi": 12000.0,
+    "lo": 2000.0,
+    "module": "channelmixerrgb",
+    "neutral": null,
+    "note": "used for warmer/cooler only while the white balance is in camera reference (late) mode; needs a daylight or planckian illuminant",
+    "param": "temperature",
+    "pinned_path": null,
+    "reachable": true,
+    "status": "candidate",
+    "step": 300.0,
+    "ui": "color calibration \u203a CAT \u203a illuminant temperature",
+    "unit": "K",
+    "value_source": "xmp",
+    "watch": "neutral greys and skin",
+    "why": "tells color calibration the light was bluer or redder, so the picture turns warmer or cooler, without touching the white balance module",
+    "wraps": false
+  },
+  {
     "candidate_paths": [],
     "concept": "color_balance",
     "default": null,

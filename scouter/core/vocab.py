@@ -126,6 +126,21 @@ PARAMS: tuple[ParamSpec, ...] = (
     ParamSpec("temperature", "tint", "white balance › tint", "ratio", 1.0, 0.5, 2.0, 0.05,
               "none", None, False, "white_balance",
               "trades green against magenta in the light", "skin and foliage"),
+    # Route A for warmth (decision rows 458/461, Pratik 2026-09-27): when the
+    # white balance is in camera reference (late) mode (temperature preset 4),
+    # warmth moves through color calibration's CAT illuminant temperature
+    # instead (`darkroom.wb_route`). darktable's hard range is 1667-25000 K;
+    # the clamp and the notch match the white-balance row. Only shown for a
+    # daylight or planckian illuminant (2 / 6), which the route checks.
+    ParamSpec("channelmixerrgb", "temperature",
+              "color calibration › CAT › illuminant temperature", "K", 1.0,
+              2000.0, 12000.0, 300.0, "xmp", None, False, "white_balance",
+              "tells color calibration the light was bluer or redder, so the picture turns "
+              "warmer or cooler, without touching the white balance module",
+              "neutral greys and skin",
+              ("iop/channelmixerrgb/temperature",),
+              note="used for warmer/cooler only while the white balance is in camera "
+                   "reference (late) mode; needs a daylight or planckian illuminant"),
     _cb("contrast", "master › contrast", "%", -0.5, 0.5, 0.05, "color_balance",
         "adds or removes contrast around middle grey, after the tone mapper",
         "that it does not fight the sigmoid contrast"),

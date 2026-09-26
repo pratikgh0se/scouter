@@ -114,6 +114,34 @@ LAYOUTS: dict[tuple[str, int], dict] = {
         "float_count": 29,
         "verified": "tests/fixtures/phase3-host.xmp (phase 3 task 10)",
     },
+    # Route A for warmth (decision rows 458/461): color calibration v3, 160
+    # bytes. Field order and types from darktable 5.4's
+    # `dt_iop_channelmixer_rgb_params_t` (src/iop/channelmixerrgb.c): six
+    # float[4] channel rows (bytes 0-95, left unnamed), six gboolean
+    # normalize flags (96-119), then the fields below. Checked against the
+    # darktable-written entry in tests/fixtures/P6281348.ORF.xmp (num 7):
+    # illuminant 2 (DT_ILLUMINANT_D), adaptation 1 (CAT16), x 0.3829,
+    # y 0.3739 and temperature 3926.67 K -- McCamy's CCT of that (x, y) is
+    # ~3923 K, so the slot is the illuminant temperature, not a coincidence.
+    # The sentinel pin of `temperature` is still owed by the host probe
+    # (tests/test_host_colorcal.py); until then the vocabulary row stays
+    # `candidate` because its action path is not pinned.
+    ("channelmixerrgb", 3): {
+        "size": 160,
+        "fields": (
+            ("illuminant", "<i", 120),
+            ("illum_fluo", "<i", 124),
+            ("illum_led", "<i", 128),
+            ("adaptation", "<i", 132),
+            ("x", "<f", 136),
+            ("y", "<f", 140),
+            ("temperature", "<f", 144),
+            ("gamut", "<f", 148),
+            ("clip", "<i", 152),
+            ("version", "<i", 156),
+        ),
+        "verified": "tests/fixtures/P6281348.ORF.xmp num 7 -> illuminant 2, temperature 3926.67",
+    },
     # Phase 3 task 10 host run, 2026-09-24: color zones v5 (520 bytes = 130
     # four-byte slots; some are ints, which only the unnamed slots expose).
     # The mix ("strength") sentinel 0.16 appeared at exactly one slot (127).

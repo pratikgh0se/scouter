@@ -98,6 +98,11 @@ class KelvinResult(Payload):
     exact: bool = False
     camera: str = ""
     table: dict | None = None
+    #: Route A (decision rows 458/461): which Kelvin route is in effect on the
+    #: image -- `darkroom.wb_route`: `route` is `white_balance`,
+    #: `color_calibration` (with `illuminant_kelvin` read from the sidecar)
+    #: or `unavailable` (with `reason`).
+    route: dict | None = None
 
 
 @dataclass

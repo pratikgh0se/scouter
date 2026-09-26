@@ -740,7 +740,10 @@ white balance in darktable 5.4's "camera reference (late)" mode (the
 scene-referred default): moving temperature or tint through darktable's
 sliders would switch off the late D65 correction and turn the frame cooler
 whichever way you asked. In that mode darktable adjusts warmth in color
-calibration, which Scouter does not drive yet.
+calibration: once its route is host-pinned (see "Warmth in camera reference
+(late) mode" below), warmer/cooler and Kelvin sets go there instead and only
+tint, nudges, or an image whose color calibration cannot take it still get
+`module_unavailable`.
 
 ### Honest limits, phase 3
 
@@ -972,6 +975,27 @@ one `darkroom_say` move take 4.6 s wall end to end, still well under the
 5 s poll ceiling. If you moved sliders **by hand** in darktable
 since Scouter's last move, say so ("I changed the exposure myself"): Claude
 passes `bounce: true` so Scouter reads your values, not the stale sidecar.
+
+**Warmth in camera reference (late) mode** (route A, decision rows 458/461).
+darktable 5.4's scene-referred default keeps white balance at preset 4
+("camera reference (late)"); moving its Kelvin slider switches that off and
+turns the frame cooler whichever way you asked. On such an image, "warmer",
+"cooler", "warmer by 500k", `darkroom adjust temperature temperature ...` and
+`darkroom set temperature temperature 5500` ("match daylight") move color
+calibration's CAT illuminant temperature instead (`channelmixerrgb.temperature`,
+same Kelvin, same 300 K notch, clamp 2000-12000 K) and leave the white balance
+module alone; the result carries a warning saying so. It needs color
+calibration enabled with a daylight or planckian illuminant, otherwise the
+answer is `module_unavailable` naming what is missing. `wb kelvin` reports
+which route is in effect (`route`: `white_balance`, `color_calibration` with
+`illuminant_kelvin` read from the sidecar, or `unavailable` with the reason);
+on a preset-4 image its `kelvin` is the white balance module's as-shot value,
+which warmth no longer moves. **Limit today:** the route's darktable action
+path (`iop/channelmixerrgb/temperature`) waits for its host probe
+(`tests/test_host_colorcal.py`), so the row is `candidate` and warmth on a
+preset-4 image still refuses `module_unavailable`. Speed is the same as any
+one-move phrase: one sidecar read decides the route, no extra darktable call
+(a direct `darkroom set` pays one extra `darkroom.current` lookup).
 
 ### Undo
 

@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 
 from scouter import metrics, paths
-from scouter.core import dtbridge, journal, xmp
+from scouter.core import dtbridge, journal, vocab, xmp
 from scouter.errors import (
     CommitTimeout,
     ModuleUnavailable,
@@ -320,10 +320,81 @@ def wb_preset(path: str, instance: int = 0) -> int | None:
     return preset if isinstance(preset, int) else None
 
 
-def wb_late_fix(params: set[str] | list[str] | tuple[str, ...]) -> str:
+#: Route A for warmth (decision rows 458/461, Pratik 2026-09-27 "warmth
+#: through colour calibration"): on a preset-4 image, Kelvin moves go to
+#: color calibration's CAT illuminant temperature and the white balance
+#: module is left untouched, so the late D65 correction stays on.
+COLORCAL_WB: tuple[str, str] = ("channelmixerrgb", "temperature")
+
+#: darktable 5.4 `dt_illuminant_t` (src/common/illuminants.h): the two
+#: illuminants whose colour is set by a temperature slider. Every other one
+#: (as shot in camera 10, custom 7, fluorescent 4, ...) ignores `temperature`.
+ILLUMINANT_KELVIN = {2: "daylight", 6: "planckian"}
+ILLUMINANT_NAMES = {0: "same as pipeline (D50)", 1: "A (incandescent)", 2: "daylight",
+                    3: "E (equi-energy)", 4: "fluorescent", 5: "LED", 6: "planckian",
+                    7: "custom", 8: "detect from surfaces", 9: "detect from edges",
+                    10: "as shot in camera"}
+#: darktable 5.4 `dt_adaptation_t`: DT_ADAPTATION_RGB is "none (bypass)" --
+#: no chromatic adaptation, so the illuminant does nothing.
+ADAPTATION_BYPASS = 4
+
+
+def wb_route(path: str, instance: int = 0) -> dict:
+    """Where a Kelvin (warmer/cooler/`temperature.temperature`) move goes on
+    this image. Local sidecar reads only; no bridge call.
+
+    - `white_balance`: the temperature preset is not 4 (or unknown) -- today's
+      route, `temperature.temperature` through the WB table.
+    - `color_calibration`: preset 4, the `channelmixerrgb.temperature` row is
+      `live`, and color calibration is enabled with a daylight/planckian
+      illuminant and a real CAT -- the move goes to `COLORCAL_WB`.
+    - `unavailable`: preset 4 and any of those is missing; `reason` says which.
+      The caller refuses (`refuse_wb_late`).
+    """
+    preset = wb_preset(path, instance)
+    if preset != WB_PRESET_D65_LATE:
+        return {"route": "white_balance", "module": "temperature", "param": "temperature",
+                "temperature_preset": preset, "reason": None}
+    row = vocab.spec(*COLORCAL_WB)
+    status = vocab.status(row) if row is not None else "missing"
+    out = {"route": "unavailable", "module": COLORCAL_WB[0], "param": COLORCAL_WB[1],
+           "temperature_preset": preset, "colorcal_status": status}
+    if status != "live":
+        return {**out, "reason": (
+            f"Scouter's color calibration route for warmth is built but its darktable "
+            f"action path is not confirmed yet (status {status}, pending a host probe)")}
+    parsed = _read_sidecar_parsed(path)
+    params = xmp.latest_params(parsed, COLORCAL_WB[0], 0) if parsed is not None else None
+    if not params or _module_enabled(path, COLORCAL_WB[0], 0) is not True:
+        return {**out, "reason": "color calibration is not enabled on this image (no active, "
+                                 "decodable entry in the sidecar)"}
+    illuminant = params.get("illuminant")
+    if illuminant not in ILLUMINANT_KELVIN:
+        name = ILLUMINANT_NAMES.get(illuminant, f"#{illuminant}")
+        return {**out, "illuminant": name, "reason": (
+            f"color calibration's illuminant is {name!r}; its temperature slider only works "
+            "for a daylight or planckian illuminant -- set the illuminant to daylight in "
+            "darktable's color calibration (CAT tab) first")}
+    if params.get("adaptation") == ADAPTATION_BYPASS:
+        return {**out, "reason": "color calibration's adaptation is 'none (bypass)', so its "
+                                 "illuminant has no effect"}
+    return {**out, "route": "color_calibration", "reason": None,
+            "illuminant": ILLUMINANT_KELVIN[illuminant],
+            "illuminant_kelvin": params.get("temperature")}
+
+
+def wb_routed_note(route: dict) -> str:
+    return ("white balance is in camera reference (late) mode (temperature preset 4), so "
+            f"warmth moved through color calibration's {route.get('illuminant')} illuminant "
+            "temperature instead; the white balance module was not touched")
+
+
+def wb_late_fix(params: set[str] | list[str] | tuple[str, ...],
+                route: dict | None = None) -> str:
     """The honest `fix` for a white-balance write refused in late mode. It names
     only what exists: colour calibration is darktable's place for warmth in
-    this mode, Scouter does not drive it, and the one live substitute (a
+    this mode; Scouter's route there (route A) is named with the reason it
+    cannot run on this image right now; the one other live substitute (a
     color balance rgb grade, for temperature only) is labelled as a grade."""
     fix = (
         "darktable's white balance on this image is in \"camera reference (late)\" mode "
@@ -332,16 +403,24 @@ def wb_late_fix(params: set[str] | list[str] | tuple[str, ...]) -> str:
         "temperature, tint or the coefficients through darktable's sliders switches the module "
         "to \"user modified\" and switches that late correction off, so the colours shift the "
         "wrong way (cooler, whichever way you asked). Nothing was changed in darktable. In this "
-        "mode darktable adjusts warmth in the color calibration module (its CAT illuminant), "
-        "which Scouter does not drive yet: change it there by hand."
+        "mode darktable adjusts warmth in the color calibration module (its CAT illuminant)"
     )
-    if "temperature" in set(params):
+    params = set(params)
+    if "temperature" in params:
+        why = (route or {}).get("reason")
+        if (route or {}).get("route") == "color_calibration":
+            fix += ("; Scouter drives it for warmer/cooler, 'darkroom adjust' and "
+                    "'darkroom set' -- say 'warmer' or 'cooler' instead of nudging.")
+        else:
+            fix += (", which Scouter does not drive on this image yet"
+                    + (f": {why}" if why else "") + ". Change it there by hand.")
         fix += (
             " Nearest thing Scouter can do: a colour grade, not a white-balance correction -- "
             "say 'warm the highlights' or 'cool the shadows' (color balance rgb)."
         )
     else:
-        fix += " Scouter has no substitute for a tint change."
+        fix += (", which Scouter does not drive for tint (it has no tint slider). "
+                "Change it there by hand. Scouter has no substitute for a tint change.")
     return fix
 
 
@@ -349,20 +428,27 @@ def refuse_wb_late(path: str, module: str, params: list[str], instance: int = 0,
                    what: str, extra: dict | None = None) -> None:
     """Raise `ModuleUnavailable` when a `temperature` write would land on a
     preset-4 (camera reference, late) white balance. A no-op for every other
-    module and every other preset (0/1/2/3), and when the preset is unknown."""
+    module and every other preset (0/1/2/3), and when the preset is unknown.
+
+    Callers route a Kelvin move to color calibration first (`wb_route`); what
+    reaches this guard on preset 4 is a tint move, a nudge, or a Kelvin move
+    whose color calibration route is not usable (still `candidate`, module
+    off, wrong illuminant) -- and it still refuses."""
     if module != "temperature":
         return
     preset = wb_preset(path, instance)
     if preset != WB_PRESET_D65_LATE:
         return
+    route = wb_route(path, instance)
     raise ModuleUnavailable(
         f"{what} cannot run: darktable's white balance on this image is in camera reference "
         "(late) mode, and changing it through darktable's sliders would switch off the late "
         "correction and shift the colours the wrong way",
-        fix=wb_late_fix(params),
+        fix=wb_late_fix(params, route),
         detail={"module": module, "params": list(params), "instance": instance,
                 "temperature_preset": preset, "mode": "camera reference (late)",
-                "darktable_enum": "DT_IOP_TEMP_D65_LATE", "path": path, **(extra or {})},
+                "darktable_enum": "DT_IOP_TEMP_D65_LATE", "path": path,
+                "colorcal_route": route, **(extra or {})},
     )
 
 
@@ -588,8 +674,10 @@ def set_param(
     """Set one module parameter to an absolute value (phase 0 finding 1).
 
     A `temperature` write on a white balance in camera reference (late) mode
-    is refused (`module_unavailable`) before anything is sent; see
-    `refuse_wb_late`. `wb.calibrate`'s sweep is exempt via `WB_LATE_EXEMPT`.
+    goes to color calibration's illuminant temperature when that route is
+    usable (`wb_route`, route A), and is otherwise refused
+    (`module_unavailable`) before anything is sent; see `refuse_wb_late`.
+    `wb.calibrate`'s sweep is exempt from both via `WB_LATE_EXEMPT`.
 
     A dry run makes no darktable calls at all -- not even to learn which image
     is in the darkroom (fix round 1, blocker 14) -- so it reports only the
@@ -623,6 +711,16 @@ def set_param(
     resolved = _current_image()
     _require_job_image(job, resolved.image_id)
     if not WB_LATE_EXEMPT.get():
+        if (module, param) == ("temperature", "temperature"):
+            route = wb_route(resolved.path, instance)
+            if route["route"] == "color_calibration":
+                # Route A: the same Kelvin, as color calibration's illuminant
+                # temperature; the WB module (preset 4) is not touched. One
+                # extra `darkroom.current` lookup in the inner call.
+                result = set_param.__wrapped__(*COLORCAL_WB, value, instance=0,
+                                               commit=commit, job=job)
+                result.warnings.append(wb_routed_note(route))
+                return result
         refuse_wb_late(resolved.path, module, [param], instance,
                        what=f"darkroom set {module}.{param}")
     dtbridge.require_darkroom()

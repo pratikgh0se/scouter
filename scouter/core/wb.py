@@ -468,7 +468,8 @@ def _no_table_result(camera: str, reason: str | None = None) -> dict:
     }
 
 
-def _coeffs_and_camera_from_image(image: str | int) -> tuple[list[float] | None, str, str | None]:
+def _coeffs_and_camera_from_image(
+        image: str | int) -> tuple[list[float] | None, str, str | None, str]:
     """Resolve `image`'s active `temperature` coefficients and its camera slug.
 
     `coeffs` is `None` (with a `reason`) when the image has no sidecar, no
@@ -485,17 +486,40 @@ def _coeffs_and_camera_from_image(image: str | int) -> tuple[list[float] | None,
     tags = exif.read_tags(resolved.path)
     camera = exif.camera_slug(tags, cfg)
 
-    parsed = darkroom._read_sidecar_parsed(resolved.path)
+    path = resolved.path
+    parsed = darkroom._read_sidecar_parsed(path)
     if parsed is None:
-        return None, camera, f"no sidecar for {resolved.path}: darktable has not committed it yet"
+        return None, camera, f"no sidecar for {path}: darktable has not committed it yet", path
     params = xmp.latest_params(parsed, "temperature")
     if params is None:
-        return None, camera, "no active temperature entry in this image's XMP"
+        return None, camera, "no active temperature entry in this image's XMP", path
     try:
         coeffs = [float(params[name]) for name in _TEMPERATURE_COEFF_NAMES]
     except (KeyError, TypeError, ValueError):
-        return None, camera, "temperature's coefficients did not decode from the XMP"
-    return coeffs, camera, None
+        return None, camera, "temperature's coefficients did not decode from the XMP", path
+    return coeffs, camera, None, path
+
+
+def _route_readback(path: str) -> tuple[dict, list[str]]:
+    """Which Kelvin route is in effect on `path` (`darkroom.wb_route`), plus the
+    warning a reader of `kelvin` needs on a preset-4 image: there `kelvin` is
+    the white balance module's as-shot value, which warmer/cooler no longer
+    move (route A) -- the illuminant temperature is what they move. Local
+    sidecar reads only."""
+    from scouter.core import darkroom
+
+    route = darkroom.wb_route(path)
+    if route["route"] == "white_balance":
+        return route, []
+    if route["route"] == "color_calibration":
+        return route, [
+            "white balance is in camera reference (late) mode: `kelvin` is the white balance "
+            "module's as-shot value, which warmer/cooler do not move here; they move color "
+            f"calibration's illuminant temperature, now {route.get('illuminant_kelvin')} K "
+            "(`route.illuminant_kelvin`)"]
+    return route, [
+        "white balance is in camera reference (late) mode and Scouter cannot move warmth on "
+        f"this image: {route.get('reason')}"]
 
 
 def kelvin(
@@ -513,7 +537,8 @@ def kelvin(
     camera)`), `image` keyword-only.
 
     Result shape: `{kelvin, interpolated, bracket, residual_ratio, exact,
-    camera, table, warnings, reason}`. No table -> `kelvin: None` with a
+    camera, table, warnings, reason}`, plus `route` for an `image` call
+    (`_route_readback`: which Kelvin route is in effect). No table -> `kelvin: None` with a
     reason naming `scouter wb calibrate`, `table: None`. Outside the
     calibrated range -> `kelvin: None` with a reason naming the range, never
     extrapolated. `table`, when a table was found, is `{"path": str,
@@ -528,15 +553,23 @@ def kelvin(
                 "wb.kelvin: pass image=..., or coeffs and camera, not both",
                 detail={"image": image, "coeffs": coeffs, "camera": camera},
             )
-        coeffs, camera, reason = _coeffs_and_camera_from_image(image)
+        coeffs, camera, reason, path = _coeffs_and_camera_from_image(image)
+        route, route_warnings = _route_readback(path)
         if coeffs is None:
-            return _no_table_result(camera, _reason_with_table_context(camera, reason))
+            out = _no_table_result(camera, _reason_with_table_context(camera, reason))
+            return {**out, "route": route, "warnings": out["warnings"] + route_warnings}
+        result = _kelvin_from(coeffs, camera, strict=strict)
+        return {**result, "route": route, "warnings": result["warnings"] + route_warnings}
     elif coeffs is None or camera is None:
         raise UsageError(
             "wb.kelvin needs image=..., or both coeffs and camera",
             detail={"coeffs": coeffs, "camera": camera},
         )
 
+    return _kelvin_from(coeffs, camera, strict=strict)
+
+
+def _kelvin_from(coeffs: list[float], camera: str, *, strict: bool) -> dict:
     try:
         table = load_table(camera)
     except ValueError as e:
@@ -579,6 +612,7 @@ def kelvin_verb(image: str | int, *, job: str | None = None) -> KelvinResult:
         table=result["table"],
         reason=result["reason"],
         warnings=list(result.get("warnings") or []),
+        route=result.get("route"),
     )
 
 
