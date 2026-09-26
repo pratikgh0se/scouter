@@ -83,8 +83,10 @@ class SayTest(_MovesFixture):
         self.assertIn("warmer", cm.exception.detail["suggestions"])
 
     def test_one_pre_commit_for_the_whole_phrase(self) -> None:
+        # `say` moves may span several modules, so its pre-commit expects
+        # none in particular (unlike `adjust`'s single-module bounce).
         moves.say.__wrapped__("brighter", commit=False, job="job-test")
-        self.assertEqual(self.commits, [(1, False)])
+        self.assertEqual(self.commits, [(1, False, None)])
 
     def test_dry_run_resolves_without_darktable(self) -> None:
         r = moves.say.__wrapped__("warmer", dry_run=True, job="job-test")

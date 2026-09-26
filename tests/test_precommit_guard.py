@@ -10,7 +10,9 @@ forces it; `trust_sidecar=True` still skips it unconditionally.
 
 The fake bridge's `darkroom._commit` is patched (tests.test_moves's fixture)
 and records every bounce in `self.commits`; a pre-read bounce is the
-`(1, False)` call.
+`(1, False, expect_module)` call -- `expect_module` is the module the
+caller (`get`/`adjust`) is about to touch, exactly like every other writer's
+commit call (row 461 follow-up).
 """
 
 from __future__ import annotations
@@ -22,7 +24,10 @@ from scouter.core import history, journal, moves
 from scouter.errors import UsageError
 from tests.test_moves import _MovesFixture
 
-PRE = (1, False)
+PRE = (1, False, "exposure")
+#: `say` moves may span several modules, so its pre-commit bounce expects none
+#: in particular (unlike `adjust`/`get`'s single-module bounce).
+PRE_SAY = (1, False, None)
 
 
 class PrecommitGuardTest(_MovesFixture):
@@ -52,7 +57,7 @@ class PrecommitGuardTest(_MovesFixture):
 
     def test_first_move_on_an_image_bounces_once(self) -> None:
         r = moves.say.__wrapped__("a touch brighter", commit=False, job="job-test")
-        self.assertEqual(self.commits, [PRE])
+        self.assertEqual(self.commits, [PRE_SAY])
         self.assertTrue(r.plan[0]["bounced"])
         self.assertIn("first move", r.plan[0]["reason"])
 
@@ -87,7 +92,7 @@ class PrecommitGuardTest(_MovesFixture):
                                  job="job-test")
         self.assertEqual(self.commits, [PRE])
         moves.say.__wrapped__("a touch brighter", commit=False, bounce=True, job="job-test")
-        self.assertEqual(self.commits, [PRE, PRE])
+        self.assertEqual(self.commits, [PRE, PRE_SAY])
 
     def test_trust_sidecar_still_never_bounces(self) -> None:
         moves.adjust.__wrapped__("exposure", "exposure", 0.3, commit=False,

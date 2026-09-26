@@ -304,7 +304,7 @@ def _set_recording_before(module: str, param: str, target: float, *, instance: i
     return result
 
 
-def _precommit(job: str, image_id: int) -> str | None:
+def _precommit(job: str, image_id: int, *, expect_module: str | None = None) -> str | None:
     """One expect-no-change bounce (P3-R3). A timeout is a warning, not a failure.
 
     Controller ruling, fix round 1: ONLY `CommitTimeout` (spec §6.2 step 4) is
@@ -313,9 +313,18 @@ def _precommit(job: str, image_id: int) -> str | None:
     move. Every other `ScouterError` (a wrong view, a dead bridge, a locked
     library, ...) is a real failure and propagates untouched: swallowing it
     here would silently continue a move whose pre-flight already failed.
+
+    `expect_module` (row 461 follow-up): the module the caller (`get`,
+    `adjust`) is about to read or write, forwarded to `_commit` exactly like
+    every other writer's commit call (`_try_commit`, `_commit_with_readback`)
+    already does. Without it, a stale rewrite whose newest history item
+    belongs to some OTHER module was indistinguishable from a fresh flush of
+    THIS one -- the same hole row 434/461 closed for the real commit, just
+    left open on this pre-flight bounce.
     """
     try:
-        darkroom._commit(job, image_id, strategy="auto", attempts=1, expect_change=False)
+        darkroom._commit(job, image_id, strategy="auto", attempts=1, expect_change=False,
+                         expect_module=expect_module)
     except CommitTimeout as e:
         return f"pre-commit did not confirm ({e.code}); the value read may predate darktable's live state"
     return None
@@ -376,13 +385,13 @@ def precommit_decision(job: str, resolved: ResolvedImage, *, bounce: bool = Fals
 
 
 def _maybe_precommit(job: str, resolved: ResolvedImage, *, bounce: bool,
-                     trust_sidecar: bool) -> tuple[str | None, dict]:
+                     trust_sidecar: bool, expect_module: str | None = None) -> tuple[str | None, dict]:
     """Run the guard, and the bounce if it asks for one. `(warning, plan_row)`."""
     do_it, reason = precommit_decision(job, resolved, bounce=bounce, trust_sidecar=trust_sidecar)
     warning = None
     t0 = time.monotonic()
     if do_it:
-        warning = _precommit(job, resolved.image_id)
+        warning = _precommit(job, resolved.image_id, expect_module=expect_module)
     ms = int((time.monotonic() - t0) * 1000) if do_it else 0
     return warning, {"action": "precommit", "bounced": do_it, "reason": reason, "ms": ms}
 
@@ -398,7 +407,7 @@ def get(module: str, param: str, *, instance: int = 0, bounce: bool = False,
     pre_warning = None
     if bounce:
         dtbridge.require_darkroom()
-        pre_warning = _precommit(job, resolved.image_id)
+        pre_warning = _precommit(job, resolved.image_id, expect_module=module)
     value, source, reason = read_current(resolved, s, instance, job)
     fresh, why = history.watermark_fresh(job, resolved.image_id, resolved.xmp_path)
     warnings: list[str] = [pre_warning] if pre_warning else []
@@ -441,7 +450,8 @@ def adjust(module: str, param: str, delta: float, *, instance: int = 0, commit: 
     resolved = darkroom._current_image()
     darkroom._require_job_image(job, resolved.image_id)
     dtbridge.require_darkroom()
-    warning, pre = _maybe_precommit(job, resolved, bounce=bounce, trust_sidecar=trust_sidecar)
+    warning, pre = _maybe_precommit(job, resolved, bounce=bounce, trust_sidecar=trust_sidecar,
+                                    expect_module=module)
     result = _adjust_core(module, param, delta, resolved=resolved, instance=instance,
                           commit=commit, level=level, job=job, ms_precommit=pre["ms"])
     result.plan[0]["precommit"] = {"bounced": pre["bounced"], "reason": pre["reason"]}
