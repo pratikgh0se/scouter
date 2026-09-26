@@ -18,6 +18,13 @@ fi
 
 BASE="$1"
 HEAD="$2"
-ROOT="${3:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# Where the checker script itself lives is NOT the same thing as which repo
+# to check (fix round 1: these were conflated, so `[repo-root]` silently had
+# no effect - the script always checked its own checkout). SCRIPT_HOME always
+# resolves from this file's own location; ROOT (the `--repo` target) defaults
+# to SCRIPT_HOME but a caller (e.g. this script's own tests, against a
+# fixture repo) can point it elsewhere.
+SCRIPT_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${3:-$SCRIPT_HOME}"
 
-exec python3 "$ROOT/tests/mutation_check.py" --base "$BASE" --head "$HEAD" --repo "$ROOT"
+exec python3 "$SCRIPT_HOME/tests/mutation_check.py" --base "$BASE" --head "$HEAD" --repo "$ROOT"
