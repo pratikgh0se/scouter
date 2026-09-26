@@ -14,7 +14,14 @@ from pathlib import Path
 
 from scouter import metrics
 from scouter.core import darkroom, dtbridge, explain, history, journal, phrases, vocab, wb, xmp
-from scouter.errors import CommitTimeout, NotPinned, ScouterError, UsageError, ValueUnknown
+from scouter.errors import (
+    CommitTimeout,
+    NotPinned,
+    ScouterError,
+    UsageError,
+    ValueUnknown,
+    WriteUnverified,
+)
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
 from scouter.types import AdjustResult, ResolvedImage, SayResult, ValueResult
@@ -190,6 +197,7 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
                    "ms_read": int((time.monotonic() - t0) * 1000), "ms_set": 0}],
         )
     t1 = time.monotonic()
+    wb_before = _wb_ratio(resolved, instance) if s.value_source == "wb_table" and commit else None
     # Fix round 1, controller ruling, load-bearing: `set_param`'s own
     # `before_state` never heard about the neutral fallback (it reads only
     # the XMP/journal) and journals `before.value: None` for this move --
@@ -202,6 +210,10 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
     applied = result.applied
     if s.value_source == "wb_table":
         applied, _, _ = read_current(resolved, s, instance, job) if commit else (None, "", None)
+        if commit:
+            warnings.extend(_verify_kelvin(resolved, s, instance, previous, target, applied,
+                                           wb_before))
+    clamped = clamped or result.clamped
     warnings.extend(result.warnings)
     explain_lines = explain.lines([explain.MoveNote(s, previous, target)], level=level, job=job)
     return AdjustResult(
@@ -214,6 +226,65 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
                "ms_read": int((t1 - t0) * 1000),
                "ms_set": int((time.monotonic() - t1) * 1000)}],
     )
+
+
+#: Row 433: how far the measured r/b ratio may sit from the one the table
+#: predicts at the target Kelvin. darktable's own Kelvin model and Scouter's
+#: measured table disagree by up to ~2.4% in r/b on the EM10iii (night 1:
+#: 5225 K set reads back 5124 K through the table, every time); three times
+#: the table's own "exact" tolerance (`wb._EXACT_TOLERANCE`, 1%) covers that
+#: with margin while still failing a 300 K move that did not happen (7%).
+#: Upper bound, from the table's resolution: the shipped measured table
+#: (`scouter/data/wb/em10iii.json`, 1000 K steps) changes r/b by at least
+#: ~3.9% between adjacent samples (11000 -> 12000 K), so 3% never verifies a
+#: landing a whole table step away. Pinned by
+#: `test_wb_verify_tolerance_is_pinned_between_the_model_offset_and_one_table_step`.
+_WB_VERIFY_TOLERANCE = 3 * wb._EXACT_TOLERANCE
+
+
+def _wb_ratio(resolved: ResolvedImage, instance: int) -> float | None:
+    params = darkroom._temperature_extra(resolved.path, instance).get("params")
+    return darkroom._rb_ratio(params)
+
+
+def _verify_kelvin(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int, previous: float,
+                   target: float, applied: float | None,
+                   before_ratio: float | None) -> list[str]:
+    """Row 433, night-1 A (`cov-phrase-warmer-olympus-bare`: 4925 K -> 5225 K
+    reported ok, coefficients untouched). A Kelvin move is verified in the
+    coefficient domain, where darktable's write is exact: the r/b ratio must
+    have changed at all, and must sit within `_WB_VERIFY_TOLERANCE` of the
+    ratio the measured table predicts at `target`. Raises `WriteUnverified`;
+    returns warnings when it cannot check (no table, no decodable ratio)."""
+    after_ratio = _wb_ratio(resolved, instance)
+    camera = _camera_for(resolved.path)
+    expected = wb.expected_ratio(camera, target) if camera else None
+    detail = {"module": s.module, "param": s.param, "requested": target, "expected": target,
+              "applied": applied, "previous": previous, "ratio_before": before_ratio,
+              "ratio_after": after_ratio, "ratio_expected": expected,
+              "tolerance": _WB_VERIFY_TOLERANCE}
+    if after_ratio is None:
+        return [f"{s.ui}: the coefficients did not decode after the write, so the move could "
+                "not be verified"]
+    if before_ratio is not None and abs(after_ratio - before_ratio) <= 1e-6 * abs(before_ratio):
+        raise WriteUnverified(
+            f"{s.module}.{s.param}: darktable was sent {target:.0f} K and the commit reported "
+            f"done, but the white-balance coefficients in the sidecar did not change "
+            f"(r/b {after_ratio:.4f}; still {previous:.0f} K)",
+            detail=detail,
+        )
+    if expected is None:
+        return [f"{s.ui}: {target:.0f} K is outside the measured table, so the landed "
+                "coefficients could not be checked against it"]
+    if abs(after_ratio - expected) / abs(expected) > _WB_VERIFY_TOLERANCE:
+        raise WriteUnverified(
+            f"{s.module}.{s.param}: darktable was sent {target:.0f} K, but the sidecar's r/b "
+            f"ratio {after_ratio:.4f} is {100 * abs(after_ratio / expected - 1):.1f}% from the "
+            f"{expected:.4f} the measured table predicts there (reads as "
+            f"{'?' if applied is None else f'{applied:.0f}'} K)",
+            detail=detail,
+        )
+    return []
 
 
 def before_fallback(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int,
@@ -299,7 +370,10 @@ def _set_recording_before(module: str, param: str, target: float, *, instance: i
         if fallback is not None:
             _patch_before(job, seq, module, param, fallback)
         raise
-    if fallback is not None and not result.noop:
+    if fallback is not None:
+        # Row 433: a readback-confirmed no-op (`noop` with a write sent)
+        # began and landed an entry too; only the zero-bridge shortcut
+        # begins none, and `_patch_before` then finds nothing to patch.
         _patch_before(job, seq, module, param, fallback)
     return result
 
@@ -557,8 +631,11 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
             except ScouterError as e:
                 if not landed:
                     raise
+                # Row 433 / spec 5.4 point 4: a move that was SENT but did
+                # not verify is reported with what the sidecar really says
+                # (`detail`), so every write the phrase made is accounted for.
                 failures.append({"module": module, "param": mv.param, "code": e.code,
-                                 "message": e.message})
+                                 "message": e.message, "detail": e.detail})
                 break
     finally:
         journal.GROUP.reset(token)

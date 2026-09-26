@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 
 from scouter.core import darkroom, dtbridge, history
-from tests.scouter_fakes import FakeBridge, TempCache, with_new_history_hash
+from tests.scouter_fakes import FakeBridge, TempCache, with_new_history_hash, with_param_value
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "P6281348.ORF.xmp"
 
@@ -25,14 +25,20 @@ FIXTURE = Path(__file__).resolve().parent / "fixtures" / "P6281348.ORF.xmp"
 FIXTURE_EXPOSURE_VALUE = 1.5500002
 
 
-def _write_sidecar(sidecar: Path, original_text: str) -> None:
+def _write_sidecar(sidecar: Path, original_text: str, sent: dict | None = None) -> None:
     time.sleep(0.01)  # guarantee the mtime tick
-    sidecar.write_text(with_new_history_hash(original_text))
+    text = original_text
+    if sent and sent.get("value") is not None:
+        # Row 433: a real commit carries the value darktable was sent; a
+        # rewrite that kept the old value is a write that did not land.
+        text = with_param_value(text, "exposure", "exposure", sent["value"])
+    sidecar.write_text(with_new_history_hash(text))
     future = time.time() + 2
     os.utime(sidecar, (future, future))
 
 
-def _commit_handler(sidecar: Path, original_text: str, *, outcome: str = "auto"):
+def _commit_handler(sidecar: Path, original_text: str, *, outcome: str = "auto",
+                    sent: dict | None = None):
     """A `history.commit` bridge double that behaves like the real plugin
     (task 12's Lua contract; fix round 1, should-fix 6 asked for more than
     one `outcome` so both blockers can be driven through this one double).
@@ -66,7 +72,7 @@ def _commit_handler(sidecar: Path, original_text: str, *, outcome: str = "auto")
         ok = True
         if outcome == "auto":
             if expect_change:
-                _write_sidecar(sidecar, original_text)
+                _write_sidecar(sidecar, original_text, sent)
                 written = True
         elif outcome == "never_write":
             ok = not expect_change
@@ -75,7 +81,7 @@ def _commit_handler(sidecar: Path, original_text: str, *, outcome: str = "auto")
                 sidecar.unlink(missing_ok=True)
                 ok = not expect_change
             else:
-                _write_sidecar(sidecar, original_text)
+                _write_sidecar(sidecar, original_text, sent)
                 written = True
         else:
             raise AssertionError(f"unknown _commit_handler outcome: {outcome!r}")
@@ -93,7 +99,12 @@ def _commit_handler(sidecar: Path, original_text: str, *, outcome: str = "auto")
 
 
 class HistoryChangedTest(unittest.TestCase):
+    def _action(self, p: dict) -> dict:
+        self.sent["value"] = p.get("value")
+        return {"nan": False, "status": p.get("value"), "view": "darkroom", **p}
+
     def setUp(self) -> None:
+        self.sent: dict = {}
         self.cache = TempCache()
         root = self.cache.start()
         self.raw = root / "P6281348.ORF"
@@ -110,14 +121,11 @@ class HistoryChangedTest(unittest.TestCase):
                     "source": "action_images",
                 },
                 "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-                "darkroom.action": lambda p: {
-                    "nan": False,
-                    "status": p.get("value"),
-                    "view": "darkroom",
-                    **p,
-                },
+                "darkroom.action": self._action,
                 "module.enable": {"nan": False, "view": "darkroom"},
-                "history.commit": _commit_handler(self.sidecar, self.original_text),
+                "history.commit": _commit_handler(
+                    self.sidecar, self.original_text, sent=self.sent
+                ),
             }
         )
         dtbridge.set_bridge(self.bridge)
@@ -137,7 +145,11 @@ class HistoryChangedTest(unittest.TestCase):
             module="exposure", param="exposure", value=FIXTURE_EXPOSURE_VALUE, job="job-test"
         )
         self.assertTrue(warm.committed)
-        self.assertFalse(warm.noop, "the warm-up call has no watermark yet, so it is not a noop")
+        # Row 433: darktable wrote nothing and the readback confirmed the
+        # value, so the warm-up IS reported as a no-op now -- but it still
+        # sent the action (no watermark to shortcut on yet).
+        self.assertTrue(warm.noop)
+        self.assertEqual(self.bridge.count("darkroom.action"), 1)
 
         self.bridge.calls.clear()
         result = darkroom.set_param(
@@ -157,7 +169,9 @@ class HistoryChangedTest(unittest.TestCase):
         result = darkroom.set_param(
             module="exposure", param="exposure", value=FIXTURE_EXPOSURE_VALUE, job="job-test"
         )
-        self.assertFalse(result.noop)
+        # Row 433: readback-confirmed "nothing to write" is reported noop.
+        self.assertTrue(result.noop)
+        self.assertEqual(self.bridge.count("darkroom.action"), 1)
         self.assertTrue(result.committed)
         self.assertEqual(self.bridge.count("history.commit"), 1)
         params = [p for m, p in self.bridge.calls if m == "history.commit"][-1]
@@ -340,7 +354,7 @@ class HistoryChangedTest(unittest.TestCase):
         never stamp a watermark from that alone, and must report the
         uncertainty honestly (`changed=False, confirmed=False`)."""
         self.bridge.responses["history.commit"] = _commit_handler(
-            self.sidecar, self.original_text, outcome="never_write"
+            self.sidecar, self.original_text, outcome="never_write", sent=self.sent
         )
         result = history.commit(
             image=str(self.raw), job="job-test", attempts=1, expect_change=False
@@ -359,7 +373,7 @@ class HistoryChangedTest(unittest.TestCase):
         from scouter.errors import CommitTimeout
 
         self.bridge.responses["history.commit"] = _commit_handler(
-            self.sidecar, self.original_text, outcome="never_write"
+            self.sidecar, self.original_text, outcome="never_write", sent=self.sent
         )
         with self.assertRaises(CommitTimeout):
             history.commit(
@@ -376,7 +390,7 @@ class HistoryChangedTest(unittest.TestCase):
         landing for real must still report `committed=True, noop=False`.
         """
         self.bridge.responses["history.commit"] = _commit_handler(
-            self.sidecar, self.original_text, outcome="mismatch_then_recover"
+            self.sidecar, self.original_text, outcome="mismatch_then_recover", sent=self.sent
         )
         result = darkroom.set_param(
             module="exposure", param="exposure", value=FIXTURE_EXPOSURE_VALUE, job="job-test"

@@ -7,8 +7,14 @@ import time
 from collections.abc import Callable
 
 from scouter import metrics, paths
-from scouter.core import dtbridge, journal, xmp
-from scouter.errors import CommitTimeout, NotInDarkroom, ScouterError, UsageError
+from scouter.core import dtbridge, journal, vocab, xmp
+from scouter.errors import (
+    CommitTimeout,
+    NotInDarkroom,
+    ScouterError,
+    UsageError,
+    WriteUnverified,
+)
 from scouter.paths import current_job
 from scouter.registry import ArgSpec, Verb, register
 from scouter.types import (
@@ -133,8 +139,13 @@ def _commit_with_readback(
     confirm: Callable[[], bool],
     what: str,
     strategy: str = "auto",
-) -> tuple[bool, list[str]]:
+    predicted_noop: bool = False,
+) -> tuple[bool, list[str], bool]:
     """`_commit`, with a commit timeout resolved by reading the XMP back.
+
+    Returns `(committed, warnings, noop)`. `noop` is True when darktable wrote
+    nothing because the requested state was already the sidecar's (confirmed
+    by `confirm()`, never assumed).
 
     Final review, should-fix 6: `darkroom.set` already did this, and every
     other writer did not -- so a write whose journal entry says `completed`
@@ -146,11 +157,36 @@ def _commit_with_readback(
     does not, the timeout is re-raised untouched -- a write that never landed
     is never reported as committed.
 
+    `predicted_noop` (row 433, night-1 C): the caller already saw, BEFORE
+    sending, that the sidecar holds the requested state (a reset of a module
+    already at its defaults, an undo whose value is already back, an enable
+    of an enabled module). Then one expect-no-change bounce (~1 s) is spent,
+    not the full two-bounce 5.4 s wait for a sidecar darktable will never
+    write; `confirm()` still decides, and a wrong prediction falls through
+    to the real commit.
+
     `xmp_path` (fix round 1, should-fix 3): the CALLER's already-resolved
     sidecar path, so watermarking a readback-resolved commit costs no extra
     `darkroom.current` round-trip -- every caller already has this path from
     resolving its own image.
     """
+    from scouter.core import history
+
+    noop_warning = (
+        f"darktable wrote no new sidecar for {what}: the state requested is the "
+        "one the XMP already carried, so there was no history change to write. "
+        "Confirmed by reading it back from the sidecar."
+    )
+    if predicted_noop:
+        try:
+            first = _commit(job, image_id, strategy=strategy, attempts=1, expect_change=False)
+        except CommitTimeout:
+            first = None
+        if first is not None and first.committed:
+            return True, list(first.warnings), False
+        if confirm():
+            history.watermark_write(job, image_id, xmp_path)
+            return True, [noop_warning], True
     try:
         result = _commit(job, image_id, strategy=strategy)
     except CommitTimeout:
@@ -162,15 +198,9 @@ def _commit_with_readback(
         # path never ran (it raised), so nothing else would record it. This
         # branch's own `confirm()` already IS the readback confirmation
         # blocker 2 (fix round 1) requires, so watermarking here is safe.
-        from scouter.core import history
-
         history.watermark_write(job, image_id, xmp_path)
-        return True, [
-            f"darktable wrote no new sidecar for {what}: the state requested is the "
-            "one the XMP already carried, so there was no history change to write. "
-            "Confirmed by reading it back from the sidecar."
-        ]
-    return result.committed, list(result.warnings)
+        return True, [noop_warning], True
+    return result.committed, list(result.warnings), False
 
 
 def _commit(
@@ -298,6 +328,125 @@ def _read_state(path: str, module: str, param: str, instance: int) -> dict:
     return state
 
 
+def _declared_default(module: str, param: str) -> float | None:
+    """The vocabulary row's declared `neutral` (else darktable `default`)."""
+    s = vocab.spec(module, param)
+    if s is None:
+        return None
+    if s.neutral is not None:
+        return float(s.neutral)
+    if s.default is not None:
+        return float(s.default)
+    return None
+
+
+def _effective_current(raw_state: dict, module: str, param: str) -> tuple[float | None, str]:
+    """What darktable really holds for this slider, per the sidecar ON DISK:
+    `(value, source)`.
+
+    The decoded value when there is one (`"xmp"`). When the sidecar exists
+    but the module has NO active history entry, darktable runs it at its
+    defaults, so the row's declared neutral/default is the value (`"default"`)
+    -- row 433, night-1 C: `set colorbalancergb.contrast 0` on a frame with
+    no colour-balance history wrote nothing (0 is what it already held) and
+    Scouter, comparing against "no value", waited 5.4 s for a commit_timeout.
+    Anything else (no sidecar, an entry that did not decode) is `None`.
+    """
+    value = raw_state.get("value")
+    if value is not None:
+        return float(value), "xmp"
+    if raw_state.get("history_end") is not None and raw_state.get("enabled") is None:
+        default = _declared_default(module, param)
+        if default is not None:
+            return default, "default"
+    return None, "xmp"
+
+
+def _effective_read(path: str, module: str, param: str, instance: int) -> float | None:
+    """`_effective_current` of the sidecar as it reads right now."""
+    state = {
+        **_module_state(path, module, instance),
+        "value": _read_value(path, module, param, instance),
+    }
+    return _effective_current(state, module, param)[0]
+
+
+def _module_at_defaults(path: str, module: str, instance: int) -> bool:
+    """Does the sidecar show `module` at its darktable defaults?
+
+    Only answerable from what Scouter knows: every vocabulary row of the
+    module that declares a neutral/default must decode, and equal it. A
+    module with no such row (exposure, sigmoid, ...) is never "known at
+    defaults" -- its reset stays unconfirmable, and a timeout stays a
+    timeout.
+    """
+    rows = [
+        s for s in vocab.PARAMS
+        if s.module == module and s.value_source == "xmp"
+        and _declared_default(module, s.param) is not None
+    ]
+    if not rows:
+        return False
+    parsed = _read_sidecar_parsed(path)
+    if parsed is None:
+        return False
+    params = xmp.latest_params(parsed, module, instance)
+    if not params:
+        return False
+    for s in rows:
+        value = params.get(s.param)
+        if not isinstance(value, (int, float)):
+            return False
+        if not _close(float(value), _declared_default(module, s.param)):
+            return False
+    return True
+
+
+def _raise_unverified(
+    what: str,
+    *,
+    module: str,
+    param: str,
+    requested: float,
+    expected: float,
+    applied: float | None,
+    previous: float | None,
+    history_end_before: int | None,
+    path: str,
+    instance: int,
+) -> None:
+    """Row 433: a committed write whose sidecar value is not the one asked
+    for (nor a declared darktable clamp) is a typed error, never `ok`."""
+    history_end_after = _module_state(path, module, instance).get("history_end")
+    message = (
+        f"{what}: darktable was sent {requested:g} and the commit reported done, but the "
+        f"sidecar reads {applied!r} (expected {expected:g}, was {previous!r})"
+    )
+    if (
+        history_end_before is not None
+        and history_end_after is not None
+        and history_end_after < history_end_before
+    ):
+        message += (
+            f"; the sidecar's history went BACKWARDS ({history_end_before} -> "
+            f"{history_end_after} items): it was rewritten from an older library state"
+        )
+    raise WriteUnverified(
+        message,
+        detail={
+            "module": module,
+            "param": param,
+            "requested": requested,
+            "expected": expected,
+            "applied": applied,
+            "previous": previous,
+            "tolerance": vocab.verify_tolerance(module, param, expected, previous),
+            "history_end_before": history_end_before,
+            "history_end_after": history_end_after,
+        },
+    )
+
+
 def _last_journal_write(
     job: str, image_id: int, module: str, param: str, instance: int
 ) -> journal.Entry | None:
@@ -394,6 +543,7 @@ def _noop_shortcut(
     raw_state: dict,
     *,
     requested: float | None,
+    bound: float | None = None,
 ) -> SetResult | None:
     """The zero-bounce, zero-bridge-write path (task 12).
 
@@ -430,6 +580,12 @@ def _noop_shortcut(
         fresh and raw_state.get("enabled") is not False and _close(target, raw_state.get("value"))
     ):
         return None
+    warnings = [
+        f"no-op: {module}.{param} is already {raw_state.get('value')} in the sidecar, "
+        "which Scouter last committed; nothing was sent to darktable"
+    ]
+    if bound is not None:
+        warnings.append(_clamp_warning(module, param, requested, bound))
     return SetResult(
         image_id=resolved.image_id,
         path=resolved.path,
@@ -441,11 +597,16 @@ def _noop_shortcut(
         previous=raw_state.get("value"),
         committed=True,
         noop=True,
-        source="xmp",
-        warnings=[
-            f"no-op: {module}.{param} is already {raw_state.get('value')} in the sidecar, "
-            "which Scouter last committed; nothing was sent to darktable"
-        ],
+        clamped=bound is not None,
+        source=raw_state.get("source", "xmp"),
+        warnings=warnings,
+    )
+
+
+def _clamp_warning(module: str, param: str, requested: float | None, bound: float) -> str:
+    return (
+        f"clamped: {module}.{param} {requested:g} is beyond darktable's own hard limit; "
+        f"darktable stores {bound:g} (the bound), not the value requested"
     )
 
 
@@ -538,15 +699,24 @@ def set_param(
     raw_state, before_state, pending_uncommitted = _raw_and_before_state(
         job, resolved.image_id, resolved.path, module, param, instance
     )
+    # Row 433, night-1 B/C: what darktable will actually STORE for `value`
+    # (a declared hard limit clamps it; a hue wraps), and what it holds now
+    # (the decoded value, or the module default when the module has no
+    # history entry). Every no-op decision and readback below compares these
+    # effective values, never the raw request against "no value".
+    effective, bound = vocab.dt_effective(module, param, value)
+    current, current_source = _effective_current(raw_state, module, param)
+    effective_raw = {**raw_state, "value": current, "source": current_source}
     shortcut = _noop_shortcut(
         job,
         resolved,
         module,
         param,
         instance,
-        None if pending_uncommitted else value,
-        raw_state,
+        None if pending_uncommitted else effective,
+        effective_raw,
         requested=value,
+        bound=bound,
     )
     if shortcut is not None:
         return shortcut
@@ -562,7 +732,7 @@ def set_param(
     predicted_noop = (
         not pending_uncommitted
         and raw_state.get("enabled") is not False
-        and _close(value, raw_state.get("value"))
+        and _close(effective, current)
     )
     entry = journal.begin(
         job,
@@ -590,8 +760,13 @@ def set_param(
     journal.complete(job, entry.seq, after={"value": value})
 
     committed = False
+    noop = False
     applied = None
     warnings: list[str] = []
+
+    def _readback() -> float | None:
+        return _effective_read(resolved.path, module, param, instance)
+
     if commit:
         # darktable writes a sidecar only when the history actually CHANGES
         # (host-proven, task 12 fix round 1). Setting a slider to the value it
@@ -602,7 +777,9 @@ def set_param(
         # twice. So: on a commit timeout, read the XMP back before deciding.
         # The timeout is still raised when the readback does NOT confirm the
         # value -- a write that genuinely never landed must never be reported
-        # as committed.
+        # as committed. "The value" is the EFFECTIVE one (row 433): a request
+        # beyond darktable's hard limit that it stored AT the limit, which
+        # the sidecar already held, is equally a satisfied no-op.
         def _try_commit(expect_change: bool, attempts: int | None) -> CommitResult | None:
             nonlocal commit_error
             try:
@@ -633,15 +810,16 @@ def set_param(
             # one-bounce prediction was wrong -- a real, unflushed change is
             # pending -- so this escalates to a genuine `expect_change=True`
             # commit rather than ever certifying a stale sidecar as fresh.
-            applied = _read_value(resolved.path, module, param, instance)
-            if _close(applied, value):
+            applied = _readback()
+            if _close(applied, effective):
                 from scouter.core import history as _history
 
                 _history.watermark_write(job, resolved.image_id, resolved.xmp_path)
                 committed = True
+                noop = True
                 warnings.extend(commit_result.warnings)
                 warnings.append(
-                    f"readback confirmed {module}.{param} already carries {value:g}: "
+                    f"readback confirmed {module}.{param} already carries {effective:g}: "
                     "the watermark was recorded now, from this confirmation, not from "
                     "the bridge's own (unconfirmed) report."
                 )
@@ -655,9 +833,10 @@ def set_param(
                 warnings.extend(commit_result.warnings)
             else:
                 if applied is None:
-                    applied = _read_value(resolved.path, module, param, instance)
-                if _close(applied, value):
+                    applied = _readback()
+                if _close(applied, effective):
                     committed = True
+                    noop = True
                     warnings.append(
                         f"darktable wrote no new sidecar for {module}.{param}: the value "
                         f"requested ({value:g}) is the one the XMP already carried, so "
@@ -668,11 +847,48 @@ def set_param(
                     assert commit_error is not None
                     raise commit_error
         if applied is None:
-            applied = _read_value(resolved.path, module, param, instance)
+            applied = _readback()
         if applied is None:
             warnings.append(
                 f"{module}.{param} committed but could not be decoded from the XMP; "
                 "`requested` is what was sent, `applied` is unknown"
+            )
+        elif _read_value(resolved.path, module, param, instance) is None:
+            warnings.append(
+                f"{module} has no history entry in the sidecar, so darktable runs it at "
+                f"its default: {module}.{param} = {applied:g}"
+            )
+    clamped = False
+    if commit and noop:
+        # Already confirmed against the effective value by the readback above.
+        clamped = bound is not None
+        if clamped:
+            warnings.append(_clamp_warning(module, param, value, bound))
+    elif commit and applied is not None:
+        # Row 433, night-1 A/B: never `ok` for a value the sidecar does not
+        # show. A match with the request is a landed write; a match with a
+        # declared darktable hard limit the request crossed is a clamp,
+        # reported as one; anything else is `write_unverified`.
+        previous_eff = current if current is not None else before_state.get("value")
+        if vocab.values_match(module, param, applied, value, previous=previous_eff):
+            pass
+        elif bound is not None and vocab.values_match(
+            module, param, applied, effective, previous=previous_eff
+        ):
+            clamped = True
+            warnings.append(_clamp_warning(module, param, value, bound))
+        else:
+            _raise_unverified(
+                f"{module}.{param}",
+                module=module,
+                param=param,
+                requested=value,
+                expected=effective,
+                applied=applied,
+                previous=previous_eff,
+                history_end_before=raw_state.get("history_end"),
+                path=resolved.path,
+                instance=instance,
             )
     return SetResult(
         image_id=resolved.image_id,
@@ -684,6 +900,8 @@ def set_param(
         applied=applied,
         previous=before_state.get("value"),
         committed=committed,
+        noop=noop,
+        clamped=clamped,
         warnings=warnings,
     )
 
@@ -810,7 +1028,7 @@ def nudge(
                 return False
             return _close(_read_value(resolved.path, module, param, instance), landed_value)
 
-        committed, warnings = _commit_with_readback(
+        committed, warnings, _noop = _commit_with_readback(
             job,
             resolved.image_id,
             xmp_path=resolved.xmp_path,
@@ -818,6 +1036,27 @@ def nudge(
             what=f"{module}.{param}",
         )
         applied = _read_value(resolved.path, module, param, instance)
+        # Row 433: darktable itself reported where the last step landed; a
+        # committed sidecar that says something else is not a landed nudge.
+        if (
+            landed_value is not None
+            and applied is not None
+            and not vocab.values_match(
+                module, param, applied, landed_value, previous=before_state.get("value")
+            )
+        ):
+            _raise_unverified(
+                f"{module}.{param}",
+                module=module,
+                param=param,
+                requested=landed_value,
+                expected=landed_value,
+                applied=applied,
+                previous=before_state.get("value"),
+                history_end_before=raw_state.get("history_end"),
+                path=resolved.path,
+                instance=instance,
+            )
     return SetResult(
         image_id=resolved.image_id,
         path=resolved.path,
@@ -867,6 +1106,13 @@ def _do_module_action(
     _require_job_image(job, resolved.image_id)
     dtbridge.require_darkroom()
     before_state = _module_state(resolved.path, module, instance)
+    # Row 433: already in the requested state before anything is sent?
+    if action_name == "reset":
+        predicted_noop = _module_at_defaults(resolved.path, module, instance)
+    else:
+        predicted_noop = before_state["enabled"] is {"enable": True, "disable": False}.get(
+            action_name
+        )
     entry = journal.begin(
         job,
         verb=f"module.{action_name}",
@@ -893,16 +1139,23 @@ def _do_module_action(
     expected_enabled = {"enable": True, "disable": False}.get(action_name)
 
     def _confirm_module() -> bool:
+        if action_name == "reset":
+            # Row 433, night-1 C (`cov-colorbalancergb-*-reset`): a reset of a
+            # module already at its defaults writes nothing. Confirmable only
+            # for a module whose vocabulary rows declare their darktable
+            # defaults, and only when every one of them reads back at it.
+            return _module_at_defaults(resolved.path, module, instance)
         if expected_enabled is None:
             return False
         return _module_enabled(resolved.path, module, instance) is expected_enabled
 
-    committed, warnings = _commit_with_readback(
+    committed, warnings, noop = _commit_with_readback(
         job,
         resolved.image_id,
         xmp_path=resolved.xmp_path,
         confirm=_confirm_module,
         what=f"{module} ({action_name})",
+        predicted_noop=predicted_noop,
     )
     after_state = _module_state(resolved.path, module, instance)
     journal.complete(
@@ -916,6 +1169,7 @@ def _do_module_action(
         instance=instance,
         enabled=after_state["enabled"],
         committed=committed,
+        noop=noop,
         warnings=warnings,
     )
 
@@ -1056,7 +1310,7 @@ def _undo_temperature_via_sliders(
         after_params = _after_params()
         return all(_close(after_params.get(name), before_params.get(name)) for name in sent)
 
-    committed, warnings = _commit_with_readback(
+    committed, warnings, _noop = _commit_with_readback(
         job,
         entry.image_id,
         xmp_path=str(xmp.sidecar_path(entry.path)),
@@ -1158,13 +1412,36 @@ def _undo_temperature_via_kelvin(
         after_params = _temperature_extra(entry.path, entry.instance).get("params") or {}
         return _ratio_within_tolerance(_rb_ratio(after_params), target_ratio)
 
-    committed, warnings = _commit_with_readback(
-        job,
-        entry.image_id,
-        xmp_path=str(xmp.sidecar_path(entry.path)),
-        confirm=_confirm,
-        what="temperature (undo via Kelvin inversion)",
-    )
+    try:
+        committed, warnings, _noop = _commit_with_readback(
+            job,
+            entry.image_id,
+            xmp_path=str(xmp.sidecar_path(entry.path)),
+            confirm=_confirm,
+            what="temperature (undo via Kelvin inversion)",
+        )
+    except CommitTimeout as e:
+        # Row 433, night-1 C (`cov-p2-brighter-warmer-olympus`): a RETRY of an
+        # unverified Kelvin undo sends the Kelvin darktable already holds, so
+        # darktable writes nothing and the commit times out. The honest
+        # answer is the same typed `undo_unverified` the first attempt gave
+        # (with the ratio the sidecar really holds), not a `commit_timeout`.
+        after_ratio = _rb_ratio(_temperature_extra(entry.path, entry.instance).get("params"))
+        raise _UndoUnverified(
+            f"seq {entry.seq}: Kelvin-inversion undo sent {target_k:.0f} K but darktable wrote "
+            "no new sidecar (it already holds that Kelvin), and the coefficient ratio does not "
+            f"verify within {wb._EXACT_TOLERANCE:.0%}: measured r/b={after_ratio!r}, "
+            f"target r/b={target_ratio!r}",
+            detail={
+                "seq": entry.seq,
+                "target_kelvin": target_k,
+                "measured_ratio": after_ratio,
+                "target_ratio": target_ratio,
+                "tolerance": wb._EXACT_TOLERANCE,
+                "coefficients": before_params,
+                "commit": e.to_dict(),
+            },
+        ) from e
     # Fix round 2, minor (d): ONE read here for both the verification ratio
     # and `restored_to`, instead of three separate `_temperature_extra`
     # calls (`_after_ratio()`, `_confirm()` again, and a bare
@@ -1415,7 +1692,7 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             verified = True
         else:
             dtbridge.call("module.disable", {"module": entry.module, "instance": entry.instance})
-            committed, warnings = _commit_with_readback(
+            committed, warnings, _noop = _commit_with_readback(
                 job,
                 entry.image_id,
                 xmp_path=str(xmp.sidecar_path(entry.path)),
@@ -1474,6 +1751,19 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
                 fix="press Ctrl-Z in darktable, or set the value you want explicitly",
                 detail={"seq": entry.seq},
             )
+        def _restored() -> bool:
+            return _close(
+                _effective_read(entry.path, entry.module, entry.param, entry.instance),
+                float(previous),
+            )
+
+        # Row 433, night-1 C (`cov-colorbalancergb.contrast-*-repeat_adjust`):
+        # when the sidecar already shows the value being restored (the write
+        # being undone never reached it), darktable will write nothing --
+        # predict that, and spend one bounce instead of a 5.4 s timeout. Not
+        # for a `commit=False` entry: its value is live in darktable while
+        # the sidecar is stale, so the sidecar proves nothing.
+        predicted = entry.commit is not False and _restored()
         dtbridge.action(
             dtbridge.action_path(entry.module, entry.param),
             instance=entry.instance,
@@ -1481,18 +1771,17 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             effect="set",
             value=float(previous),
         )
-        committed, warnings = _commit_with_readback(
+        committed, warnings, _noop = _commit_with_readback(
             job,
             entry.image_id,
             xmp_path=str(xmp.sidecar_path(entry.path)),
-            confirm=lambda: _close(
-                _read_value(entry.path, entry.module, entry.param, entry.instance), float(previous)
-            ),
+            confirm=_restored,
             what=f"{entry.module}.{entry.param} (undo)",
+            predicted_noop=predicted,
         )
         # Blocker 5: verify from the XMP after the commit. `restored_to` is
         # what was actually read back, not the value that was requested.
-        actual = _read_value(entry.path, entry.module, entry.param, entry.instance)
+        actual = _effective_read(entry.path, entry.module, entry.param, entry.instance)
         verified = _close(actual, previous)
         if not verified:
             warnings.append(

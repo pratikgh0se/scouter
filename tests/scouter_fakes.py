@@ -337,3 +337,44 @@ def with_new_history_hash(text: str) -> str:
     if not count:
         raise AssertionError("fixture sidecar has no history_current_hash to change")
     return new
+
+
+def with_param_value(text: str, operation: str, param: str, value: float) -> str:
+    """`text` with the newest ACTIVE `operation` entry's `param` set to `value`
+    -- what darktable's sidecar says after a set of that slider really landed.
+
+    Row 433: a commit double that only bumps the history hash (and keeps the
+    old value) now models a write that did NOT land, which `set`/`adjust`
+    report as `write_unverified`. Only fixed-offset layouts (exposure) and
+    named float slots (sigmoid) are supported; the params are re-emitted as
+    plain hex, which `xmp.decode_params` reads like darktable's own.
+    """
+    import re
+    import struct
+
+    from scouter.core import xmp
+
+    parsed = xmp.parse(text)
+    target = None
+    for entry in sorted(parsed.entries, key=lambda e: e.num, reverse=True):
+        if entry.operation == operation and entry.active:
+            target = entry
+            break
+    if target is None:
+        raise AssertionError(f"no active {operation} entry to rewrite")
+    layout = xmp.LAYOUTS[(operation, target.modversion)]
+    blob = bytearray(xmp.decode_params(target.params_hex))
+    if "fields" in layout:
+        fmt, offset = next((f, o) for n, f, o in layout["fields"] if n == param)
+    else:
+        slot = next(i for i, n in layout["named_slots"].items() if n == param)
+        fmt, offset = "<f", slot * 4
+    struct.pack_into(fmt, blob, offset, value)
+    new_hex = bytes(blob).hex()
+    pattern = re.compile(
+        rf'(darktable:num="{target.num}".*?darktable:params=")[^"]*(")', re.S
+    )
+    new, count = pattern.subn(lambda m: m.group(1) + new_hex + m.group(2), text, count=1)
+    if not count:
+        raise AssertionError(f"could not rewrite {operation} num {target.num}")
+    return new

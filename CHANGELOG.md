@@ -5,6 +5,42 @@ branch, which fixes defects found by the E12 live evaluation against real
 darktable (`Knowledge/Scouter - E12 live evaluation 2026-09-24.md` in the
 vault; decision row 407).
 
+## Unreleased (fix/htc-applied-verify)
+
+Row 433, night-1 gauntlet (`night1-20260926`): write verbs reported what
+they asked for, not what darktable stored.
+
+- **A. No `ok` for a value the sidecar does not show.** `darkroom set`,
+  `adjust`, `say` (per move) and `nudge` compare the read-back value with
+  the target: within a tenth of the row's step (darktable's slider rounding,
+  e.g. black -0.002744 -> -0.0027, stays well inside), never looser than half
+  the requested change, never tighter than float32. White balance is checked
+  in the coefficient domain: the r/b ratio must have moved, and must sit
+  within 3% (3x `wb._EXACT_TOLERANCE`; the darktable-vs-table model offset is
+  ~2.4%) of the ratio the measured table predicts at the target Kelvin. A
+  mismatch is the new typed error `write_unverified` (exit 25), with
+  `requested`/`expected`/`applied`/`previous`/`history_end_*` in `detail`,
+  and a note when the sidecar's history went backwards. In `say`, a failed
+  move after others landed is `outcome: partial` (not ok) with the failure's
+  detail in `refused`. Night-1: faded blacks (target -0.0027, read 0.0098,
+  history 112 -> 92), warmer (coefficients untouched), more saturation /
+  vibrance / contrast (unchanged values), all reported ok.
+- **B. darktable's own hard limits are reported.** `set sigmoid skew 1.1`
+  stores 1.0: the result is `clamped: true` with a warning naming the bound.
+  Only limits with host evidence are declared (`vocab.DT_HARD_BOUNDS`:
+  sigmoid skew +-1, colour balance zone chroma >= 0); an unexplained
+  mismatch is `write_unverified`, never a guessed clamp.
+- **C. Nothing to write is a prompt `noop`, not a 5.4 s `commit_timeout`.**
+  The effective request (clamped by a declared limit, hue wrapped) is
+  compared with the effective current value (the module default when the
+  module has no history entry); when they agree, one expect-no-change
+  bounce is spent and the answer is `noop: true` (plus `clamped` when a
+  limit applied). Also for `reset` of a module whose declared defaults all
+  read back, `enable` of an enabled module, and `undo_last` when the value is
+  already back. A retried Kelvin-inversion undo that darktable does not
+  rewrite answers `undo_unverified`, not `commit_timeout`. A write whose
+  effective state differs from the sidecar still times out.
+
 ## Unreleased (fix/adjust-commit)
 
 Row 430 (host acceptance run on darktable 5.4.1, 2026-09-26): row 429's
