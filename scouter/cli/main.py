@@ -149,6 +149,20 @@ def build_parser() -> argparse.ArgumentParser:
         "job id), 1 for every other failure (wrong view, missing "
         "plugin, etc.).",
     )
+    doctor.add_argument(
+        "--probe-main-thread",
+        dest="probe_main_thread",
+        action="store_true",
+        help="ask the plugin which routes reach darktable's GTK main thread "
+        "(darktable_mcp.probe_main_thread) and print the table",
+    )
+    doctor.add_argument(
+        "--switch-views",
+        dest="switch_views",
+        action="store_true",
+        help="with --probe-main-thread: also do a darkroom -> lighttable -> darkroom "
+        "round trip through darktable's switch-views commands (start in the darkroom)",
+    )
     doctor.set_defaults(_verb=None, _args=[])
 
     setup_parser = groups.add_parser(
@@ -165,6 +179,47 @@ def build_parser() -> argparse.ArgumentParser:
     )
     setup_parser.set_defaults(_verb=None, _args=[])
     return parser
+
+
+def _yes_no(value) -> str:
+    if value is None:
+        return "-"
+    return "yes" if value else "no"
+
+
+def render_probe_table(probe: dict) -> str:
+    """Plain-text table for `doctor --probe-main-thread`: one line per route,
+    with the source-derived thread and expectation underneath."""
+    rows = probe.get("rows") or []
+    header = ("ROUTE", "CANDIDATE", "RAN", "VIEW-READ", "GUI-TOUCH", "DETAIL")
+    table = [header]
+    for r in rows:
+        ran = "skip" if r.get("skipped") else _yes_no(r.get("ran"))
+        table.append(
+            (
+                str(r.get("route", "")),
+                str(r.get("candidate", "")),
+                ran,
+                _yes_no(r.get("view_read_ok")) if not r.get("skipped") else "-",
+                _yes_no(r.get("gui_touch_ok")) if not r.get("skipped") else "-",
+                str(r.get("detail", "")),
+            )
+        )
+    widths = [max(len(row[i]) for row in table) for i in range(5)]
+    recommended = probe.get("recommended_view_transport") or "none (run with --switch-views)"
+    lines = [
+        f"darktable Lua API {probe.get('api_version') or '?'}; view {probe.get('view', '?')}; "
+        f"current view transport {probe.get('view_switch_transport', '?')}; "
+        f"recommended {recommended}",
+        "",
+    ]
+    for i, row in enumerate(table):
+        lines.append("  ".join(row[j].ljust(widths[j]) for j in range(5)) + "  " + row[5])
+        if i > 0:
+            r = rows[i - 1]
+            lines.append(f"    thread: {r.get('thread', '?')}")
+            lines.append(f"    expect: {r.get('expect', '?')}")
+    return "\n".join(lines)
 
 
 def _doctor() -> dict:
@@ -206,6 +261,16 @@ def _doctor() -> dict:
         report["view"] = None
         report["bridge"] = e.code
         report["bridge_fix"] = e.fix
+
+    # Row 422/429: the plugin's view-switch transport. "action" is the only
+    # one since row 429 removed the main-thread proxy; anything else (or no
+    # answer) means an old plugin install -- `scouter setup` reinstalls it.
+    # A report line, never a reason to fail the whole check.
+    try:
+        diag = dtbridge.diag()
+        report["view_transport"] = str(diag.get("view_switch_transport") or "unknown")
+    except ScouterError:
+        report["view_transport"] = "unknown"
 
     # Phase 2's four lines (task 14 step 4). `doctor` is the one verb whose
     # job is to answer "why did that refuse?" before the refusal happens,
@@ -320,6 +385,18 @@ def main(argv: list[str] | None = None) -> int:
                 return code
         print(json.dumps(payload, indent=2 if pretty else None, sort_keys=True))
         return code
+
+    if namespace.group == "doctor" and getattr(namespace, "probe_main_thread", False):
+        from scouter.core import dtbridge
+
+        try:
+            probe = dtbridge.probe_main_thread(
+                switch_views=bool(getattr(namespace, "switch_views", False))
+            )
+        except ScouterError as e:
+            return emit({"verb": "doctor", "ok": False, "error": e.to_dict()}, 1)
+        print(render_probe_table(probe))
+        return 0
 
     if namespace.group == "doctor":
         report = _doctor()

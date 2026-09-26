@@ -5,6 +5,75 @@ branch, which fixes defects found by the E12 live evaluation against real
 darktable (`Knowledge/Scouter - E12 live evaluation 2026-09-24.md` in the
 vault; decision row 407).
 
+## Unreleased (fix/bounce-main-thread)
+
+Row 429 (host probe on darktable 5.4.1, 2026-09-26, then this change):
+
+- `history.commit` `auto` is now `no_bounce` (select the image, "synchronize
+  selection" DB flush, rating touch rewrites the XMP; no view switch), with
+  `view_bounce_action` as the automatic fallback when `no_bounce` did not
+  change the sidecar (`fallback_from` reports the `no_bounce` attempt). With
+  `expect_change=false` a `no_bounce` that wrote nothing is an honest no-op,
+  no bounce. Host: `no_bounce` 1.17 s cold / 0.16 s warm, `view_bounce_action`
+  0.75 / 0.80 / 1.07 s, 0 new crash reports. The Python layer sends
+  `image_id` with `auto` too.
+- Removed the main-thread proxy (Lua shortcut pressed via `dt.gui.action`)
+  and its candidate paths: the host confirmed darktable answers nan and never
+  runs the handler. `darkroom.open`, `return_to_darkroom` and every bounce use
+  the switch-views action transport by default; an unknown transport
+  (including `proxy`) is refused with a reason. `darktable_mcp.diag` now
+  reports `view_switch_transport` and the auto commit order; `scouter
+  doctor` shows `view_transport`.
+- `darktable_mcp.probe_main_thread` no longer raises on 5.4.1: it read
+  `dt.control.timer` unguarded, and darktable's singleton userdata raise on an
+  unknown field (`field "timer" not found for type
+  dt_lua_singleton_control`). Every optional `dt.control`/`dt.gui`/
+  `dt.configuration` field in the probe goes through `opt_field` (pcall).
+- `history read --source auto`: the XMP unless it is stale -- missing,
+  mid-write, or older than library.db's `images.change_timestamp` (GTimeSpan
+  decoded to unix time, 1 s slack) -- then library.db.
+- README: the row 418 crash is closed, and B1's first-commit hang is
+  explained as that crash. docs/measurements.md: commit timings.
+
+Earlier on this branch (rows 418/422):
+
+- Row 418 (controller, 2026-09-24 21:22): darktable crashed 4 of 7 live
+  benchmark-run-2 launches, SIGSEGV, `thread pool-1`:
+  `_dt_ctl_switch_mode_to_by_view -> dt_view_manager_switch_by_view ->
+  dt_gui_process_events -> gdk_event_prepare -> NSAutoreleasePool drain`. Root
+  cause: the Lua plugin's `history.commit` view bounce called
+  `dt.gui.current_view(v)` from whatever OS thread darktable resumed the
+  `dt.control.dispatch` worker on after a `dt.control.sleep` yield -- not
+  reliably the main thread under load, and macOS's Cocoa/Quartz GDK backend
+  segfaults when that view-manager call runs off the main thread. The same
+  signature explains row 407/E12's B1 ("5 of 13 first-commit hangs") and the
+  E12 stalls.
+- Fix: every `dt.gui.current_view` SETTER call in `darktable_mcp.lua`
+  (`commit_view_bounce`'s both legs, `switch_to_darkroom`,
+  `return_to_darkroom`) now goes through a new `switch_view` /
+  `run_on_main_thread` marshaling layer: a Lua shortcut registered once at
+  load time (`dt.register_event(..., "shortcut", ...)`), fired via
+  `dt.gui.action("lua/darktable_mcp_main_thread_proxy", ...)` -- the same
+  thread-safe marshaling every slider/rating verb in this plugin already
+  relied on. A view switch whose proxy cannot be confirmed to have run
+  (missing `dt.register_event`/`dt.gui.action`, or the proxy not firing
+  within its 3s budget) is refused with an honest error instead of falling
+  back to the direct, unmarshaled call -- fail closed, never crash. Bounce
+  semantics (leave the darkroom, dwell, return) and its timing budgets are
+  unchanged.
+- Lua dispatcher unit suite (`tests/lua/test_dispatcher.lua`) gained
+  coverage: a view switch / commit bounce is executed via the main-thread
+  proxy (asserted against `dt.gui.action`'s call log), a GUI call whose proxy
+  never fires within budget is refused rather than run unmarshaled, and a
+  build with no `dt.register_event` at all registers nothing and refuses
+  every main-thread call up front.
+- README's "Honest limits" B1 entry updated: fixed pending host verification
+  (the host run to confirm this against a live darktable session has not run
+  yet).
+- No Python-side or bridge-protocol changes; `history.commit`'s
+  request/response shape is unchanged, so no MCP goldens needed
+  regenerating.
+
 ## 1.0rc1 (product/close, 2026-09-26, decision row 427)
 
 Phase 3 plus the product-close items, offered as the 1.0 release candidate.

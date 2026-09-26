@@ -240,24 +240,42 @@ item rather than rewriting history — so your own Ctrl-Z still works.
 
 These are load-bearing, not incidental — read them before scripting against Scouter:
 
-- **The commit trigger is a view bounce.** darktable only writes the XMP
-  sidecar when the darkroom is left, not per slider move (phase 0 finding 3),
-  so every write's commit briefly bounces the view out to the lighttable and
-  back (design 8.1's `view_bounce`, the only strategy phase 0/1 proved
-  actually commits). Measured at ~500ms wall clock on this Mac against a
-  small library (`docs/measurements.md`), ~0.8s end to end through the bridge
-  under a live GUI. The view switch is asynchronous, so the plugin yield-polls
-  until the view really changed and confirms the commit by watching the
-  sidecar itself — never by assuming the bounce landed. darktable writes a
-  sidecar only when the history actually changed, so a write asking for the
-  value the image already has produces no write; Scouter resolves that by
-  reading the value back and says so in a warning, and still reports
-  `commit_timeout` when the value genuinely is not there. The editor
-  benchmark (row 408 B1) measured the FIRST `history commit`/view-bounce
-  after a fresh darktable launch intermittently wedging the bridge outright
-  (5 of 13 sessions: no MCP answer in 30s, then `view.current` itself dead)
-  -- not isolated to a specific cause yet, and not fixed here; it needs a
-  darktable-launch-state isolation harness this branch does not have.
+- **The commit trigger: `no_bounce` first, a view bounce as the fallback.**
+  darktable writes the XMP sidecar only when the history is flushed (leaving
+  the darkroom, switching image, autosave, "synchronize selection") -- not per
+  slider move (phase 0 finding 3). Since row 429 `history commit`'s default
+  (`--strategy auto`) is `no_bounce`: select exactly the image, press the
+  darkroom's "synchronize selection" (flushes history to library.db), and
+  re-assign the image's rating (darktable rewrites the XMP from the DB) --
+  the view never moves. When that does not change the sidecar, auto falls
+  back to `view_bounce_action`: out to the lighttable and back through
+  darktable's own "switch views" commands. Host-measured on darktable 5.4.1
+  (row 429): `no_bounce` 1.17 s on the first commit of a session, 0.16 s
+  warm; `view_bounce_action` 0.75-1.07 s. Either way the commit is confirmed
+  by watching the sidecar itself, never assumed. darktable writes a sidecar
+  only when the history actually changed, so a write asking for the value the
+  image already has produces no write; Scouter resolves that by reading the
+  value back and says so in a warning, and still reports `commit_timeout`
+  when the value genuinely is not there. `--strategy` forces any one
+  strategy (`no_bounce`, `view_bounce_action`, `view_bounce` -- the same
+  bounce on the plugin's default transport -- or `sidecar_action`).
+- **Row 418 crash: closed (row 429).** The editor benchmark (row 408 B1)
+  measured the FIRST `history commit` after a fresh darktable launch
+  intermittently wedging the bridge (5 of 13 sessions: no MCP answer in 30 s,
+  then `view.current` itself dead). That hang WAS the row 418 crash:
+  darktable runs every Lua call on its Lua thread pool, and the old bounce
+  called `dt.gui.current_view(v)`, whose view switch can run directly on that
+  pool thread; on macOS that segfaults (SIGSEGV in
+  `dt_ctl_switch_mode_to_by_view`, thread `pool-1`), and whatever was waiting
+  on the bridge saw a hang. Every view switch (commit bounce,
+  `darkroom open`, the bounce's return leg) now presses darktable's own
+  "global/switch views/<view>" command through `dt.gui.action`, which
+  darktable runs on the GTK main thread. Host run 2026-09-26: three action
+  bounces and two `no_bounce` commits, 0 new crash reports. The plugin never
+  calls the `dt.gui.current_view` setter any more; an unknown view transport
+  is refused, not attempted. (A first fix, a Lua-shortcut "main-thread
+  proxy", was removed: darktable refuses a lua-owned action pressed from Lua.)
+  `scouter doctor --probe-main-thread [--switch-views]` reports each route.
 - **`darkroom status` reports slider *positions*, not values.** `dt.gui.action`'s
   read-back is a normalised 0..1 position in the slider's visible range, and
   phase 1 has no verified position→value table for every slider — use

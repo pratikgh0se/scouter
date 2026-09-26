@@ -227,8 +227,8 @@ def test_history_commit_confirms_the_sidecar_on_disk():
         "history.commit does not retry the bounce; the FIRST commit of a "
         "session can land mid-render and flush nothing"
     )
-    assert (
-        "pcall(commit_view_bounce)" in body
+    assert re.search(
+        r"pcall\(commit_view_bounce[,)]", body
     ), "the bounce must run under pcall so the loop can stop cleanly"
     for field in ("sidecar_written", "sidecar_wait_ms", "sidecar ="):
         assert field in body, f"history.commit does not report {field}"
@@ -403,8 +403,13 @@ def test_history_commit_reports_cpu_ms_not_ms():
     assert "os.time()" not in body, "history.commit must not time itself with os.time()"
     assert body.count("cpu_ms = (os.clock()") == 3, (
         "history.commit must report cpu_ms = (os.clock() - started) * 1000 on "
-        "all three return paths (sidecar success, sidecar failure, view_bounce)"
+        "its three own return paths (sidecar success, sidecar failure, view_bounce)"
     )
+    # Row 429: the no_bounce result (also auto's first rung) is built by
+    # run_no_bounce, from the same `started`.
+    no_bounce = source.split("local function run_no_bounce(p, started)", 1)
+    assert len(no_bounce) == 2, "run_no_bounce not found in the plugin"
+    assert no_bounce[1].split("\nend\n", 1)[0].count("cpu_ms = (os.clock() - started)") == 1
     assert re.search(r"(?<!cpu_)\bms\s*=", body) is None, (
         "history.commit still returns the old ambiguous `ms` field alongside "
         "or instead of cpu_ms"

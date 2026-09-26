@@ -96,6 +96,16 @@ class FakeBridge:
     ) -> None:
         self.responses: dict[str, Any] = {
             "view.current": {"view": "darkroom"},
+            # Row 422/429: a sane default for `darktable_mcp.diag` (`scouter
+            # doctor`'s view-transport line), the shape the plugin answers
+            # since row 429 removed the main-thread proxy.
+            "darktable_mcp.diag": {
+                "view_switch_transport": "action",
+                "view_transports": ["action"],
+                "default_commit_strategy": "auto",
+                "auto_commit_order": ["no_bounce", "view_bounce_action"],
+                "view": "darkroom",
+            },
             # A sane default for `library.import`/`library.register`'s
             # `import_batch` call, so a test that isn't specifically exercising
             # the film-roll-registration path doesn't have to restate the

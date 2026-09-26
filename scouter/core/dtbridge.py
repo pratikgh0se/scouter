@@ -205,6 +205,33 @@ def current_view() -> str:
     return str(result.get("view", "unknown"))
 
 
+def diag() -> dict:
+    """`darktable_mcp.diag`: the plugin's default view-switch transport
+    (`view_switch_transport`, "action" since row 429 removed the main-thread
+    proxy) and commit order (`auto_commit_order`: no_bounce, then
+    view_bounce_action). Read-only; presses nothing. `scouter doctor` shows
+    the transport so an old plugin install is visible before a commit."""
+    return call("darktable_mcp.diag")
+
+
+def probe_main_thread(switch_views: bool = False) -> dict:
+    """`darktable_mcp.probe_main_thread` (row 418/422): one row per route onto
+    darktable's GTK main thread, each with what was observed and what the
+    darktable 5.4.1 source predicts. `switch_views=True` additionally does a
+    darkroom -> lighttable -> darkroom round trip through the global
+    switch-views commands -- the only row that moves the view."""
+    return call("darktable_mcp.probe_main_thread", {"switch_views": bool(switch_views)})
+
+
+def view_transport(set_to: str | None = None) -> str:
+    """Read (or with `set_to`, change) the plugin's default view-switch
+    transport. Only "action" (darktable's own global switch-views commands,
+    run on the GTK main thread) exists since row 429; the plugin refuses any
+    other value, including the removed "proxy"."""
+    params = {"set": set_to} if set_to else {}
+    return str(call("darktable_mcp.view_transport", params).get("transport", "unknown"))
+
+
 def require_darkroom() -> str:
     """Pre-flight: raise `wrong_view` before spending an action on a dead call.
 

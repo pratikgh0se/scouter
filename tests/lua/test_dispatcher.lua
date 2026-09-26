@@ -66,9 +66,52 @@ local selection_log = {}
 local styles_created = {}
 local applied_styles = {}
 
+-- Row 418/422: registered "shortcut" callbacks, keyed by name (the tooltip,
+-- 4th arg) -- mirrors real darktable's `dt.register_event(event_name,
+-- "shortcut", callback, name)`. Row 422's host finding: darktable actually
+-- addresses a lua-registered shortcut's `dt.gui.action` path after the
+-- EVENT NAME (1st arg), not the tooltip, and the plugin used to pass those
+-- two arguments different values -- so the path it pressed never matched
+-- the path darktable had actually registered, and `dt.gui.action` on a
+-- nonexistent path silently never fires.
+--
+-- `main_thread_real_action_path` is this stub's stand-in for "the one path
+-- the simulated host actually answers to" -- independent of what the
+-- plugin under test requests, exactly like a real, opaque darktable build.
+-- It defaults to the event-name convention (`"lua/" .. event_name`), which
+-- is what the row 422 fix now registers under, so the common-path tests
+-- below see candidate 1 resolve immediately. Tests that want to exercise
+-- discovery of a LATER candidate, or a total miss, override it before
+-- reloading the plugin.
+local registered_shortcuts = {}
+local shortcut_handler = nil
+local shortcut_event_name = nil
+local main_thread_real_action_path = nil
+-- Test-controlled kill switch: when true, the stub's `dt.gui.action` records
+-- the call (so callers can see it fired) but does NOT invoke the registered
+-- handler -- simulating a proxy that activated but whose handler never ran
+-- on the main thread within budget. Exercises run_on_main_thread's honest
+-- refusal path.
+local suppress_main_thread_proxy = false
+-- When true, the stub's dt.gui.action returns nan for any "lua/..." path
+-- without firing the handler -- what real darktable 5.4.1 does
+-- (dt_action_process: "lua action '%s' triggered from lua").
+local darktable_refuses_lua_actions = false
+
 local stub_dt = {
   database = stub_db,
   print_log = function(msg) table.insert(dt_log, msg) end,
+  register_event = function(event_name, event_type, callback, name)
+    if event_type == "shortcut" then
+      registered_shortcuts[name] = callback
+      shortcut_handler = callback
+      shortcut_event_name = event_name
+      if main_thread_real_action_path == nil then
+        main_thread_real_action_path = "lua/" .. event_name
+      end
+    end
+    return true
+  end,
   control = {
     dispatch = function(_) end,
     -- Real darktable's view switch is ASYNCHRONOUS (host-proven: see the
@@ -95,6 +138,54 @@ stub_dt.gui = {
   action = function(path, instance, element, effect, value)
     table.insert(action_log, {path = path, instance = instance, element = element,
                              effect = effect, value = value})
+    -- Row 422: the stub only fires the registered shortcut handler for the
+    -- ONE path `main_thread_real_action_path` names -- any other path
+    -- (including a plausible-looking guess) is a silent no-op, exactly like
+    -- real darktable's `dt.gui.action` on a path it does not recognise.
+    -- This is what lets a test prove the plugin discovers the right
+    -- candidate by elimination rather than the stub matching by convention
+    -- on the plugin's behalf.
+    -- Source-verified emulation (darktable 5.4.1): a lua-owned shortcut
+    -- action pressed from Lua is refused with nan, never firing its handler.
+    if darktable_refuses_lua_actions and type(path) == "string" and path:find("^lua/") then
+      return NAN
+    end
+    -- darktable's own "global/switch views/<view>" commands:
+    -- dt_ctl_switch_mode_to semantics -- asking for the view you are in
+    -- toggles back to the lighttable -- and, as for every command action,
+    -- the return value is always nan even though the callback ran.
+    local target = type(path) == "string" and path:match("^global/switch views/(.+)$")
+    if target and action_returns[path] == nil then
+      view_state.action_switches = (view_state.action_switches or 0) + 1
+      if target == view_state.current then
+        if target ~= "lighttable" then view_state.current = "lighttable" end
+      else
+        -- The command's callback (dt_ctl_switch_mode_to) runs on the GTK
+        -- main thread; the stub delegates to the scripted view setter so
+        -- every lag/failure script written against dt.gui.current_view
+        -- applies to the action transport too. `via_action` lets a test
+        -- tell this delegated call from a direct setter call by the plugin.
+        view_state.via_action = true
+        local ok, err = pcall(stub_dt.gui.current_view, views[target])
+        view_state.via_action = false
+        if not ok then error(err) end
+      end
+      return NAN
+    end
+    if path == "views/darkroom/synchronize selection" and action_returns[path] == nil then
+      if view_state.current ~= "darkroom" then return NAN end
+      view_state.db_flushes = (view_state.db_flushes or 0) + 1
+      return NAN
+    end
+    if path == "lib/copy_history/write sidecar files" and action_returns[path] == nil then
+      if view_state.current ~= "lighttable" then return NAN end
+      for _, img in ipairs(stub_dt.gui.selection_now or {}) do
+        if img.sidecar then
+          local h = io.open(img.sidecar, "w"); h:write("written by write sidecar files"); h:close()
+        end
+      end
+      return 0
+    end
     local r = action_returns[path]
     if r == nil then return value or 0 end
     if r == "nan" then return NAN end
@@ -128,8 +219,12 @@ stub_dt.gui = {
   -- the action_images fallback fresh, independent of which switch mechanism
   -- (display_image or the view-switch bounce) ends up doing the real work.
   selection = function(images)
+    -- Getter form (no argument): report the current selection without
+    -- recording a selection change.
+    if images == nil then return stub_dt.gui.selection_now or {} end
     table.insert(selection_log, images)
     stub_dt.gui.action_images = images
+    stub_dt.gui.selection_now = images
     return images
   end,
   action_images = {},
@@ -1592,12 +1687,14 @@ assertEq(action_log[#action_log].effect, "activate", "reset effect")
 local ok_err = plugin.handle({id = "x", method = "module.enable", params = {}})
 assertTrue(ok_err.error ~= nil, "module.enable without module errors")
 
--- history.commit: strategy="auto" goes straight to the proven view_bounce
--- floor -- task 1's measurement rejected every sidecar-write action spelling
--- on this darktable build, so auto no longer tries the ladder at all.
+-- history.commit: strategy="auto" never tries the sidecar ladder (task 1's
+-- measurement rejected every spelling). Row 429: auto is no_bounce, then the
+-- action bounce -- here nothing is loaded, so no_bounce has no image and the
+-- bounce is what runs.
 view_state.current = "darkroom"
 local c = plugin.methods["history.commit"]({strategy = "auto"})
-assertEq(c.strategy_used, "view_bounce", "auto uses the view bounce, never the sidecar ladder")
+assertEq(c.strategy_used, "view_bounce_action", "auto falls back to the action bounce, never the sidecar ladder")
+assertEq(c.fallback_from and c.fallback_from.strategy, "no_bounce", "after trying no_bounce")
 assertEq(c.ok, true, "view bounce ok")
 assertEq(c.view_after, "darkroom", "view bounce returns to the darkroom")
 assertTrue(type(c.cpu_ms) == "number", "history.commit reports cpu_ms as a number")
@@ -1621,6 +1718,7 @@ assertEq(c2.ok, true, "sidecar commit ok")
 
 -- ...and honestly reports failure, never a silent fallback, when every
 -- spelling is nan.
+action_returns["lib/copy_history/write sidecar files"] = "nan"
 action_returns["lib/selected image[s]/write sidecar files"] = "nan"
 action_returns["lib/metadata/write sidecar files"] = "nan"
 action_returns["lib/image/write sidecar files"] = "nan"
@@ -1631,16 +1729,21 @@ assertEq(c3.ok, false, "sidecar commit reports failure instead of silently succe
 -- The view bounce refuses outside the darkroom instead of attempting a
 -- bounce that cannot possibly commit anything.
 view_state.current = "lighttable"
-local c4 = plugin.methods["history.commit"]({strategy = "auto"})
+local c4 = plugin.methods["history.commit"]({strategy = "view_bounce_action"})
 assertEq(c4.ok, false, "view bounce refuses outside the darkroom")
 assertEq(c4.detail, "not in darkroom", "refusal names the reason")
 assertEq(c4.view_after, "lighttable", "refusal reports the actual (unchanged) view honestly")
+-- auto outside the darkroom does not bounce either: no_bounce's own answer stands.
+local c4a = plugin.methods["history.commit"]({strategy = "auto"})
+assertEq(c4a.strategy_used, "no_bounce", "auto outside the darkroom reports no_bounce")
+assertEq(c4a.ok, false, "and its honest failure (nothing to commit)")
+assertEq(view_state.current, "lighttable", "without switching views")
 
 -- A single flaky switch back into the darkroom is retried once, so it does
 -- not strand the session in the lighttable when the commit likely landed.
 view_state.current = "darkroom"
 view_state.fail_switches_remaining = 1
-local c5 = plugin.methods["history.commit"]({strategy = "auto"})
+local c5 = plugin.methods["history.commit"]({strategy = "view_bounce_action"})
 assertEq(c5.ok, true, "a switch that fails once and succeeds on retry still commits")
 assertEq(c5.view_after, "darkroom", "retry lands back in the darkroom")
 assertEq(view_state.fail_switches_remaining, 0, "the scripted failure was consumed by the retry")
@@ -1649,7 +1752,7 @@ assertEq(view_state.fail_switches_remaining, 0, "the scripted failure was consum
 -- view truthfully, never a claimed "darkroom" that never happened.
 view_state.current = "darkroom"
 view_state.fail_switches_remaining = 2
-local c6 = plugin.methods["history.commit"]({strategy = "auto"})
+local c6 = plugin.methods["history.commit"]({strategy = "view_bounce_action"})
 assertEq(c6.ok, false, "two consecutive switch failures are reported as failure")
 assertEq(c6.view_after, "lighttable",
   "an unrecovered bounce leaves (and honestly reports) the session in the lighttable")
@@ -1687,7 +1790,7 @@ do
     return r
   end
 
-  local cp = plugin.methods["history.commit"]({strategy = "auto"})
+  local cp = plugin.methods["history.commit"]({strategy = "view_bounce_action"})
   stub_dt.gui.current_view = original_view
 
   assertEq(cp.ok, true, "the commit confirms the sidecar actually changed")
@@ -1698,7 +1801,7 @@ do
   -- A sidecar that never changes is reported honestly -- never ok=true just
   -- because the views moved -- and the reason names the real mechanism.
   view_state.current = "darkroom"
-  local cq = plugin.methods["history.commit"]({strategy = "auto"})
+  local cq = plugin.methods["history.commit"]({strategy = "view_bounce_action"})
   assertEq(cq.sidecar_written, false, "an unchanged sidecar is reported as not written")
   assertEq(cq.ok, false, "and the commit as a whole does not claim success")
   assertTrue(cq.detail ~= nil and cq.detail:find("did not change", 1, true) ~= nil,
@@ -1711,7 +1814,7 @@ do
   -- "checked and unchanged".
   img.sidecar = nil
   view_state.current = "darkroom"
-  local cn = plugin.methods["history.commit"]({strategy = "auto"})
+  local cn = plugin.methods["history.commit"]({strategy = "view_bounce_action"})
   assertEq(cn.sidecar, nil, "no sidecar path to report when the image has none")
   assertEq(cn.sidecar_written, nil, "sidecar_written is absent, not false, when unchecked")
   assertEq(cn.ok, true, "and the bounce result stands on its own")
@@ -1735,20 +1838,20 @@ do
   stub_dt.gui.action_images = {img}
   view_state.current = "darkroom"
 
-  local c_zero = plugin.methods["history.commit"]({strategy = "auto", attempts = 0})
+  local c_zero = plugin.methods["history.commit"]({strategy = "view_bounce_action", attempts = 0})
   assertEq(c_zero.attempts_used, 1, "attempts below 1 clamps to 1")
 
-  local c_big = plugin.methods["history.commit"]({strategy = "auto", attempts = 99})
+  local c_big = plugin.methods["history.commit"]({strategy = "view_bounce_action", attempts = 99})
   assertEq(c_big.attempts_used, 3, "attempts above 3 clamps to 3")
 
   local c_noop = plugin.methods["history.commit"](
-    {strategy = "auto", expect_change = false})
+    {strategy = "view_bounce_action", expect_change = false})
   assertEq(c_noop.attempts_used, 1, "expect_change=false forces one attempt regardless of `attempts`")
   assertEq(c_noop.sidecar_written, false, "sidecar_written reports the real disk fact")
   assertEq(c_noop.ok, true, "expect_change=false with nothing written is still ok")
   assertEq(c_noop.expect_change, false, "expect_change is echoed back")
 
-  local c_default = plugin.methods["history.commit"]({strategy = "auto"})
+  local c_default = plugin.methods["history.commit"]({strategy = "view_bounce_action"})
   assertEq(c_default.attempts_used, 2, "the default path still spends up to two attempts")
   assertEq(c_default.expect_change, true, "expect_change defaults to true")
   assertEq(c_default.sidecar_written, false,
@@ -2402,6 +2505,35 @@ do
   stub_dt.gui.current_view = original
 end
 
+-- Row 418/429: no view switch in the plugin ever calls the
+-- dt.gui.current_view SETTER itself (row 418's crash); every switch is a
+-- press of darktable's own switch-views command.
+do
+  view_state.current = "darkroom"
+  stub_dt.gui.action_images = {images_by_id[101]}
+  local direct = 0
+  local original = stub_dt.gui.current_view
+  stub_dt.gui.current_view = function(v)
+    if v ~= nil and not view_state.via_action then direct = direct + 1 end
+    return original(v)
+  end
+  local switches_before = view_state.action_switches or 0
+  local bounce = plugin.commit_view_bounce()
+  local opened = plugin.methods["darkroom.open"]({image_id = 102})
+  stub_dt.gui.current_view = original
+  assertEq(bounce.ok, true, "the bounce lands through the action transport")
+  assertTrue(opened ~= nil, "darkroom.open answers")
+  assertEq(direct, 0, "no direct dt.gui.current_view(v) setter call from the plugin")
+  assertTrue((view_state.action_switches or 0) - switches_before >= 2,
+    "the switches were switch-views command presses")
+  assertEq(plugin.view_switch_transport(), "action", "action is the default transport")
+  local ok, err = plugin.switch_view(views.lighttable, "proxy")
+  assertEq(ok, false, "an unknown (or removed) transport is refused")
+  assertTrue(err:find("unknown view transport", 1, true) ~= nil, "honestly: " .. tostring(err))
+  stub_dt.gui.action_images = {}
+  view_state.current = "darkroom"
+end
+
 -- image.lookup by absolute path.
 local lu = plugin.methods["image.lookup"]({path = "/photos/DSC_0001.NEF"})
 assertEq(lu.found, true, "lookup found")
@@ -2496,6 +2628,317 @@ assertEq(sn2.taken, false, "snapshot not taken when the fallback action also ret
 assertTrue(sn2.detail ~= nil, "snapshot fallback records the libs.snapshots error as detail")
 stub_dt.gui.libs.snapshots.take_snapshot = original_take_snapshot
 action_returns["lib/snapshots/take snapshot"] = nil
+
+-- ---- Row 418/422 follow-up: source-verified transports ------------------
+--
+-- A scriptable image whose rating setter emulates darktable's
+-- DT_IMAGE_CACHE_SAFE release: it rewrites the sidecar from "the DB", whose
+-- version only advances when the darkroom flushes (synchronize selection).
+local function make_db_backed_image(id, sidecar)
+  local backing = {id = id, filename = "DB_" .. id .. ".ORF", path = "/photos", rating = 2,
+                   sidecar = sidecar, is_altered = true}
+  local img = setmetatable({}, {
+    __index = backing,
+    __newindex = function(_, k, v)
+      backing[k] = v
+      if k == "rating" and backing.sidecar and not backing.rating_writes_nothing then
+        local h = io.open(backing.sidecar, "w")
+        h:write("xmp from db v" .. tostring(view_state.db_flushes or 0)); h:close()
+        backing.xmp_writes = (backing.xmp_writes or 0) + 1
+      end
+    end,
+  })
+  return img, backing
+end
+
+-- The global switch-views commands: pressed with the right path, verified by
+-- the view (their return is always nan), and never pressed for the view we
+-- are already in (dt_ctl_switch_mode_to would toggle back to the lighttable).
+do
+  view_state.current = "darkroom"
+  local before = #action_log
+  local ok, how = plugin.switch_view_via_action(views.lighttable)
+  assertEq(ok, true, "switch_view_via_action presses the lighttable command")
+  assertEq(how, "global/switch views/lighttable", "the pressed path is darktable's own command")
+  assertEq(view_state.current, "lighttable", "the stub switched")
+  assertEq(action_log[before + 1].path, "global/switch views/lighttable", "recorded in the action log")
+  local n = #action_log
+  local ok2, how2 = plugin.switch_view_via_action(views.lighttable)
+  assertEq(ok2, true, "already there is success")
+  assertTrue(how2:find("already", 1, true) ~= nil, "and says so: " .. tostring(how2))
+  assertEq(#action_log, n, "no press when already in the target view (it would toggle)")
+  local ok3, how3 = plugin.switch_view_via_action({id = "map"})
+  assertEq(ok3, false, "an unmapped view is refused")
+  assertTrue(how3:find("map", 1, true) ~= nil, "naming it")
+  view_state.current = "darkroom"
+end
+
+-- view_bounce_action: both legs through the switch-views commands, working
+-- on a host that refuses every lua-owned action (the 5.4.1 reality). A
+-- forced "view_bounce" is the same bounce on the default (action) transport.
+do
+  darktable_refuses_lua_actions = true
+  local tmp = os.tmpname()
+  local f = io.open(tmp, "w"); f:write("before"); f:close()
+  local img = images_by_id[101]
+  img.sidecar = tmp
+  stub_dt.gui.action_images = {img}
+  view_state.current = "darkroom"
+
+  local original_action = stub_dt.gui.action
+  local writes = 0
+  stub_dt.gui.action = function(path, ...)
+    local r = original_action(path, ...)
+    if path == "global/switch views/lighttable" then
+      writes = writes + 1
+      local h = io.open(tmp, "w"); h:write("after the action bounce " .. writes); h:close()
+    end
+    return r
+  end
+  local switches_before = view_state.action_switches or 0
+  local c = plugin.methods["history.commit"]({strategy = "view_bounce_action"})
+  local c_forced = plugin.methods["history.commit"]({strategy = "view_bounce", attempts = 1})
+  stub_dt.gui.action = original_action
+  assertEq(c.strategy_used, "view_bounce_action", "strategy_used echoes view_bounce_action")
+  assertEq(c.ok, true, "view_bounce_action commits: " .. tostring(c.detail))
+  assertEq(c.sidecar_written, true, "and the sidecar changed")
+  assertEq(c.view_after, "darkroom", "and it came back to the darkroom")
+  assertTrue((view_state.action_switches or 0) - switches_before >= 2,
+    "both legs went through the switch-views commands")
+  assertEq(c_forced.ok, true, "a forced view_bounce still commits: " .. tostring(c_forced.detail))
+  assertEq(c_forced.strategy_used, "view_bounce_action",
+    "and reports the transport it really used")
+  img.sidecar = nil
+  os.remove(tmp)
+  darktable_refuses_lua_actions = false
+end
+
+-- auto (row 429): no_bounce first; view_bounce_action only when no_bounce did
+-- not change the sidecar.
+do
+  local tmp = os.tmpname()
+  local f = io.open(tmp, "w"); f:write("before"); f:close()
+  local img, backing = make_db_backed_image(105, tmp)
+  images_by_id[105] = img
+  stub_dt.gui.action_images = {img}
+  view_state.current = "darkroom"
+
+  local switches_before = view_state.action_switches or 0
+  local c = plugin.methods["history.commit"]({strategy = "auto", image_id = 105})
+  assertEq(c.strategy_used, "no_bounce", "auto commits with no_bounce when it writes the XMP")
+  assertEq(c.ok, true, "ok: " .. tostring(c.detail))
+  assertEq(c.sidecar_written, true, "sidecar changed")
+  assertEq(view_state.action_switches or 0, switches_before, "no view switch on the no_bounce path")
+  assertEq(c.fallback_from, nil, "no fallback recorded")
+
+  -- no_bounce writes nothing (rating touch does not reach the XMP): auto
+  -- falls back to the action bounce, which does.
+  backing.rating_writes_nothing = true
+  local original_action = stub_dt.gui.action
+  stub_dt.gui.action = function(path, ...)
+    local r = original_action(path, ...)
+    if path == "global/switch views/lighttable" then
+      local h = io.open(tmp, "w"); h:write("after the fallback bounce"); h:close()
+    end
+    return r
+  end
+  local c2 = plugin.methods["history.commit"]({strategy = "auto", image_id = 105, attempts = 1})
+  stub_dt.gui.action = original_action
+  assertEq(c2.strategy_used, "view_bounce_action", "auto fell back to view_bounce_action")
+  assertEq(c2.ok, true, "and the fallback committed: " .. tostring(c2.detail))
+  assertEq(c2.sidecar_written, true, "sidecar changed via the bounce")
+  assertTrue(type(c2.fallback_from) == "table" and c2.fallback_from.strategy == "no_bounce",
+    "the no_bounce attempt is reported")
+  assertEq(c2.view_after, "darkroom", "back in the darkroom")
+
+  -- expect_change=false and no_bounce wrote nothing: an honest no-op, no bounce.
+  local switches2 = view_state.action_switches or 0
+  local c3 = plugin.methods["history.commit"]({strategy = "auto", image_id = 105,
+                                               expect_change = false})
+  assertEq(c3.strategy_used, "no_bounce", "expect_change=false stays on no_bounce")
+  assertEq(c3.ok, true, "and is ok")
+  assertEq(c3.sidecar_written, false, "reporting that nothing was written")
+  assertEq(view_state.action_switches or 0, switches2, "without a bounce")
+
+  images_by_id[105] = nil
+  stub_dt.gui.selection_now = nil
+  stub_dt.gui.action_images = {}
+  view_state.current = "darkroom"
+  os.remove(tmp)
+end
+
+-- no_bounce in the darkroom: narrow the selection, flush history to the DB
+-- with "synchronize selection", rewrite the XMP from the DB with a rating
+-- touch, and confirm on disk -- never switching views.
+do
+  local tmp = os.tmpname()
+  local f = io.open(tmp, "w"); f:write("before"); f:close()
+  local img, backing = make_db_backed_image(104, tmp)
+  images_by_id[104] = img
+  stub_dt.gui.action_images = {img}
+  stub_dt.gui.selection_now = {images_by_id[101], images_by_id[102]}
+  view_state.current = "darkroom"
+  local flushes_before = view_state.db_flushes or 0
+  local switches_before = view_state.action_switches or 0
+
+  local c = plugin.methods["history.commit"]({strategy = "no_bounce", image_id = 104})
+  assertEq(c.strategy_used, "no_bounce", "strategy_used echoes no_bounce")
+  assertEq(c.ok, true, "no_bounce commits in the darkroom: " .. tostring(c.detail))
+  assertEq(c.sidecar_written, true, "the sidecar changed on disk")
+  assertEq(c.view_after, "darkroom", "still in the darkroom")
+  assertEq(view_state.action_switches or 0, switches_before, "no view switch at all")
+  assertEq((view_state.db_flushes or 0) - flushes_before, 1, "one synchronize-selection DB flush")
+  assertEq(backing.rating, 2, "the rating touch left the rating unchanged")
+  assertEq(#stub_dt.gui.selection_now, 1, "the selection was narrowed to exactly one image")
+  assertEq(stub_dt.gui.selection_now[1].id, 104, "the image being committed")
+  local names = {}
+  for _, st in ipairs(c.steps) do names[#names + 1] = st.step .. "=" .. tostring(st.ok) end
+  assertEq(table.concat(names, ","),
+    "select=true,synchronize_selection_db_flush=true,rating_touch_xmp_from_db=true,sidecar_changed=true",
+    "the ladder's steps are reported in order")
+
+  -- is_altered false: the flush is SKIPPED (it would dereference an empty
+  -- history) and reported as such.
+  backing.is_altered = false
+  local c2 = plugin.methods["history.commit"]({strategy = "no_bounce", image_id = 104})
+  assertEq(c2.steps[2].step, "synchronize_selection_db_flush", "step 2 is the flush")
+  assertEq(c2.steps[2].ok, false, "reported not done")
+  assertTrue(c2.steps[2].detail:find("skipped", 1, true) ~= nil, "because it was skipped")
+  assertEq((view_state.db_flushes or 0) - flushes_before, 1, "and no flush was pressed")
+  backing.is_altered = true
+
+  -- A selection that cannot be narrowed is a refusal: synchronize selection
+  -- would paste history onto the other selected images.
+  local original_selection = stub_dt.gui.selection
+  stub_dt.gui.selection = function(images)
+    if images == nil then return {images_by_id[101], img} end
+    return images
+  end
+  local c3 = plugin.methods["history.commit"]({strategy = "no_bounce", image_id = 104})
+  stub_dt.gui.selection = original_selection
+  assertEq(c3.ok, false, "no_bounce refuses when the selection is not exactly the image")
+  assertTrue(c3.detail:find("selection", 1, true) ~= nil, "and says why: " .. tostring(c3.detail))
+  assertEq((view_state.db_flushes or 0) - flushes_before, 1, "without pressing synchronize selection")
+
+  -- From the lighttable: the history stack module's write sidecar files.
+  local f2 = io.open(tmp, "w"); f2:write("stale"); f2:close()
+  action_returns["lib/copy_history/write sidecar files"] = nil   -- set to nan by the ladder test
+  view_state.current = "lighttable"
+  local c4 = plugin.methods["history.commit"]({strategy = "no_bounce", image_id = 104})
+  assertEq(c4.ok, true, "no_bounce commits from the lighttable: " .. tostring(c4.detail))
+  assertEq(c4.steps[2].step, "write_sidecar_files_action", "via the write sidecar files button")
+  assertEq(c4.steps[2].detail, "lib/copy_history/write sidecar files", "at its source-verified path")
+  assertEq(c4.view_after, "lighttable", "still in the lighttable")
+
+  images_by_id[104] = nil
+  stub_dt.gui.selection_now = nil
+  stub_dt.gui.action_images = {}
+  view_state.current = "darkroom"
+  os.remove(tmp)
+end
+
+-- The corrected sidecar ladder path is tried first.
+assertEq(plugin.sidecar_action_paths[1], "lib/copy_history/write sidecar files",
+  "the source-verified write sidecar files path leads the ladder")
+
+-- darktable_mcp.view_transport: read, set, refuse junk (the removed proxy included).
+do
+  local vt = plugin.methods["darktable_mcp.view_transport"]
+  assertEq(vt({}).transport, "action", "the default transport is the switch-views action")
+  assertEq(vt({set = "action"}).transport, "action", "set to action")
+  local bad = plugin.handle({id = "vt", method = "darktable_mcp.view_transport",
+                             params = {set = "teleport"}})
+  assertTrue(bad.error ~= nil and bad.error:find("teleport", 1, true) ~= nil, "junk refused")
+  local gone = plugin.handle({id = "vt2", method = "darktable_mcp.view_transport",
+                              params = {set = "proxy"}})
+  assertTrue(gone.error ~= nil, "the removed proxy transport is refused")
+  assertEq(vt({}).transport, "action", "still action")
+  local d = plugin.methods["darktable_mcp.diag"]()
+  assertEq(d.view_switch_transport, "action", "diag reports the transport")
+  assertEq(d.default_commit_strategy, "auto", "and the default commit strategy")
+  assertEq(d.auto_commit_order[1], "no_bounce", "auto tries no_bounce first")
+  assertEq(d.auto_commit_order[2], "view_bounce_action", "then the action bounce")
+end
+
+-- darktable_mcp.probe_main_thread: one row per route, honest about what ran.
+do
+  darktable_refuses_lua_actions = true
+  view_state.current = "darkroom"
+  local actions_before = #action_log
+  local probe = plugin.methods["darktable_mcp.probe_main_thread"]({})
+  local by_route = {}
+  for _, r in ipairs(probe.rows) do
+    by_route[r.route] = r
+    assertTrue(type(r.expect) == "string" and type(r.thread) == "string",
+      "each row carries its source-derived expectation and thread: " .. r.route)
+  end
+  assertEq(by_route.a_lua_shortcut.skipped, true, "the removed lua shortcut is reported, not pressed")
+  for i = actions_before + 1, #action_log do
+    assertTrue(not tostring(action_log[i].path):find("^lua/"), "no lua/ path is pressed")
+  end
+  assertEq(by_route.c_control_dispatch.ran, false, "the stub dispatch never runs the callback")
+  assertEq(by_route.d1_gtk_wrap_roundtrip.ran, true, "the gtk-wrapped selection getter answers")
+  assertEq(by_route.d2_switch_views_action.skipped, true, "no view switch unless asked")
+  assertEq(view_state.current, "darkroom", "the default probe never switches views")
+  assertEq(by_route.d3_gui_mimic.skipped, true, "mimic is never run (deadlock)")
+  assertEq(by_route.d5_display_image_getter.skipped, true, "the display_image getter is never run")
+  assertEq(probe.recommended_view_transport, nil, "nothing recommended without the switch test")
+
+  local switches_before = view_state.action_switches or 0
+  local probe2 = plugin.methods["darktable_mcp.probe_main_thread"]({switch_views = true})
+  local d2 = nil
+  for _, r in ipairs(probe2.rows) do if r.route == "d2_switch_views_action" then d2 = r end end
+  assertEq(d2.ran, true, "switch_views=true: both legs land: " .. tostring(d2.detail))
+  assertEq(view_state.current, "darkroom", "and the probe ends back in the darkroom")
+  assertEq((view_state.action_switches or 0) - switches_before, 2, "exactly two presses")
+  assertEq(probe2.recommended_view_transport, "action", "the action transport is recommended")
+
+  view_state.current = "lighttable"
+  local probe3 = plugin.methods["darktable_mcp.probe_main_thread"]({switch_views = true})
+  for _, r in ipairs(probe3.rows) do
+    if r.route == "d2_switch_views_action" then
+      assertEq(r.ran, false, "switch test refuses to start outside the darkroom")
+    end
+  end
+  view_state.current = "darkroom"
+  darktable_refuses_lua_actions = false
+end
+
+-- Row 429 host regression: darktable 5.4.1's dt.control / dt.gui are
+-- singleton userdata whose __index RAISES on an unknown field
+-- (`field "timer" not found for type dt_lua_singleton_control`). The probe
+-- must read every optional field through a guard and still answer.
+do
+  local function singleton(real, type_name)
+    return setmetatable({}, {__index = function(_, k)
+      local v = real[k]
+      if v == nil then
+        error('field "' .. tostring(k) .. '" not found for type ' .. type_name)
+      end
+      return v
+    end})
+  end
+  local real_control, real_gui = stub_dt.control, stub_dt.gui
+  local real_configuration = stub_dt.configuration
+  stub_dt.control = singleton(real_control, "dt_lua_singleton_control")
+  stub_dt.configuration = nil
+  view_state.current = "darkroom"
+  local ok, probe = pcall(plugin.methods["darktable_mcp.probe_main_thread"], {switch_views = true})
+  assertEq(ok, true, "the probe survives a raising dt.control: " .. tostring(not ok and probe or ""))
+  if ok then
+    local d4 = nil
+    for _, r in ipairs(probe.rows) do if r.route == "d4_main_loop_schedulers" then d4 = r end end
+    assertTrue(d4 ~= nil and d4.detail:find("timer is nil", 1, true) ~= nil,
+      "dt.control.timer is reported absent: " .. tostring(d4 and d4.detail))
+    assertEq(probe.recommended_view_transport, "action", "and the switch test still ran")
+  end
+  assertEq(plugin.opt_field(stub_dt.control, "timer"), nil, "opt_field turns the raise into nil")
+  assertTrue(plugin.opt_field(stub_dt.control, "sleep") ~= nil, "and passes a real field through")
+  assertEq(plugin.opt_field(nil, "x"), nil, "and tolerates a missing object")
+  stub_dt.control, stub_dt.gui = real_control, real_gui
+  stub_dt.configuration = real_configuration
+  view_state.current = "darkroom"
+end
 
 -- ---- Report ----------------------------------------------------------------
 if #failures > 0 then
