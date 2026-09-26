@@ -65,6 +65,33 @@ def test_launch_without_start_time_stops_child_and_writes_no_owner(owner, monkey
     assert started[0].pid not in dtprocess._children
 
 
+def test_launch_forwards_env_to_popen(owner, monkeypatch, tmp_path):
+    """C1: launch's env kwarg reaches Popen so the child never inherits the
+    real HOME/XDG_*; no real process is spawned here (Popen is monkeypatched)."""
+    captured = {}
+
+    class FakeProc:
+        pid = 4321
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            pass
+
+    def fake_popen(argv, *, stdout=None, stderr=None, start_new_session=None, env=None):
+        captured["env"] = env
+        return FakeProc()
+
+    monkeypatch.setattr(dtprocess.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(dtprocess, "_lstart", lambda pid: None)  # force the fast LaunchError path
+    monkeypatch.setattr(dtprocess.time, "sleep", lambda s: None)
+    custom_env = {"HOME": "/isolated/home"}
+    with pytest.raises(dtprocess.LaunchError):
+        dtprocess.launch(None, tmp_path / "lib" / "library.db", env=custom_env)
+    assert captured["env"] == custom_env
+
+
 def test_foreign_pid_is_refused_and_never_signalled(owner):
     # A genuinely owned record (this test process: live pid, real lstart and
     # comm); `kill` is a recorder, so nothing is ever signalled.
