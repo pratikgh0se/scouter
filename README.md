@@ -160,10 +160,31 @@ Add the MCP server to your client's config alongside (or instead of) `darktable`
 ### Setup
 
 ```sh
-pip install -e '.[dev]'
-darktable-mcp install-plugin        # copies the Lua plugin, then RESTART darktable
-scouter doctor                      # darktable, plugin, current view, cache paths
+uv sync --extra dev                 # or: python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+.venv/bin/python -m scouter setup   # installs the Lua plugin (persistently), checks doctor,
+                                    # prints the `claude mcp add` line
+# restart darktable, open a photo in the darkroom, then:
+scouter setup --check               # every item ok? exit 0; anything missing? exit 1, changes nothing
 ```
+
+`scouter setup` is idempotent and does, in order:
+
+| Item | What it does | `--check` reports |
+|---|---|---|
+| `plugin` | writes the packaged `darktable_mcp.lua` where the bridge reads it (`~/.config/darktable/lua/`, or `$DARKTABLE_MCP_PLUGIN_PATH`) and **leaves it installed** -- no uninstall on exit, unlike the host tests | `ok` / `missing` / `stale` (an older plugin) |
+| `luarc` | adds `require "darktable_mcp"` to `~/.config/darktable/luarc` once, keeping every other line | `ok` / `missing` |
+| `wb_tables` | copies the measured white-balance tables shipped in `scouter/data/wb/` (today: `em10iii`) into `<config_dir>/wb/` when that camera has none; never overwrites one | `ok` / `missing`, plus any other calibrated bodies |
+| `config` | reported only: `scouter config init` writes it, because the backup gate is yours to arm. Single-frame editing works without it | `ok` / `missing` (not required) |
+| `doctor` | the bridge half of `scouter doctor`: darktable running, plugin loaded, answering | `ok` / `bridge_timeout` / ... |
+
+It then prints the exact `claude mcp add` command and the equivalent JSON
+(see "Editing with Scouter from Claude Code" below). It never reads or writes
+Claude Code's own config; registering is one command you run yourself.
+The exit code is `0` when every required item is ok. Right after a fresh
+install `doctor` is not ok until darktable is restarted -- the `next` list in
+the output says so.
+
+`darktable-mcp install-plugin` still exists and writes the same two files.
 
 darktable must be **running**, with the image open in the **darkroom**: slider
 actions exist only there, and `scouter` says so (`wrong_view`, exit code 4)
@@ -179,8 +200,7 @@ never lands and `scouter` reports `commit_timeout` (exit 10) rather than
 claiming a write it cannot see.
 
 The plugin loads through `~/.config/darktable/luarc` (`require "darktable_mcp"`),
-same as the original `darktable-mcp` tools — `darktable-mcp install-plugin`
-writes both the plugin file and that `luarc` line for you.
+same as the original `darktable-mcp` tools.
 
 ### A hero edit
 
@@ -358,14 +378,61 @@ scouter style   apply-set --name hero-harbour --job-slug harbour-wedding --exclu
 scouter outliers list --reference <hero> --job-slug harbour-wedding --pretty
 scouter export  release --job-slug harbour-wedding --preset client-proof --yes
 scouter export  verify --manifest <path>
+scouter job     run --job-slug harbour-wedding --preset hero-harbour --hero <hero> --yes   # the chain, below
 scouter backup  run --yes
 scouter backup  verify
 scouter wb      calibrate <scratch.orf> --yes   # measures this camera's Kelvin table
+scouter wb      calibrate <folder> --camera a7 --dry-run   # folder mode: one body, a scratch copy
 scouter wb      kelvin <image>
 ```
 
 Every one of them is the same function the MCP server exposes, under the same
 name and arguments — `tests/test_layer_parity.py` pins that.
+
+### White-balance tables for a new body (Sony A7 and NEX-5N recipe)
+
+Relative white balance ("warmer", "cooler by 300k") and `outliers list`'s
+Kelvin test need a measured table per camera body at
+`<config_dir>/wb/<body>.json` (`~/.config/scouter/wb/`, the same place
+`wb kelvin` reads; `scouter setup` installs the shipped `em10iii` one).
+`wb calibrate` takes a **folder of raws, one body at a time**: it reads each
+file's EXIF body, picks the first frame of the body you name, copies it to a
+scratch dir (`~/.cache/scouter/wb-scratch/<body>/`, or `--scratch DIR`) and
+sweeps the Kelvin slider on the **copy** -- the original never gets a
+history item. `--dry-run` lists the frames it would use, the chosen one, the
+copy and the table path, with no darktable call.
+
+The body slug comes from the config's `cameras` map (`scouter config init`
+maps `ILCE-7` to `a7`), else from the EXIF model (`NEX-5N` -> `nex5n`,
+unmapped `ILCE-7` -> `ilce7`). Not yet run -- this is the recipe for Pratik's
+own session:
+
+```sh
+# 1. which frame each body would use (no darktable needed)
+scouter --pretty wb calibrate ~/Pictures/EditingTrial/sony --camera a7 --dry-run
+scouter --pretty wb calibrate ~/Pictures/EditingTrial/sony --camera nex5n --dry-run
+
+# 2. A7: stage the copy, launch darktable ON it (Scouter cannot move the darkroom
+#    onto a frame imported in the same session), then sweep ~21 points (~40 s)
+mkdir -p ~/.cache/scouter/wb-scratch/a7
+cp ~/Pictures/EditingTrial/sony/DSC01425.ARW ~/.cache/scouter/wb-scratch/a7/
+/Applications/darktable.app/Contents/MacOS/darktable ~/.cache/scouter/wb-scratch/a7/DSC01425.ARW &
+scouter wb calibrate ~/Pictures/EditingTrial/sony --camera a7 --yes
+
+# 3. quit darktable, then the same for the NEX-5N
+mkdir -p ~/.cache/scouter/wb-scratch/nex5n
+cp ~/Pictures/EditingTrial/sony/DSC07448.ARW ~/.cache/scouter/wb-scratch/nex5n/
+/Applications/darktable.app/Contents/MacOS/darktable ~/.cache/scouter/wb-scratch/nex5n/DSC07448.ARW &
+scouter wb calibrate ~/Pictures/EditingTrial/sony --camera nex5n --yes
+
+# 4. check: a Kelvin number instead of "no wb calibration table"
+scouter --pretty wb kelvin ~/.cache/scouter/wb-scratch/a7/DSC01425.ARW
+```
+
+The frame names above are what `--dry-run` picks (first by name per body);
+trust its output over this text. A table that is not strictly monotone in
+r/b is refused, never written. To ship a table with Scouter (so `scouter
+setup` installs it on a fresh config), copy it into `scouter/data/wb/`.
 
 ### The backup gate
 
@@ -653,12 +720,23 @@ shows which words work today.
 - **Relative white balance needs the camera's measured table and assumes
   tint 1.0.** Without a table: `value_unknown`, naming `scouter wb
   calibrate`.
-- **`darkroom adjust`/`darkroom say` bounce the view once before they read**,
-  because a hand-moved slider is invisible on disk until darktable commits.
-  On the 2026-09-24 host run that bounce made a one-move `darkroom say` take
-  a median **4.1 s** (target 3.5 s, missed); with `--trust-sidecar` (no
-  pre-commit bounce, for scripts that own the darkroom) the median was
-  **1.4 s**.
+- **`darkroom adjust`/`darkroom say` trust the sidecar by default, behind a
+  staleness guard** (product close, row 427 item 4). The pre-read view
+  bounce -- which makes darktable write a hand-moved slider to disk -- cost
+  ~2.7 s of a 4.1 s one-move `say` on the 2026-09-24 host run (1.37 s
+  without it; target 3.5 s). It now runs only when Scouter cannot show the
+  sidecar is current: no sidecar yet, the first move on an image in this
+  session (or the image changed since the last move), or the sidecar is
+  older than the journal's last move (a `--no-commit` move). Each result's
+  `plan` says whether it bounced and why. So a conversation pays the bounce
+  once per image and then runs at the trust-sidecar speed; the guarded
+  default is not yet host-measured (`tests/test_host_phase3.py::
+  test_4_conversation_timing` measures it and a forced-bounce loop).
+  What the guard cannot see is a slider **you** moved by hand in darktable
+  since Scouter's last commit -- darktable writes nothing until the darkroom
+  is left. Pass `--bounce` (MCP `bounce: true`) after touching sliders
+  yourself; `--trust-sidecar` still skips the bounce unconditionally.
+  `darkroom get` never bounces unless `--bounce`.
 - **Undoing a preset application is refused.** darktable's Lua API cannot
   remove history items. Use the history panel.
 - **Color zones' zone curves are unreachable.** Only its global mix
@@ -724,15 +802,212 @@ host run").
   r/b.
 - **Preset round trip** (save, list, apply to the open image, delete)
   passed.
-- **Timing.** A one-move `darkroom say` has a median of 4.1 s with the
-  pre-commit bounce, which misses the 3.5 s target, so the host timing test
-  fails. With `--trust-sidecar` the median is 1.4 s.
+- **Timing.** A one-move `darkroom say` had a median of 4.1 s with the
+  pre-commit bounce, which missed the 3.5 s target; with `--trust-sidecar`
+  the median was 1.4 s. The default is now the staleness guard (see
+  "Honest limits, phase 3"), pending a host re-measure.
 
 To re-run it, close darktable first and have the hero ORF present:
 
 ```sh
 SCOUTER_HOST_TESTS=1 uv run --extra dev python -m pytest tests/test_host_phase3.py -q -s
 ```
+
+## Honest limits, product 1.0rc (2026-09-26)
+
+Read these with the phase 1-3 limits above; they are what the product close
+did not, or could not, settle.
+
+- **Global edits only.** No masks, no local or spot edits, no retouch:
+  darktable's Lua API exposes none of them. White-balance tint is set, never
+  nudged (`absolute_only`); color zones' zone curves are unreachable. The
+  user guide's "What refuses, and why" lists every refusal.
+- **The staleness guard cannot see your hands.** It trusts the sidecar when
+  the sidecar is newer than Scouter's last move on the same image. A slider
+  you moved yourself in darktable since then is invisible until darktable
+  writes the sidecar; pass `--bounce` (MCP `bounce: true`) after hand edits.
+  The guarded default's timing is not host-measured yet (row 415 measured
+  4.12 s with the bounce every time, 1.37 s without).
+- **`scouter setup` does not register the MCP server.** It prints the `claude
+  mcp add` command and never reads or writes Claude Code's config. Right
+  after installing the plugin, `doctor` is not ok until darktable restarts.
+  Not yet run against the real `~/.config/darktable`.
+- **`wb calibrate` folder mode still needs darktable to show the copy.** The
+  sweep runs on a scratch copy, and darktable cannot be moved onto a frame
+  imported in the same session, so the recipe launches darktable on the copy
+  first. The A7 and NEX-5N tables are **not measured yet**; until they are,
+  warmer/cooler on Sony frames refuses `value_unknown` and `outliers list`
+  falls back to the r/b ratio.
+- **`job run` stops; it does not roll back.** Ratings applied by the cull and
+  styles appended by the preset step stay when a later step refuses. Styles
+  cannot be removed through the Lua API at all. The 2 s settle before
+  `outliers` is a measured-lag allowance (row 408 B7), not a sidecar-written
+  signal. Not yet run on a real job.
+- **Still open from earlier rounds.** The first `history commit` after a fresh
+  darktable launch intermittently wedging the bridge (row 408 B1) and the E12
+  15-18 minute pre-verb stalls (D3) have no root cause yet.
+
+## Editing with Scouter from Claude Code
+
+Scouter edits the photo open in **your running darktable**, from a Claude
+Code conversation. You talk; Claude calls Scouter's MCP tools; each change is
+a normal darktable history item you can see, keep, or undo yourself. It
+works on the whole image (global edits). It does not paint masks.
+
+### Register the server (once)
+
+1. `scouter setup` (see "Setup" above): plugin installed, `luarc` line, the
+   measured WB tables, then restart darktable.
+2. Register the server. `scouter setup` prints this line with your own
+   paths; from this checkout it is:
+
+```
+claude mcp add --transport stdio --scope user --env PYTHONPATH=/Users/pratik/CodeBase/scouter scouter -- /Users/pratik/CodeBase/scouter/.venv/bin/python -m scouter.mcp.server
+```
+
+A stdio server, user scope (every project sees it), the repo's own venv
+python, absolute paths; `PYTHONPATH` pins this checkout even if the venv's
+editable install points at a worktree. The same server as JSON, for a
+project `.mcp.json` or Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "scouter": {
+      "type": "stdio",
+      "command": "/Users/pratik/CodeBase/scouter/.venv/bin/python",
+      "args": ["-m", "scouter.mcp.server"],
+      "env": {"PYTHONPATH": "/Users/pratik/CodeBase/scouter"}
+    }
+  }
+}
+```
+
+3. `claude mcp list` should show `scouter: ... - Connected`. Each server
+   process pins one Scouter session job, so undo works across the whole
+   conversation. Start a new Claude Code session after registering.
+
+### Single frame by phrases
+
+Open the photo in darktable's **darkroom** yourself (double-click it in the
+lighttable). Scouter edits whatever the darkroom shows; it cannot switch
+darktable to a frame imported in the same darktable session. Then just say
+what you want. Claude sends it to `darkroom_say`, and you watch it land in
+darktable. These six sentences map to live vocabulary rows today
+(`tests/test_user_guide.py` checks each one):
+
+| You say | Scouter moves | Row(s) |
+|---|---|---|
+| "slightly brighter" | exposure up half a step (+0.15 EV; one step is 0.3 EV) | `exposure.exposure` |
+| "a touch warmer" | white balance +150 K, read through the camera's measured Kelvin table | `temperature.temperature` |
+| "less contrast" | tone-mapper contrast down (sigmoid, or filmic rgb when filmic is the active tone mapper) | `sigmoid.contrast` |
+| "lift the shadows" | colour balance rgb shadows luminance up | `colorbalancergb.shadows_luminance` |
+| "a bit more vibrance" | colour balance rgb global vibrance up | `colorbalancergb.global_vibrance` |
+| "warm the highlights" | highlights hue set to 60° (orange), highlights chroma up one step | `colorbalancergb.highlights_hue`, `highlights_chroma` |
+
+Amounts: "slightly" / "a touch" / "a bit" / "much" scale one step, or ask for
+a number ("cooler by 300k"). `vocab_list` (CLI `scouter vocab list`) shows every
+word and its status. A phrase with several moves ("teal and orange") lands
+as one group. For an exact value, Claude uses `darkroom_set`
+(`scouter darkroom set exposure exposure 1.2`); for an exact relative change,
+`darkroom_adjust`. `darkroom_get` reads a value back.
+
+**Speed.** One phrase measured ~1.4 s on the host with the pre-read bounce
+skipped (2026-09-24; the guarded default below is not host-measured yet). The
+first move on a photo in a session also makes darktable write its pending
+edits first (one view bounce, ~2.7 s more). If you moved sliders **by hand** in darktable
+since Scouter's last move, say so ("I changed the exposure myself"): Claude
+passes `bounce: true` so Scouter reads your values, not the stale sidecar.
+
+### Undo
+
+"Undo that" -> `darkroom_undo_last`: the whole last phrase is reverted as one
+group ("teal and orange" undoes all four moves). `single: true` undoes only
+the last single move. Undo writes a new history item setting the old value
+back; darktable's own history panel and Ctrl-Z still work alongside it.
+Undo cannot remove a **preset application** (darktable's Lua API cannot
+delete history items); use darktable's history panel for that.
+
+### Save as a preset
+
+"Save this look as harbour-warm" -> `preset_save`: the modules changed in
+this session on the open photo become a darktable style named `harbour-warm`,
+with a copy under `<library_root>/scouter/memory/presets/` when a library
+is configured. Replacing an existing preset needs confirmation.
+`preset_list` lists them; `preset_apply` puts one on the open photo (live) or
+on another image.
+
+### Apply to a job
+
+A job is a folder `scouter library import` made (see phase 2 above). "Apply
+harbour-warm to the whole harbour-wedding job, except the hero" ->
+`preset_apply_job` with `exclude`. It is gated: Claude shows the dry run
+(how many frames) first and asks before `confirm: true`. Applying always
+**appends** to each frame's history.
+
+### Batch: `job run`
+
+One call for the whole delivery chain -> `job_run` (CLI `scouter job run`):
+
+```sh
+scouter --pretty job run --job-slug harbour-wedding --preset harbour-warm --hero <hero> --dry-run
+scouter --pretty job run --job-slug harbour-wedding --preset harbour-warm --hero <hero> --yes
+```
+
+In order: **cull** (propose ratings with the job-relative sharpness gate,
+then apply them), **preset** (apply-set to every frame except `--exclude`
+and the hero), **outliers** (frames outside tolerance against the hero,
+after a 2 s pause for darktable's sidecar writes), **export** (release
+through `--export-preset`, default `client-proof`, with a checksum
+manifest). Every step reports counts. The chain **stops at the first step
+that refuses or comes back partial**, says which (`stopped_at`) and why;
+earlier steps are not rolled back. `--steps cull,export` runs a subset.
+Without `--yes` nothing is written.
+
+### Export
+
+"Export proofs for harbour-wedding" -> `export_release` with
+`preset: client-proof` (2048 px sRGB JPEG, frames rated at or above the
+proof floor). `client-final` / `print-tiff` export the frames you gave
+darktable's **green** colour label. Files land in the job's `exports/<preset>/`
+with a `manifest-*.json` you can check with `export_verify`. Export renders
+through `darktable-cli` from the XMP sidecars, so darktable's "write sidecar"
+preference must be on.
+
+### Educative mode
+
+Scouter can explain what each move did, for learning while you edit. Set it
+per call ("explain that fully") or in `config.json` (`"educative"`):
+
+| Level | What you get |
+|---|---|
+| `off` | only the summary line (`exposure › exposure: +0.15 EV (0.7 EV → 0.85 EV)`) |
+| `brief` (default) | one sentence per move: what changed, before/after, what to watch |
+| `full` | the brief sentence plus the underlying concept (exposure, tone mapping, white balance, ...) the first time it comes up in the session, never repeated |
+
+### What refuses, and why
+
+Scouter refuses rather than guess. Each refusal names the fix.
+
+- **Masks and local edits: not available.** No drawn or parametric masks, no
+  retouch, no spot or graduated edits: darktable's Lua API exposes no masks.
+  Every Scouter edit is global. Do local work in darktable by hand.
+- **White-balance tint: set it, don't nudge it.** "more magenta" refuses
+  `value_unknown`: darktable stores tint only inside the channel
+  coefficients, so there is no value to move relatively. Set it absolutely:
+  `darkroom set temperature tint 1.05`.
+- **Color zones' zone curves: unreachable.** Zones are curve nodes, not
+  sliders; only color zones' overall `strength` mix is reachable. Use colour
+  balance rgb phrases ("warm the highlights", "teal and orange") instead.
+- **Warmer/cooler on a body with no WB table** refuses `value_unknown`,
+  naming `wb calibrate` (Sony A7 / NEX-5N: see the recipe above).
+- **A frame darktable is not showing** refuses `not_in_darkroom`: open it in
+  darktable yourself.
+- **A word whose darktable path is not probed** refuses `not_pinned`
+  (`scouter vocab list` shows none today: 22 live, tint absolute-only,
+  zone curves unreachable).
+- **Overwriting history** is refused: darktable's Lua API only appends.
+
 
 ## Contributing
 

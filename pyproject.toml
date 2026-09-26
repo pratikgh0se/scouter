@@ -67,6 +67,7 @@ include = ["darktable_mcp*", "scouter*"]
 
 [tool.setuptools.package-data]
 darktable_mcp = ["lua/*.lua"]
+scouter = ["data/wb/*.json"]
 
 [tool.setuptools.dynamic]
 version = {attr = "darktable_mcp.__version__"}

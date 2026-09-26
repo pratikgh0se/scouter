@@ -262,6 +262,9 @@ class ConfirmGateTest(unittest.TestCase):
         # own confirm gate (already exercised above) fires first, so no
         # darkroom/bridge fixture wiring is needed here either.
         "preset.apply_job": {"name": "hero", "job_slug": "gate-hero"},
+        # job.run without confirm runs NO step: a plan, plus the child dry
+        # runs (apply-set, export) that are themselves gated above.
+        "job.run": {"job_slug": "gate-hero", "preset": "hero"},
     }
     # `style.apply` is deliberately NOT here (final review, should-fix 7): its
     # only would-be gate was mode=overwrite, which darktable cannot do at all,

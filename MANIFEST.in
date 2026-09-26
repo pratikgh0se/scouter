@@ -10,6 +10,8 @@ graft tests
 # the wheel or `darktable-mcp install-plugin`, the first thing every user runs,
 # fails on a fresh install.
 recursive-include darktable_mcp/lua *.lua
+# The measured white-balance tables `scouter setup` installs.
+recursive-include scouter/data *.json
 
 global-exclude __pycache__ *.py[cod]
 prune .venv

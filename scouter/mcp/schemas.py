@@ -55,6 +55,17 @@ EDUCATIVE = {
     "description": "explanation level for this call; omit to use the config's `educative` "
     "(default brief)",
 }
+TRUST_SIDECAR = {
+    "type": "boolean",
+    "default": False,
+    "description": "never bounce before reading, even when the staleness guard would",
+}
+BOUNCE = {
+    "type": "boolean",
+    "default": False,
+    "description": "force the pre-read commit bounce (~2.7 s): use after the user moved sliders "
+    "by hand in darktable, which Scouter cannot see until darktable writes the sidecar",
+}
 PRESET_NAME = {
     "type": "string",
     "description": "preset (darktable style) name",
@@ -842,10 +853,18 @@ TOOL_SPECS: list[dict] = [
         "scratch copy. Refuses (usage error) rather than write a table whose "
         "r/b coefficient ratio is not strictly increasing in Kelvin. "
         "Requires confirm=true to run at all (never overwrites an existing "
-        "table otherwise).",
+        "table otherwise). `image` may be a folder of raws: one body at a time "
+        "(`camera` picks it when the folder is mixed); the first frame of that "
+        "body is copied to a scratch dir and the COPY is swept, never the "
+        "original; dry_run lists the frames, the chosen one and the table path "
+        "with no darktable call.",
         "inputSchema": _schema(
             {
-                "image": IMAGE,
+                "image": {
+                    "type": ["string", "integer"],
+                    "description": "absolute path to a raw, a darktable image id, or a "
+                    "folder of raws (folder mode)",
+                },
                 "k_from": {
                     "type": "integer",
                     "default": 2000,
@@ -860,6 +879,16 @@ TOOL_SPECS: list[dict] = [
                     "type": "integer",
                     "default": 500,
                     "description": "Kelvin step between points",
+                },
+                "camera": {
+                    "type": "string",
+                    "description": "folder mode: the body slug to calibrate (e.g. a7, "
+                    "nex5n) when the folder holds more than one",
+                },
+                "scratch": {
+                    "type": "string",
+                    "description": "folder mode: directory for the scratch copy "
+                    "(default <cache>/wb-scratch)",
                 },
                 "allow_in_job": {
                     "type": "boolean",
@@ -895,12 +924,13 @@ TOOL_SPECS: list[dict] = [
     {
         "name": "darkroom_get",
         "description": "Read one parameter's current VALUE from the image's XMP sidecar (or Kelvin "
-        "via the camera's measured table). Never moves the view; `fresh: false` means darktable "
-        "may hold newer, uncommitted changes.",
+        "via the camera's measured table). Never moves the view unless bounce; `fresh: false` "
+        "means darktable may hold newer, uncommitted changes.",
         "inputSchema": _schema(
             {"module": {"type": "string", "description": "darktable module, e.g. sigmoid"},
              "param": {"type": "string", "description": "parameter, e.g. contrast"},
-             "instance": INSTANCE},
+             "instance": INSTANCE,
+             "bounce": BOUNCE},
             ["module", "param"],
         ),
     },
@@ -908,7 +938,8 @@ TOOL_SPECS: list[dict] = [
         "name": "darkroom_adjust",
         "description": "Change one module parameter by a relative delta in internal units (EV for "
         "exposure, K for temperature, fractions for color balance rgb: 0.05 means 5 %). Reads the "
-        "current value first (one view bounce to flush unsaved slider moves unless trust_sidecar), "
+        "current value first (trusting the sidecar unless the staleness guard sees it is older than "
+        "the last move or the image changed; then one view bounce), "
         "clamps to Scouter's safe range, sets it, and returns previous/target/applied plus a "
         "one-line summary.",
         "inputSchema": _schema(
@@ -918,8 +949,8 @@ TOOL_SPECS: list[dict] = [
              "instance": INSTANCE,
              "commit": {"type": "boolean", "default": True,
                         "description": "commit history to the XMP after the write"},
-             "trust_sidecar": {"type": "boolean", "default": False,
-                               "description": "skip the pre-read commit bounce"},
+             "trust_sidecar": TRUST_SIDECAR,
+             "bounce": BOUNCE,
              "educative": EDUCATIVE,
              "dry_run": DRY_RUN},
             ["module", "param", "delta"],
@@ -938,8 +969,8 @@ TOOL_SPECS: list[dict] = [
             {"phrase": PHRASE, "amount": AMOUNT,
              "commit": {"type": "boolean", "default": True,
                         "description": "commit history to the XMP after the write"},
-             "trust_sidecar": {"type": "boolean", "default": False,
-                               "description": "skip the pre-read commit bounce"},
+             "trust_sidecar": TRUST_SIDECAR,
+             "bounce": BOUNCE,
              "educative": EDUCATIVE,
              "dry_run": DRY_RUN},
             ["phrase"],
@@ -998,6 +1029,39 @@ TOOL_SPECS: list[dict] = [
                          "of the job"},
              "dry_run": DRY_RUN},
             ["name", "job_slug"],
+        ),
+    },
+    {
+        "name": "job_run",
+        "description": "Batch-edit a whole job in one call, in this order: cull (propose ratings "
+        "with the job-relative sharpness gate, then apply them), preset (append the hero preset "
+        "to every frame except `exclude` and the hero), outliers (frames outside tolerance "
+        "against the hero), export (export_release through `export_preset` with a manifest). "
+        "Each step reports its counts. Stops at the first step that refuses or comes back "
+        "partial and says where (outcome partial); earlier steps are not rolled back. Without "
+        "confirm=true it is a dry run: nothing is written, and the plan shows what each step "
+        "would touch. preset/outliers are skipped when no preset/hero is given.",
+        "inputSchema": _schema(
+            {"job_slug": {"type": "string", "description": "the job (library job slug)"},
+             "preset": {"type": "string",
+                        "description": "hero preset (darktable style) to apply to the set"},
+             "hero": IMAGE,
+             "exclude": {"type": "array", "items": {"type": "string"},
+                         "description": "paths or ids the preset step leaves out"},
+             "export_preset": {"type": "string",
+                               "enum": ["preview", "client-proof", "client-final", "print-tiff"],
+                               "default": "client-proof",
+                               "description": "export release preset"},
+             "min_rating": {"type": "integer", "minimum": -1, "maximum": 5,
+                            "description": "export selection floor for proof presets"},
+             "steps": {"type": "array",
+                       "items": {"type": "string",
+                                 "enum": ["cull", "preset", "outliers", "export"]},
+                       "description": "subset to run, in chain order (default: all)"},
+             "confirm": {"type": "boolean", "default": False,
+                         "description": "required: the chain writes ratings, styles, exports"},
+             "dry_run": DRY_RUN},
+            ["job_slug"],
         ),
     },
 ]

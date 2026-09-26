@@ -117,6 +117,12 @@ class CalibrateResult(Payload):
     points: list[dict] = field(default_factory=list)
     written: bool = False
     overwritten: bool = False
+    #: Folder mode (product close, row 427 item 3): every raw of the chosen
+    #: body (`{path, camera}`), the frame the sweep uses, and the scratch
+    #: copy it actually sweeps -- the original is never touched.
+    frames: list[dict] = field(default_factory=list)
+    source_image: str | None = None
+    scratch_copy: str | None = None
 
 
 @dataclass
@@ -632,3 +638,16 @@ class Envelope:
         if self.error is not None:
             out["error"] = self.error
         return out
+
+
+@dataclass
+class JobRunResult(Payload):
+    """`job.run`'s result (product close, row 427 item 5 prep). `steps` has
+    one row per step attempted or skipped -- `{step, verb, outcome, counts,
+    warnings, error?, reason?}` -- in chain order; `stopped_at` names the
+    step that refused or came back partial (the chain stops there)."""
+
+    job_slug: str = ""
+    steps: list[dict] = field(default_factory=list)
+    completed: int = 0
+    stopped_at: str | None = None

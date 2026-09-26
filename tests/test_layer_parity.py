@@ -54,6 +54,7 @@ EXPECTED_VERBS = {
     "preset.list",
     "preset.apply",
     "preset.apply_job",
+    "job.run",
 }
 
 

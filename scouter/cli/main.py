@@ -15,7 +15,7 @@ from scouter.cli import tables
 from scouter.errors import EXIT_CODES, ScouterError, exit_code_for
 
 #: Verbs excluded from the parity check because they are diagnostics, not verbs.
-NON_REGISTRY_COMMANDS = ("doctor",)
+NON_REGISTRY_COMMANDS = ("doctor", "setup")
 
 _TYPES = {"str": str, "int": int, "float": float, "image": str}
 
@@ -150,6 +150,20 @@ def build_parser() -> argparse.ArgumentParser:
         "plugin, etc.).",
     )
     doctor.set_defaults(_verb=None, _args=[])
+
+    setup_parser = groups.add_parser(
+        "setup",
+        help="install the Lua plugin persistently, check doctor, print the MCP registration",
+        description="Idempotent. Installs the darktable Lua plugin and its luarc line "
+        "(and leaves them installed), copies the measured white-balance tables into "
+        "the config's wb/ dir when missing, runs doctor, and prints the exact "
+        "`claude mcp add` command plus the equivalent JSON. --check changes nothing. "
+        "Exits 0 when every required item is ok, 1 otherwise.",
+    )
+    setup_parser.add_argument(
+        "--check", action="store_true", help="report each item ok/missing; change nothing"
+    )
+    setup_parser.set_defaults(_verb=None, _args=[])
     return parser
 
 
@@ -316,6 +330,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             code = 1
         return emit(report, code)
+
+    if namespace.group == "setup":
+        from scouter.cli import setup as setup_module
+
+        report = setup_module.run(check=bool(namespace.check))
+        return emit(report, 0 if report["ok"] else 1)
 
     verb_id = namespace._verb
     dual_name = _DUAL_MODE_POSITIONALS.get(verb_id)

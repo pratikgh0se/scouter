@@ -144,10 +144,15 @@
     "name": "cull_propose"
   },
   {
-    "description": "Change one module parameter by a relative delta in internal units (EV for exposure, K for temperature, fractions for color balance rgb: 0.05 means 5 %). Reads the current value first (one view bounce to flush unsaved slider moves unless trust_sidecar), clamps to Scouter's safe range, sets it, and returns previous/target/applied plus a one-line summary.",
+    "description": "Change one module parameter by a relative delta in internal units (EV for exposure, K for temperature, fractions for color balance rgb: 0.05 means 5 %). Reads the current value first (trusting the sidecar unless the staleness guard sees it is older than the last move or the image changed; then one view bounce), clamps to Scouter's safe range, sets it, and returns previous/target/applied plus a one-line summary.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
+        "bounce": {
+          "default": false,
+          "description": "force the pre-read commit bounce (~2.7 s): use after the user moved sliders by hand in darktable, which Scouter cannot see until darktable writes the sidecar",
+          "type": "boolean"
+        },
         "commit": {
           "default": true,
           "description": "commit history to the XMP after the write",
@@ -187,7 +192,7 @@
         },
         "trust_sidecar": {
           "default": false,
-          "description": "skip the pre-read commit bounce",
+          "description": "never bounce before reading, even when the staleness guard would",
           "type": "boolean"
         }
       },
@@ -247,10 +252,15 @@
     "name": "darkroom_enable"
   },
   {
-    "description": "Read one parameter's current VALUE from the image's XMP sidecar (or Kelvin via the camera's measured table). Never moves the view; `fresh: false` means darktable may hold newer, uncommitted changes.",
+    "description": "Read one parameter's current VALUE from the image's XMP sidecar (or Kelvin via the camera's measured table). Never moves the view unless bounce; `fresh: false` means darktable may hold newer, uncommitted changes.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
+        "bounce": {
+          "default": false,
+          "description": "force the pre-read commit bounce (~2.7 s): use after the user moved sliders by hand in darktable, which Scouter cannot see until darktable writes the sidecar",
+          "type": "boolean"
+        },
         "instance": {
           "default": 0,
           "description": "module instance (darktable's multi_priority)",
@@ -381,6 +391,11 @@
           "maximum": 5,
           "type": "number"
         },
+        "bounce": {
+          "default": false,
+          "description": "force the pre-read commit bounce (~2.7 s): use after the user moved sliders by hand in darktable, which Scouter cannot see until darktable writes the sidecar",
+          "type": "boolean"
+        },
         "commit": {
           "default": true,
           "description": "commit history to the XMP after the write",
@@ -408,7 +423,7 @@
         },
         "trust_sidecar": {
           "default": false,
-          "description": "skip the pre-read commit bounce",
+          "description": "never bounce before reading, even when the staleness guard would",
           "type": "boolean"
         }
       },
@@ -731,6 +746,81 @@
       "type": "object"
     },
     "name": "history_read"
+  },
+  {
+    "description": "Batch-edit a whole job in one call, in this order: cull (propose ratings with the job-relative sharpness gate, then apply them), preset (append the hero preset to every frame except `exclude` and the hero), outliers (frames outside tolerance against the hero), export (export_release through `export_preset` with a manifest). Each step reports its counts. Stops at the first step that refuses or comes back partial and says where (outcome partial); earlier steps are not rolled back. Without confirm=true it is a dry run: nothing is written, and the plan shows what each step would touch. preset/outliers are skipped when no preset/hero is given.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "default": false,
+          "description": "required: the chain writes ratings, styles, exports",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "exclude": {
+          "description": "paths or ids the preset step leaves out",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "export_preset": {
+          "default": "client-proof",
+          "description": "export release preset",
+          "enum": [
+            "preview",
+            "client-proof",
+            "client-final",
+            "print-tiff"
+          ],
+          "type": "string"
+        },
+        "hero": {
+          "description": "absolute path to the raw file, or a darktable image id",
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "job_slug": {
+          "description": "the job (library job slug)",
+          "type": "string"
+        },
+        "min_rating": {
+          "description": "export selection floor for proof presets",
+          "maximum": 5,
+          "minimum": -1,
+          "type": "integer"
+        },
+        "preset": {
+          "description": "hero preset (darktable style) to apply to the set",
+          "type": "string"
+        },
+        "steps": {
+          "description": "subset to run, in chain order (default: all)",
+          "items": {
+            "enum": [
+              "cull",
+              "preset",
+              "outliers",
+              "export"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "job_slug"
+      ],
+      "type": "object"
+    },
+    "name": "job_run"
   },
   {
     "description": "Copy, checksum, rename and register a memory card into the library. Refuses with backup_not_configured before reading a single file unless the backup gate passes (config.show reports its verdict). Always requires confirm=true: an import is always more than one file. Originals are copied read-only (chmod 0444) and verified with two independent sha256 passes; a darktable that is not running does not fail the import (film_roll_registered: false, retry with library.register).",
@@ -1382,7 +1472,7 @@
     "name": "vocab_resolve"
   },
   {
-    "description": "Sweep the darkroom's Kelvin slider from k_from to k_to and write the measured per-camera table `~/.config/scouter/wb/<camera>.json`, which wb.kelvin and outliers.list's temperature_k_delta then use. Costs ~1.8s per point and adds one history item per point, so it refuses inside a job's raw/ unless allow_in_job=true -- run it on a scratch copy. Refuses (usage error) rather than write a table whose r/b coefficient ratio is not strictly increasing in Kelvin. Requires confirm=true to run at all (never overwrites an existing table otherwise).",
+    "description": "Sweep the darkroom's Kelvin slider from k_from to k_to and write the measured per-camera table `~/.config/scouter/wb/<camera>.json`, which wb.kelvin and outliers.list's temperature_k_delta then use. Costs ~1.8s per point and adds one history item per point, so it refuses inside a job's raw/ unless allow_in_job=true -- run it on a scratch copy. Refuses (usage error) rather than write a table whose r/b coefficient ratio is not strictly increasing in Kelvin. Requires confirm=true to run at all (never overwrites an existing table otherwise). `image` may be a folder of raws: one body at a time (`camera` picks it when the folder is mixed); the first frame of that body is copied to a scratch dir and the COPY is swept, never the original; dry_run lists the frames, the chosen one and the table path with no darktable call.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -1390,6 +1480,10 @@
           "default": false,
           "description": "required: image is inside a job's raw/",
           "type": "boolean"
+        },
+        "camera": {
+          "description": "folder mode: the body slug to calibrate (e.g. a7, nex5n) when the folder holds more than one",
+          "type": "string"
         },
         "confirm": {
           "default": false,
@@ -1402,7 +1496,7 @@
           "type": "boolean"
         },
         "image": {
-          "description": "absolute path to the raw file, or a darktable image id",
+          "description": "absolute path to a raw, a darktable image id, or a folder of raws (folder mode)",
           "type": [
             "string",
             "integer"
@@ -1417,6 +1511,10 @@
           "default": 12000,
           "description": "last Kelvin point",
           "type": "integer"
+        },
+        "scratch": {
+          "description": "folder mode: directory for the scratch copy (default <cache>/wb-scratch)",
+          "type": "string"
         },
         "step": {
           "default": 500,
