@@ -355,6 +355,7 @@ class ErrorsTest(unittest.TestCase):
             "state_locked",
             "darktable_unresponsive",
             "write_unverified",
+            "module_unavailable",
         }
         codes = {cls.code for cls in errors.ERROR_CLASSES}
         self.assertEqual(codes, expected)

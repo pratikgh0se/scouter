@@ -514,6 +514,11 @@ def adjust(module: str, param: str, delta: float, *, instance: int = 0, commit: 
         )
     resolved = darkroom._current_image()
     darkroom._require_job_image(job, resolved.image_id)
+    # Before the pre-read bounce: a white balance in camera reference (late)
+    # mode is refused with nothing sent. If only the bounce reveals preset 4
+    # (no sidecar before it), `set_param`'s own guard still refuses the write.
+    darkroom.refuse_wb_late(resolved.path, module, [param], instance,
+                            what=f"darkroom adjust {module}.{param}")
     dtbridge.require_darkroom()
     warning, pre = _maybe_precommit(job, resolved, bounce=bounce, trust_sidecar=trust_sidecar)
     result = _adjust_core(module, param, delta, resolved=resolved, instance=instance,
@@ -534,6 +539,21 @@ def _refusal(mv_module: str, param: str, kind: str) -> dict | None:
         return {"module": mv_module, "param": param, "code": e.code, "status": vocab.status(s),
                 "message": e.message}
     return None
+
+
+def _refuse_wb_late(phrase: str, key: str, resolved: ResolvedImage,
+                    concrete: list[tuple[str, phrases.Move]]) -> None:
+    """The whole phrase refuses, before any of its moves lands, when one of
+    them would move a white balance in camera reference (late) mode (gauntlet
+    §5.4 point 4: never a half-applied edit)."""
+    wb_params = [mv.param for module, mv in concrete if module == "temperature"]
+    if not wb_params:
+        return
+    darkroom.refuse_wb_late(
+        resolved.path, "temperature", wb_params, 0, what=f"'{phrase}'",
+        extra={"phrase": phrase, "key": key,
+               "refused": [{"module": "temperature", "param": p, "code": "module_unavailable"}
+                           for p in wb_params]})
 
 
 def _raise_refused(phrase: str, key: str, refused: list[dict], total: int,
@@ -575,14 +595,22 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
         _raise_refused(phrase, res.key, pre_refused, len(res.moves))
     resolved = darkroom._current_image()
     darkroom._require_job_image(job, resolved.image_id)
-    dtbridge.require_darkroom()
     tone = route_tone(resolved.path)
     concrete = [(tone if mv.module == phrases.TONE else mv.module, mv) for mv in res.moves]
+    # Local sidecar read only: refused with nothing sent, not even the
+    # view check or the pre-read bounce.
+    _refuse_wb_late(phrase, res.key, resolved, concrete)
+    dtbridge.require_darkroom()
     refused = [r for r in (_refusal(m, mv.param, mv.kind) for m, mv in concrete) if r]
     if refused:
         _raise_refused(phrase, res.key, refused, len(concrete))
     group = f"say-{journal.next_seq(job)}"
     warning, pre = _maybe_precommit(job, resolved, bounce=bounce, trust_sidecar=trust_sidecar)
+    if pre["bounced"]:
+        # The bounce can be what first writes the sidecar (or flushes a hand
+        # edit): re-check before the first move, so a later WB move can never
+        # refuse after an earlier move of the same phrase has landed.
+        _refuse_wb_late(phrase, res.key, resolved, concrete)
     # Final review #1a ruling, all-or-nothing: a `set` move whose before
     # value is unreadable and whose row declares no neutral/default would
     # journal an entry `undo_last` can only refuse. Refuse the whole phrase

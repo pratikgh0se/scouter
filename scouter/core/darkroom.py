@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import math
 import time
 from collections.abc import Callable
@@ -10,6 +11,7 @@ from scouter import metrics, paths
 from scouter.core import dtbridge, journal, vocab, xmp
 from scouter.errors import (
     CommitTimeout,
+    ModuleUnavailable,
     NotInDarkroom,
     ScouterError,
     UsageError,
@@ -310,6 +312,83 @@ def _temperature_extra(path: str, instance: int) -> dict:
     params = dict(params)
     params_hex = params.pop("params_hex", None)
     return {"params": params, "params_hex": params_hex}
+
+
+#: darktable 5.4 `src/iop/temperature.c`: `dt_iop_temperature_preset_t`'s
+#: DT_IOP_TEMP_D65_LATE, the `preset` field (5th, `xmp.LAYOUTS[("temperature",
+#: 4)]`) of a "camera reference (late)" white balance -- 5.4's scene-referred
+#: default. darktable stores the AS-SHOT coefficients and sets
+#: `late_correction`, so color calibration applies the D65 correction late.
+#: Every temperature/tint/coefficient slider change runs
+#: `_temp_tint_callback`/`gui_changed`, which force DT_IOP_TEMP_USER (2) and
+#: drop that correction: the frame turns cooler whichever way Kelvin moved
+#: (gauntlet night 1, cov-phrase-warmer-olympus-touch). No GUI action keeps
+#: preset 4 while changing the coefficients.
+WB_PRESET_D65_LATE = 4
+
+#: Python-only exemption (no CLI/MCP argument; `set_param`'s signature is
+#: pinned by the layer-parity test): `wb.calibrate`'s sweep measures the
+#: Kelvin->coefficient mapping, which the late correction does not enter.
+WB_LATE_EXEMPT: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "scouter_wb_late_exempt", default=False)
+
+
+def wb_preset(path: str, instance: int = 0) -> int | None:
+    """The temperature module's decoded `preset`, from the sidecar, or `None`
+    (no sidecar, no active temperature entry, or params that did not decode).
+    Local read only; no bridge call."""
+    parsed = _read_sidecar_parsed(path)
+    if parsed is None:
+        return None
+    params = xmp.latest_params(parsed, "temperature", instance)
+    preset = (params or {}).get("preset")
+    return preset if isinstance(preset, int) else None
+
+
+def wb_late_fix(params: set[str] | list[str] | tuple[str, ...]) -> str:
+    """The honest `fix` for a white-balance write refused in late mode. It names
+    only what exists: colour calibration is darktable's place for warmth in
+    this mode, Scouter does not drive it, and the one live substitute (a
+    color balance rgb grade, for temperature only) is labelled as a grade."""
+    fix = (
+        "darktable's white balance on this image is in \"camera reference (late)\" mode "
+        "(temperature preset 4, darktable 5.4's scene-referred default): it keeps the as-shot "
+        "coefficients and color calibration applies the D65 correction late. Changing "
+        "temperature, tint or the coefficients through darktable's sliders switches the module "
+        "to \"user modified\" and switches that late correction off, so the colours shift the "
+        "wrong way (cooler, whichever way you asked). Nothing was changed in darktable. In this "
+        "mode darktable adjusts warmth in the color calibration module (its CAT illuminant), "
+        "which Scouter does not drive yet: change it there by hand."
+    )
+    if "temperature" in set(params):
+        fix += (
+            " Nearest thing Scouter can do: a colour grade, not a white-balance correction -- "
+            "say 'warm the highlights' or 'cool the shadows' (color balance rgb)."
+        )
+    else:
+        fix += " Scouter has no substitute for a tint change."
+    return fix
+
+
+def refuse_wb_late(path: str, module: str, params: list[str], instance: int = 0, *,
+                   what: str, extra: dict | None = None) -> None:
+    """Raise `ModuleUnavailable` when a `temperature` write would land on a
+    preset-4 (camera reference, late) white balance. A no-op for every other
+    module and every other preset (0/1/2/3), and when the preset is unknown."""
+    if module != "temperature":
+        return
+    preset = wb_preset(path, instance)
+    if preset != WB_PRESET_D65_LATE:
+        return
+    raise ModuleUnavailable(
+        f"{what} cannot run: darktable's white balance on this image is in camera reference "
+        "(late) mode, and changing it through darktable's sliders would switch off the late "
+        "correction and shift the colours the wrong way",
+        fix=wb_late_fix(params),
+        detail={"module": module, "params": list(params), "instance": instance,
+                "temperature_preset": preset, "mode": "camera reference (late)",
+                "darktable_enum": "DT_IOP_TEMP_D65_LATE", "path": path, **(extra or {})},
+    )
 
 
 def _read_state(path: str, module: str, param: str, instance: int) -> dict:
@@ -664,6 +743,10 @@ def set_param(
 ) -> SetResult:
     """Set one module parameter to an absolute value (phase 0 finding 1).
 
+    A `temperature` write on a white balance in camera reference (late) mode
+    is refused (`module_unavailable`) before anything is sent; see
+    `refuse_wb_late`. `wb.calibrate`'s sweep is exempt via `WB_LATE_EXEMPT`.
+
     A dry run makes no darktable calls at all -- not even to learn which image
     is in the darkroom (fix round 1, blocker 14) -- so it reports only the
     action that would be sent, never a value or an image id.
@@ -695,6 +778,9 @@ def set_param(
         )
     resolved = _current_image()
     _require_job_image(job, resolved.image_id)
+    if not WB_LATE_EXEMPT.get():
+        refuse_wb_late(resolved.path, module, [param], instance,
+                       what=f"darkroom set {module}.{param}")
     dtbridge.require_darkroom()
     raw_state, before_state, pending_uncommitted = _raw_and_before_state(
         job, resolved.image_id, resolved.path, module, param, instance
@@ -956,6 +1042,8 @@ def nudge(
         )
     resolved = _current_image()
     _require_job_image(job, resolved.image_id)
+    refuse_wb_late(resolved.path, module, [param], instance,
+                   what=f"darkroom nudge {module}.{param}")
     dtbridge.require_darkroom()
     raw_state, before_state, pending_uncommitted = _raw_and_before_state(
         job, resolved.image_id, resolved.path, module, param, instance
@@ -1488,6 +1576,29 @@ def _undo_temperature_via_kelvin(
     return committed, warnings, undone
 
 
+def _warn_late_not_restored(entry: journal.Entry, before_params: dict | None, undone: dict,
+                            warnings: list[str]) -> None:
+    """Undo is never blocked by the late-WB guard, but a move made while the
+    white balance was in camera reference (late) mode (`preset` 4) cannot be
+    fully restored: every tier restores through darktable's sliders, which
+    force preset 2, so the coefficients come back WITHOUT the late D65
+    correction. Say so rather than let a verified ratio read as the old look."""
+    if (before_params or {}).get("preset") != WB_PRESET_D65_LATE:
+        return
+    after = wb_preset(entry.path, entry.instance)
+    restored = after == WB_PRESET_D65_LATE
+    undone["late_correction_restored"] = restored
+    if not restored:
+        warnings.append(
+            f"seq {entry.seq} was made while white balance was in \"camera reference (late)\" "
+            f"mode (preset 4); the coefficients are restored, but darktable's sliders cannot "
+            f"switch that mode back on (preset now {after}), so the late D65 correction is "
+            "still off and the colours will not match the pre-move look. To get it back, "
+            "step back in darktable's own history stack (select the item before this "
+            "move, or Ctrl-Z) -- that restores the stored preset."
+        )
+
+
 def _refuse_temperature_undo(entry: journal.Entry, before_params: dict | None) -> None:
     """Tier 4 (brief step 6): the honest refusal, carrying the journalled
     coefficient vector, the target Kelvin (when a table happens to answer
@@ -1741,6 +1852,7 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             # verify -- a normal return here is always a verified tier 3.
             committed, warnings, undone = via_kelvin
             mark_undone_ok = True
+        _warn_late_not_restored(entry, before_params, undone, warnings)
     else:
         mark_undone_ok = True
         previous = entry.before.get("value")

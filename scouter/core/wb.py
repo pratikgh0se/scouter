@@ -849,7 +849,14 @@ def calibrate(
     set_fn = _unwrapped(darkroom.set_param)
     points: list[dict] = []
     for k in ks:
-        set_fn("temperature", "temperature", float(k), job=job)
+        # Exempt from the late-WB guard (`darkroom.refuse_wb_late`): this sweep
+        # measures the Kelvin->coefficient mapping; the late D65 correction
+        # does not enter that measurement.
+        exempt = darkroom.WB_LATE_EXEMPT.set(True)
+        try:
+            set_fn("temperature", "temperature", float(k), job=job)
+        finally:
+            darkroom.WB_LATE_EXEMPT.reset(exempt)
         parsed = darkroom._read_sidecar_parsed(resolved.path)
         params = xmp.latest_params(parsed, "temperature") if parsed is not None else None
         if params is None:

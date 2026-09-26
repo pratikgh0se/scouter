@@ -237,6 +237,23 @@ class NotPinned(ScouterError):
     )
 
 
+class ModuleUnavailable(ScouterError):
+    """A module Scouter knows cannot take this write on this image, in the mode
+    darktable holds it in right now -- refused before anything is sent.
+
+    First use (gauntlet night 1): white balance in darktable 5.4's "camera
+    reference (late)" mode (`temperature` preset 4, DT_IOP_TEMP_D65_LATE),
+    where any slider change drops the late D65 correction. The raiser always
+    passes a situation-specific `fix`; this one is only the fallback."""
+
+    code = "module_unavailable"
+    fix = (
+        "this module cannot take the change on this image in its current mode "
+        "(see detail); nothing was sent to darktable. `scouter vocab list` shows "
+        "which words work today."
+    )
+
+
 class DarktableUnresponsive(BridgeTimeout):
     """Watchdog design 2.2: a call timed out AND the 5 s health ping failed
     while a darktable process exists (fix round 1: a darktable that is not
@@ -320,6 +337,10 @@ EXIT_CODES: dict[str, int] = {
     # Row 433 night-1 fix: a committed write whose read-back value is not the
     # one requested (and not a darktable clamp).
     "write_unverified": 25,
+    # Gauntlet §5.4's refusal set: a module that cannot take this write in the
+    # mode darktable holds it in (first use: white balance, camera reference late).
+    # 25 is taken by write_unverified on fix/htc-applied-verify (merges first).
+    "module_unavailable": 26,
 }
 
 ERROR_CLASSES: tuple[type[ScouterError], ...] = (
@@ -343,6 +364,7 @@ ERROR_CLASSES: tuple[type[ScouterError], ...] = (
     StateLocked,
     DarktableUnresponsive,
     WriteUnverified,
+    ModuleUnavailable,
 )
 
 
