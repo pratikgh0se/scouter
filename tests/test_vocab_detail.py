@@ -2,7 +2,7 @@
 
 import unittest
 
-from scouter.core import phrases, vocab
+from scouter.core import dtbridge, phrases, vocab
 
 
 class DetailRowsTest(unittest.TestCase):
@@ -15,11 +15,33 @@ class DetailRowsTest(unittest.TestCase):
         self.assertIn("iop/sharpen/amount", s.candidate_paths)
 
     def test_phrases(self) -> None:
-        self.assertEqual(phrases.resolve("reduce noise").key, "denoise_more")
-        self.assertEqual(phrases.resolve("less denoising").moves[0].notches, -1)
-        self.assertEqual(phrases.resolve("sharpen a touch").moves[0].notches, 0.5)
-        self.assertEqual(phrases.resolve("less sharpening").key, "sharpen_less")
+        # (phrase, key, module, param, notches): the sign is the direction on
+        # the row -- denoiseprofile.strength up is more denoising, sharpen.amount
+        # down is less sharpening.
+        cases = (
+            ("reduce noise", "denoise_more", "denoiseprofile", "strength", 1),
+            ("denoise", "denoise_more", "denoiseprofile", "strength", 1),
+            ("less denoising", "denoise_less", "denoiseprofile", "strength", -1),
+            ("sharpen", "sharpen_more", "sharpen", "amount", 1),
+            ("sharpen a touch", "sharpen_more", "sharpen", "amount", 0.5),
+            ("less sharpening", "sharpen_less", "sharpen", "amount", -1),
+        )
+        for text, key, module, param, notches in cases:
+            with self.subTest(phrase=text):
+                r = phrases.resolve(text)
+                self.assertEqual(r.key, key)
+                self.assertEqual(len(r.moves), 1)
+                mv = r.moves[0]
+                self.assertEqual((mv.module, mv.param, mv.notches), (module, param, notches))
         self.assertEqual(phrases.resolve("softer contrast").key, "less_contrast")  # unchanged
+
+    def test_status_follows_the_pins(self) -> None:
+        # Neither row has a host-pinned action path yet (Task 34 Step 6 is the
+        # host probe), so both are exactly `candidate` -- never `live`.
+        for s in (vocab.spec("denoiseprofile", "strength"), vocab.spec("sharpen", "amount")):
+            with self.subTest(row=f"{s.module}.{s.param}"):
+                self.assertNotIn((s.module, s.param), dtbridge.ACTION_PATHS)
+                self.assertEqual(vocab.status(s), "candidate")
 
 
 if __name__ == "__main__":

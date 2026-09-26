@@ -52,7 +52,7 @@ class VocabShapeTest(unittest.TestCase):
                     self.assertTrue(s.candidate_paths, "an unpinned reachable row needs candidates")
                 self.assertEqual(s.display_scale, 100.0 if s.unit == "%" else 1.0)
 
-    def test_statuses_after_the_task_10_host_run(self) -> None:
+    def test_statuses_after_the_task_10_pinning_run(self) -> None:
         # Task 10 (2026-09-24 host run) pinned all 15 candidate paths and
         # every XMP slot the sentinel method found, so only tint (no value
         # source) stays absolute_only and colorzones.curves unreachable.
