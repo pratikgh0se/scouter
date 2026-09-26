@@ -504,16 +504,20 @@ def _cell(state, why=None):
     "fallback_ok"/"fallback_bad" (the weaken column, round 6: the changed
     function(s) had no assertion at all, so the mutation ran against the
     file's first assertion anywhere instead - always labelled, pass or fail,
-    so a reviewer sees it ran against code the range didn't touch). Every
-    state but plain True/False, fallback_bad and marker_mismatch is n/a, not
-    a fail, and not counted against the gate - the weaken column carries the
-    requirement instead."""
+    so a reviewer sees it ran against code the range didn't touch), or
+    "no_functions" (round 8: the changed test FILE has zero new/changed test
+    FUNCTIONS - a decorator-only or fixture-signature edit - so there was
+    nothing to select and run at all). Every state but plain True/False,
+    fallback_bad and marker_mismatch is n/a, not a fail, and not counted
+    against the gate - the weaken column carries the requirement instead."""
     if state is None:
         return "n/a"
     if state == "new_module":
         return "n/a (new module)"
     if state == "no_prod_change":
         return "n/a (no production change)"
+    if state == "no_functions":
+        return "n/a (no test functions changed)"
     if state == "targets_predate_range":
         return f"n/a (targets predate range: {why})"
     if state == "marker_mismatch":
@@ -591,6 +595,21 @@ def check_range(repo, base, head):
                     status = file_status(repo, base, head, f)
                     revert_to_base(repo, base, wt, f, status)
                 for f, (status, funcs) in remaining.items():
+                    # Fix round 8 (integrator report, gate-w5-style): a
+                    # changed test FILE with zero new/changed test FUNCTIONS
+                    # (a decorator-only or fixture-signature edit) has no
+                    # test ids to select at all. Without this guard,
+                    # `ids = []` -> `run_pytest([])`'s early return `(0, "no
+                    # tests selected")` reads `failed = rc != 0` -> False ->
+                    # "did not fail (BAD)", exactly as if a real revert had
+                    # failed to break a real test - a false alarm, checked
+                    # BEFORE the no-production-change import check since
+                    # there is nothing to import-match against either.
+                    if not funcs:
+                        revert_by_file[f] = ("no_functions",
+                                              "no new/changed test function in this file "
+                                              "(decorator-only or fixture-signature edit)")
+                        continue
                     # Fix round 4: this test file may not even be ABOUT any of
                     # the production files this range changed (e.g. new tests
                     # added for pre-existing code) - reverting production it

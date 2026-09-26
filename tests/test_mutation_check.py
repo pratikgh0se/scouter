@@ -11,6 +11,7 @@ is now scoped to this repo's real test directories - `tests/`,
 `-k "not host"` excludes scouter's real darktable-requiring suite; this file
 carries no `host` in any test name, so it always runs with the rest."""
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -43,6 +44,28 @@ def commit_all(root, message):
 def write_test(root, text):
     (root / "tests").mkdir(exist_ok=True)
     (root / "tests" / "test_production.py").write_text(text)
+
+
+def copy_gate_scaffolding(dest, repo_root):
+    """Copy the `make gate` / `scripts/merge_gate.sh` / `scripts/mutation_check.sh`
+    / `tests/mutation_check.py` scaffolding from `repo_root` (wherever THIS
+    checkout happens to live) into a temp fixture dir `dest`, so `make gate`
+    runs fully self-contained there. Fix round 8: `MakeGateInvokesTheScript`
+    used to run `make gate` against `self.REPO_ROOT` itself - the real,
+    possibly-concurrently-used host repo. Its own `git worktree add`/`remove`
+    calls then raced any OTHER agent's concurrent git worktree operations on
+    the SAME shared `.git` (this environment routinely runs several agents
+    in parallel), which is exactly the "assumes a clean git state" isolation
+    bug: not reproducible deterministically, and not reproducible at all from
+    a checkout path other than the one the test happened to be authored in."""
+    (dest / "scripts").mkdir(parents=True, exist_ok=True)
+    (dest / "tests").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(repo_root / "Makefile", dest / "Makefile")
+    shutil.copy2(repo_root / "scripts" / "merge_gate.sh", dest / "scripts" / "merge_gate.sh")
+    shutil.copy2(repo_root / "scripts" / "mutation_check.sh", dest / "scripts" / "mutation_check.sh")
+    shutil.copy2(repo_root / "tests" / "mutation_check.py", dest / "tests" / "mutation_check.py")
+    (dest / "scripts" / "merge_gate.sh").chmod(0o755)
+    (dest / "scripts" / "mutation_check.sh").chmod(0o755)
 
 
 PROD_BUGGY = "def add(a, b):\n    return a - b\n"
@@ -759,6 +782,90 @@ class ReferencesProdFileHandlesInitReexports(unittest.TestCase):
             self.assertIn("FAIL (good)", weak_cell)
 
 
+class NoChangedTestFunctionsIsNotAFailure(unittest.TestCase):
+    """Fix round 8 (HTC integration report): a changed test FILE whose only
+    edit in-range is NOT inside any `def test_*` (a decorator-only edit, or a
+    fixture/helper function's signature changing - e.g. three local
+    `fake_commit` fixtures gaining an `expect_module=None` keyword, the
+    integration's real example) has zero new/changed test functions - there
+    is nothing to select and run. `ids = []` must never reach `run_pytest`
+    and be misread as `rc == 0` -> "did not fail (BAD)"; it must read
+    n/a (no test functions changed), and must NOT count against the gate."""
+
+    def test_a_helper_signature_change_with_no_test_function_touched_reads_n_a(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - a\n")
+            write_test(root, "def test_placeholder():\n    assert True\n")
+            base = commit_all(root, "base: buggy unrelated.py, one placeholder test")
+
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
+            write_test(root,
+                       "def test_placeholder():\n    assert True\n\n\n"
+                       "def fake_commit(x, expect_module=None):\n"
+                       "    return x\n")
+            head = commit_all(root, "fix unrelated.py; add a non-test helper, no test function touched")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertTrue(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertEqual(names, "-")  # no new/changed test function at all
+            self.assertEqual(rev_cell, "n/a (no test functions changed)")
+            self.assertEqual(weak_cell, "n/a")
+
+    def test_cli_exit_code_zero(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - a\n")
+            write_test(root, "def test_placeholder():\n    assert True\n")
+            base = commit_all(root, "base")
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
+            write_test(root,
+                       "def test_placeholder():\n    assert True\n\n\n"
+                       "def fake_commit(x, expect_module=None):\n"
+                       "    return x\n")
+            head = commit_all(root, "fix unrelated.py; helper-only edit")
+
+            p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
+                                 "--base", base, "--head", head, "--repo", str(root)],
+                                capture_output=True, text=True)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertIn("n/a (no test functions changed)", p.stdout)
+            self.assertNotIn("did not fail (BAD)", p.stdout)
+
+    def test_the_file_level_fallback_still_runs_for_files_that_DO_have_changed_functions(self):
+        """Round 6's fallback rule must stay intact - this guard only fires
+        when funcs is genuinely empty, never for a file that has a
+        new/changed test function (even one with no assert of its own)."""
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            write_test(root,
+                       "from production import add\n\n\n"
+                       "def test_old_with_a_real_check():\n"
+                       "    assert add(2, 3) == 5\n")
+            base = commit_all(root, "base: one old test with a real assertion")
+
+            write_test(root,
+                       "from production import add\n\n\n"
+                       "def test_old_with_a_real_check():\n"
+                       "    assert add(2, 3) == 5\n\n\n"
+                       "def test_new_makes_a_call_but_checks_nothing():\n"
+                       "    add(2, 3)\n")
+            head = commit_all(root, "add a new test with no assert at all")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertNotEqual(names, "-")
+            self.assertIn("weaken: file-level fallback", weak_cell)
+
+
 class SkippedTestIsFlagged(unittest.TestCase):
     def test_xfail_mark_on_a_new_test_is_a_static_flag(self):
         with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
@@ -812,14 +919,32 @@ class MakeGateInvokesTheScript(unittest.TestCase):
             self.assertIn("did not fail (BAD)", p.stdout)
 
     def test_make_gate_invokes_scripts_merge_gate_sh_on_this_repos_own_smoke_range(self):
-        # The real end-to-end wire: `make gate` on scouter's OWN history,
-        # using the same base/head this task's smoke test uses. Confirms the
-        # Makefile target really execs scripts/merge_gate.sh (not just that
-        # the target parses), against real scouter files.
-        p = subprocess.run(["make", "gate", "BASE=5501801", "HEAD=55fc881"],
-                            cwd=self.REPO_ROOT, capture_output=True, text=True, timeout=120)
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn("| test file |", p.stdout)
+        # The real end-to-end wire: `make gate` with NO repo-root override
+        # (`scripts/merge_gate.sh`'s `ROOT` then defaults to `SCRIPT_HOME`,
+        # i.e. wherever the scaffolding lives) - confirms the Makefile
+        # target really execs scripts/merge_gate.sh (not just that the
+        # target parses). Fix round 8: this used to run against
+        # self.REPO_ROOT itself (the real host repo), whose git worktree
+        # operations could race any OTHER agent's concurrent git worktree
+        # use on that SAME shared .git, and which only worked from whatever
+        # checkout path the test happened to be authored in. A temp copy of
+        # the scaffolding, gating a temp fixture repo's own history, is
+        # deterministic and reproducible from any checkout.
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_BUGGY)
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: buggy add()")
+            (root / "production.py").write_text(PROD_FIXED)
+            write_test(root, DISCRIMINATING_TEST)
+            head = commit_all(root, "fix + a real, discriminating test")
+
+            copy_gate_scaffolding(root, self.REPO_ROOT)
+            p = subprocess.run(["make", "gate", f"BASE={base}", f"HEAD={head}"],
+                                cwd=root, capture_output=True, text=True, timeout=120)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertIn("| test file |", p.stdout)
 
     def test_merge_gate_sh_skip_env_var_is_logged_and_exits_zero(self):
         with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
