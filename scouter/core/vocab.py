@@ -79,6 +79,29 @@ def _cb(param: str, ui: str, unit: str, lo: float, hi: float, step: float, conce
     )
 
 
+#: Touch-floor ruling (row: htc-touch-floor, provisional/reversible): each
+#: zone's `touch` magnitude (INTENSITY factor 0.5 x step, see phrases.py) must
+#: land at or above the M5 stat floor the gauntlet evaluator checks the
+#: matching phrase against (`tests/gauntlet/layers/coverage.py:PHRASE_STAT`,
+#: floors from `gauntlet.metrics.FLOOR_MIN`), as measured on the recorded
+#: night-1 evidence (`~/Pictures/ScouterScratch/gauntlet/night1-20260926/
+#: cases/cov-phrase-*-bare.json`, both hero bodies).
+#:
+#: `test_vocab.py` enforces `step <= (hi - lo) / 4` for every reachable row
+#: (a Scouter safety invariant, not touched here), which caps how far a step
+#: can rise inside the existing clamp. `shadows_luminance` on the dark
+#: olympus hero needs a touch of ~0.50 to clear its 0.5 L* floor; the cap
+#: inside its +-0.25 clamp is 0.0625. The zone-chroma family needs ~0.15-0.31
+#: for `cool_shadows`/`teal_orange`; the cap inside its 0-0.3 clamp is
+#: 0.0375. These stay a residual, documented in the triage doc's
+#: D-bare-step-below-perceptual-floor cluster as needing a brighter/more
+#: chromatic hero frame or a rescaled M5 floor (Pratik's roadmap call, not a
+#: step size) -- every step below is raised to the invariant's ceiling.
+_ZONE_LUMINANCE_STEP = {"shadows": 0.125, "midtones": 0.06, "highlights": 0.10}
+#: All three zones share one clamp (0.0-0.3); the invariant ceiling is 0.075.
+_ZONE_CHROMA_STEP = 0.075
+
+
 def _zone(zone: str, section: str, label: str,
           short: str | None = None) -> tuple[ParamSpec, ParamSpec, ParamSpec]:
     base = f"iop/colorbalancergb/{section}"
@@ -88,7 +111,8 @@ def _zone(zone: str, section: str, label: str,
     # section word (`lift`, `gain`) is tried first for those two zones.
     lead = (f"iop/colorbalancergb/{short}",) if short else ()
     return (
-        _cb(f"{zone}_luminance", f"4 ways › {section} › luminance", "%", -0.25, 0.25, 0.02,
+        _cb(f"{zone}_luminance", f"4 ways › {section} › luminance", "%", -0.25, 0.25,
+            _ZONE_LUMINANCE_STEP[zone],
             "color_balance", f"lifts or lowers only the {label}",
             "noise in the darkest areas" if zone == "shadows" else
             ("clipping in the brightest areas" if zone == "highlights" else "skin"),
@@ -96,7 +120,7 @@ def _zone(zone: str, section: str, label: str,
         _cb(f"{zone}_hue", f"4 ways › {section} › hue", "°", 0.0, 360.0, 10.0,
             "grading", f"picks the tint colour for the {label}",
             "neutral greys in that range", (*(f"{b}/hue" for b in lead), f"{base}/hue", f"{flat} hue"), wraps=True),
-        _cb(f"{zone}_chroma", f"4 ways › {section} › chroma", "%", 0.0, 0.3, 0.02,
+        _cb(f"{zone}_chroma", f"4 ways › {section} › chroma", "%", 0.0, 0.3, _ZONE_CHROMA_STEP,
             "grading", f"sets how strong the {label} tint is",
             "greys in that range turning coloured", (*(f"{b}/chroma" for b in lead), f"{base}/chroma", f"{flat} chroma")),
     )
@@ -129,15 +153,21 @@ PARAMS: tuple[ParamSpec, ...] = (
     _cb("contrast", "master › contrast", "%", -0.5, 0.5, 0.05, "color_balance",
         "adds or removes contrast around middle grey, after the tone mapper",
         "that it does not fight the sigmoid contrast"),
-    _cb("global_saturation", "master › global saturation", "%", -0.5, 0.5, 0.05,
+    #: Touch-floor ruling (see `_ZONE_CHROMA_STEP` above): raised from 0.05
+    #: each so `a touch` clears the M5 C* floor (0.5) on the night-1
+    #: evidence. `global_saturation`/`global_chroma` reach it (0.25 is the
+    #: invariant ceiling for their +-0.5 clamp: `step <= (hi-lo)/4`).
+    #: `global_vibrance` needs a touch of ~0.58 (olympus) / ~0.45 (sony_a7);
+    #: the same ceiling caps its touch at 0.125 -- the residual noted above.
+    _cb("global_saturation", "master › global saturation", "%", -0.5, 0.5, 0.25,
         "chroma_saturation",
         "changes colourfulness and darkens strong colours slightly, which reads natural",
         "skin and skies for over-cooked colour"),
-    _cb("global_vibrance", "master › global vibrance", "%", -0.5, 0.5, 0.05,
+    _cb("global_vibrance", "master › global vibrance", "%", -0.5, 0.5, 0.25,
         "chroma_saturation", "boosts the least colourful pixels most",
         "already-saturated areas, which should barely move",
         ("iop/colorbalancergb/global vibrance",)),
-    _cb("global_chroma", "master › global chroma", "%", -0.5, 0.5, 0.05,
+    _cb("global_chroma", "master › global chroma", "%", -0.5, 0.5, 0.20,
         "chroma_saturation", "changes colourfulness at constant brightness",
         "bright saturated colours going neon", ("iop/colorbalancergb/global chroma",)),
     *_zone("shadows", "shadows lift", "shadows", "lift"),
