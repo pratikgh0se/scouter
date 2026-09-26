@@ -853,10 +853,18 @@ TOOL_SPECS: list[dict] = [
         "scratch copy. Refuses (usage error) rather than write a table whose "
         "r/b coefficient ratio is not strictly increasing in Kelvin. "
         "Requires confirm=true to run at all (never overwrites an existing "
-        "table otherwise).",
+        "table otherwise). `image` may be a folder of raws: one body at a time "
+        "(`camera` picks it when the folder is mixed); the first frame of that "
+        "body is copied to a scratch dir and the COPY is swept, never the "
+        "original; dry_run lists the frames, the chosen one and the table path "
+        "with no darktable call.",
         "inputSchema": _schema(
             {
-                "image": IMAGE,
+                "image": {
+                    "type": ["string", "integer"],
+                    "description": "absolute path to a raw, a darktable image id, or a "
+                    "folder of raws (folder mode)",
+                },
                 "k_from": {
                     "type": "integer",
                     "default": 2000,
@@ -871,6 +879,16 @@ TOOL_SPECS: list[dict] = [
                     "type": "integer",
                     "default": 500,
                     "description": "Kelvin step between points",
+                },
+                "camera": {
+                    "type": "string",
+                    "description": "folder mode: the body slug to calibrate (e.g. a7, "
+                    "nex5n) when the folder holds more than one",
+                },
+                "scratch": {
+                    "type": "string",
+                    "description": "folder mode: directory for the scratch copy "
+                    "(default <cache>/wb-scratch)",
                 },
                 "allow_in_job": {
                     "type": "boolean",

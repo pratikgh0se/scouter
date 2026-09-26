@@ -117,6 +117,12 @@ class CalibrateResult(Payload):
     points: list[dict] = field(default_factory=list)
     written: bool = False
     overwritten: bool = False
+    #: Folder mode (product close, row 427 item 3): every raw of the chosen
+    #: body (`{path, camera}`), the frame the sweep uses, and the scratch
+    #: copy it actually sweeps -- the original is never touched.
+    frames: list[dict] = field(default_factory=list)
+    source_image: str | None = None
+    scratch_copy: str | None = None
 
 
 @dataclass

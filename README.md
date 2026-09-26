@@ -381,11 +381,57 @@ scouter export  verify --manifest <path>
 scouter backup  run --yes
 scouter backup  verify
 scouter wb      calibrate <scratch.orf> --yes   # measures this camera's Kelvin table
+scouter wb      calibrate <folder> --camera a7 --dry-run   # folder mode: one body, a scratch copy
 scouter wb      kelvin <image>
 ```
 
 Every one of them is the same function the MCP server exposes, under the same
 name and arguments — `tests/test_layer_parity.py` pins that.
+
+### White-balance tables for a new body (Sony A7 and NEX-5N recipe)
+
+Relative white balance ("warmer", "cooler by 300k") and `outliers list`'s
+Kelvin test need a measured table per camera body at
+`<config_dir>/wb/<body>.json` (`~/.config/scouter/wb/`, the same place
+`wb kelvin` reads; `scouter setup` installs the shipped `em10iii` one).
+`wb calibrate` takes a **folder of raws, one body at a time**: it reads each
+file's EXIF body, picks the first frame of the body you name, copies it to a
+scratch dir (`~/.cache/scouter/wb-scratch/<body>/`, or `--scratch DIR`) and
+sweeps the Kelvin slider on the **copy** -- the original never gets a
+history item. `--dry-run` lists the frames it would use, the chosen one, the
+copy and the table path, with no darktable call.
+
+The body slug comes from the config's `cameras` map (`scouter config init`
+maps `ILCE-7` to `a7`), else from the EXIF model (`NEX-5N` -> `nex5n`,
+unmapped `ILCE-7` -> `ilce7`). Not yet run -- this is the recipe for Pratik's
+own session:
+
+```sh
+# 1. which frame each body would use (no darktable needed)
+scouter --pretty wb calibrate ~/Pictures/EditingTrial/sony --camera a7 --dry-run
+scouter --pretty wb calibrate ~/Pictures/EditingTrial/sony --camera nex5n --dry-run
+
+# 2. A7: stage the copy, launch darktable ON it (Scouter cannot move the darkroom
+#    onto a frame imported in the same session), then sweep ~21 points (~40 s)
+mkdir -p ~/.cache/scouter/wb-scratch/a7
+cp ~/Pictures/EditingTrial/sony/DSC01425.ARW ~/.cache/scouter/wb-scratch/a7/
+/Applications/darktable.app/Contents/MacOS/darktable ~/.cache/scouter/wb-scratch/a7/DSC01425.ARW &
+scouter wb calibrate ~/Pictures/EditingTrial/sony --camera a7 --yes
+
+# 3. quit darktable, then the same for the NEX-5N
+mkdir -p ~/.cache/scouter/wb-scratch/nex5n
+cp ~/Pictures/EditingTrial/sony/DSC07448.ARW ~/.cache/scouter/wb-scratch/nex5n/
+/Applications/darktable.app/Contents/MacOS/darktable ~/.cache/scouter/wb-scratch/nex5n/DSC07448.ARW &
+scouter wb calibrate ~/Pictures/EditingTrial/sony --camera nex5n --yes
+
+# 4. check: a Kelvin number instead of "no wb calibration table"
+scouter --pretty wb kelvin ~/.cache/scouter/wb-scratch/a7/DSC01425.ARW
+```
+
+The frame names above are what `--dry-run` picks (first by name per body);
+trust its output over this text. A table that is not strictly monotone in
+r/b is refused, never written. To ship a table with Scouter (so `scouter
+setup` installs it on a fresh config), copy it into `scouter/data/wb/`.
 
 ### The backup gate
 

@@ -1397,7 +1397,7 @@
     "name": "vocab_resolve"
   },
   {
-    "description": "Sweep the darkroom's Kelvin slider from k_from to k_to and write the measured per-camera table `~/.config/scouter/wb/<camera>.json`, which wb.kelvin and outliers.list's temperature_k_delta then use. Costs ~1.8s per point and adds one history item per point, so it refuses inside a job's raw/ unless allow_in_job=true -- run it on a scratch copy. Refuses (usage error) rather than write a table whose r/b coefficient ratio is not strictly increasing in Kelvin. Requires confirm=true to run at all (never overwrites an existing table otherwise).",
+    "description": "Sweep the darkroom's Kelvin slider from k_from to k_to and write the measured per-camera table `~/.config/scouter/wb/<camera>.json`, which wb.kelvin and outliers.list's temperature_k_delta then use. Costs ~1.8s per point and adds one history item per point, so it refuses inside a job's raw/ unless allow_in_job=true -- run it on a scratch copy. Refuses (usage error) rather than write a table whose r/b coefficient ratio is not strictly increasing in Kelvin. Requires confirm=true to run at all (never overwrites an existing table otherwise). `image` may be a folder of raws: one body at a time (`camera` picks it when the folder is mixed); the first frame of that body is copied to a scratch dir and the COPY is swept, never the original; dry_run lists the frames, the chosen one and the table path with no darktable call.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -1405,6 +1405,10 @@
           "default": false,
           "description": "required: image is inside a job's raw/",
           "type": "boolean"
+        },
+        "camera": {
+          "description": "folder mode: the body slug to calibrate (e.g. a7, nex5n) when the folder holds more than one",
+          "type": "string"
         },
         "confirm": {
           "default": false,
@@ -1417,7 +1421,7 @@
           "type": "boolean"
         },
         "image": {
-          "description": "absolute path to the raw file, or a darktable image id",
+          "description": "absolute path to a raw, a darktable image id, or a folder of raws (folder mode)",
           "type": [
             "string",
             "integer"
@@ -1432,6 +1436,10 @@
           "default": 12000,
           "description": "last Kelvin point",
           "type": "integer"
+        },
+        "scratch": {
+          "description": "folder mode: directory for the scratch copy (default <cache>/wb-scratch)",
+          "type": "string"
         },
         "step": {
           "default": 500,

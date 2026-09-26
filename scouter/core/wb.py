@@ -562,6 +562,64 @@ def _resolve_darktable_version() -> str:
     return _parse_darktable_version(raw)
 
 
+#: Folder mode skips non-raw files (a JPEG has no raw white-balance multipliers).
+_NOT_RAW = {"JPG", "JPEG", "PNG", "TIF", "TIFF", "XMP"}
+
+
+def _body_of(path: Path, cfg) -> str:
+    """The camera slug for one raw, from its own EXIF (same rule as import)."""
+    from scouter.core import exif
+
+    return exif.camera_slug(exif.read_tags(str(path)), cfg)
+
+
+def _folder_plan(folder: Path, camera: str | None, scratch: str | None) -> dict:
+    """Pick one body's frames and the frame to sweep. Local reads only."""
+    from scouter.config import load as load_config
+
+    cfg = load_config()
+    wanted = {"." + e.lower() for e in cfg.import_.extensions if e.upper() not in _NOT_RAW}
+    raws = sorted(p for p in folder.iterdir()
+                  if p.is_file() and p.suffix.lower() in wanted and not p.name.startswith("."))
+    bodies: dict[str, list[Path]] = {}
+    unreadable: list[str] = []
+    for raw in raws:
+        try:
+            bodies.setdefault(_body_of(raw, cfg), []).append(raw)
+        except (ScouterError, OSError, ValueError):
+            unreadable.append(raw.name)
+    counts = ", ".join(f"{b}: {len(v)}" for b, v in sorted(bodies.items()))
+    if not bodies:
+        raise UsageError(
+            f"no raw with a readable camera model in {folder}",
+            fix="point wb calibrate at a folder of raws (ORF/ARW/DNG) or at one raw file",
+            detail={"folder": str(folder), "unreadable": unreadable},
+        )
+    if camera is None:
+        if len(bodies) > 1:
+            raise UsageError(
+                f"{folder} holds {len(bodies)} camera bodies ({counts}); calibrate one at a "
+                "time: pass --camera <body>",
+                detail={"folder": str(folder), "bodies": sorted(bodies)},
+            )
+        camera = next(iter(bodies))
+    if camera not in bodies:
+        raise UsageError(
+            f"no {camera!r} frames in {folder}; bodies present: {counts}",
+            detail={"folder": str(folder), "bodies": sorted(bodies), "camera": camera},
+        )
+    frames = bodies[camera]
+    chosen = frames[0]
+    root = Path(scratch).expanduser() if scratch else paths.cache_root() / "wb-scratch"
+    return {
+        "camera": camera,
+        "frames": [{"path": str(p), "camera": camera} for p in frames],
+        "chosen": chosen,
+        "copy": root / camera / chosen.name,
+        "unreadable": unreadable,
+    }
+
+
 @metrics.instrumented("wb.calibrate")
 def calibrate(
     image: str | int,
@@ -569,6 +627,8 @@ def calibrate(
     k_to: int = 12000,
     step: int = 500,
     *,
+    camera: str | None = None,
+    scratch: str | None = None,
     allow_in_job: bool = False,
     confirm: bool = False,
     dry_run: bool = False,
@@ -620,6 +680,17 @@ def calibrate(
             detail={"k_from": k_from, "k_to": k_to, "step": step},
         )
     estimated_s = round(len(ks) * _SECONDS_PER_POINT, 1)
+
+    folder = Path(str(image)).expanduser()
+    if not str(image).isdigit() and folder.is_dir():
+        return _calibrate_folder(folder, ks, k_from, k_to, step, camera=camera, scratch=scratch,
+                                 allow_in_job=allow_in_job, confirm=confirm, dry_run=dry_run,
+                                 job=job, estimated_s=estimated_s)
+    if camera is not None or scratch is not None:
+        raise UsageError(
+            "camera and scratch apply to folder mode only (image is a folder of raws)",
+            detail={"image": str(image), "camera": camera, "scratch": scratch},
+        )
 
     resolved = dtbridge.resolve_image(image)
     if _inside_job_raw(resolved.path) and not allow_in_job:
@@ -767,6 +838,57 @@ def calibrate(
     )
 
 
+def _calibrate_folder(folder: Path, ks: list[int], k_from: int, k_to: int, step: int, *,
+                      camera: str | None, scratch: str | None, allow_in_job: bool,
+                      confirm: bool, dry_run: bool, job: str,
+                      estimated_s: float) -> CalibrateResult:
+    """Folder mode: one body, one scratch copy, then the ordinary sweep."""
+    import shutil
+
+    plan_info = _folder_plan(folder, camera, scratch)
+    cam = plan_info["camera"]
+    chosen: Path = plan_info["chosen"]
+    copy: Path = plan_info["copy"]
+    table_path = _table_path(cam)
+    extra = {"frames": plan_info["frames"], "source_image": str(chosen),
+             "scratch_copy": str(copy)}
+    warnings = ([f"camera model unreadable, skipped: {', '.join(plan_info['unreadable'])}"]
+                if plan_info["unreadable"] else [])
+    if dry_run or not confirm:
+        plan = [{"action": "copy", "from": str(chosen), "to": str(copy)}] + [
+            {"action": "darkroom.set", "module": "temperature", "param": "temperature",
+             "value": k} for k in ks]
+        return CalibrateResult(
+            outcome="dry_run", camera=cam, table_path=str(table_path), ks=ks,
+            estimated_s=estimated_s, plan=plan, warnings=warnings, **extra,
+            reason=(
+                f"{'dry run' if dry_run else 'confirm required'}: {cam} has "
+                f"{len(plan_info['frames'])} frame(s) in {folder}; would copy {chosen.name} to "
+                f"{copy} (the original is never touched), sweep {len(ks)} Kelvin points "
+                f"({ks[0]}-{ks[-1]}, step {step}, ~{estimated_s}s) on the copy, and write "
+                f"{table_path}{' (overwriting it)' if table_path.exists() else ''}. darktable "
+                "must be able to show the copy in the darkroom: if it cannot switch to a frame "
+                "imported this session, launch darktable on the copy and re-run"
+                + ("" if dry_run else "; re-run with --yes / confirm=true")
+            ),
+        )
+    copy.parent.mkdir(parents=True, exist_ok=True)
+    if not copy.exists() or copy.stat().st_size != chosen.stat().st_size:
+        shutil.copy2(chosen, copy)
+    inner = _unwrapped(calibrate)
+    result = inner(str(copy), k_from, k_to, step, allow_in_job=allow_in_job, confirm=True,
+                   job=job)
+    result.frames = extra["frames"]
+    result.source_image = extra["source_image"]
+    result.scratch_copy = extra["scratch_copy"]
+    result.warnings = warnings + list(result.warnings)
+    if result.camera and result.camera != cam:
+        result.warnings.append(
+            f"the copy's EXIF resolved to {result.camera!r}, not {cam!r}; the table was "
+            f"written as {result.camera}.json")
+    return result
+
+
 IMAGE_ARG = ArgSpec(
     "image",
     "image",
@@ -790,10 +912,15 @@ for verb in (
         group="wb",
         fn=calibrate,
         args=(
-            IMAGE_ARG,
+            ArgSpec("image", "image", required=True, positional=True,
+                    help="a raw file, an image id, or a folder of raws (one body at a time)"),
             ArgSpec("k_from", "int", default=2000, positional=True, help="first Kelvin point"),
             ArgSpec("k_to", "int", default=12000, positional=True, help="last Kelvin point"),
             ArgSpec("step", "int", default=500, help="Kelvin step between points"),
+            ArgSpec("camera", "str", default=None,
+                    help="folder mode: which body to calibrate when the folder is mixed"),
+            ArgSpec("scratch", "str", default=None,
+                    help="folder mode: where the scratch copy goes (default <cache>/wb-scratch)"),
             ArgSpec(
                 "allow_in_job",
                 "bool",
