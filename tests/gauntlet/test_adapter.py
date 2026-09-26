@@ -381,3 +381,28 @@ def test_resumed_session_dirs_number_after_the_highest(pinned_env, fake_corpus):
     _, _, routed, _ = _routed(pinned_env, fake_corpus)
     s = routed._session("olympus")
     assert s.root.name == "008-olympus"
+
+
+def test_mcp_death_reaches_the_observation_and_the_session_reopens(pinned_env, fake_corpus,
+                                                                    monkeypatch):
+    """(final fix I3): release bar 1 counts MCP-server deaths as crashes."""
+    from gauntlet.adapter import Observation
+    from gauntlet.evaluate import evaluate
+    from tests.gauntlet import execute
+    from tests.gauntlet.policy import POLICY
+
+    def dies(s, c):
+        s.mcp_deaths.append("mcp_server_death: exit 1")
+        s.mcp_dead = True
+        return Observation()
+
+    monkeypatch.setattr(execute, "run_tool_case", dies)
+    _, _, routed, _ = _routed(pinned_env, fake_corpus)
+    case = _case()
+    obs = routed.run_case(case)
+    assert obs.crash_reports == ["mcp_server_death: exit 1"]
+    assert evaluate(case, obs, POLICY).outcome == "crash"
+    first = routed.current
+    monkeypatch.setattr(execute, "run_tool_case", lambda s, c: Observation())
+    routed.run_case(case)
+    assert routed.current is not first  # the dead session was replaced

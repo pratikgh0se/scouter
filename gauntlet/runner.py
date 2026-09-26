@@ -265,7 +265,10 @@ class Runner:
                                       hang_evidence=[f"{type(e).__name__}: {e}"])
                 obs.wall_s = obs.wall_s or (self.clock() - t0)
                 if self.adapter.crash_count() > crashes_before:
-                    obs.crash_reports = self.adapter.crash_reports_since(t_wall)
+                    # (final fix I3): merge -- a session-recorded crash (e.g. an
+                    # MCP-server death) must survive crash files appearing too.
+                    obs.crash_reports = list(dict.fromkeys(
+                        [*obs.crash_reports, *self.adapter.crash_reports_since(t_wall)]))
                 verdict = evaluate(case, obs, self.policy)
                 self._write(case, obs, verdict, t_wall)
                 summary.ran += 1

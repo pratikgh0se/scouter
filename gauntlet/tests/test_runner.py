@@ -240,3 +240,22 @@ def test_refuse_run_from_open_session_writes_no_result(tmp_path):
     a.open_session = refuse
     s = Runner(a, run).run_layers()
     assert s.status == "blocked: foreign darktable" and run.read_results() == []
+
+
+def test_session_crash_reports_survive_a_crash_file(tmp_path):
+    """(final fix I3): a session-recorded crash (an MCP-server death) is kept
+    when crash files also appeared; the runner merges, never overwrites."""
+    from gauntlet.adapter import Observation
+
+    a, run = _setup(tmp_path)
+
+    class S(ToySession):
+        def run_case(self, case):
+            a.crashes += 1
+            return Observation(crash_reports=["mcp_server_death: exit 1"])
+
+    a.open_session = lambda layer, run_root: S(a)
+    Runner(a, run).run_layers(layers=["alpha"])
+    obs = run.read_result("alpha-0")["observation"]
+    assert obs["crash_reports"][0] == "mcp_server_death: exit 1"
+    assert "toy-0.ips" in obs["crash_reports"]

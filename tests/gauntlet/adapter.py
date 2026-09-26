@@ -186,7 +186,8 @@ class RoutedSession:
         return AgentSession(inner)
 
     def _session(self, body: str):
-        if self.current is not None and self.current.body == body:
+        if self.current is not None and self.current.body == body and \
+                not getattr(self.current, "mcp_dead", False):  # (final fix I3): reopen
             return self.current
         if self.current is not None:
             old, self.current = self.current, None
@@ -232,14 +233,21 @@ class RoutedSession:
             raise
         # Park (agent usage limit) is deliberately not caught: the runner parks.
         if self.layer == "bulk":
-            return exec_bulk.run_bulk_case(s, case)
-        if self.layer == "robustness":
-            return faults.run_fault_case(s, case)
-        if self.layer == "scenarios_agent":
+            obs = exec_bulk.run_bulk_case(s, case)
+        elif self.layer == "robustness":
+            obs = faults.run_fault_case(s, case)
+        elif self.layer == "scenarios_agent":
             # (final fix C1): keep the handle so abort() can kill its claude.
             self.agent = self.agent_factory(s)
-            return self.agent.run_case(case)
-        return run_tool_case(s, case)
+            obs = self.agent.run_case(case)
+        else:
+            obs = run_tool_case(s, case)
+        # (final fix I3): an MCP-server death inside this case is a crash.
+        take = getattr(s, "take_mcp_deaths", None)
+        deaths = take() if take is not None else []
+        if deaths and isinstance(obs, Observation):
+            obs.crash_reports.extend(deaths)
+        return obs
 
     def _stop_agent(self) -> None:
         """Kill a running agent case's claude process group (final fix C1)."""

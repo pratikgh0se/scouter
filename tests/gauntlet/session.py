@@ -178,6 +178,10 @@ class ScouterSession:
         self.touched: set[str] = set()
         self.baselines: dict[str, dict] = {}
         self.floors: dict[str, float] = {}
+        #: (final fix I3): "mcp_server_death: exit N" notes not yet handed to
+        #: an observation; mcp_dead marks the session for reopen.
+        self.mcp_deaths: list[str] = []
+        self.mcp_dead = False
 
     # -- lifecycle -------------------------------------------------------
 
@@ -290,12 +294,32 @@ class ScouterSession:
             rec.health = self.dt.health()
         except Exception as e:  # noqa: BLE001 - transport failure is a result
             rec.error = f"transport: {type(e).__name__}: {e}"[:300]
+        if rec.error in ("timeout",) or (rec.error or "").startswith("transport:"):
+            self._check_mcp_alive()
         rec.wall_s = round(self.clock() - t0, 3)
         if write and tool.startswith("darkroom_") and "module" in args:
             self.touched.add(str(args["module"]))
         if write and tool in ("darkroom_say", "preset_apply", "darkroom_undo_last"):
             self.touched.add("*")
         return rec
+
+    def _check_mcp_alive(self) -> None:
+        """(final fix I3): after a transport error or a timeout, an exited MCP
+        server is a crash (release bar 1), recorded once per session."""
+        proc = getattr(self.mcp, "proc", None)
+        if proc is None or self.mcp_dead:
+            return
+        try:
+            rc = proc.poll()
+        except Exception:  # noqa: BLE001 - cannot tell: not a recorded death
+            return
+        if rc is not None:
+            self.mcp_dead = True
+            self.mcp_deaths.append(f"mcp_server_death: exit {rc}")
+
+    def take_mcp_deaths(self) -> list[str]:
+        out, self.mcp_deaths = self.mcp_deaths, []
+        return out
 
     def ensure_frame(self, role: str) -> Path:
         assert self.staged is not None
