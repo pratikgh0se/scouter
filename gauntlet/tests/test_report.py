@@ -91,7 +91,7 @@ class _StubAdapter:
     def layers(self):
         return self._layers
 
-    def signoff_lines(self):
+    def signoff_lines(self, run=None):
         return []
 
     def crash_reports_since(self, t):
@@ -180,3 +180,35 @@ def test_p0_needs_review_blocks_the_bar():
     rep = report.build(_StubRun(), adapter, [case], [result])
     assert rep["S8_signoff"]["p0"] == "0/1"
     assert not rep["S8_signoff"]["release_bar_met"]
+
+
+class _BlockingToy(ToyAdapter):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.seen_run = None
+
+    def signoff_lines(self, run=None):
+        self.seen_run = run
+        return ["toy originals unchanged: NO"]
+
+    def signoff_blockers(self, run=None):
+        return ["toy originals changed"]
+
+
+def test_an_adapter_blocker_fails_the_bar_and_is_listed(tmp_path):
+    """Task 28 fix round 1, I1: optional signoff_blockers(run); signoff_lines(run)."""
+    a = _BlockingToy()
+    run = RunDir(tmp_path, "s")
+    write_generation(run, a)
+    Runner(a, run).run_layers()
+    rep = report.write(run, a)
+    s8 = rep["S8_signoff"]
+    assert not s8["release_bar_met"] and s8["blockers"] == ["toy originals changed"]
+    assert a.seen_run is run
+    assert "  - toy originals changed" in run.report_md.read_text()
+
+
+def test_no_blockers_method_means_no_blockers(tmp_path):
+    a, run = _run(tmp_path)
+    s8 = report.write(run, a)["S8_signoff"]
+    assert s8["blockers"] == [] and s8["release_bar_met"]

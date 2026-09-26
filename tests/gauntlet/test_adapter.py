@@ -39,7 +39,8 @@ def test_corpus_missing_is_a_clear_error(tmp_path):
 
 # -- carry-over requirements (t28-carry.md) ---------------------------------
 
-ENV_KEYS = ("SCOUTER_CONFIG", "SCOUTER_CACHE", "OBSIDIAN_VAULT_PATH")
+ENV_KEYS = ("SCOUTER_CONFIG", "SCOUTER_CACHE", "OBSIDIAN_VAULT_PATH",
+            "SCOUTER_DARKTABLE_LIBRARY_DB")
 
 
 @pytest.fixture
@@ -201,3 +202,80 @@ def test_gauntlet_json_loads_the_scouter_adapter():
     assert cfg == {"adapter": "tests.gauntlet.adapter:make",
                    "runs_root": "~/Pictures/ScouterScratch/gauntlet", "title": "Scouter Gauntlet"}
     assert isinstance(load_adapter(cfg["adapter"]), ScouterAdapter)
+
+
+# -- fix round 1 (t28-r1-findings.md) ----------------------------------------
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_a_fresh_report_process_checks_the_originals(tmp_path, monkeypatch, changed):
+    """I1: `gauntlet report` builds a fresh adapter; it reads originals.before.json."""
+    now = {"a.ORF": "h1", "b.ORF": "h2" if not changed else "EDITED"}
+    monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals", lambda: dict(now))
+    run = RunDir(tmp_path, "stamp").ensure()
+    (run.root / "originals.before.json").write_text(json.dumps({"a.ORF": "h1", "b.ORF": "h2"}))
+    a = ScouterAdapter(tmp_path)  # fresh: nothing in memory
+    line = a.signoff_lines(run)[0]
+    assert line.endswith("NO" if changed else "yes") and "sha256 of 2" in line
+    assert a.signoff_blockers(run) == (["EditingTrial originals changed"] if changed else [])
+
+
+def test_no_live_layer_means_not_checked_and_no_blocker(tmp_path, monkeypatch):
+    monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals",
+                        lambda: pytest.fail("must not hash without a before snapshot"))
+    run = RunDir(tmp_path, "stamp").ensure()
+    a = ScouterAdapter(tmp_path)
+    assert "not checked" in a.signoff_lines(run)[0] and a.signoff_blockers(run) == []
+
+
+def test_looks_cases_are_grouped_by_routed_body_golden_first(tmp_path):
+    """I2: 233 body switches -> at most 3; the calibration case stays first."""
+    cases = ScouterAdapter(tmp_path).generate("looks")
+    bodies = [adapter_mod.routed_body(c) for c in cases]
+    assert sum(1 for x, y in zip(bodies, bodies[1:]) if x != y) <= 3
+    assert cases[0].steps[0].tool == "chart_golden"
+    assert len(cases) == 469
+
+
+def test_bulk_keeps_generator_order(tmp_path):
+    """I2: bulk shares out_dir within a session, so it is not body-sorted."""
+    from tests.gauntlet.layers import bulk
+
+    a = ScouterAdapter(tmp_path)
+    assert [c.id for c in a.generate("bulk")] == [c.id for c in bulk.generate(a.tax())]
+
+
+def test_run_case_repoints_a_cache_a_late_close_reset(pinned_env, fake_corpus, monkeypatch):
+    """N1: re-point to this session's cache, and never carry a stale record over it."""
+    from tests.gauntlet import execute
+
+    monkeypatch.setattr(execute, "run_tool_case", lambda s, c: "ran")
+    _, _, routed, _ = _routed(pinned_env, fake_corpus)
+    s = routed._session("olympus")
+    live = s.root / "cache" / dtprocess.OWNER_FILE
+    live.write_text('{"pid": "live"}')
+    stale = pinned_env / "runs" / adapter_mod.PROCESS_DIR / "cache"
+    stale.mkdir(parents=True)
+    (stale / dtprocess.OWNER_FILE).write_text('{"pid": "stale"}')
+    monkeypatch.setenv("SCOUTER_CACHE", str(stale))  # what a late close does
+    assert routed.run_case(_case()) == "ran"
+    assert dtprocess.owner_path() == live and live.read_text() == '{"pid": "live"}'
+
+
+def test_a_vanished_crash_file_does_not_hide_the_others(tmp_path, monkeypatch):
+    """N2: stat per file."""
+    monkeypatch.setattr(adapter_mod, "CRASH_DIR", tmp_path)
+    (tmp_path / "darktable-1.ips").write_text("x")
+    (tmp_path / "darktable-gone.ips").symlink_to(tmp_path / "vanished")  # stat -> OSError
+    a = ScouterAdapter(tmp_path)
+    assert a.crash_reports_since(0.0) == [str(tmp_path / "darktable-1.ips")]
+
+
+def test_isolate_process_pins_the_library_db(pinned_env):
+    """N3: the runner process never falls back to the real darktable library."""
+    import os
+
+    root = pinned_env / "runs" / adapter_mod.PROCESS_DIR
+    adapter_mod.isolate_process(root)
+    assert os.environ["SCOUTER_DARKTABLE_LIBRARY_DB"] == str(root / "library" / "library.db")
+    assert os.environ["SCOUTER_CACHE"] == str(root / "cache")

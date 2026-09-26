@@ -74,6 +74,14 @@ class Session(Protocol):
 
 
 class Adapter(Protocol):
+    """What the engine calls. `signoff_lines(run)` gets the RunDir being
+    reported on (a report may run in a fresh process, so product sign-off
+    state must be read from the run dir, not memory).
+
+    Optional (looked up with getattr, default none):
+    `signoff_blockers(run) -> list[str]`: product sign-off items that fail the
+    release bar; the report lists them under S8 "blockers"."""
+
     name: str
 
     def layers(self) -> list[LayerSpec]: ...
@@ -81,7 +89,7 @@ class Adapter(Protocol):
     def open_session(self, layer: str, run_root: Any) -> Session: ...
     def crash_count(self) -> int: ...
     def crash_reports_since(self, t: float) -> list[str]: ...
-    def signoff_lines(self) -> list[str]: ...
+    def signoff_lines(self, run: Any = None) -> list[str]: ...  # run: the RunDir reported on
     def generation_notes(self, cases: list[Case]) -> str: ...
     def write_tools(self) -> frozenset[str]: ...
     def policy(self) -> Any: ...  # gauntlet.evaluate.Policy

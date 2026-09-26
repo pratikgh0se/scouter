@@ -49,11 +49,19 @@ def isolate_process(root: Path) -> None:
 
     write_config(root)
     env = isolated_env(root)
-    for k in ("SCOUTER_CONFIG", "SCOUTER_CACHE", "OBSIDIAN_VAULT_PATH"):
+    # (fix round 1, N3) the library too, as isolated_env pins it for children:
+    # never fall back to a running darktable's or ~/.config/darktable's library.
+    for k in ("SCOUTER_CONFIG", "SCOUTER_CACHE", "OBSIDIAN_VAULT_PATH",
+              "SCOUTER_DARKTABLE_LIBRARY_DB"):
         os.environ[k] = env[k]
 
 
-def point_cache(cache: Path, *gauntlet_roots: Path) -> None:
+def routed_body(case: Case) -> str:
+    """The body a RoutedSession opens for this case (chart / no body -> olympus)."""
+    return case.body if case.body not in (None, "chart") else "olympus"
+
+
+def point_cache(cache: Path, *gauntlet_roots: Path, carry: bool = True) -> None:
     """Point this process's SCOUTER_CACHE at `cache` (carry 1).
 
     dtprocess.owner_path() is cache_root()/darktable.owner.json, so the runner
@@ -63,14 +71,14 @@ def point_cache(cache: Path, *gauntlet_roots: Path) -> None:
     current owner record is carried over so a darktable an earlier session
     failed to quit stays "ours" (quit, never a second launch) -- but only from
     a cache inside a gauntlet root (runs root, run dir), never from Pratik's
-    real cache."""
+    real cache. carry=False only re-points (the record at `cache` is newer)."""
     from scouter.core import dtprocess
 
     old = dtprocess.owner_path()
     cache.mkdir(parents=True, exist_ok=True)
     os.environ["SCOUTER_CACHE"] = str(cache)
     new = dtprocess.owner_path()
-    if old != new and old.exists() and any(
+    if carry and old != new and old.exists() and any(
             old.resolve().is_relative_to(Path(r).expanduser().resolve()) for r in gauntlet_roots):
         shutil.copyfile(old, new)
 
@@ -143,8 +151,15 @@ class RoutedSession:
         from tests.gauntlet.execute import run_tool_case
         from tests.gauntlet.session import ForeignDarktable, SessionBlocked
 
+        if self.current is not None:
+            # (fix round 1, N1): a capped abort/close of an earlier session that
+            # finished late may have reset SCOUTER_CACHE; re-point, never carry
+            # (the record in this session's cache is the live one).
+            mine = self.current.root / "cache"
+            if os.environ.get("SCOUTER_CACHE") != str(mine):
+                point_cache(mine, *self._roots(), carry=False)
         try:
-            s = self._session(case.body if case.body not in (None, "chart") else "olympus")
+            s = self._session(routed_body(case))
         except (SessionBlocked, ForeignDarktable) as e:
             self.current = None
             return Observation(blocked=f"session: {e}", hang_evidence=[f"session: {e}"])
@@ -184,6 +199,7 @@ class ScouterAdapter:
         self._originals_before: dict | None = None
         self._look_gates: tuple | None = None
         self._install: dict[str, object] = {}
+        self._originals_now: dict[str | None, dict] = {}
 
     # -- data --------------------------------------------------------------
 
@@ -233,9 +249,16 @@ class ScouterAdapter:
             cases = tool if layer == "scenarios" else agent
             return sorted(cases, key=lambda c: (c.body or "", c.id))  # fewer relaunches
         if layer == "bulk":
+            # Not body-sorted (fix round 1, I2): cases of one session share its
+            # out_dir, so export_files / frames_verified would count earlier
+            # cases' exports. Today a bulk session holds at most 2 flow cases.
             return bulk.generate(t)
         if layer == "looks":
-            return tag_sourced_components(looks.generate(t))
+            # (fix round 1, I2): group by routed body so sessions relaunch less
+            # (233 switches -> 1). Stable on generator order within a body, not
+            # by id: the chart golden case writes the per-run calibration every
+            # look_plan reads, so it must stay first.
+            return sorted(tag_sourced_components(looks.generate(t)), key=routed_body)
         if layer == "robustness":
             # Generator order is load-bearing (carry 5): wd_auto_heal runs
             # before wd_heal_cap in one session/job. Never re-sort this layer.
@@ -290,20 +313,48 @@ class ScouterAdapter:
 
     def _crash_files(self, since: float) -> list[Path]:
         try:
-            return sorted(p for p in CRASH_DIR.iterdir()
-                          if p.suffix in (".ips", ".crash", ".hang")
-                          and any(n in p.name.lower() for n in ("darktable", "python"))
-                          and p.stat().st_mtime >= since)
+            entries = list(CRASH_DIR.iterdir())
         except OSError:
             return []
+        out = []
+        for p in entries:
+            if p.suffix not in (".ips", ".crash", ".hang") or \
+                    not any(n in p.name.lower() for n in ("darktable", "python")):
+                continue
+            try:  # (fix round 1, N2): one vanished file must not hide the others
+                if p.stat().st_mtime >= since:
+                    out.append(p)
+            except OSError:
+                continue
+        return sorted(out)
 
-    def signoff_lines(self) -> list[str]:
-        if not self._originals_before:
+    def _originals(self, run=None) -> tuple[dict, dict] | None:
+        """(before, now) sha256 maps, or None when no live layer ran. `gauntlet
+        report` is a fresh process (fix round 1, I1): read the run's
+        originals.before.json. The now-hash is computed once per run."""
+        before = self._originals_before
+        key = str(run.root) if run is not None else None
+        if not before and run is not None:
+            path = Path(run.root) / "originals.before.json"
+            if path.exists():
+                before = json.loads(path.read_text())
+        if not before:
+            return None
+        if key not in self._originals_now:
+            self._originals_now[key] = corpus_mod.sha256_originals()
+        return before, self._originals_now[key]
+
+    def signoff_lines(self, run=None) -> list[str]:
+        got = self._originals(run)
+        if got is None:
             return ["EditingTrial originals: not checked (no live layer ran)"]
-        after = corpus_mod.sha256_originals()
-        same = after == self._originals_before
+        before, after = got
         return [f"EditingTrial originals unchanged (sha256 of {len(after)}): "
-                f"{'yes' if same else 'NO'}"]
+                f"{'yes' if after == before else 'NO'}"]
+
+    def signoff_blockers(self, run=None) -> list[str]:
+        got = self._originals(run)
+        return ["EditingTrial originals changed"] if got and got[0] != got[1] else []
 
     def generation_notes(self, cases: list[Case]) -> str:
         t = self.tax()
