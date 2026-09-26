@@ -690,6 +690,14 @@ def test_fix3_siblings_of_a_module_already_present_are_still_collateral():
                               "filmicrgb.contrast": 1.0}])
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "collateral" and v.notes == ["filmicrgb.__enabled", "filmicrgb.contrast"]
+    # the module IS present before, but this sibling key is not in the snapshot:
+    # the write did not introduce the module, so the sibling appearing is
+    # collateral (pins the `_module_absent` guard; without it the absent-before
+    # sibling would be excused as part of an "introduced" module)
+    obs = _steps_obs([_mv("colorbalancergb", "global_saturation")],
+                     [{k: 0.0}, {k: 0.5, "colorbalancergb.contrast": 0.1}])
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "collateral" and v.notes == ["colorbalancergb.contrast"]
 
 
 def _undo_case(k):
