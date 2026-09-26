@@ -37,7 +37,6 @@ import queue
 import re
 import secrets
 import shutil
-import signal
 import statistics
 import struct
 import subprocess
@@ -917,6 +916,7 @@ class DarktableHost:
         self.library_db = library_db
         self.log_path = log_path
         self.proc: subprocess.Popen | None = None
+        self.launched = None
 
     def _bridge(self):
         from scouter.core import dtbridge
@@ -926,12 +926,9 @@ class DarktableHost:
     def launch(self, frame: Path) -> dict:
         started = time.monotonic()
         self.library_db.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.log_path, "ab") as log:
-            self.proc = subprocess.Popen(
-                [str(DARKTABLE), "--library", str(self.library_db), str(frame)],
-                stdout=log,
-                stderr=log,
-            )
+        from scouter.core import dtprocess
+
+        self.launched = dtprocess.launch(frame, self.library_db, log_path=self.log_path)
         dtb = self._bridge()
         last = "never answered"
         deadline = time.monotonic() + 120
@@ -967,7 +964,9 @@ class DarktableHost:
         ok = loaded is not None and os.path.realpath(loaded) == os.path.realpath(frame)
         if ok and self.settle_s:
             time.sleep(self.settle_s)
+        ready = dtprocess.wait_gui_ready(30.0)
         return {
+            "gui_ready": ready.get("ready"),
             "settle_s": self.settle_s,
             "ok": ok,
             "launch_to_darkroom_s": round(to_darkroom, 2),
@@ -995,30 +994,12 @@ class DarktableHost:
             return {"ok": False, "error": str(e)[:300]}
 
     def quit(self) -> dict:
-        proc = self.proc
-        if proc is None:
-            return {"ok": True, "how": "not running"}
-        how = "osascript"
-        try:
-            subprocess.run(
-                ["osascript", "-e", 'tell application "darktable" to quit'],
-                capture_output=True,
-                timeout=30,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            pass
-        for wait, sig in ((20, None), (10, signal.SIGTERM), (10, signal.SIGKILL)):
-            if sig is not None:
-                how = sig.name
-                proc.send_signal(sig) if sig == signal.SIGTERM else proc.kill()
-            try:
-                proc.wait(timeout=wait)
-                break
-            except subprocess.TimeoutExpired:
-                continue
+        from scouter.core import dtprocess
+
+        res = dtprocess.terminate(responsive=self.alive())
         self.proc = None
-        return {"ok": proc.poll() is not None, "how": how}
+        self.launched = None
+        return {"ok": res["ok"], "how": res["how"]}
 
 
 # ---------------------------------------------------------------------------
@@ -1787,7 +1768,7 @@ def main(argv: list[str] | None = None) -> int:
             result = runner.run()
         finally:
             mcp.close()
-            if host.proc is not None:
+            if host.launched is not None:
                 host.quit()
         result["environment"]["run_dir"] = str(run_dir / body)
         j, m = write_results(result, args.out, stamp)
