@@ -925,8 +925,40 @@ end
 local GUI_READY_EVENT = "pixelpipe-processing-complete"
 local GUI_READY_EVENT_NAME = "darktable_mcp_gui_ready"
 local GUI_READY_FALLBACK_S = 20
-local GUI_READY_WAIT_MS = 10000
 local GUI_READY_POLL_MS = 100
+-- How long a gated verb with no `budget_ms` of its own waits for the gate.
+-- Review of row 433: it MUST stay well inside the Python client's timeout for
+-- that method (darktable_mcp/bridge/client.py DEFAULT_TIMEOUTS) -- a wait at
+-- or past the client's timeout turns the honest gui_not_ready answer into
+-- "no response at all" (a generic bridge_timeout, plus a stale response file).
+-- Rule, pinned by tests/test_dtbridge.py: every wait <= half the client's
+-- timeout. Default 2s covers the 5-10s verbs (darkroom.status/action,
+-- module.*, view_transport); longer-budget verbs may wait for a slow first
+-- render. history.commit sends its own budget_ms, which wins.
+local GUI_READY_WAIT_MS = 2000
+local GUI_GATE_WAIT_MS = {
+  ["darkroom.open"] = 20000,
+  ["history.commit"] = 20000,
+  ["import_batch"] = 20000,
+  ["apply_preset"] = 20000,
+  ["image.rate"] = 20000,
+  ["style.apply"] = 20000,
+  ["style.import_file"] = 20000,
+  ["darktable_mcp.probe_main_thread"] = 20000,
+  ["view_photos"] = 10000,
+  ["rate_photos"] = 10000,
+  ["image.color_labels"] = 10000,
+  ["style.create_from_current"] = 10000,
+  ["style.export_file"] = 10000,
+  ["darkroom.apply_style"] = 10000,
+  ["list_styles"] = 5000,
+  ["snapshot.take"] = 5000,
+  ["style.delete"] = 5000,
+}
+
+local function gui_gate_wait_ms(method)
+  return GUI_GATE_WAIT_MS[method] or GUI_READY_WAIT_MS
+end
 
 -- Verbs that touch no gtk-wrapped API (dt.gui.action / selection / mimic /
 -- display_image): served with the gate closed, so a launcher's readiness
@@ -2786,7 +2818,7 @@ local function handle(req)
     -- Row 433: never let a GUI-touching verb run before gtk_main does.
     local params = type(req.params) == "table" and req.params or nil
     local caller_budget = params and tonumber(params.budget_ms) or nil
-    local open, waited = wait_for_gui_gate(caller_budget or GUI_READY_WAIT_MS)
+    local open, waited = wait_for_gui_gate(caller_budget or gui_gate_wait_ms(req.method))
     if not open then
       return {id = req.id, error = string.format(
         "gui_not_ready: darktable's main loop has not started yet (no pixelpipe has "
@@ -3155,9 +3187,11 @@ return {
   gui_gate = gui_gate,
   gui_ready = gui_ready,
   gui_gate_exempt = GUI_GATE_EXEMPT,
+  gui_gate_wait_ms = gui_gate_wait_ms,
   gui_ready_timing = {
     fallback_s = GUI_READY_FALLBACK_S,
     wait_ms = GUI_READY_WAIT_MS,
+    wait_ms_by_method = GUI_GATE_WAIT_MS,
     poll_ms = GUI_READY_POLL_MS,
   },
 }

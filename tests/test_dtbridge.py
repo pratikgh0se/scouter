@@ -443,5 +443,38 @@ class ResolveImagesBatchTest(unittest.TestCase):
         self.assertEqual(bridge.count("image.lookup"), 2)
 
 
+class GuiGateWaitFitsClientTimeoutTest(unittest.TestCase):
+    """Row 433 review: the plugin's GUI-ready gate wait for each verb must stay
+    well inside the Python client's timeout for that verb, or the typed
+    gui_not_ready answer arrives after the client gave up (a generic
+    bridge_timeout and a stale response file)."""
+
+    def test_every_gated_verb_waits_at_most_half_its_client_timeout(self) -> None:
+        import re
+
+        from darktable_mcp.bridge.client import DEFAULT_TIMEOUTS, FALLBACK_TIMEOUT
+
+        lua = (
+            Path(__file__).resolve().parents[1] / "darktable_mcp" / "lua" / "darktable_mcp.lua"
+        ).read_text()
+        default_ms = int(re.search(r"^local GUI_READY_WAIT_MS = (\d+)", lua, re.M).group(1))
+        table = re.search(r"^local GUI_GATE_WAIT_MS = \{(.*?)^\}", lua, re.M | re.S).group(1)
+        overrides = {m: int(v) for m, v in re.findall(r'\["([^"]+)"\] = (\d+)', table)}
+        exempt_block = re.search(r"^local GUI_GATE_EXEMPT = \{(.*?)^\}", lua, re.M | re.S).group(1)
+        exempt = set(re.findall(r'\["([^"]+)"\]', exempt_block))
+        methods = set(re.findall(r'^methods\["([^"]+)"\]', lua, re.M)) | set(
+            re.findall(r"^methods\.([A-Za-z_]+)", lua, re.M)
+        )
+        self.assertIn("darkroom.status", methods)
+        self.assertTrue(set(overrides) <= methods, set(overrides) - methods)
+        for method in sorted(methods - exempt):
+            wait_s = overrides.get(method, default_ms) / 1000
+            client_s = DEFAULT_TIMEOUTS.get(method, FALLBACK_TIMEOUT)
+            with self.subTest(method=method):
+                self.assertLessEqual(
+                    wait_s, client_s / 2, f"{method}: gate {wait_s}s vs client {client_s}s"
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3142,6 +3142,21 @@ do
   assertTrue(naps >= 1 and naps <= 10,
     "row433: the gate wait yields and stays within budget_ms (" .. naps .. " naps)")
 
+  -- Review fix: a gated verb with NO budget_ms of its own (darkroom.status,
+  -- client timeout 5s) must refuse inside its short default wait, not the
+  -- old flat 10s -- else the client times out first and the typed answer is
+  -- lost.
+  naps = 0
+  local st = plugin.handle({id = "g1b", method = "darkroom.status",
+                            params = {path = "iop/exposure/exposure"}})
+  assertTrue(st.error ~= nil and string.find(st.error, "gui_not_ready", 1, true) ~= nil,
+    "row433 review: darkroom.status refuses gui_not_ready: " .. tostring(st.error))
+  assertTrue(naps * 100 <= 2000,
+    "row433 review: darkroom.status waited <= 2s at the gate (" .. naps .. " naps)")
+  assertEq(#action_log, calls_before, "row433 review: and pressed nothing")
+  assertEq(plugin.gui_gate_wait_ms and plugin.gui_gate_wait_ms("darkroom.open"), 20000,
+    "row433 review: darkroom.open may wait for a slow first render")
+
   -- Read-only verbs that touch no gtk-wrapped API still answer: the launch
   -- readiness poll (view.current, darkroom.current) and doctor's diag.
   local v = plugin.handle({id = "g2", method = "view.current", params = {}})
