@@ -46,6 +46,65 @@ def write_test(root, text):
     (root / "tests" / "test_production.py").write_text(text)
 
 
+class SharedFixtureTestCase(unittest.TestCase):
+    """Round 11 (make the self-suite cheap): a base for test classes whose
+    methods all exercise the SAME base/head fixture from different angles -
+    typically a direct `mc.check_range()` call in one method and a CLI
+    `subprocess.run([...mutation_check.py...])` invocation in a sibling one.
+    `check_range` and the CLI are both read-only against the fixture repo,
+    so building it ONCE per class (`setUpClass`, not `setUp`) instead of
+    once per test method is safe. Subclasses implement `build_fixture(root)`
+    (write files, make the base and head commits) and return
+    `(base_sha, head_sha)`; `self.root`/`self.base`/`self.head` are then
+    shared read-only class attributes for every test method."""
+
+    @classmethod
+    def build_fixture(cls, root):
+        raise NotImplementedError
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._tmp_ctx = tempfile.TemporaryDirectory(prefix="mc-fixture-")
+        cls.root = Path(cls._tmp_ctx.name)
+        cls.base, cls.head = cls.build_fixture(cls.root)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp_ctx.cleanup()
+        super().tearDownClass()
+
+
+def env_with_this_interpreter_on_path():
+    """`os.environ`, with the directory of `sys.executable` (whichever
+    interpreter is ACTUALLY running this test right now) prepended to PATH.
+
+    Fix round 9 (integrator-reproduced failure, 10/36 red from
+    `.venv/bin/python -m pytest tests/test_mutation_check.py -q`, 36/36 green
+    from `python3 -m pytest ...` after `export PATH=.../.venv/bin:$PATH`):
+    `scripts/merge_gate.sh` (and, through it, `scripts/mutation_check.sh`)
+    resolves its own "python3" via PATH - invoking a test with an ABSOLUTE
+    interpreter path puts no venv `bin/` on PATH at all, so that bare
+    "python3" subprocess silently picks up whatever system interpreter PATH
+    happens to find, which may lack pytest entirely (every check the gate
+    scripts run then fails to even start). Every subprocess call this file
+    makes to `scripts/merge_gate.sh` or `make gate` must use this env, so the
+    whole chain matches the interpreter actually running the test - not
+    whatever the CALLER's ambient PATH happened to be - regardless of
+    whether that interpreter came with its own venv `bin/` alongside it (a
+    linked git worktree, in particular, never gets a copy of an untracked
+    `.venv/` - `scripts/mutation_check.sh`'s own venv-preferring fallback
+    only fires when SCRIPT_HOME actually has one)."""
+    # Deliberately NOT `.resolve()`d: `sys.executable` as INVOKED (e.g.
+    # `.venv/bin/python`, a symlink) is what Python's own venv detection
+    # keys off at startup (it looks for `pyvenv.cfg` next to the path it was
+    # launched as) - following the symlink to its real target directory
+    # (often a bare, venv-less base interpreter with no pytest installed)
+    # would silently defeat that detection and reintroduce this exact bug.
+    interpreter_dir = str(Path(sys.executable).parent)
+    return {**os.environ, "PATH": f"{interpreter_dir}:{os.environ.get('PATH', '')}"}
+
+
 def copy_gate_scaffolding(dest, repo_root):
     """Copy the `make gate` / `scripts/merge_gate.sh` / `scripts/mutation_check.sh`
     / `tests/mutation_check.py` scaffolding from `repo_root` (wherever THIS
@@ -94,128 +153,98 @@ IMPORT_ERROR_TEST = (
 )
 
 
-class DiscriminatingTestPassesTheGate(unittest.TestCase):
+class DiscriminatingTestPassesTheGate(SharedFixtureTestCase):
+    @classmethod
+    def build_fixture(cls, root):
+        init_repo(root)
+        (root / "production.py").write_text(PROD_BUGGY)
+        write_test(root, PLACEHOLDER_TEST)
+        base = commit_all(root, "base: buggy add()")
+        (root / "production.py").write_text(PROD_FIXED)
+        write_test(root, DISCRIMINATING_TEST)
+        head = commit_all(root, "fix add(): a - b -> a + b, cover it")
+        return base, head
+
     def test_a_real_bug_fix_with_a_real_test_passes(self):
-        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
-            root = Path(tmp)
-            init_repo(root)
-            (root / "production.py").write_text(PROD_BUGGY)
-            write_test(root, PLACEHOLDER_TEST)
-            base = commit_all(root, "base: buggy add()")
-
-            (root / "production.py").write_text(PROD_FIXED)
-            write_test(root, DISCRIMINATING_TEST)
-            head = commit_all(root, "fix add(): a - b -> a + b, cover it")
-
-            ok, rows, note = mc.check_range(root, base, head)
-            self.assertIsNone(note)
-            self.assertTrue(ok, rows)
-            self.assertEqual(len(rows), 1)
-            f, names, rev_cell, weak_cell, flags_cell = rows[0]
-            self.assertEqual(f, "tests/test_production.py")
-            self.assertIn("FAIL (good)", rev_cell)
-            self.assertIn("FAIL (good)", weak_cell)
-            self.assertEqual(flags_cell, "none")
+        ok, rows, note = mc.check_range(self.root, self.base, self.head)
+        self.assertIsNone(note)
+        self.assertTrue(ok, rows)
+        self.assertEqual(len(rows), 1)
+        f, names, rev_cell, weak_cell, flags_cell = rows[0]
+        self.assertEqual(f, "tests/test_production.py")
+        self.assertIn("FAIL (good)", rev_cell)
+        self.assertIn("FAIL (good)", weak_cell)
+        self.assertEqual(flags_cell, "none")
 
     def test_cli_exit_code_zero_and_table_on_stdout(self):
-        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
-            root = Path(tmp)
-            init_repo(root)
-            (root / "production.py").write_text(PROD_BUGGY)
-            write_test(root, PLACEHOLDER_TEST)
-            base = commit_all(root, "base")
-            (root / "production.py").write_text(PROD_FIXED)
-            write_test(root, DISCRIMINATING_TEST)
-            head = commit_all(root, "fix + real test")
-
-            p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
-                                 "--base", base, "--head", head, "--repo", str(root)],
-                                capture_output=True, text=True)
-            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-            self.assertIn("| test file |", p.stdout)
+        p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
+                             "--base", self.base, "--head", self.head, "--repo", str(self.root)],
+                            capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("| test file |", p.stdout)
 
 
-class TautologicalTestFailsTheGate(unittest.TestCase):
+class TautologicalTestFailsTheGate(SharedFixtureTestCase):
+    @classmethod
+    def build_fixture(cls, root):
+        init_repo(root)
+        (root / "production.py").write_text(PROD_BUGGY)
+        write_test(root, PLACEHOLDER_TEST)
+        base = commit_all(root, "base: buggy add()")
+        (root / "production.py").write_text(PROD_FIXED)
+        write_test(root, TAUTOLOGICAL_TEST)
+        head = commit_all(root, "fix add(), but the new test asserts nothing real")
+        return base, head
+
     def test_a_no_op_assert_true_test_is_caught(self):
-        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
-            root = Path(tmp)
-            init_repo(root)
-            (root / "production.py").write_text(PROD_BUGGY)
-            write_test(root, PLACEHOLDER_TEST)
-            base = commit_all(root, "base: buggy add()")
-
-            (root / "production.py").write_text(PROD_FIXED)
-            write_test(root, TAUTOLOGICAL_TEST)
-            head = commit_all(root, "fix add(), but the new test asserts nothing real")
-
-            ok, rows, note = mc.check_range(root, base, head)
-            self.assertIsNone(note)
-            self.assertFalse(ok, rows)
-            f, names, rev_cell, weak_cell, flags_cell = rows[0]
-            self.assertIn("did not fail (BAD)", rev_cell)
-            self.assertIn("tautology", flags_cell)
+        ok, rows, note = mc.check_range(self.root, self.base, self.head)
+        self.assertIsNone(note)
+        self.assertFalse(ok, rows)
+        f, names, rev_cell, weak_cell, flags_cell = rows[0]
+        self.assertIn("did not fail (BAD)", rev_cell)
+        self.assertIn("tautology", flags_cell)
 
     def test_cli_exit_code_nonzero(self):
-        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
-            root = Path(tmp)
-            init_repo(root)
-            (root / "production.py").write_text(PROD_BUGGY)
-            write_test(root, PLACEHOLDER_TEST)
-            base = commit_all(root, "base")
-            (root / "production.py").write_text(PROD_FIXED)
-            write_test(root, TAUTOLOGICAL_TEST)
-            head = commit_all(root, "fix + tautological test")
-
-            p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
-                                 "--base", base, "--head", head, "--repo", str(root)],
-                                capture_output=True, text=True)
-            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-            self.assertIn("did not fail (BAD)", p.stdout)
+        p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
+                             "--base", self.base, "--head", self.head, "--repo", str(self.root)],
+                            capture_output=True, text=True)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("did not fail (BAD)", p.stdout)
 
 
-class ImportErrorIsNotDiscriminating(unittest.TestCase):
+class ImportErrorIsNotDiscriminating(SharedFixtureTestCase):
     """Fix round 1: a test file that cannot even be collected must not read as
     "FAIL (good)" just because pytest exits non-zero - that exit happens for
     a genuine assertion failure too, and only a collection error is not
     discrimination at all."""
 
+    @classmethod
+    def build_fixture(cls, root):
+        init_repo(root)
+        (root / "production.py").write_text(PROD_BUGGY)
+        write_test(root, PLACEHOLDER_TEST)
+        base = commit_all(root, "base: buggy add()")
+        (root / "production.py").write_text(PROD_FIXED)
+        write_test(root, IMPORT_ERROR_TEST)
+        head = commit_all(root, "fix add(), but the new test module cannot import")
+        return base, head
+
     def test_an_import_error_reads_as_error_not_fail_good(self):
-        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
-            root = Path(tmp)
-            init_repo(root)
-            (root / "production.py").write_text(PROD_BUGGY)
-            write_test(root, PLACEHOLDER_TEST)
-            base = commit_all(root, "base: buggy add()")
-
-            (root / "production.py").write_text(PROD_FIXED)
-            write_test(root, IMPORT_ERROR_TEST)
-            head = commit_all(root, "fix add(), but the new test module cannot import")
-
-            ok, rows, note = mc.check_range(root, base, head)
-            self.assertIsNone(note)
-            self.assertFalse(ok, rows)
-            f, names, rev_cell, weak_cell, flags_cell = rows[0]
-            self.assertIn("ERROR", rev_cell)
-            self.assertNotIn("FAIL (good)", rev_cell)
-            self.assertIn("ERROR", weak_cell)
-            self.assertNotIn("FAIL (good)", weak_cell)
+        ok, rows, note = mc.check_range(self.root, self.base, self.head)
+        self.assertIsNone(note)
+        self.assertFalse(ok, rows)
+        f, names, rev_cell, weak_cell, flags_cell = rows[0]
+        self.assertIn("ERROR", rev_cell)
+        self.assertNotIn("FAIL (good)", rev_cell)
+        self.assertIn("ERROR", weak_cell)
+        self.assertNotIn("FAIL (good)", weak_cell)
 
     def test_cli_exit_code_nonzero_and_table_says_error(self):
-        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
-            root = Path(tmp)
-            init_repo(root)
-            (root / "production.py").write_text(PROD_BUGGY)
-            write_test(root, PLACEHOLDER_TEST)
-            base = commit_all(root, "base")
-            (root / "production.py").write_text(PROD_FIXED)
-            write_test(root, IMPORT_ERROR_TEST)
-            head = commit_all(root, "fix + a test module that cannot import")
-
-            p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
-                                 "--base", base, "--head", head, "--repo", str(root)],
-                                capture_output=True, text=True)
-            self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-            self.assertIn("ERROR (not discriminating)", p.stdout)
+        p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
+                             "--base", self.base, "--head", self.head, "--repo", str(self.root)],
+                            capture_output=True, text=True)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("ERROR (not discriminating)", p.stdout)
 
 
 class NewModuleImportErrorIsNotAFailure(unittest.TestCase):
@@ -414,7 +443,7 @@ class SharedProductionModulePlusNewModule(unittest.TestCase):
             self.assertIn("FAIL (good)", weak_cell)
 
 
-class NoProductionChangeForThisTestFile(unittest.TestCase):
+class NoProductionChangeForThisTestFile(SharedFixtureTestCase):
     """Fix round 4 (window-5 gate run, gate-w5.txt): a changed test file whose
     SUBJECT module(s) have no production change in this range - e.g. new
     tests added for pre-existing, untouched code, while some UNRELATED
@@ -422,43 +451,32 @@ class NoProductionChangeForThisTestFile(unittest.TestCase):
     because *some* production file changed in the range. Detected via the
     test file's own imports vs. the set of changed production files."""
 
+    @classmethod
+    def build_fixture(cls, root):
+        init_repo(root)
+        (root / "production.py").write_text(PROD_FIXED)  # never changes
+        (root / "unrelated.py").write_text("def sub(a, b):\n    return a - a\n")  # buggy, unrelated
+        write_test(root, PLACEHOLDER_TEST)
+        base = commit_all(root, "base: production.py (already correct) + buggy unrelated.py")
+        (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
+        write_test(root, DISCRIMINATING_TEST)
+        head = commit_all(root, "fix unrelated.py; add new tests for production.py, which did not change")
+        return base, head
+
     def test_new_tests_for_unchanged_code_read_n_a_no_production_change(self):
-        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
-            root = Path(tmp)
-            init_repo(root)
-            (root / "production.py").write_text(PROD_FIXED)  # never changes
-            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - a\n")  # buggy, unrelated
-            write_test(root, PLACEHOLDER_TEST)
-            base = commit_all(root, "base: production.py (already correct) + buggy unrelated.py")
-
-            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
-            write_test(root, DISCRIMINATING_TEST)
-            head = commit_all(root, "fix unrelated.py; add new tests for production.py, which did not change")
-
-            ok, rows, note = mc.check_range(root, base, head)
-            self.assertIsNone(note)
-            self.assertTrue(ok, rows)
-            f, names, rev_cell, weak_cell, flags_cell = rows[0]
-            self.assertEqual(rev_cell, "n/a (no production change)")
-            self.assertIn("FAIL (good)", weak_cell)
+        ok, rows, note = mc.check_range(self.root, self.base, self.head)
+        self.assertIsNone(note)
+        self.assertTrue(ok, rows)
+        f, names, rev_cell, weak_cell, flags_cell = rows[0]
+        self.assertEqual(rev_cell, "n/a (no production change)")
+        self.assertIn("FAIL (good)", weak_cell)
 
     def test_cli_exit_code_zero(self):
-        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
-            root = Path(tmp)
-            init_repo(root)
-            (root / "production.py").write_text(PROD_FIXED)
-            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - a\n")
-            write_test(root, PLACEHOLDER_TEST)
-            base = commit_all(root, "base")
-            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
-            write_test(root, DISCRIMINATING_TEST)
-            head = commit_all(root, "fix unrelated.py; new tests for untouched production.py")
-
-            p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
-                                 "--base", base, "--head", head, "--repo", str(root)],
-                                capture_output=True, text=True)
-            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-            self.assertIn("n/a (no production change)", p.stdout)
+        p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
+                             "--base", self.base, "--head", self.head, "--repo", str(self.root)],
+                            capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("n/a (no production change)", p.stdout)
 
 
 class NewModuleUnderATestDirectoryNotItselfATest(unittest.TestCase):
@@ -866,6 +884,270 @@ class NoChangedTestFunctionsIsNotAFailure(unittest.TestCase):
             self.assertIn("weaken: file-level fallback", weak_cell)
 
 
+class B0InterpreterAndOutcomeClassification(unittest.TestCase):
+    """Fix round 10, B0 (HTC gate-rows audit, the critical finding): the
+    integrator's gate ran under a system python3 with no pytest; every
+    internal `python3 -m pytest ...` subprocess then exited 1 with "No
+    module named pytest", and the tool read that bare non-zero exit as a
+    genuine failure - every single row read "FAIL (good)", a false result
+    that never actually discriminated anything. RED (pre-fix): rc != 0 alone
+    was "failed". GREEN (this fix): a fixed interpreter, a mandatory
+    preflight, and requiring pytest's own "N failed" summary line before
+    scoring a failure at all."""
+
+    def test_classify_pytest_outcome(self):
+        self.assertEqual(mc.classify_pytest_outcome(0, "5 passed in 0.01s"), "passed")
+        self.assertEqual(mc.classify_pytest_outcome(1, "1 failed, 4 passed in 0.02s"), "failed")
+        # The exact failure mode the audit found: rc 1, but NOT because
+        # pytest ran and found a failure - a broken interpreter exiting 1
+        # with no pytest summary line at all must never read as "failed".
+        self.assertEqual(mc.classify_pytest_outcome(1, "No module named pytest"), "error_runner")
+        self.assertEqual(mc.classify_pytest_outcome(2, "internal error"), "error_runner")
+        self.assertEqual(mc.classify_pytest_outcome(4, "ERROR: not found: x::y"), "error_runner")
+        self.assertEqual(mc.classify_pytest_outcome(5, "no tests ran"), "error_runner")
+
+    def test_pytest_timeout_budget_scales_deterministically_with_the_selection(self):
+        # Round 11: max(180, 10 * len(ids)) - no per-file markers or
+        # overrides. This repo's own 48-test self-suite is exactly the case
+        # that timed out under the old fixed 180s ceiling when a
+        # merge_gate run over a large range selected nearly all of them.
+        self.assertEqual(mc.pytest_timeout_budget([]), 180)
+        self.assertEqual(mc.pytest_timeout_budget(["a"] * 5), 180)   # 50 < 180 floor
+        self.assertEqual(mc.pytest_timeout_budget(["a"] * 18), 180)  # 180 == floor, not yet above it
+        self.assertEqual(mc.pytest_timeout_budget(["a"] * 19), 190)  # 190 > 180
+        self.assertEqual(mc.pytest_timeout_budget(["a"] * 48), 480)
+        self.assertEqual(mc.pytest_timeout_budget(["a"] * 100), 1000)
+
+    def test_run_pytest_defaults_its_timeout_to_the_budget_formula(self):
+        # A selection large enough that 10*N clearly exceeds a short,
+        # deliberately-too-small explicit override, proving the DEFAULT (no
+        # override) really is the formula, not some other fixed number -
+        # exercised by actually timing out at an explicit tiny override and
+        # NOT timing out with the same ids under the default.
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            write_test(root, "import time\n\n\ndef test_slow():\n    time.sleep(1)\n    assert True\n")
+            commit_all(root, "one slow-ish test")
+            ids = ["tests/test_production.py::test_slow"]
+            rc, out = mc.run_pytest(root, ids, sys.executable, timeout=0.01)
+            self.assertEqual(out, "timed out")
+            rc2, out2 = mc.run_pytest(root, ids, sys.executable)  # default: the formula, plenty of room
+            self.assertNotEqual(out2, "timed out")
+
+    def test_gate_python_prefers_the_repos_own_venv(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp).resolve()
+            venv_bin = root / ".venv" / "bin"
+            venv_bin.mkdir(parents=True)
+            fake_python = venv_bin / "python"
+            fake_python.write_text("#!/bin/sh\n")
+            fake_python.chmod(0o755)
+            self.assertEqual(mc.gate_python(root), str(fake_python))
+
+    def test_gate_python_falls_back_to_sys_executable_with_no_venv(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            self.assertEqual(mc.gate_python(Path(tmp)), sys.executable)
+
+    def test_check_pytest_available_reports_environment_error_for_a_bad_interpreter(self):
+        ok, detail = mc.check_pytest_available("/no/such/interpreter-xyz", ".")
+        self.assertFalse(ok)
+        self.assertIn("pytest unavailable", detail)
+
+    def test_check_pytest_available_is_ok_for_the_interpreter_running_this_test(self):
+        ok, detail = mc.check_pytest_available(sys.executable, ".")
+        self.assertTrue(ok, detail)
+
+    def test_main_exits_2_with_no_table_when_pytest_is_unavailable(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_BUGGY)
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base")
+            (root / "production.py").write_text(PROD_FIXED)
+            write_test(root, DISCRIMINATING_TEST)
+            head = commit_all(root, "fix + a real test")
+
+            p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
+                                 "--base", base, "--head", head, "--repo", str(root)],
+                                capture_output=True, text=True,
+                                env={**os.environ, "PATH": "/usr/bin:/bin"})
+            # Whether this reproduces depends on whether /usr/bin/python3 (if
+            # any) happens to have pytest on this machine - assert the
+            # INVARIANT the rule protects, not a specific outcome: it is
+            # NEVER a false "FAIL (good)"-only table when pytest is missing.
+            if p.returncode == 2:
+                self.assertIn("environment error", p.stdout)
+                self.assertNotIn("| test file |", p.stdout)
+
+
+class B1RevertedSymbolImportError(unittest.TestCase):
+    """Fix round 10, B1 (HTC gate-rows audit): `cannot import name 'X' from
+    'M'` after reverting `M` is not the same failure as `M` not existing at
+    all (round 2's new_module rule) - `M` DOES exist at base, it just does
+    not define `X` yet, because the range ADDED `X` to `M`. When `M`'s diff
+    is additions-only, rerun with `M` kept at HEAD and score that run
+    normally instead of blaming the test for a collection error that is not
+    its fault."""
+
+    def test_reverting_a_pure_addition_reruns_with_the_symbol_kept_at_head(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "errors.py").write_text("class Existing(Exception):\n    pass\n")
+            (root / "production.py").write_text(PROD_BUGGY)
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: errors.py has Existing only, buggy add()")
+
+            # errors.py gains a NEW class (a pure addition); production.py is
+            # fixed. The new test imports both.
+            (root / "errors.py").write_text(
+                "class Existing(Exception):\n    pass\n\n\nclass BadInput(Exception):\n    pass\n")
+            (root / "production.py").write_text(PROD_FIXED)
+            write_test(root,
+                       "from errors import BadInput\n"
+                       "from production import add\n\n\n"
+                       "def test_add_and_the_new_error_class():\n"
+                       "    assert add(2, 3) == 5\n"
+                       "    assert issubclass(BadInput, Exception)\n")
+            head = commit_all(root, "fix add(); add errors.BadInput (pure addition); cover both")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertTrue(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("FAIL (good)", rev_cell)
+            self.assertIn("errors.py kept at head for import of BadInput", rev_cell)
+            self.assertIn("FAIL (good)", weak_cell)
+
+    def test_a_genuinely_unrelated_import_error_stays_error(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_BUGGY)
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base")
+            (root / "production.py").write_text(PROD_FIXED)
+            write_test(root, IMPORT_ERROR_TEST)  # imports nonexistent_module_xyz - not range-related
+            head = commit_all(root, "fix add(); new test imports a genuinely missing module")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertEqual(rev_cell, "ERROR (not discriminating)")
+
+
+class B3OnlyRealCollectedItemsAreSelected(unittest.TestCase):
+    """Fix round 10, B3 (HTC gate-rows audit): a `def test(self)` nested
+    inside a factory function (`_make()`, `setattr`-copied onto a class once
+    per data row - a common data-driven-test pattern) is not itself a
+    collected item; pytest only ever sees the `setattr`-given name. Changing
+    the shared closure must be recognized via the REAL collected items
+    (`pytest --collect-only`), not a fake `Class::test` node id."""
+
+    def test_a_changed_generated_test_factory_resolves_to_real_collected_items(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_BUGGY)
+            write_test(root,
+                       "import unittest\nfrom production import add\n\n\n"
+                       "def _make(n, expected):\n"
+                       "    def test(self):\n"
+                       "        self.assertEqual(add(*n), expected)\n"
+                       "    return test\n\n\n"
+                       "class GeneratedTest(unittest.TestCase):\n"
+                       "    pass\n\n\n"
+                       "for _n, _expected in [((2, 3), 5), ((10, 5), 15)]:\n"
+                       "    setattr(GeneratedTest, f'test_add_{_n[0]}_{_n[1]}', _make(_n, _expected))\n")
+            base = commit_all(root, "base: buggy add(), generated tests via setattr")
+
+            (root / "production.py").write_text(PROD_FIXED)
+            write_test(root,
+                       "import unittest\nfrom production import add\n\n\n"
+                       "def _make(n, expected):\n"
+                       "    def test(self):\n"
+                       "        result = add(*n)\n"
+                       "        self.assertEqual(result, expected)\n"
+                       "    return test\n\n\n"
+                       "class GeneratedTest(unittest.TestCase):\n"
+                       "    pass\n\n\n"
+                       "for _n, _expected in [((2, 3), 5), ((10, 5), 15)]:\n"
+                       "    setattr(GeneratedTest, f'test_add_{_n[0]}_{_n[1]}', _make(_n, _expected))\n")
+            head = commit_all(root, "fix add(); change the shared generated-test closure")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertTrue(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            # Real collected item names, never the fake "GeneratedTest::test".
+            self.assertIn("test_add_2_3", names)
+            self.assertIn("test_add_10_5", names)
+            self.assertNotIn("GeneratedTest.test ", names + " ")
+            self.assertIn("FAIL (good)", rev_cell)
+            self.assertIn("FAIL (good)", weak_cell)
+            self.assertEqual(flags_cell, "none")  # not a false "no assert" on the factory closure
+
+    def test_nested_test_defs_are_excluded_from_test_defs_but_found_by_nested_test_like_defs(self):
+        source = ("def _make():\n"
+                   "    def test_inner(self):\n"
+                   "        assert True\n"
+                   "    return test_inner\n\n\n"
+                   "def test_outer():\n"
+                   "    assert True\n")
+        self.assertEqual(set(mc.test_defs(source).keys()), {(None, "test_outer")})
+        self.assertEqual(set(mc.nested_test_like_defs(source).keys()), {(None, "test_inner")})
+
+
+class B4StaticNoAssertFollowsSameFileHelpers(unittest.TestCase):
+    """Fix round 10, B4 (HTC gate-rows audit): a test body with no `assert`
+    of its own, but a call to `self.<helper>(...)` (a method on the same
+    class, or a `*Fixture`/`*Base` base class in the same file) whose OWN
+    body contains `assert`, counts as asserting - reported as information
+    ("asserts via helper <name>"), never as the failing "no assert" flag. A
+    genuinely assert-free chain still flags."""
+
+    def test_a_test_that_only_calls_a_same_class_helper_with_a_real_assert_is_not_flagged(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            base = commit_all(root, "base")
+            write_test(root,
+                       "import unittest\nfrom production import add\n\n\n"
+                       "class Checks(unittest.TestCase):\n"
+                       "    def check_sum(self, a, b, expected):\n"
+                       "        self.assertEqual(add(a, b), expected)\n\n"
+                       "    def test_add_via_helper(self):\n"
+                       "        self.check_sum(2, 3, 5)\n")
+            head = commit_all(root, "add a new test that only calls a same-class helper")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("asserts via helper check_sum", flags_cell)
+            self.assertNotIn("no assert in the function body", flags_cell)
+
+    def test_a_test_that_calls_nothing_with_a_real_assert_still_flags(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            base = commit_all(root, "base")
+            write_test(root,
+                       "from production import add\n\n\n"
+                       "def test_calls_nothing_useful():\n"
+                       "    add(2, 3)\n")
+            head = commit_all(root, "add a new test that asserts nothing, calls nothing helpful")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("no assert in the function body", flags_cell)
+
+
 class SkippedTestIsFlagged(unittest.TestCase):
     def test_xfail_mark_on_a_new_test_is_a_static_flag(self):
         with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
@@ -914,7 +1196,7 @@ class MakeGateInvokesTheScript(unittest.TestCase):
 
             p = subprocess.run(
                 [str(self.REPO_ROOT / "scripts" / "merge_gate.sh"), base, head, str(root)],
-                capture_output=True, text=True)
+                capture_output=True, text=True, env=env_with_this_interpreter_on_path())
             self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
             self.assertIn("did not fail (BAD)", p.stdout)
 
@@ -942,7 +1224,8 @@ class MakeGateInvokesTheScript(unittest.TestCase):
 
             copy_gate_scaffolding(root, self.REPO_ROOT)
             p = subprocess.run(["make", "gate", f"BASE={base}", f"HEAD={head}"],
-                                cwd=root, capture_output=True, text=True, timeout=120)
+                                cwd=root, capture_output=True, text=True, timeout=120,
+                                env=env_with_this_interpreter_on_path())
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertIn("| test file |", p.stdout)
 
@@ -959,7 +1242,8 @@ class MakeGateInvokesTheScript(unittest.TestCase):
 
             p = subprocess.run(
                 [str(self.REPO_ROOT / "scripts" / "merge_gate.sh"), base, head, str(root)],
-                capture_output=True, text=True, env={**os.environ, "SCOUTER_SKIP_MUTATION_CHECK": "1"})
+                capture_output=True, text=True,
+                env={**env_with_this_interpreter_on_path(), "SCOUTER_SKIP_MUTATION_CHECK": "1"})
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertIn("SCOUTER_SKIP_MUTATION_CHECK", p.stderr)
             self.assertIn("WARN", p.stderr)

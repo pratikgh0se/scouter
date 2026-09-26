@@ -27,4 +27,15 @@ HEAD="$2"
 SCRIPT_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT="${3:-$SCRIPT_HOME}"
 
-exec python3 "$SCRIPT_HOME/tests/mutation_check.py" --base "$BASE" --head "$HEAD" --repo "$ROOT"
+# Fix round 9 (integrator-reproduced failure): a bare "python3" resolves via
+# whatever PATH the CALLER happens to have, which may not be this repo's own
+# venv (e.g. invoked via `.venv/bin/python -m pytest ...` - that puts no
+# venv `bin/` on PATH at all) - the wrong interpreter here has no pytest,
+# and every check this script runs then fails to even start. Prefer this
+# repo's own venv (resolved from SCRIPT_HOME, so it is never the CALLER's
+# working directory's venv by accident), falling back to PATH only when
+# there is none - so the whole chain is self-sufficient from any checkout.
+PYTHON="$SCRIPT_HOME/.venv/bin/python3"
+[[ -x "$PYTHON" ]] || PYTHON="python3"
+
+exec "$PYTHON" "$SCRIPT_HOME/tests/mutation_check.py" --base "$BASE" --head "$HEAD" --repo "$ROOT"
