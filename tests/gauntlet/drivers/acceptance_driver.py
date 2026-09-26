@@ -7,7 +7,7 @@ of each step goes to <run>/steps/. Never raises: a failed step is a row.
 Steps: (1) scouter setup (real) + setup --check; (2) Sony WB calibration,
 a7 then nex5n, folder mode, darktable launched on the scratch copy first;
 (3) acceptance per body (olympus, sony); (4) MCP parity over stdio;
-(5) editor benchmark run 2 (plan v2) per body from .worktrees/bench2;
+(5) editor benchmark run 2 (plan v2) per body from tests/gauntlet/benchmark;
 (6) darktable quit, final table.
 """
 
@@ -29,7 +29,7 @@ from pathlib import Path
 
 REPO = Path("/Users/pratik/CodeBase/scouter")
 PY = str(REPO / ".venv" / "bin" / "python")
-BENCH = REPO / ".worktrees" / "bench2"
+BENCH = REPO  # row 433 task 1: the harness now lives in tests/gauntlet/benchmark on main
 DT = "/Applications/darktable.app/Contents/MacOS/darktable"
 TRIAL = Path("/Users/pratik/Pictures/EditingTrial")
 SONY = TRIAL / "sony"
@@ -550,7 +550,7 @@ def step4_mcp(mcp_line: str | None, sony: dict) -> None:
 
 
 def step5_bench() -> None:
-    log("\n### 5. editor benchmark run 2 (plan v2) from .worktrees/bench2")
+    log("\n### 5. editor benchmark run 2 (plan v2) from tests/gauntlet/benchmark")
     if not BENCH.is_dir():
         record("bench: worktree", "skip", None, f"{BENCH} missing")
         return
@@ -560,7 +560,7 @@ def step5_bench() -> None:
             record(f"bench {body}", "skip", None, "a darktable is still running")
             continue
         t0 = time.monotonic()
-        argv = [PY, "tests/benchmark/run_editor_benchmark.py", "--live", "--plan", "v2",
+        argv = [PY, "tests/gauntlet/benchmark/run_editor_benchmark.py", "--live", "--plan", "v2",
                 "--body", body, "--label", "phase3-v2"]
         try:
             p = subprocess.run(argv, cwd=str(BENCH), env=base_env(), capture_output=True,
@@ -583,7 +583,7 @@ def step5_bench() -> None:
                time.monotonic() - t0, summary or f"exit {p.returncode}; {p.stdout[-200:]}")
     RESULTS["bench_results"] = produced
     if produced:
-        subprocess.run(["git", "-C", str(BENCH), "add", "tests/benchmark/results"],
+        subprocess.run(["git", "-C", str(BENCH), "add", "tests/gauntlet/benchmark/results"],
                        capture_output=True, timeout=60)
         msg = ("bench: run 2 (plan v2, phase3-v2) after row 429's no_bounce/action-transport "
                f"fix, acceptance run {STAMP}\n\nCo-Authored-By: Claude Fable 5.1 "
