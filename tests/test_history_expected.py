@@ -151,14 +151,22 @@ class StaleRewriteReportedByThePluginTest(unittest.TestCase):
         dtbridge.set_bridge(None)
         self.cache.stop()
 
-    def _bridge(self, *, restored: bool) -> None:
+    STALE = xmp(92, "exposure", "black_0.0098", "db")
+    GOOD = xmp(113, "exposure", "black_m0.0027", "autosave")
+
+    def _bridge(self, *, restored: bool, strategy: str = "no_bounce",
+                then_write: str | None = None) -> None:
         def commit(params: dict) -> dict:
-            self.sidecar.write_text(xmp(92, "exposure", "black_0.0098", "db"))
+            self.sidecar.write_text(self.STALE)
             if restored:
                 self.sidecar.write_text(self.pre)
-            return {"strategy_used": "no_bounce", "ok": False, "view_after": "darkroom",
-                    "sidecar_written": False, "stale_rewrite": True,
+            if then_write is not None:  # a write that lands after the plugin answered
+                self.sidecar.write_text(then_write)
+            return {"strategy_used": strategy, "ok": False, "view_after": "darkroom",
+                    "sidecar_written": strategy != "no_bounce",
+                    "stale_rewrite": True,
                     "stale_rewrite_restored": restored or None,
+                    "stale_hash": "h92black_0.0098",
                     "detail": "stale_rewrite: history_end went back from 112 to 92"}
 
         dtbridge.set_bridge(FakeBridge({
@@ -184,6 +192,64 @@ class StaleRewriteReportedByThePluginTest(unittest.TestCase):
             history.commit_expecting(image=str(self.raw), timeout_s=3.0, expect_change=False)
         self.assertTrue(ctx.exception.detail["stale_rewrite_restored"])
         self.assertEqual(self.sidecar.read_text(), self.pre)
+
+
+    def test_the_bounce_path_is_restored_too(self) -> None:
+        # Round 2: the fallback restore is not gated on no_bounce.
+        self._bridge(restored=False, strategy="view_bounce_action")
+        with self.assertRaises(CommitTimeout) as ctx:
+            history.commit_expecting(image=str(self.raw), timeout_s=3.0, expect_change=True,
+                                     strategy="view_bounce_action", expect_module="exposure")
+        self.assertTrue(ctx.exception.detail["stale_rewrite_restored"])
+        self.assertEqual(self.sidecar.read_text(), self.pre)
+
+    def test_a_good_write_that_landed_meanwhile_is_left_alone(self) -> None:
+        # Race guard: darktable's autosave wrote the real history after the
+        # stale rewrite; restoring now would throw the good write away.
+        self._bridge(restored=False, strategy="view_bounce_action", then_write=self.GOOD)
+        with self.assertRaises(CommitTimeout) as ctx:
+            history.commit_expecting(image=str(self.raw), timeout_s=3.0, expect_change=True,
+                                     strategy="view_bounce_action", expect_module="exposure")
+        self.assertTrue(ctx.exception.detail["stale_rewrite_healed"])
+        self.assertFalse(ctx.exception.detail["stale_rewrite_restored"])
+        self.assertEqual(self.sidecar.read_text(), self.GOOD)
+
+
+class RestoreRaceGuardTest(unittest.TestCase):
+    """`_restore_if_still_stale`, every branch (row 461 fix round 2)."""
+
+    def setUp(self) -> None:
+        self.cache = TempCache()
+        self.sidecar = self.cache.start() / "x.ORF.xmp"
+        self.pre = xmp(112, "exposure", "black_m0.0002", "s")
+        self.stale = xmp(92, "exposure", "black_0.0098", "db")
+        self.stale_hash = "h92black_0.0098"
+
+    def tearDown(self) -> None:
+        self.cache.stop()
+
+    def _run(self, current: str, module: str | None = "exposure",
+             stale_hash: str | None = "h92black_0.0098") -> str:
+        self.sidecar.write_text(current)
+        return history._restore_if_still_stale(self.sidecar, self.pre, stale_hash, module)
+
+    def test_still_the_stale_rewrite_is_restored(self) -> None:
+        self.assertEqual(self._run(self.stale), "restored")
+        self.assertEqual(self.sidecar.read_text(), self.pre)
+
+    def test_still_behind_without_a_stale_hash_is_restored(self) -> None:
+        self.assertEqual(self._run(self.stale, stale_hash=None), "restored")
+
+    def test_a_good_write_is_healed_and_untouched(self) -> None:
+        good = xmp(113, "exposure", "black_m0.0027", "autosave")
+        self.assertEqual(self._run(good), "healed")
+        self.assertEqual(self.sidecar.read_text(), good)
+        self.assertEqual(self._run(good, module=None), "healed")
+
+    def test_something_else_is_left_untouched(self) -> None:
+        other = xmp(113, "sigmoid", "c1.7", "other")
+        self.assertEqual(self._run(other), "left")
+        self.assertEqual(self.sidecar.read_text(), other)
 
 
 if __name__ == "__main__":

@@ -551,6 +551,46 @@ def _restore_sidecar(sidecar: Path, text: str) -> bool:
     return True
 
 
+_HASH_RX = re.compile(r'darktable:history_current_hash="([^"]*)"')
+
+
+def _restore_if_still_stale(
+    sidecar: Path, snapshot: str, stale_hash: str | None, expect_module: str | None
+) -> str:
+    """Put the pre-commit sidecar back only while the stale rewrite is still
+    on disk (row 461 fix round 2, race guard). Returns:
+
+    - "healed": a good write landed meanwhile (darktable autosave, a
+      bounce) -- history_end >= the pre-commit one, the file is no longer
+      the stale rewrite, and its newest item is `expect_module` (any, when
+      none is given). Left alone.
+    - "restored": still the stale rewrite (same history hash as
+      `stale_hash`; without one, history_end still behind the snapshot).
+    - "left": neither; not ours to overwrite. "failed": the write-back failed.
+
+    Mirrors the Lua plugin's `restore_if_still_stale`.
+    Enforcer: tests/test_history_expected.py (RestoreRaceGuardTest).
+    """
+    try:
+        current = sidecar.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "left"
+    cur_hash_m = _HASH_RX.search(current)
+    cur_hash = cur_hash_m.group(1) if cur_hash_m else None
+    pre_end, _ = _history_items(snapshot)
+    cur_end, cur_items = _history_items(current)
+    went_back = _history_end_went_back(snapshot, current) is not None
+    still_stale = cur_hash == stale_hash if stale_hash is not None else went_back
+    if not still_stale and cur_end is not None and (pre_end is None or cur_end >= pre_end):
+        newest = cur_items.get(cur_end - 1)
+        op = _OP_RX.search(newest) if newest else None
+        if not expect_module or (op is not None and op.group(1) == expect_module):
+            return "healed"
+    if not still_stale:
+        return "left"
+    return "restored" if _restore_sidecar(sidecar, snapshot) else "failed"
+
+
 def _history_advanced_as_expected(
     before: str | None, after: str | None, expect_module: str
 ) -> tuple[bool, str | None]:
@@ -747,14 +787,24 @@ def commit_expecting(
         # not this edit (history_end went back, or not the expected module).
         # Refused on every path -- never a no-op, never a commit, never a
         # watermark. The second look is ours: re-read the sidecar.
-        restored = bool(result.get("stale_rewrite_restored"))
-        if not restored and strategy_used == "no_bounce" and snapshot is not None:
-            restored = _restore_sidecar(sidecar, snapshot)
+        # Round 2: on any strategy (the bounce path too), and race-guarded.
+        if result.get("stale_rewrite_restored"):
+            outcome = "restored"
+        elif result.get("stale_rewrite_healed"):
+            outcome = "healed"
+        elif snapshot is not None:
+            outcome = _restore_if_still_stale(
+                sidecar, snapshot, result.get("stale_hash"), expect_module
+            )
+        else:
+            outcome = "left"
+        restored = outcome == "restored"
         raise CommitTimeout(
             f"stale_rewrite: darktable rewrote {sidecar} with an older history, not this "
             f"edit ({result.get('detail')}); "
-            + ("the pre-commit sidecar was restored" if restored
-               else "the sidecar was NOT restored"),
+            + {"restored": "the pre-commit sidecar was restored",
+               "healed": "a good write landed meanwhile, so the sidecar was left alone"}.get(
+                outcome, "the sidecar was NOT restored"),
             fix="leave and re-enter the darkroom (the bounce writes the in-memory history), "
             "then read the history back",
             detail={
@@ -763,6 +813,7 @@ def commit_expecting(
                 "xmp": str(sidecar),
                 "stale_rewrite": result.get("detail"),
                 "stale_rewrite_restored": restored,
+                "stale_rewrite_healed": outcome == "healed",
                 "sidecar_end_now": _history_items(_history_fingerprint(sidecar))[0],
                 "ms": int((time.monotonic() - started) * 1000),
             },

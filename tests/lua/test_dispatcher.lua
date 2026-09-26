@@ -3080,6 +3080,30 @@ do
   assertEq(c4.ok, false, "a regressed bounce write is not a commit")
   assertEq(c4.stale_rewrite, true, "flagged stale")
   assertTrue(c4.detail:find("went back from 112 to 92", 1, true) ~= nil, "detail: " .. tostring(c4.detail))
+  -- Round 2: the bounce path restores too, like its no_bounce sibling.
+  assertEq(c4.stale_rewrite_restored, true, "the bounce path restores the pre-commit sidecar")
+  assertEq(get(), pre, "the sidecar on disk is the pre-commit copy again")
+
+  -- Round 2 race guard (restore_if_still_stale), each branch:
+  local rs = plugin.restore_if_still_stale
+  local stale = xmp_with_history(92, "exposure", "black_0.0098", "db")
+  local stale_hash = stale:match('history_current_hash="([^"]*)"')
+  -- still the stale rewrite -> restored
+  put(stale)
+  assertEq(rs(tmp, pre, stale_hash, "exposure"), "restored", "still stale: restored")
+  assertEq(get(), pre, "and the file is the pre-commit copy")
+  -- a good write landed meanwhile (autosave / bounce) -> healed, untouched
+  local good = xmp_with_history(113, "exposure", "black_m0.0027", "autosave")
+  put(good)
+  assertEq(rs(tmp, pre, stale_hash, "exposure"), "healed", "a good write landed: healed")
+  assertEq(get(), good, "and the good write is left alone")
+  -- healed without an expected module: forward and no longer the stale one
+  assertEq(rs(tmp, pre, stale_hash, nil), "healed", "healed without a module too")
+  -- something else (not stale, not the expected module) -> left, untouched
+  local other = xmp_with_history(113, "sigmoid", "c1.7", "other")
+  put(other)
+  assertEq(rs(tmp, pre, stale_hash, "exposure"), "left", "neither: left alone")
+  assertEq(get(), other, "file untouched")
 
   action_returns["views/darkroom/synchronize selection"] = nil
   images_by_id[108] = nil

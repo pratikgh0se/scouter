@@ -2005,7 +2005,51 @@ local function restore_sidecar(path, text)
   return true
 end
 
-local function history_advanced_as_expected(before_sig, after_sig, expect_module)
+local function history_hash(text)
+  return type(text) == "string" and text:match('darktable:history_current_hash="([^"]*)"') or nil
+end
+
+local function read_file(path)
+  if type(path) ~= "string" then return nil end
+  local fh = io.open(path, "r")
+  if not fh then return nil end
+  local t = fh:read("*a")
+  fh:close()
+  return t
+end
+
+-- Forward declaration: defined just below, used by the race guard.
+local history_advanced_as_expected
+
+-- Row 461 fix round 2: after a stale rewrite, put the pre-commit sidecar back
+-- ONLY while the file still holds that stale rewrite. Re-read it first:
+--   * "healed": a good write landed meanwhile (darktable autosave, the
+--     fallback bounce) -- history_end >= the pre-commit one and the newest
+--     item is the expected module (without one: the file is simply no
+--     longer the stale rewrite). Left alone.
+--   * "restored": the file's history hash is still the stale rewrite's.
+--   * "left": neither (something else rewrote it); not ours to overwrite.
+--   * "failed": still stale, but the write-back failed.
+-- Enforcer: tests/lua/test_dispatcher.lua "row 461 round 2" block; Python
+-- mirror scouter.core.history._restore_if_still_stale.
+local function restore_if_still_stale(path, snapshot, stale_hash, expect_module)
+  local current = read_file(path)
+  local pre_end = history_items(snapshot)
+  local cur_end, cur_items = history_items(current)
+  if current ~= nil and history_hash(current) ~= stale_hash
+     and cur_end ~= nil and (pre_end == nil or cur_end >= pre_end) then
+    local newest = cur_items[cur_end - 1]
+    local op = newest and newest:match('darktable:operation="([^"]*)"')
+    if type(expect_module) ~= "string" or expect_module == "" or op == expect_module then
+      return "healed"
+    end
+  end
+  if current == nil or history_hash(current) ~= stale_hash then return "left" end
+  if restore_sidecar(path, snapshot) then return "restored" end
+  return "failed"
+end
+
+history_advanced_as_expected = function(before_sig, after_sig, expect_module)
   local after_end, after_items = history_items(after_sig)
   if after_end == nil then return false, "the rewritten sidecar has no readable history_end" end
   local before_end, before_items = history_items(before_sig)
@@ -2137,6 +2181,7 @@ local function commit_no_bounce(image, before, sidecar, history_before, expect_m
   local detail = nil
   local stale = nil
   local restored = nil
+  local stale_hash = nil
   if sidecar then
     written, waited = wait_for_sidecar(sidecar, before)
     step("sidecar_changed", written, tostring(waited) .. "ms")
@@ -2172,13 +2217,11 @@ local function commit_no_bounce(image, before, sidecar, history_before, expect_m
         if why ~= nil then
           written = false
           stale = true
-          restored = restore_sidecar(sidecar, snapshot)
-          step("restore_sidecar", restored, restored and "pre-commit sidecar put back"
-               or "could not put the pre-commit sidecar back")
+          stale_hash = history_hash(history_after)
+          restored = restore_if_still_stale(sidecar, snapshot, stale_hash, expect_module)
+          step("restore_sidecar", restored == "restored" or restored == "healed", restored)
           detail = "stale_rewrite: the sidecar was rewritten after " .. waited .. "ms but not "
-            .. "with this edit (" .. why .. "); "
-            .. (restored and "the pre-commit sidecar was restored"
-                or "the pre-commit sidecar could NOT be restored")
+            .. "with this edit (" .. why .. "); pre-commit sidecar: " .. restored
             .. "; the darkroom's history is still only in memory"
         end
       end
@@ -2186,7 +2229,7 @@ local function commit_no_bounce(image, before, sidecar, history_before, expect_m
   end
   return {ok = written == true, steps = steps, view = current_view_name(),
           written = written, waited = waited, detail = detail, stale = stale,
-          restored = restored}
+          restored = restored, stale_hash = stale_hash}
 end
 
 -- The only strategies history.commit understands. Anything else is a
@@ -2239,7 +2282,9 @@ local function run_no_bounce(p, started)
     -- Row 434: the sidecar WAS rewritten, but with a history that is not
     -- this write's (an older library.db state). Never an honest no-op.
     stale_rewrite = r.stale or nil,
-    stale_rewrite_restored = r.stale and (r.restored == true) or nil,
+    stale_rewrite_restored = r.stale and (r.restored == "restored") or nil,
+    stale_rewrite_healed = r.stale and (r.restored == "healed") or nil,
+    stale_hash = r.stale_hash,
   }
 end
 
@@ -2336,6 +2381,7 @@ methods["history.commit"] = function(p)
   local sidecar = image_sidecar_path(image)
   local before = sidecar and sidecar_signature(sidecar) or nil
   local history_before_bounce = sidecar and sidecar_history_signature(sidecar) or nil
+  local snapshot_before_bounce = sidecar and read_file(sidecar) or nil
 
   -- COMMIT_BOUNCE_ATTEMPTS is now the DEFAULT for `attempts`, not a constant.
   -- A caller who already knows the history may not change (the Python layer's
@@ -2401,9 +2447,17 @@ methods["history.commit"] = function(p)
   -- Row 461 rule 1 on the bounce path too: a sidecar whose history_end went
   -- back is refused, never reported as the commit.
   local stale_why = nil
+  local stale_hash, restore_outcome = nil, nil
   if written == true and history_before_bounce ~= nil then
-    stale_why = history_end_went_back(history_before_bounce, sidecar_history_signature(sidecar))
-    if stale_why then detail = "stale_rewrite: " .. stale_why end
+    local after_sig = sidecar_history_signature(sidecar)
+    stale_why = history_end_went_back(history_before_bounce, after_sig)
+    if stale_why then
+      -- Row 461 round 2: the bounce path restores too (race-guarded).
+      stale_hash = history_hash(after_sig)
+      restore_outcome = restore_if_still_stale(sidecar, snapshot_before_bounce, stale_hash,
+                                               p.expect_module)
+      detail = "stale_rewrite: " .. stale_why .. "; pre-commit sidecar: " .. restore_outcome
+    end
   end
   if detail == nil and written == false then
     detail = "the view bounce completed " .. attempt_count
@@ -2422,6 +2476,9 @@ methods["history.commit"] = function(p)
     ok = result.ok and (written ~= false or not expect_change) and stale_why == nil,
     detail = detail,
     stale_rewrite = stale_why and true or nil,
+    stale_rewrite_restored = stale_why and (restore_outcome == "restored") or nil,
+    stale_rewrite_healed = stale_why and (restore_outcome == "healed") or nil,
+    stale_hash = stale_hash,
     no_bounce_skipped = no_bounce_skipped,
     view_after = result.view,
     cpu_ms = (os.clock() - started) * 1000,
@@ -3325,6 +3382,7 @@ return {
   view_switch_transport = function() return view_switch_transport end,
   commit_no_bounce = commit_no_bounce,
   history_advanced_as_expected = history_advanced_as_expected,
+  restore_if_still_stale = restore_if_still_stale,
   sync_selection_action_path = SYNC_SELECTION_ACTION_PATH,
   wait_for_darkroom_image = wait_for_darkroom_image,
   view_settle = {
