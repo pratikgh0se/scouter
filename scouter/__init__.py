@@ -2,7 +2,11 @@
 
 import time
 
-__version__ = "0.3.0"
+#: Product close (row 427, 2026-09-26): phase 3's code plus the close items,
+#: offered as the 1.0 release candidate. PEP 440 pre-release form.
+__version__ = "1.0rc1"
+#: Stays an integer: `metrics.db` declares `phase INTEGER NOT NULL` and every
+#: event carries it. The product close adds no phase of its own.
 PHASE = 3
 
 #: Review round 1, should-fix (D3, row 407): captured as close to process

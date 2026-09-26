@@ -5,6 +5,43 @@ branch, which fixes defects found by the E12 live evaluation against real
 darktable (`Knowledge/Scouter - E12 live evaluation 2026-09-24.md` in the
 vault; decision row 407).
 
+## 1.0rc1 (product/close, 2026-09-26, decision row 427)
+
+Phase 3 plus the product-close items, offered as the 1.0 release candidate.
+Unit-tested with fakes; the items marked "not host-run" still need Pratik's
+live darktable session.
+
+- `scouter setup` / `scouter setup --check` (new, non-registry like `doctor`):
+  installs the packaged Lua plugin and its `luarc` line **persistently**,
+  copies the measured white-balance tables shipped in `scouter/data/wb/`
+  (today `em10iii`) into `<config_dir>/wb/` when absent (never overwrites;
+  E12 D9), reports `config` and `doctor`, and prints the exact
+  `claude mcp add --transport stdio --scope user ...` command plus the
+  equivalent JSON. `--check` changes nothing; exit 1 when a required item is
+  missing. Not host-run.
+- Timing (row 427 item 4): `darkroom say`/`adjust` trust the sidecar by
+  default behind a staleness guard (`moves.precommit_decision`): the ~2.7 s
+  pre-read bounce runs only when there is no sidecar, on the first move on an
+  image in a session, after the image changed, or when the sidecar is older
+  than the journal's last move. `--bounce` forces it (also on `darkroom get`);
+  `--trust-sidecar` still skips it; both together is `usage`. Each result's
+  `plan` records the decision. Not host-measured yet.
+- `wb calibrate <folder> --camera <body>` (row 427 item 3): folder mode, one
+  body at a time, sweeping a scratch copy of the body's first frame (never
+  the original); `--dry-run` lists the frames, the chosen one, the copy and
+  the table path with no darktable call. New `camera`/`scratch` args on CLI
+  and MCP. README recipe for the Sony A7 and NEX-5N. Not host-run.
+- `job run` / MCP `job_run` (row 427 item 5 prep): cull propose + apply,
+  preset apply-set with exclusions (hero excluded), outliers against the
+  hero, export release; counts per step; stops at the first refusal or
+  partial step (`stopped_at`), no rollback; dry run without `--yes`.
+- README: "Setup" rewritten; new "Editing with Scouter from Claude Code"
+  user guide (six example sentences checked against live vocabulary rows by
+  `tests/test_user_guide.py`), mirrored to the vault; "Honest limits,
+  product 1.0rc".
+- Version `0.3.0` -> `1.0rc1`. `PHASE` stays `3` (an integer column in
+  `metrics.db`).
+
 ## Unreleased (phase-3-task10: host run)
 
 - Phase 3 task 10 host run on darktable 5.4.1 (details in

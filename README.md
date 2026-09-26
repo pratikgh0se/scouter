@@ -813,6 +813,40 @@ To re-run it, close darktable first and have the hero ORF present:
 SCOUTER_HOST_TESTS=1 uv run --extra dev python -m pytest tests/test_host_phase3.py -q -s
 ```
 
+## Honest limits, product 1.0rc (2026-09-26)
+
+Read these with the phase 1-3 limits above; they are what the product close
+did not, or could not, settle.
+
+- **Global edits only.** No masks, no local or spot edits, no retouch:
+  darktable's Lua API exposes none of them. White-balance tint is set, never
+  nudged (`absolute_only`); color zones' zone curves are unreachable. The
+  user guide's "What refuses, and why" lists every refusal.
+- **The staleness guard cannot see your hands.** It trusts the sidecar when
+  the sidecar is newer than Scouter's last move on the same image. A slider
+  you moved yourself in darktable since then is invisible until darktable
+  writes the sidecar; pass `--bounce` (MCP `bounce: true`) after hand edits.
+  The guarded default's timing is not host-measured yet (row 415 measured
+  4.12 s with the bounce every time, 1.37 s without).
+- **`scouter setup` does not register the MCP server.** It prints the `claude
+  mcp add` command and never reads or writes Claude Code's config. Right
+  after installing the plugin, `doctor` is not ok until darktable restarts.
+  Not yet run against the real `~/.config/darktable`.
+- **`wb calibrate` folder mode still needs darktable to show the copy.** The
+  sweep runs on a scratch copy, and darktable cannot be moved onto a frame
+  imported in the same session, so the recipe launches darktable on the copy
+  first. The A7 and NEX-5N tables are **not measured yet**; until they are,
+  warmer/cooler on Sony frames refuses `value_unknown` and `outliers list`
+  falls back to the r/b ratio.
+- **`job run` stops; it does not roll back.** Ratings applied by the cull and
+  styles appended by the preset step stay when a later step refuses. Styles
+  cannot be removed through the Lua API at all. The 2 s settle before
+  `outliers` is a measured-lag allowance (row 408 B7), not a sidecar-written
+  signal. Not yet run on a real job.
+- **Still open from earlier rounds.** The first `history commit` after a fresh
+  darktable launch intermittently wedging the bridge (row 408 B1) and the E12
+  15-18 minute pre-verb stalls (D3) have no root cause yet.
+
 ## Editing with Scouter from Claude Code
 
 Scouter edits the photo open in **your running darktable**, from a Claude

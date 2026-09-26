@@ -131,4 +131,5 @@ class HostSupportScopeTest(unittest.TestCase):
 
 class VersionTest(unittest.TestCase):
     def test_phase_and_version(self) -> None:
-        self.assertEqual((PHASE, __version__), (3, "0.3.0"))
+        # Product close (row 427): phase 3's code as the 1.0 release candidate.
+        self.assertEqual((PHASE, __version__), (3, "1.0rc1"))
