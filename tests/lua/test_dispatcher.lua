@@ -66,15 +66,27 @@ local selection_log = {}
 local styles_created = {}
 local applied_styles = {}
 
--- Row 418: registered "shortcut" callbacks, keyed by name -- mirrors real
--- darktable's `dt.register_event(plugin, "shortcut", callback, name)`. The
--- stub `dt.gui.action` below fires the matching callback synchronously for
--- any `"lua/<name>"` path, which is exactly the marshaling
--- `run_on_main_thread` depends on: a real host does this on the main
--- thread, the stub does it inline (there is only one thread in the test
--- process), and either way the closure runs and the proxy loop sees
--- `main_thread_job_done` flip before its budget expires.
+-- Row 418/422: registered "shortcut" callbacks, keyed by name (the tooltip,
+-- 4th arg) -- mirrors real darktable's `dt.register_event(event_name,
+-- "shortcut", callback, name)`. Row 422's host finding: darktable actually
+-- addresses a lua-registered shortcut's `dt.gui.action` path after the
+-- EVENT NAME (1st arg), not the tooltip, and the plugin used to pass those
+-- two arguments different values -- so the path it pressed never matched
+-- the path darktable had actually registered, and `dt.gui.action` on a
+-- nonexistent path silently never fires.
+--
+-- `main_thread_real_action_path` is this stub's stand-in for "the one path
+-- the simulated host actually answers to" -- independent of what the
+-- plugin under test requests, exactly like a real, opaque darktable build.
+-- It defaults to the event-name convention (`"lua/" .. event_name`), which
+-- is what the row 422 fix now registers under, so the common-path tests
+-- below see candidate 1 resolve immediately. Tests that want to exercise
+-- discovery of a LATER candidate, or a total miss, override it before
+-- reloading the plugin.
 local registered_shortcuts = {}
+local shortcut_handler = nil
+local shortcut_event_name = nil
+local main_thread_real_action_path = nil
 -- Test-controlled kill switch: when true, the stub's `dt.gui.action` records
 -- the call (so callers can see it fired) but does NOT invoke the registered
 -- handler -- simulating a proxy that activated but whose handler never ran
@@ -85,9 +97,14 @@ local suppress_main_thread_proxy = false
 local stub_dt = {
   database = stub_db,
   print_log = function(msg) table.insert(dt_log, msg) end,
-  register_event = function(_plugin, event_type, callback, name)
+  register_event = function(event_name, event_type, callback, name)
     if event_type == "shortcut" then
       registered_shortcuts[name] = callback
+      shortcut_handler = callback
+      shortcut_event_name = event_name
+      if main_thread_real_action_path == nil then
+        main_thread_real_action_path = "lua/" .. event_name
+      end
     end
     return true
   end,
@@ -117,14 +134,16 @@ stub_dt.gui = {
   action = function(path, instance, element, effect, value)
     table.insert(action_log, {path = path, instance = instance, element = element,
                              effect = effect, value = value})
-    -- Row 418: a "lua/<name>" path is a registered shortcut's action path.
-    -- Fire its handler now, exactly as real darktable's dt.gui.action does
-    -- when it marshals the activation onto the main thread and runs it.
-    local shortcut_prefix = "lua/"
-    if path:sub(1, #shortcut_prefix) == shortcut_prefix and not suppress_main_thread_proxy then
-      local name = path:sub(#shortcut_prefix + 1)
-      local handler = registered_shortcuts[name]
-      if handler then handler("shortcut", name) end
+    -- Row 422: the stub only fires the registered shortcut handler for the
+    -- ONE path `main_thread_real_action_path` names -- any other path
+    -- (including a plausible-looking guess) is a silent no-op, exactly like
+    -- real darktable's `dt.gui.action` on a path it does not recognise.
+    -- This is what lets a test prove the plugin discovers the right
+    -- candidate by elimination rather than the stub matching by convention
+    -- on the plugin's behalf.
+    if path == main_thread_real_action_path and shortcut_handler
+        and not suppress_main_thread_proxy then
+      shortcut_handler("shortcut", shortcut_event_name)
     end
     local r = action_returns[path]
     if r == nil then return value or 0 end
@@ -2448,9 +2467,11 @@ do
   assertEq(ok, true, "run_on_main_thread succeeds when the proxy fires")
   assertEq(err, "ok", "run_on_main_thread returns the job's own result")
   assertEq(ran_on_proxy, true, "the job actually ran")
+  local resolved_path = plugin.main_thread_proxy_resolved_path()
+  assertTrue(resolved_path ~= nil, "run_on_main_thread resolved a candidate action path")
   local fired = false
   for i = actions_before + 1, #action_log do
-    if action_log[i].path == plugin.main_thread_proxy_action_path then fired = true end
+    if action_log[i].path == resolved_path then fired = true end
   end
   assertTrue(fired, "run_on_main_thread activated the shortcut via dt.gui.action, "
     .. "the same marshaling every other verb in this file relies on")
@@ -2464,7 +2485,7 @@ do
   assertEq(view_state.current, "lighttable", "and the view really switched")
   local fired2 = false
   for i = actions_before2 + 1, #action_log do
-    if action_log[i].path == plugin.main_thread_proxy_action_path then fired2 = true end
+    if action_log[i].path == resolved_path then fired2 = true end
   end
   assertTrue(fired2, "switch_view's dt.gui.current_view call was marshaled through the proxy")
   view_state.current = "darkroom"
@@ -2476,7 +2497,7 @@ do
   assertEq(bounce.ok, true, "commit_view_bounce still succeeds through the proxy")
   local proxy_calls = 0
   for i = actions_before3 + 1, #action_log do
-    if action_log[i].path == plugin.main_thread_proxy_action_path then
+    if action_log[i].path == resolved_path then
       proxy_calls = proxy_calls + 1
     end
   end
@@ -2537,6 +2558,109 @@ do
   assertTrue(err ~= nil and err:find("dt.register_event") ~= nil,
     "naming the actual missing piece: " .. tostring(err))
   -- Restore the real stub for every test below this one.
+  package.loaded.darktable = stub_dt
+  package.loaded.darktable_mcp = nil
+  require("darktable_mcp")
+  package.loaded["darktable_mcp"] = internals
+end
+
+-- Row 422: the real host names a lua-registered shortcut's action path
+-- after the EVENT NAME, not the tooltip -- but that is "most likely", not
+-- host-certified for every darktable build, so `run_on_main_thread` tries
+-- an ordered list of candidates on first use. Simulate a host where only
+-- the SECOND candidate ("lua/darktable_mcp", the old tooltip-era guess)
+-- actually answers, and prove the plugin discovers and caches it rather
+-- than getting stuck on the first, wrong guess.
+do
+  main_thread_real_action_path = "lua/darktable_mcp"
+  package.loaded.darktable_mcp = nil
+  local reloaded = require("darktable_mcp")
+
+  assertEq(reloaded.main_thread_proxy_resolved_path(), nil,
+    "not resolved yet -- resolution is lazy, on first run_on_main_thread call")
+
+  local actions_before = #reloaded.main_thread_proxy_candidates_tried()
+  local ok, err = reloaded.run_on_main_thread(function() return "discovered" end)
+  assertEq(ok, true, "run_on_main_thread discovers a later candidate")
+  assertEq(err, "discovered", "and still returns the job's own result")
+
+  local resolved = reloaded.main_thread_proxy_resolved_path()
+  assertEq(resolved, "lua/darktable_mcp",
+    "the SECOND candidate is the one that resolved, not the first")
+
+  local tried = reloaded.main_thread_proxy_candidates_tried()
+  assertTrue(#tried - actions_before >= 2,
+    "at least the first two candidates were tried before the second one landed")
+  assertEq(tried[actions_before + 1], reloaded.main_thread_proxy_candidates[1],
+    "the first (wrong) candidate was tried before the one that worked")
+
+  -- Caching: a second call resolves immediately, without re-probing the
+  -- first (wrong) candidate again.
+  local action_count_before = #action_log
+  local ok2 = reloaded.run_on_main_thread(function() return true end)
+  assertEq(ok2, true, "a later call reuses the cached, already-resolved path")
+  local wrong_candidate = reloaded.main_thread_proxy_candidates[1]
+  local reprobed_wrong = false
+  for i = action_count_before + 1, #action_log do
+    if action_log[i].path == wrong_candidate then reprobed_wrong = true end
+  end
+  assertTrue(not reprobed_wrong,
+    "the cached path means the wrong first candidate is never tried again")
+
+  -- Restore.
+  package.loaded.darktable = stub_dt
+  package.loaded.darktable_mcp = nil
+  require("darktable_mcp")
+  package.loaded["darktable_mcp"] = internals
+  main_thread_real_action_path = "lua/" .. shortcut_event_name
+end
+
+-- Row 422: when NONE of the candidates fire -- a host whose action-path
+-- convention this plugin has never seen -- the refusal names every
+-- candidate it tried, so a human reading a stuck `history.commit` knows
+-- exactly what was attempted instead of guessing.
+do
+  main_thread_real_action_path = "lua/totally-unrecognised-path"
+  package.loaded.darktable_mcp = nil
+  local reloaded = require("darktable_mcp")
+
+  local ok, err = reloaded.run_on_main_thread(function() return "unreachable" end)
+  assertEq(ok, false, "no candidate fires => an honest refusal, not a hang or a crash")
+  for _, candidate in ipairs(reloaded.main_thread_proxy_candidates) do
+    assertTrue(err ~= nil and err:find(candidate, 1, true) ~= nil,
+      "the refusal names candidate " .. candidate .. ": " .. tostring(err))
+  end
+  assertEq(reloaded.main_thread_proxy_resolved_path(), nil,
+    "nothing resolved when every candidate missed")
+
+  -- darktable_mcp.diag reports the same honest "not resolved" state.
+  local diag = reloaded.methods["darktable_mcp.diag"]()
+  assertEq(diag.main_thread_proxy_path, nil, "diag reports no resolved path")
+  assertEq(diag.main_thread_proxy_fired, false, "diag reports the proxy did not fire")
+  assertEq(diag.main_thread_proxy_registered, true, "diag still reports the registration itself")
+
+  -- Restore.
+  package.loaded.darktable = stub_dt
+  package.loaded.darktable_mcp = nil
+  require("darktable_mcp")
+  package.loaded["darktable_mcp"] = internals
+  main_thread_real_action_path = "lua/" .. shortcut_event_name
+end
+
+-- Row 422: darktable_mcp.diag reports the resolved path once the proxy is
+-- working normally -- what `scouter doctor` surfaces as `main_thread_proxy`.
+do
+  package.loaded.darktable_mcp = nil
+  local reloaded = require("darktable_mcp")
+  local diag = reloaded.methods["darktable_mcp.diag"]()
+  assertEq(diag.main_thread_proxy_fired, true, "diag: the proxy fires on a working host")
+  assertEq(diag.main_thread_proxy_path, reloaded.main_thread_proxy_resolved_path(),
+    "diag reports the same path run_on_main_thread resolved and cached")
+  assertTrue(diag.main_thread_proxy_path ~= nil and
+    diag.main_thread_proxy_path:find("lua/") == 1,
+    "the reported path is a dt.gui.action path")
+
+  -- Restore.
   package.loaded.darktable = stub_dt
   package.loaded.darktable_mcp = nil
   require("darktable_mcp")

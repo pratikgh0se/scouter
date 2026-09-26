@@ -906,15 +906,51 @@ end
 -- `dt.gui.action` -- the same marshaling every other verb here already
 -- relies on carries the closure onto the main thread and runs it there.
 --
--- NEEDS HOST VERIFICATION (the controller's host test, not tonight): the
--- exact action path a lua-registered shortcut is addressable under
--- (MAIN_THREAD_PROXY_ACTION_PATH below) has not been exercised on this Mac.
--- If it is wrong, `run_on_main_thread` FAILS CLOSED -- see its own comment
--- -- so the worst case of a wrong path is an honest refusal on every view
--- switch, never a crash.
+-- HOST-VERIFIED WRONG (row 422, controller host test, 2026-09-26): the
+-- registration below used to pass the fixed plugin id "darktable_mcp" as
+-- `dt.register_event`'s first argument and the descriptive
+-- MAIN_THREAD_PROXY_NAME only as the fourth (tooltip) argument. Every
+-- `history.commit` on the real host then refused with "main-thread proxy
+-- did not fire within 3000ms" -- `dt.gui.action` reported the activation as
+-- having fired (no pcall failure) but the handler never ran. Diagnosis:
+-- darktable names a Lua-registered shortcut's action path after the EVENT
+-- NAME (the first argument to `dt.register_event`), not the tooltip, so the
+-- path this code was pressing (`lua/darktable_mcp_main_thread_proxy`, built
+-- from the tooltip) almost certainly did not match the path darktable
+-- actually registered (`lua/darktable_mcp`, built from the old first
+-- argument) -- and `dt.gui.action` on a nonexistent path does not error, it
+-- just never fires anything, which is indistinguishable from "fired but the
+-- main thread is stuck" from here.
+--
+-- Fix: register the proxy under its OWN unique event name (first argument),
+-- so the action path this code presses and the path darktable actually
+-- exposes are the same string by construction. The tooltip (fourth
+-- argument) is kept for readability in darktable's shortcut preferences but
+-- is no longer load-bearing for addressing.
+--
+-- Because the exact naming rule is still "most likely", not host-certified
+-- for every darktable build, `run_on_main_thread` does not hard-code a
+-- single path: it tries a short, ordered list of candidates the first time
+-- it is needed, caches whichever one actually fires a handler, and refuses
+-- -- naming every candidate it tried -- only if none of them do. This keeps
+-- the "refuse rather than crash" rule (row 418) while no longer betting the
+-- whole feature on one guessed path.
 local MAIN_THREAD_PROXY_NAME = "darktable_mcp_main_thread_proxy"
-local MAIN_THREAD_PROXY_ACTION_PATH = "lua/" .. MAIN_THREAD_PROXY_NAME
+--: Ordered candidates for the shortcut's `dt.gui.action` path, most likely
+--: first (event-name convention), then the old tooltip-derived guess, then
+--: a namespaced form some darktable builds use for lua-registered actions.
+local MAIN_THREAD_PROXY_CANDIDATES = {
+  "lua/" .. MAIN_THREAD_PROXY_NAME,
+  "lua/darktable_mcp",
+  "lua/darktable_mcp/" .. MAIN_THREAD_PROXY_NAME,
+}
 local MAIN_THREAD_PROXY_BUDGET_MS = 3000
+--: Budget for each candidate probe. Short on purpose (row 422 fix): a wrong
+--: candidate never fires, so probing it is pure wasted wall time -- keeping
+--: this well under MAIN_THREAD_PROXY_BUDGET_MS means resolving through two
+--: or three wrong guesses on first use still finishes well inside a
+--: caller's own request budget.
+local MAIN_THREAD_PROXY_PROBE_BUDGET_MS = 1500
 
 -- Registered once, at module load time (itself on darktable's real startup
 -- thread, not the later dispatch worker). `main_thread_proxy_registered`
@@ -926,6 +962,16 @@ local main_thread_job = nil
 local main_thread_job_done = false
 local main_thread_job_ok = false
 local main_thread_job_result = nil
+--: Set once `run_on_main_thread` has proven a candidate path fires a
+--: handler; nil until then. Exposed to tests as
+--: `main_thread_proxy_resolved_path` and surfaced through
+--: `darktable_mcp.diag` / `scouter doctor`.
+local main_thread_proxy_resolved_path = nil
+--: Every candidate path tried so far this session, in order -- kept even
+--: after resolution so a later refusal (should the resolved path stop
+--: firing) can still report the full history, and so `diag` can show its
+--: work.
+local main_thread_proxy_candidates_tried = {}
 
 -- Runs on whatever thread darktable invokes the shortcut from -- by design,
 -- that is the main thread, because it is the same marshaling dt.gui.action
@@ -939,9 +985,64 @@ local function main_thread_proxy_handler(_event, _shortcut_name)
 end
 
 if dt.register_event then
-  local registered = pcall(dt.register_event, "darktable_mcp", "shortcut",
+  local registered = pcall(dt.register_event, MAIN_THREAD_PROXY_NAME, "shortcut",
                             main_thread_proxy_handler, MAIN_THREAD_PROXY_NAME)
   main_thread_proxy_registered = registered
+end
+
+-- Press `path` via `dt.gui.action`, hand it `fn` as the job to run, and wait
+-- up to `budget_ms` for `main_thread_proxy_handler` to flip
+-- `main_thread_job_done`. Returns (fired, ok, result):
+--   * `fired` is false when `dt.gui.action` itself raised, or when the
+--     handler never ran within budget -- both mean "this path is not it".
+--   * `ok`/`result` are the job's own `pcall` outcome, meaningful only when
+--     `fired` is true.
+-- Shared by both the first-use candidate probe and every real call once a
+-- path is resolved, so there is exactly one place that presses the
+-- shortcut and polls for it landing.
+local function try_main_thread_action(path, fn, budget_ms)
+  main_thread_job = fn
+  main_thread_job_done = false
+  main_thread_job_ok = false
+  main_thread_job_result = nil
+  local fired = pcall(dt.gui.action, path, 0, "", "activate", 1.0)
+  if not fired then
+    main_thread_job = nil
+    return false, false, nil
+  end
+  local waited = 0
+  while not main_thread_job_done do
+    if not (dt.control and dt.control.sleep) then
+      main_thread_job = nil
+      return false, false, "dt.control.sleep unavailable, cannot wait for it"
+    end
+    if waited >= budget_ms then
+      main_thread_job = nil
+      return false, false, nil
+    end
+    dt.control.sleep(VIEW_SETTLE_POLL_MS)
+    waited = waited + VIEW_SETTLE_POLL_MS
+  end
+  return true, main_thread_job_ok, main_thread_job_result
+end
+
+-- Resolve which candidate path actually fires a handler, probing each one
+-- (in order) with a tiny no-op job and MAIN_THREAD_PROXY_PROBE_BUDGET_MS.
+-- Caches and returns the first one that lands; returns nil if none do. Runs
+-- at most once per session in the common case -- every later call reuses
+-- `main_thread_proxy_resolved_path` directly.
+local function resolve_main_thread_proxy_path()
+  if main_thread_proxy_resolved_path then return main_thread_proxy_resolved_path end
+  for _, path in ipairs(MAIN_THREAD_PROXY_CANDIDATES) do
+    table.insert(main_thread_proxy_candidates_tried, path)
+    local fired = try_main_thread_action(path, function() return true end,
+                                          MAIN_THREAD_PROXY_PROBE_BUDGET_MS)
+    if fired then
+      main_thread_proxy_resolved_path = path
+      return path
+    end
+  end
+  return nil
 end
 
 -- Run `fn` on darktable's main thread. Returns (ok, result) on success or
@@ -950,12 +1051,12 @@ end
 -- replaces.
 --
 -- FAILS CLOSED: any missing piece of the marshaling machinery (no
--- `dt.register_event` at load time, no `dt.gui.action` now, the proxy never
--- firing within budget) returns `false, <honest reason>`. `fn` is NEVER
--- called directly on the calling thread as a fallback -- that fallback is
--- exactly row 418's crash. This is the "refuse rather than crash" honesty
--- rule: a GUI-touching call that cannot be proven to have reached the main
--- thread is refused, not attempted anyway.
+-- `dt.register_event` at load time, no `dt.gui.action` now, none of the
+-- candidate paths firing within budget) returns `false, <honest reason>`.
+-- `fn` is NEVER called directly on the calling thread as a fallback -- that
+-- fallback is exactly row 418's crash. This is the "refuse rather than
+-- crash" honesty rule: a GUI-touching call that cannot be proven to have
+-- reached the main thread is refused, not attempted anyway.
 local function run_on_main_thread(fn, budget_ms)
   budget_ms = budget_ms or MAIN_THREAD_PROXY_BUDGET_MS
   if not main_thread_proxy_registered then
@@ -965,34 +1066,20 @@ local function run_on_main_thread(fn, budget_ms)
   if not (dt.gui and dt.gui.action) then
     return false, "main-thread proxy unavailable: dt.gui.action is missing"
   end
-  main_thread_job = fn
-  main_thread_job_done = false
-  main_thread_job_ok = false
-  main_thread_job_result = nil
-  local fired = pcall(dt.gui.action, MAIN_THREAD_PROXY_ACTION_PATH, 0, "", "activate", 1.0)
+  local path = resolve_main_thread_proxy_path()
+  if not path then
+    return false, "main-thread proxy unavailable: none of the candidate action paths " ..
+      "fired a handler (tried: " .. table.concat(MAIN_THREAD_PROXY_CANDIDATES, ", ") .. ")"
+  end
+  local fired, ok, result = try_main_thread_action(path, fn, budget_ms)
   if not fired then
-    main_thread_job = nil
-    return false, "main-thread proxy unavailable: dt.gui.action(" ..
-      MAIN_THREAD_PROXY_ACTION_PATH .. ") failed to fire"
+    return false, string.format(
+      "main-thread proxy did not fire within %dms (dt.gui.action activated %s but its " ..
+      "handler never ran -- refusing rather than calling the GTK-touching code directly " ..
+      "on this thread)", budget_ms, path)
   end
-  local waited = 0
-  while not main_thread_job_done do
-    if not (dt.control and dt.control.sleep) then
-      main_thread_job = nil
-      return false, "main-thread proxy: dt.control.sleep unavailable, cannot wait for it"
-    end
-    if waited >= budget_ms then
-      main_thread_job = nil
-      return false, string.format(
-        "main-thread proxy did not fire within %dms (dt.gui.action activated the " ..
-        "shortcut but its handler never ran -- refusing rather than calling the " ..
-        "GTK-touching code directly on this thread)", budget_ms)
-    end
-    dt.control.sleep(VIEW_SETTLE_POLL_MS)
-    waited = waited + VIEW_SETTLE_POLL_MS
-  end
-  if not main_thread_job_ok then return false, main_thread_job_result end
-  return true, main_thread_job_result
+  if not ok then return false, result end
+  return true, result
 end
 
 -- Switch to `view` (a dt.gui.views.* table) via the main-thread proxy.
@@ -1044,6 +1131,23 @@ end
 
 methods["view.current"] = function()
   return {view = current_view_name()}
+end
+
+-- Row 422 diagnostic: resolves (probing candidates if not already resolved)
+-- and reports the main-thread proxy's action path, so `scouter doctor` can
+-- show a wrong-path refusal BEFORE it shows up as a failed `history.commit`
+-- deep in a real session. Read-only from the caller's point of view --
+-- resolution itself presses a no-op job through the proxy, exactly like any
+-- other `run_on_main_thread` call, it just discards the job's result.
+methods["darktable_mcp.diag"] = function()
+  local ok = run_on_main_thread(function() return true end, MAIN_THREAD_PROXY_PROBE_BUDGET_MS)
+  return {
+    main_thread_proxy_path = main_thread_proxy_resolved_path,
+    main_thread_proxy_fired = ok == true,
+    main_thread_proxy_registered = main_thread_proxy_registered,
+    main_thread_proxy_candidates = MAIN_THREAD_PROXY_CANDIDATES,
+    main_thread_proxy_candidates_tried = main_thread_proxy_candidates_tried,
+  }
 end
 
 local function find_image_by_path(path)
@@ -2430,10 +2534,17 @@ return {
   -- Row 418 main-thread marshaling.
   run_on_main_thread = run_on_main_thread,
   switch_view = switch_view,
-  main_thread_proxy_action_path = MAIN_THREAD_PROXY_ACTION_PATH,
+  main_thread_proxy_candidates = MAIN_THREAD_PROXY_CANDIDATES,
   main_thread_proxy_name = MAIN_THREAD_PROXY_NAME,
   main_thread_proxy_registered = main_thread_proxy_registered,
   main_thread_proxy_budget_ms = MAIN_THREAD_PROXY_BUDGET_MS,
+  main_thread_proxy_probe_budget_ms = MAIN_THREAD_PROXY_PROBE_BUDGET_MS,
+  -- A function, not a snapshotted value: `main_thread_proxy_resolved_path`
+  -- is nil at module load and only set the first time `run_on_main_thread`
+  -- successfully resolves a candidate, so tests (and `diag`) need the
+  -- current value, not the value captured when this table was built.
+  main_thread_proxy_resolved_path = function() return main_thread_proxy_resolved_path end,
+  main_thread_proxy_candidates_tried = function() return main_thread_proxy_candidates_tried end,
   wait_for_darkroom_image = wait_for_darkroom_image,
   view_settle = {
     poll_ms = VIEW_SETTLE_POLL_MS,

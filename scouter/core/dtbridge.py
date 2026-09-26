@@ -205,6 +205,16 @@ def current_view() -> str:
     return str(result.get("view", "unknown"))
 
 
+def diag() -> dict:
+    """`darktable_mcp.diag` (row 422): resolves/probes the main-thread proxy's
+    `dt.gui.action` path and reports whether it is currently firing. Read-only
+    -- `scouter doctor` calls this to surface a wrong-path refusal (the row
+    422 host symptom: every `history.commit` refused with "main-thread proxy
+    did not fire") before it shows up mid-session, rather than reporting only
+    on the first real GUI-touching verb."""
+    return call("darktable_mcp.diag")
+
+
 def require_darkroom() -> str:
     """Pre-flight: raise `wrong_view` before spending an action on a dead call.
 

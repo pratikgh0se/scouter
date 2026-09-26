@@ -96,6 +96,21 @@ class FakeBridge:
     ) -> None:
         self.responses: dict[str, Any] = {
             "view.current": {"view": "darkroom"},
+            # Row 422: a sane default for `darktable_mcp.diag` (`scouter
+            # doctor`'s main-thread proxy line) -- a resolved, firing proxy,
+            # so a test that isn't specifically exercising the row 422
+            # refusal doesn't have to restate this shape.
+            "darktable_mcp.diag": {
+                "main_thread_proxy_path": "lua/darktable_mcp_main_thread_proxy",
+                "main_thread_proxy_fired": True,
+                "main_thread_proxy_registered": True,
+                "main_thread_proxy_candidates": [
+                    "lua/darktable_mcp_main_thread_proxy",
+                    "lua/darktable_mcp",
+                    "lua/darktable_mcp/darktable_mcp_main_thread_proxy",
+                ],
+                "main_thread_proxy_candidates_tried": ["lua/darktable_mcp_main_thread_proxy"],
+            },
             # A sane default for `library.import`/`library.register`'s
             # `import_batch` call, so a test that isn't specifically exercising
             # the film-roll-registration path doesn't have to restate the
