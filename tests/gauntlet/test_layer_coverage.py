@@ -1,3 +1,6 @@
+import pytest
+
+from scouter.core import vocab
 from tests.gauntlet.layers import coverage
 
 
@@ -18,7 +21,14 @@ def test_boundary_accepts_refusal_but_not_a_silent_clamp():
     assert c.meta["accept_refusal"]
     chk = c.expect.checks[0]
     assert chk.metric == "boundary" and chk.tags["silent_if_fail"]
-    assert chk.target["request"] == c.expect.checks[0].target["request"]
+    # the probe is one step below the row's lower bound, computed here from
+    # the vocabulary row (exposure: lo -3.0 EV, step 0.3 EV), not read back
+    # from the generated check
+    s = vocab.spec("exposure", "exposure")
+    assert (s.lo, s.step) == (-3.0, 0.3)
+    assert chk.target["request"] == pytest.approx(s.lo - s.step) == -3.3
+    assert chk.target["bound"] == s.lo
+    assert c.steps[-1].args["value"] == chk.target["request"]
 
 
 def test_kelvin_cases_reset_tint_first_and_offset_their_checks():
