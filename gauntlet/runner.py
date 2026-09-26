@@ -17,6 +17,17 @@ SESSION_MAX_CASES = 50
 SESSION_MAX_S = 20 * 60
 PARK_MAX_WAIT_S = 6 * 3600
 NON_PASS = ("partial", "fail")
+#: (fix round 1, I1): open_session can hang (a stuck product launch) or raise
+#: (a launch failure); it must never do either untyped, so it goes through
+#: the same hard-cap machinery as a case.
+SESSION_OPEN_CAP_S = 180.0
+#: (fix round 1, I2): abort()/close() are best-effort cleanup, not part of
+#: the case's own budget; capped and swallowed so a broken cleanup path
+#: cannot kill the run.
+SESSION_CLOSE_CAP_S = 30.0
+#: (fix round 1, I1): after this many consecutive open failures the layer
+#: stops (status "blocked") instead of retrying forever.
+MAX_CONSECUTIVE_OPEN_FAILURES = 3
 
 
 @dataclass
@@ -55,7 +66,9 @@ class Runner:
     def __init__(self, adapter: Adapter, run: RunDir, *, commit: str = "",
                  clock=time.monotonic, sleep=time.sleep, wall=time.time,
                  session_max_cases: int = SESSION_MAX_CASES,
-                 session_max_s: float = SESSION_MAX_S) -> None:
+                 session_max_s: float = SESSION_MAX_S,
+                 session_open_cap_s: float = SESSION_OPEN_CAP_S,
+                 max_consecutive_open_failures: int = MAX_CONSECUTIVE_OPEN_FAILURES) -> None:
         self.adapter = adapter
         self.run = run.ensure()
         self.clock = clock
@@ -65,6 +78,8 @@ class Runner:
         self.policy = adapter.policy()
         self.session_max_cases = session_max_cases
         self.session_max_s = session_max_s
+        self.session_open_cap_s = session_open_cap_s
+        self.max_consecutive_open_failures = max_consecutive_open_failures
 
     def _select(self, cases: list[Case], layer: str, *, resume: bool, only_failed: bool,
                 case_ids: set[str] | None, tiers: set[str] | None = None,
@@ -118,20 +133,73 @@ class Runner:
         self.progress.finish(summary.status)
         return summary
 
+    def _open_session(self, layer: str):
+        """Open a session under the same hard-cap machinery as a case (fix
+        round 1, I1). Returns (session, None) or (None, reason)."""
+        try:
+            session = _call_with_cap(lambda: self.adapter.open_session(layer, self.run),
+                                     self.session_open_cap_s)
+            return session, None
+        except _Timeout as e:
+            return None, str(e)
+        except Exception as e:  # noqa: BLE001 - a launch failure is a case result
+            return None, f"{type(e).__name__}: {e}"
+
+    def _safe_close(self, session) -> None:
+        """close() is best-effort: capped, and a failure only reaches the log
+        (fix round 1, I2)."""
+        try:
+            _call_with_cap(session.close, SESSION_CLOSE_CAP_S)
+        except _Timeout as e:
+            self.progress.log(f"- session close timed out: {e}")
+        except Exception as e:  # noqa: BLE001 - never let cleanup kill the run
+            self.progress.log(f"- session close failed: {type(e).__name__}: {e}")
+
+    def _safe_abort(self, session) -> list[str]:
+        """abort() is best-effort: capped, and a failure is folded into the
+        case's own hang_evidence rather than raised (fix round 1, I2)."""
+        try:
+            _call_with_cap(session.abort, SESSION_CLOSE_CAP_S)
+            return []
+        except _Timeout as e:
+            return [f"abort timed out: {e}"]
+        except Exception as e:  # noqa: BLE001 - never let cleanup kill the run
+            return [f"abort failed: {type(e).__name__}: {e}"]
+
     def _run_layer(self, layer: str, todo: list[Case], summary: RunSummary,
                    wait_on_park: bool) -> str:
         session = None
         started = 0.0
         count = 0
         i = 0
+        consecutive_open_failures = 0
         try:
             while i < len(todo):
                 case = todo[i]
                 if session is None or count >= self.session_max_cases or \
                         self.clock() - started > self.session_max_s:
                     if session is not None:
-                        session.close()
-                    session = self.adapter.open_session(layer, self.run)
+                        old, session = session, None
+                        self._safe_close(old)
+                    session, open_err = self._open_session(layer)
+                    if session is None:
+                        consecutive_open_failures += 1
+                        obs = Observation(blocked=f"session_open: {open_err}",
+                                          hang_evidence=[open_err or ""])
+                        t_wall = self.wall()
+                        verdict = evaluate(case, obs, self.policy)
+                        self._write(case, obs, verdict, t_wall)
+                        summary.ran += 1
+                        i += 1
+                        if consecutive_open_failures >= self.max_consecutive_open_failures:
+                            summary.skipped += len(todo) - i
+                            self.progress.log(
+                                f"- layer {layer}: stopped after "
+                                f"{consecutive_open_failures} consecutive session-open "
+                                f"failures ({open_err})")
+                            return "blocked"
+                        continue
+                    consecutive_open_failures = 0
                     started, count = self.clock(), 0
                 crashes_before = self.adapter.crash_count()
                 t_wall = self.wall()
@@ -143,14 +211,14 @@ class Runner:
                     self.progress.park(layer, case.id, p.reason)
                     if wait_on_park and p.until and p.until - self.wall() < PARK_MAX_WAIT_S:
                         self.sleep(max(0.0, p.until - self.wall()) + 60)
-                        self.progress.unpark(case.id)
+                        self.progress.unpark(case.id, layer)
                         continue
                     summary.parked.extend(c.id for c in todo[i:])
                     return "parked"
                 except _Timeout as e:
-                    session.abort()
-                    session = None
-                    obs = Observation(blocked="hard_cap", hang_evidence=[str(e)])
+                    old, session = session, None
+                    evidence = [str(e), *self._safe_abort(old)]
+                    obs = Observation(blocked="hard_cap", hang_evidence=evidence)
                 except Exception as e:  # noqa: BLE001 - a harness error is a case result
                     obs = Observation(blocked="harness_error",
                                       hang_evidence=[f"{type(e).__name__}: {e}"])
@@ -168,11 +236,13 @@ class Runner:
             return "done"
         finally:
             if session is not None:
-                session.close()
+                old, session = session, None
+                self._safe_close(old)
 
     def _write(self, case: Case, obs: Observation, verdict: Verdict, t_wall: float) -> None:
         from dataclasses import asdict
 
+        prev = self.run.read_result(case.id)
         doc = {
             "id": case.id, "layer": case.layer, "tier": case.tier, "mode": case.mode,
             "body": case.body, "frame_role": case.frame_role, "source": case.source,
@@ -182,7 +252,9 @@ class Runner:
             "observation": asdict(obs),
         }
         self.run.write_result(case.id, doc)
-        self.progress.record(case.layer, case.id, case.tier, verdict.to_dict(), obs.wall_s)
+        prev_verdict = prev["verdict"] if prev else None
+        self.progress.record(case.layer, case.id, case.tier, verdict.to_dict(), obs.wall_s,
+                             prev_verdict=prev_verdict)
 
 
 def failed_verdict(note: str) -> Verdict:

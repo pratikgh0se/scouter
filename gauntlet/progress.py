@@ -45,30 +45,45 @@ class Progress:
         self._layer_done0 = self.doc["layers"][name]["done"]
         self.save()
 
-    def record(self, name: str, case_id: str, tier: str, verdict: dict, wall_s: float) -> None:
-        lay = self.doc["layers"][name]
-        self.unpark(case_id)
-        lay["done"] += 1
-        lay[verdict["score"]] += 1
-        lay["points"] += {"pass": 1.0, "partial": 0.5, "fail": 0.0}[verdict["score"]]
+    def _apply(self, lay: dict, tier: str, verdict: dict, sign: int) -> None:
+        """Add (sign=+1) or remove (sign=-1) one verdict's contribution to a
+        layer's counters (fix round 1, I3: reruns must not double-count)."""
+        lay[verdict["score"]] += sign
+        lay["points"] += sign * {"pass": 1.0, "partial": 0.5, "fail": 0.0}[verdict["score"]]
         outcome = verdict["outcome"]
         if outcome == "silent_failure":
-            lay["silent"] += 1
+            lay["silent"] += sign
         if outcome == "crash":
-            lay["crash"] += 1
+            lay["crash"] += sign
         if outcome == "failed_hang":
-            lay["hang"] += 1
+            lay["hang"] += sign
         if outcome == "blocked":
-            lay["blocked"] += 1
+            lay["blocked"] += sign
         if tier == "P0" and verdict["score"] == "pass":
-            lay["p0_pass"] += 1
-        lay["rate_pct"] = round(100.0 * lay["points"] / lay["done"], 1)
+            lay["p0_pass"] += sign
+
+    def record(self, name: str, case_id: str, tier: str, verdict: dict, wall_s: float,
+              prev_verdict: dict | None = None) -> None:
+        """`prev_verdict` (fix round 1, I3): when this case already had a
+        result (an `only_failed` or explicit-id rerun), the runner passes the
+        verdict it is replacing so its old contribution is undone first --
+        otherwise a rerun double-counts `done` and every counter."""
+        lay = self.doc["layers"][name]
+        self.unpark(case_id, name)
+        if prev_verdict is not None:
+            self._apply(lay, tier, prev_verdict, -1)
+        else:
+            lay["done"] += 1
+        self._apply(lay, tier, verdict, 1)
+        outcome = verdict["outcome"]
+        lay["rate_pct"] = round(100.0 * lay["points"] / lay["done"], 1) if lay["done"] else 0.0
         elapsed = self.clock() - self._layer_t0
         done_here = lay["done"] - self._layer_done0
         per_case = elapsed / done_here if done_here else 0.0
-        lay["eta_s"] = round(per_case * (lay["total"] - lay["done"]), 1)
+        lay["eta_s"] = max(0.0, round(per_case * (lay["total"] - lay["done"]), 1))
         self.doc["current_case"] = case_id
-        self.doc["eta_s"] = sum(v.get("eta_s") or 0 for v in self.doc["layers"].values())
+        self.doc["eta_s"] = max(0.0, sum(v.get("eta_s") or 0 for v in
+                                         self.doc["layers"].values()))
         note = verdict.get("silent_failure") or "; ".join(str(n) for n in verdict.get("notes", [])[:2])  # noqa: E501
         self.log(f"- **{case_id}**: {outcome}, {wall_s:.2f}s{' -- ' + note if note else ''}")
         self.save()
@@ -82,13 +97,24 @@ class Progress:
         self.log(f"- **{case_id}**: parked -- {reason}")
         self.save()
 
-    def unpark(self, case_id: str) -> None:
+    def unpark(self, case_id: str, layer: str | None = None) -> None:
+        """(fix round 1, I4): also restores the layer's own parked counter and
+        status -- previously only the run-level `parked` list was cleared, so
+        a layer that resolved its last park in-process (`wait_on_park`) was
+        left reporting `status: "parked"` forever."""
         if case_id in self.doc["parked"]:
             self.doc["parked"].remove(case_id)
+        if layer is not None:
+            lay = self.doc["layers"].get(layer)
+            if lay is not None and lay.get("parked", 0) > 0:
+                lay["parked"] -= 1
+                if lay["parked"] <= 0 and lay.get("status") == "parked":
+                    lay["status"] = "running"
 
     def end_layer(self, name: str, status: str = "done") -> None:
         lay = self.doc["layers"][name]
-        if lay.get("status") != "parked" or status != "done":
+        still_parked = lay.get("parked", 0) > 0
+        if not (still_parked and status == "done"):
             lay["status"] = status
         lay["eta_s"] = 0.0 if status == "done" else lay.get("eta_s")
         self.log(f"\n## Layer {name}: {status} ({lay['done']}/{lay['total']}, "
