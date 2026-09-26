@@ -3,7 +3,7 @@ their phrases resolve (and refuse honestly until pinned)."""
 
 import unittest
 
-from scouter.core import phrases, vocab
+from scouter.core import dtbridge, phrases, vocab
 
 
 class FinishingRowsTest(unittest.TestCase):
@@ -18,12 +18,31 @@ class FinishingRowsTest(unittest.TestCase):
         self.assertEqual((v.lo, v.hi, v.step), (-0.8, 0.4, 0.05))
 
     def test_phrases_resolve_to_the_rows(self) -> None:
-        self.assertEqual(phrases.resolve("add grain").moves[0].param, "strength")
-        self.assertEqual(phrases.resolve("less grain").moves[0].notches, -1)
-        self.assertEqual(phrases.resolve("darker corners").moves[0].notches, -1)
-        self.assertEqual(phrases.resolve("add a vignette").key, "darker_corners")
-        self.assertEqual(phrases.resolve("lighter corners a lot").moves[0].notches, 2)
+        # (phrase, key, module, param, notches): the sign is the direction on
+        # the row -- grain.strength up is more grain, vignette.brightness
+        # down is darker corners.
+        cases = (
+            ("add grain", "more_grain", "grain", "strength", 1),
+            ("more grain", "more_grain", "grain", "strength", 1),
+            ("less grain", "less_grain", "grain", "strength", -1),
+            ("darker corners", "darker_corners", "vignette", "brightness", -1),
+            ("add a vignette", "darker_corners", "vignette", "brightness", -1),
+            ("lighter corners", "lighter_corners", "vignette", "brightness", 1),
+            ("lighter corners a lot", "lighter_corners", "vignette", "brightness", 2),
+        )
+        for text, key, module, param, notches in cases:
+            with self.subTest(phrase=text):
+                r = phrases.resolve(text)
+                self.assertEqual(r.key, key)
+                self.assertEqual(len(r.moves), 1)
+                mv = r.moves[0]
+                self.assertEqual((mv.module, mv.param, mv.notches), (module, param, notches))
 
     def test_status_follows_the_pins(self) -> None:
+        # Neither row has a host-pinned action path or XMP slot yet (Task 32
+        # adds them as candidates pending their own host probe), so both are
+        # exactly `candidate` -- never `live` without a pin.
         for s in (vocab.spec("grain", "strength"), vocab.spec("vignette", "brightness")):
-            self.assertIn(vocab.status(s), ("candidate", "absolute_only", "live"))
+            with self.subTest(row=f"{s.module}.{s.param}"):
+                self.assertNotIn((s.module, s.param), dtbridge.ACTION_PATHS)
+                self.assertEqual(vocab.status(s), "candidate")
