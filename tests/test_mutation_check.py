@@ -46,6 +46,36 @@ def write_test(root, text):
     (root / "tests" / "test_production.py").write_text(text)
 
 
+def env_with_this_interpreter_on_path():
+    """`os.environ`, with the directory of `sys.executable` (whichever
+    interpreter is ACTUALLY running this test right now) prepended to PATH.
+
+    Fix round 9 (integrator-reproduced failure, 10/36 red from
+    `.venv/bin/python -m pytest tests/test_mutation_check.py -q`, 36/36 green
+    from `python3 -m pytest ...` after `export PATH=.../.venv/bin:$PATH`):
+    `scripts/merge_gate.sh` (and, through it, `scripts/mutation_check.sh`)
+    resolves its own "python3" via PATH - invoking a test with an ABSOLUTE
+    interpreter path puts no venv `bin/` on PATH at all, so that bare
+    "python3" subprocess silently picks up whatever system interpreter PATH
+    happens to find, which may lack pytest entirely (every check the gate
+    scripts run then fails to even start). Every subprocess call this file
+    makes to `scripts/merge_gate.sh` or `make gate` must use this env, so the
+    whole chain matches the interpreter actually running the test - not
+    whatever the CALLER's ambient PATH happened to be - regardless of
+    whether that interpreter came with its own venv `bin/` alongside it (a
+    linked git worktree, in particular, never gets a copy of an untracked
+    `.venv/` - `scripts/mutation_check.sh`'s own venv-preferring fallback
+    only fires when SCRIPT_HOME actually has one)."""
+    # Deliberately NOT `.resolve()`d: `sys.executable` as INVOKED (e.g.
+    # `.venv/bin/python`, a symlink) is what Python's own venv detection
+    # keys off at startup (it looks for `pyvenv.cfg` next to the path it was
+    # launched as) - following the symlink to its real target directory
+    # (often a bare, venv-less base interpreter with no pytest installed)
+    # would silently defeat that detection and reintroduce this exact bug.
+    interpreter_dir = str(Path(sys.executable).parent)
+    return {**os.environ, "PATH": f"{interpreter_dir}:{os.environ.get('PATH', '')}"}
+
+
 def copy_gate_scaffolding(dest, repo_root):
     """Copy the `make gate` / `scripts/merge_gate.sh` / `scripts/mutation_check.sh`
     / `tests/mutation_check.py` scaffolding from `repo_root` (wherever THIS
@@ -914,7 +944,7 @@ class MakeGateInvokesTheScript(unittest.TestCase):
 
             p = subprocess.run(
                 [str(self.REPO_ROOT / "scripts" / "merge_gate.sh"), base, head, str(root)],
-                capture_output=True, text=True)
+                capture_output=True, text=True, env=env_with_this_interpreter_on_path())
             self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
             self.assertIn("did not fail (BAD)", p.stdout)
 
@@ -942,7 +972,8 @@ class MakeGateInvokesTheScript(unittest.TestCase):
 
             copy_gate_scaffolding(root, self.REPO_ROOT)
             p = subprocess.run(["make", "gate", f"BASE={base}", f"HEAD={head}"],
-                                cwd=root, capture_output=True, text=True, timeout=120)
+                                cwd=root, capture_output=True, text=True, timeout=120,
+                                env=env_with_this_interpreter_on_path())
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertIn("| test file |", p.stdout)
 
@@ -959,7 +990,8 @@ class MakeGateInvokesTheScript(unittest.TestCase):
 
             p = subprocess.run(
                 [str(self.REPO_ROOT / "scripts" / "merge_gate.sh"), base, head, str(root)],
-                capture_output=True, text=True, env={**os.environ, "SCOUTER_SKIP_MUTATION_CHECK": "1"})
+                capture_output=True, text=True,
+                env={**env_with_this_interpreter_on_path(), "SCOUTER_SKIP_MUTATION_CHECK": "1"})
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertIn("SCOUTER_SKIP_MUTATION_CHECK", p.stderr)
             self.assertIn("WARN", p.stderr)

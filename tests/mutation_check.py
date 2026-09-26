@@ -222,10 +222,19 @@ def run_pytest(root, node_ids, timeout=180):
     """Run exactly `node_ids` with `-k "not host"` (host tests need real
     darktable and never run in this check). Returns (rc, out); rc 5 means
     "every selected test was filtered out by -k", distinct from a real pass
-    or a real failure - callers must not read it as either."""
+    or a real failure - callers must not read it as either.
+
+    Uses `sys.executable`, never the bare string "python3" (root cause of a
+    real integrator-reproduced failure: invoking this script via an absolute
+    interpreter path, e.g. `.venv/bin/python -m pytest ...`, does not put
+    that venv's `bin/` on PATH - a bare "python3" subprocess then silently
+    resolves to whatever system interpreter PATH happens to find, which may
+    lack pytest entirely. `sys.executable` is always the interpreter actually
+    running this process, so every internal check subprocess matches it
+    regardless of how - or from where - the caller was invoked)."""
     if not node_ids:
         return 0, "no tests selected"
-    argv = ["python3", "-m", "pytest", *node_ids, "-k", "not host", "-q"]
+    argv = [sys.executable, "-m", "pytest", *node_ids, "-k", "not host", "-q"]
     return sh(argv, cwd=root, timeout=timeout)
 
 
