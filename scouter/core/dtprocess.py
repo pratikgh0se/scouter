@@ -115,7 +115,8 @@ def foreign_pids() -> list[int]:
 
 
 def launch(frame: str | Path | None, library: str | Path, configdir: str | Path | None = None,
-           *, log_path: str | Path | None = None, exe: str = DARKTABLE) -> Launched:
+           *, log_path: str | Path | None = None, exe: str = DARKTABLE,
+           env: dict[str, str] | None = None) -> Launched:
     argv = [exe, "--library", str(library)]
     if configdir:
         argv += ["--configdir", str(configdir)]
@@ -124,7 +125,7 @@ def launch(frame: str | Path | None, library: str | Path, configdir: str | Path 
     Path(library).parent.mkdir(parents=True, exist_ok=True)
     log = open(log_path, "ab") if log_path else subprocess.DEVNULL
     try:
-        proc = subprocess.Popen(argv, stdout=log, stderr=log, start_new_session=True)
+        proc = subprocess.Popen(argv, stdout=log, stderr=log, start_new_session=True, env=env)
     finally:
         if log is not subprocess.DEVNULL:
             log.close()

@@ -54,12 +54,16 @@ class Rehearsal:
         import os
 
         env = {k: v for k, v in os.environ.items() if k not in
-               ("SCOUTER_CONFIG", "SCOUTER_CACHE", "SCOUTER_JOB", "OBSIDIAN_VAULT_PATH")}
+               ("SCOUTER_CONFIG", "SCOUTER_CACHE", "SCOUTER_JOB", "OBSIDIAN_VAULT_PATH",
+                "SCOUTER_DARKTABLE_LIBRARY_DB")}
         env.update(HOME=str(self.home), XDG_CONFIG_HOME=str(self.config),
                    XDG_CACHE_HOME=str(self.cache), PYTHONPATH=str(REPO),
                    SCOUTER_CONFIG=str(self.config / "scouter" / "config.json"),
                    SCOUTER_CACHE=str(self.cache / "scouter"),
                    OBSIDIAN_VAULT_PATH=str(self.root / "vault"),
+                   # Pin the library: without it history/backup fall back to a running
+                   # darktable's --library, then ~/.config/darktable/library.db (real one).
+                   SCOUTER_DARKTABLE_LIBRARY_DB=str(self.config / "library.db"),
                    DARKTABLE_MCP_PLUGIN_PATH=str(self.config / "darktable" / "lua" /
                                                  "darktable_mcp.lua"))
         return env
@@ -89,7 +93,7 @@ class Rehearsal:
             from scouter.core import dtprocess
 
             cfg = self.config / "darktable"
-            rec = dtprocess.launch(None, cfg / "library.db", cfg)
+            rec = dtprocess.launch(None, cfg / "library.db", cfg, env=self.env())
             time.sleep(15)
             res = dtprocess.terminate(rec.pid)
             ok = (cfg / "darktablerc").exists() and (cfg / "library.db").exists()
@@ -145,11 +149,19 @@ class InstallSession:
 
     def run_case(self, case: Case) -> Observation:
         t0 = time.monotonic()
+        name = case.meta["action"]
         try:
-            ok, detail = self.rehearsal.action(case.meta["action"])
+            ok, detail = self.rehearsal.action(name)
+        except subprocess.TimeoutExpired as e:
+            return Observation(calls=[CallRecord("rehearsal", {"action": name},
+                                                 {"ok": False, "outcome": "timeout"})],
+                               blocked=f"hang: install action {name} exceeded its timeout",
+                               hang_evidence=[str(e)],
+                               extra={"action_ok": False},
+                               wall_s=time.monotonic() - t0)
         except Exception as e:  # noqa: BLE001 - a failed action is a result
             ok, detail = False, {"error": f"{type(e).__name__}: {e}"[:300]}
-        return Observation(calls=[CallRecord("rehearsal", {"action": case.meta["action"]},
+        return Observation(calls=[CallRecord("rehearsal", {"action": name},
                                              {"ok": ok, "outcome": "ok", "data": detail})],
                            extra={"action_ok": ok, "detail": detail},
                            wall_s=time.monotonic() - t0)
