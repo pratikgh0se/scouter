@@ -299,17 +299,28 @@ def _changed_keys(obs: Observation, units: dict) -> list[str]:
                   if not _same(units.get(k, "ratio"), a.get(k), b.get(k)))
 
 
-def _reported_key(writes: list[CallRecord]) -> str | None:
-    """The one module.param the last ok write's envelope names, if it names one."""
+def _reported_keys(writes: list[CallRecord]) -> list[str] | None:
+    """The module.param keys the last ok write's envelope reports moving.
+
+    A multi-move envelope (darkroom_say) reports its moves' module.param,
+    noop moves excluded; a single-move one its data.module/data.param.
+    `data.key` is never read as a param: darkroom_say puts the PHRASE key
+    there ("warmer"), which is not a module.param (smoke S1-A). An envelope
+    that names something but no param gives [] (skip rule (b)); one that
+    names nothing gives None (the case's sidecar key may stand in)."""
     for c in reversed(writes):
         if not _env_ok(c):
             continue
         data = (c.envelope or {}).get("data") or {}
-        if isinstance(data.get("key"), str):
-            return data["key"]
+        moves = data.get("moves")
+        if isinstance(moves, list) and moves:
+            return sorted({f"{m['module']}.{m['param']}" for m in moves
+                           if isinstance(m, dict) and not m.get("noop")
+                           and isinstance(m.get("module"), str)
+                           and isinstance(m.get("param"), str)})
         if isinstance(data.get("module"), str) and isinstance(data.get("param"), str):
-            return f"{data['module']}.{data['param']}"
-        return None
+            return [f"{data['module']}.{data['param']}"]
+        return [] if "key" in data else None
     return None
 
 
@@ -365,13 +376,16 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     if sidecar.get("changed") and not _fingerprint_changed(obs):
         return "a: reported ok but the sidecar history did not change"
     units = sidecar.get("units", {})
-    key = _reported_key(writes) or sidecar.get("key")
-    if key:
+    keys = _reported_keys(writes)
+    if keys is None:
+        keys = [sidecar["key"]] if sidecar.get("key") else []
+    if keys:
         changed = _changed_keys(obs, units)
-        if changed and key not in changed:
-            return f"b: reported {key} but {', '.join(changed)} changed"
-        if sidecar.get("changed") and key not in changed:
-            return f"a: reported ok but {key} did not change"
+        named = ", ".join(keys)
+        if changed and not set(keys) & set(changed):
+            return f"b: reported {named} but {', '.join(changed)} changed"
+        if sidecar.get("changed") and not set(keys) & set(changed):
+            return f"a: reported ok but {named} did not change"
     unmoved = _m1_key_unchanged(case, obs)
     if unmoved:
         return f"a: reported ok but {unmoved} did not change"
