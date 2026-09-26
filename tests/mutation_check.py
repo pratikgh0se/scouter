@@ -64,9 +64,49 @@ def sh(argv, cwd=None, timeout=300, input_text=None):
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
+# Fix round 1 (review): basename alone (`test_*.py` anywhere in the tree) was
+# too loose - scoped to this repo's actual pytest collection roots.
+TEST_DIRS = ("tests/", "gauntlet/tests/", "tests/gauntlet/")
+
+
 def is_test_file(rel_path):
+    rel_path = str(rel_path).replace("\\", "/")
     name = Path(rel_path).name
-    return name.startswith("test_") and name.endswith(".py")
+    if not (name.startswith("test_") and name.endswith(".py")):
+        return False
+    return rel_path.startswith(TEST_DIRS)
+
+
+_SUPPORT_BASENAMES = ("conftest.py", "__init__.py")
+_SUPPORT_NAME_HINTS = ("fake", "mock", "stub")
+
+
+def is_test_support_file(rel_path):
+    """A `.py` file under a test directory that is test-DOUBLE support, not
+    production - `conftest.py`, `tests/**/__init__.py`, anything under a
+    `fixtures/` directory, or a fakes/mocks/stubs module (e.g.
+    `tests/scouter_fakes.py`). Fix round 3 (audit, fix/htc-applied-verify):
+    these must never be reverted (that would test against a stale double, not
+    the actual bug) or required to "discriminate" (they are not tests).
+
+    Deliberately narrower than "any non-test_*.py file under a test
+    directory": `tests/gauntlet/observe.py` and `tests/gauntlet/execute.py`
+    are real harness code with real behavior (and real bugs to catch) that
+    merely lives under `tests/` for organizational reasons - excluding them
+    from mutation testing entirely would silently blind the gate on exactly
+    the files `tests/gauntlet/test_execute.py` exists to cover."""
+    rel_path = str(rel_path).replace("\\", "/")
+    if not rel_path.endswith(".py"):
+        return False
+    if not rel_path.startswith(TEST_DIRS) or is_test_file(rel_path):
+        return False
+    name = Path(rel_path).name
+    if name in _SUPPORT_BASENAMES:
+        return True
+    if "fixtures" in rel_path.split("/"):
+        return True
+    stem = name[:-3].lower()
+    return any(hint in stem for hint in _SUPPORT_NAME_HINTS)
 
 
 def changed_files(repo, base, head):
@@ -189,6 +229,62 @@ def run_pytest(root, node_ids, timeout=180):
     return sh(argv, cwd=root, timeout=timeout)
 
 
+# pytest's own signature for "this test module could not even be collected"
+# (an ImportError/SyntaxError at import time) - distinct from a genuine
+# assertion failure, which never prints either string. Matched on OUTPUT, not
+# rc: a collection error and a real failure can both exit non-zero (fix
+# round 1).
+COLLECTION_ERROR_RE = re.compile(r"ERROR collecting|ImportError while importing test module|"
+                                  r"errors? during collection")
+
+
+def is_collection_error(out):
+    return bool(COLLECTION_ERROR_RE.search(out or ""))
+
+
+# Fix round 2 (row 459 audit, capsule-corp's capsule/intent-examples
+# f3031c3..0e184f7, mirrored here): when a production file is NEW in the
+# range, reverting it to base means deleting it - every test that imports it
+# then ERRORs no matter how well it discriminates, which is not a
+# test-quality signal. Distinguish that specific shape from a genuine,
+# unrelated import error.
+NO_MODULE_RE = re.compile(r"No module named '([\w.]+)'")
+CANNOT_IMPORT_RE = re.compile(r"cannot import name '(\w+)' from '([\w.]+)'")
+
+
+def _prod_module_candidates(path):
+    """(dotted, attr, package) for a production .py file path - `dotted` is
+    the fully-qualified module name; `attr`/`package` is the "from package
+    import attr" shape a `from pkg import newmodule` statement produces when
+    newmodule.py is missing (Python reports the parent package name, not the
+    missing module, in that phrasing)."""
+    p = str(path)
+    p = p[: -len("/__init__.py")] if p.endswith("/__init__.py") else p[:-3]
+    dotted = p.replace("/", ".")
+    parts = dotted.split(".")
+    attr = parts[-1]
+    package = ".".join(parts[:-1])
+    return dotted, attr, package
+
+
+def new_module_import_error(out, new_prod_files):
+    """True when the collection error in `out` is explained by one of
+    `new_prod_files` (production files added in this range, so absent after a
+    revert-to-base) simply not existing - as opposed to a genuinely broken or
+    unrelated import."""
+    out = out or ""
+    m1 = NO_MODULE_RE.search(out)
+    m2 = CANNOT_IMPORT_RE.search(out)
+    for f in new_prod_files:
+        dotted, attr, package = _prod_module_candidates(f)
+        if m1 and (m1.group(1) == dotted or dotted.startswith(m1.group(1) + ".")
+                   or m1.group(1).startswith(dotted + ".")):
+            return True
+        if m2 and m2.group(1) == attr and m2.group(2) in (package, dotted.rsplit(".", 1)[0] if "." in dotted else ""):
+            return True
+    return False
+
+
 def apply_weakening(text, func_ranges):
     """Flip the FIRST discriminating assertion INSIDE one of `func_ranges`.
     Returns (new_text, what) or (None, None)."""
@@ -234,11 +330,26 @@ def static_flags(source, lineno, end_lineno):
     return flags
 
 
+def _cell(state):
+    """`state` is None (n/a), True (failed - good), False (did not fail - bad),
+    "error" (collection error - not discriminating, fix round 1) or
+    "new_module" (the only failure is the reverted file not existing yet -
+    fix round 2; n/a, not a fail, and not counted against the gate - the
+    weaken column carries the requirement instead)."""
+    if state is None:
+        return "n/a"
+    if state == "new_module":
+        return "n/a (new module)"
+    if state == "error":
+        return "ERROR (not discriminating)"
+    return "FAIL (good)" if state else "did not fail (BAD)"
+
+
 def check_range(repo, base, head):
     repo = Path(repo).resolve()
     changed = changed_files(repo, base, head)
     test_files = [f for f in changed if is_test_file(f)]
-    prod_files = [f for f in changed if f.endswith(".py") and not is_test_file(f)]
+    prod_files = [f for f in changed if f.endswith(".py") and not is_test_file(f) and not is_test_support_file(f)]
 
     rows = []
     ok = True
@@ -268,6 +379,7 @@ def check_range(repo, base, head):
     # ---- (b) revert-mutation, one worktree, production reverted to base ----
     revert_by_file = {}
     if prod_files:
+        new_prod_files = [f for f in prod_files if file_status(repo, base, head, f) == "A"]
         with tempfile.TemporaryDirectory(prefix="mutation-check-revert-") as tmp:
             wt = make_worktree(repo, head, Path(tmp))
             try:
@@ -277,6 +389,16 @@ def check_range(repo, base, head):
                 for f, (status, funcs) in per_file_funcs.items():
                     ids = sorted({node_id(f, cls, name) for cls, name, _, _ in funcs})
                     rc, out = run_pytest(wt, ids)
+                    if is_collection_error(out):
+                        if new_module_import_error(out, new_prod_files):
+                            # n/a, not a fail: the module the test imports
+                            # simply doesn't exist yet at base - the weaken
+                            # column (below) carries the requirement.
+                            revert_by_file[f] = ("new_module", out[-800:])
+                        else:
+                            revert_by_file[f] = ("error", out[-800:])
+                            ok = False
+                        continue
                     if rc == NO_TESTS_COLLECTED_RC:
                         revert_by_file[f] = (None, "n/a - only host-only tests changed (filtered by -k 'not host')")
                         continue
@@ -311,6 +433,10 @@ def check_range(repo, base, head):
                     rc, out = run_pytest(wt, ids)
                 finally:
                     target.write_text(original, encoding="utf-8")
+                if is_collection_error(out):
+                    weaken_by_func[f] = ("error", out[-800:])
+                    ok = False
+                    continue
                 if rc == NO_TESTS_COLLECTED_RC:
                     weaken_by_func[f] = (None, "n/a - only host-only tests changed (filtered by -k 'not host')")
                     continue
@@ -327,8 +453,8 @@ def check_range(repo, base, head):
         rev_ok, rev_why = revert_by_file.get(f, (None, "-"))
         weak_ok, weak_why = weaken_by_func.get(f, (None, "-"))
         flags = static_by_file.get(f, [])
-        rev_cell = "n/a" if rev_ok is None else ("FAIL (good)" if rev_ok else "did not fail (BAD)")
-        weak_cell = "n/a" if weak_ok is None else ("FAIL (good)" if weak_ok else "did not fail (BAD)")
+        rev_cell = _cell(rev_ok)
+        weak_cell = _cell(weak_ok)
         flags_cell = "; ".join(flags) if flags else "none"
         rows.append((f, names, rev_cell, weak_cell, flags_cell))
 
