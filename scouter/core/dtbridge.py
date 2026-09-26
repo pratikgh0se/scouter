@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 
 from darktable_mcp.bridge.client import (
@@ -213,6 +214,27 @@ def call(method: str, params: dict | None = None, timeout: float | None = None) 
         raise BridgeTimeout(
             f"bridge method {method} failed: {message}", detail={"method": method}
         ) from e
+
+
+#: Watchdog design 2.1: the ping budget. Only ever called after a timeout.
+HEALTH_TIMEOUT_S = 5.0
+
+
+def health(timeout: float = HEALTH_TIMEOUT_S) -> dict:
+    """One `darktable_mcp.diag` call with a 5 s budget: `alive` (answered,
+    GUI ready), `starting` (answered, gui_ready false) or `unresponsive` (no
+    answer). diag is exempt from the plugin's GUI gate and touches no
+    gtk-wrapped API, so an answer proves the Lua worker is alive."""
+    t0 = time.monotonic()
+    try:
+        d = get_bridge().call("darktable_mcp.diag", {}, timeout=timeout) or {}
+    except Exception as e:  # noqa: BLE001 - any failure to answer is "unresponsive"
+        return {"state": "unresponsive", "ping_ms": int(1000 * (time.monotonic() - t0)),
+                "error": str(e)[:200]}
+    ready = d.get("gui_ready")
+    return {"state": "starting" if ready is False else "alive",
+            "ping_ms": int(1000 * (time.monotonic() - t0)), "gui_ready": ready,
+            "gui_ready_source": d.get("gui_ready_source")}
 
 
 def current_view() -> str:

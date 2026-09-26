@@ -19,7 +19,6 @@ import queue
 import secrets
 import shlex
 import shutil
-import signal
 import subprocess
 import sys
 import threading
@@ -195,13 +194,11 @@ class Darktable:
         self.proc: subprocess.Popen | None = None
 
     def launch(self, step: str, frame: Path, library: Path, settle_s: float = 5.0) -> bool:
-        from scouter.core import dtbridge
+        from scouter.core import dtbridge, dtprocess
 
         library.parent.mkdir(parents=True, exist_ok=True)
         t0 = time.monotonic()
-        logf = open(RUN / "darktable.log", "ab")
-        self.proc = subprocess.Popen([DT, "--library", str(library), str(frame)],
-                                     stdout=logf, stderr=logf)
+        dtprocess.launch(frame, library, log_path=RUN / "darktable.log")
         last = "never answered"
         in_darkroom = False
         while time.monotonic() - t0 < 120:
@@ -212,8 +209,8 @@ class Darktable:
             if last == "darkroom":
                 in_darkroom = True
                 break
-            if self.proc.poll() is not None:
-                last = f"darktable exited ({self.proc.returncode})"
+            if dtprocess.owned_pid() is None:
+                last = "darktable exited"
                 break
             time.sleep(1.0)
         if not in_darkroom:
@@ -239,30 +236,10 @@ class Darktable:
 
     def quit(self, step: str) -> None:
         t0 = time.monotonic()
-        how = "osascript"
-        try:
-            subprocess.run(["osascript", "-e", 'tell application "darktable" to quit'],
-                           capture_output=True, timeout=30, check=False)
-        except subprocess.TimeoutExpired:
-            pass
-        proc = self.proc
-        if proc is not None:
-            for wait, sig in ((25, None), (10, signal.SIGTERM), (10, signal.SIGKILL)):
-                if sig is not None:
-                    how = sig.name
-                    try:
-                        proc.send_signal(sig)
-                    except ProcessLookupError:
-                        break
-                try:
-                    proc.wait(timeout=wait)
-                    break
-                except subprocess.TimeoutExpired:
-                    continue
-        else:
-            deadline = time.monotonic() + 25
-            while darktable_running() and time.monotonic() < deadline:
-                time.sleep(1)
+        from scouter.core import dtprocess
+
+        res = dtprocess.terminate(responsive=None)
+        how = res["how"]
         self.proc = None
         time.sleep(3)
         gone = not darktable_running()
