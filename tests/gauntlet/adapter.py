@@ -172,6 +172,7 @@ class RoutedSession:
         self.run = run
         self.current = None
         self.agent = None  # the AgentSession of the running agent case (final fix C1)
+        self.aborted = False  # (pre-night-1 N1/N3): set once, never cleared
         # (final fix I1): a resumed run numbers after the dirs already there,
         # never reusing one whose sidecars/library an earlier session edited.
         self.n = highest_session_n(run.sessions_dir / layer)
@@ -193,6 +194,10 @@ class RoutedSession:
         return AgentSession(inner)
 
     def _session(self, body: str):
+        from tests.gauntlet.session import SessionBlocked
+
+        if self.aborted:  # (N1): an aborted routed session opens nothing new
+            raise SessionBlocked("routed session aborted")
         if self.current is not None and self.current.body == body and \
                 not getattr(self.current, "mcp_dead", False):  # (final fix I3): reopen
             return self.current
@@ -205,9 +210,15 @@ class RoutedSession:
         self.n += 1
         root = self.run.sessions_dir / self.layer / f"{self.n:03d}-{body}"
         point_cache(root / "cache", *self._roots())  # == the MCP child's cache
-        self.current = self.session_factory(self.adapter.corpus(), root, body, self.run.root)
-        self.current.open()
-        return self.current
+        s = self.session_factory(self.adapter.corpus(), root, body, self.run.root)
+        self.current = s
+        if self.aborted:  # (N1): abort() set the flag before it read current
+            raise SessionBlocked("routed session aborted")
+        s.open()
+        if self.aborted:
+            s.abort()  # a repeat abort: kills only s's recorded pids
+            raise SessionBlocked("routed session aborted during open")
+        return s
 
     def open_body(self, body: str):
         """(final fix I7): open the session for `body` now (eager open). On a
@@ -217,8 +228,9 @@ class RoutedSession:
         try:
             return self._session(body)
         except BaseException:
-            self.current = None
-            self._back_to_process_cache()
+            if not self.aborted:  # (N1): after an abort the cache may be the next session's
+                self.current = None
+                self._back_to_process_cache()
             raise
 
     def _roots(self) -> tuple[Path, Path]:
@@ -257,8 +269,12 @@ class RoutedSession:
             obs = faults.run_fault_case(s, case)
         elif self.layer == "scenarios_agent":
             # (final fix C1): keep the handle so abort() can kill its claude.
-            self.agent = self.agent_factory(s)
-            obs = self.agent.run_case(case)
+            agent = self.agent_factory(s)
+            self.agent = agent
+            if self.aborted:  # (pre-night-1 N3): abort ran before the handle existed
+                agent.aborted = True
+                agent.stop_claude()
+            obs = agent.run_case(case)
         else:
             obs = run_tool_case(s, case)
         # (final fix I3): an MCP-server death inside this case is a crash.
@@ -275,16 +291,19 @@ class RoutedSession:
             agent.aborted = True
             agent.stop_claude()
 
-    def abort(self) -> None:
+    def abort(self) -> dict:
+        self.aborted = True
+        res = {"ok": True, "how": "nothing_open", "killed": []}
         try:
             self._stop_agent()
         finally:
             if self.current is not None:
                 old, self.current = self.current, None
                 try:
-                    old.abort()
+                    res = old.abort() or res
                 finally:
                     self._back_to_process_cache()
+        return res
 
     def close(self) -> None:
         self._stop_agent()
@@ -298,6 +317,9 @@ class RoutedSession:
 
 class ScouterAdapter:
     name = "scouter"
+    #: (pre-night-1 N1): a cold launch + gui_ready + MCP initialize + the
+    #: noise-floor renders; the engine default (180 s) is too tight.
+    session_open_cap_s = 420.0
 
     def __init__(self, runs_root: Path = RUNS_ROOT) -> None:
         self.runs_root = runs_root
@@ -310,6 +332,7 @@ class ScouterAdapter:
         #: RoutedSession's ScouterSession factory (None = the real one); a seam
         #: for tests, which never launch darktable.
         self.session_factory = None
+        self._opening: RoutedSession | None = None  # (N1): the in-flight eager open
 
     # -- data --------------------------------------------------------------
 
@@ -382,7 +405,7 @@ class ScouterAdapter:
             return guide.generate()
         raise ValueError(layer)
 
-    def open_session(self, layer: str, run):
+    def open_session(self, layer: str, run, next_case: Case | None = None):
         import tests.gauntlet.exec_guide  # noqa: F401 - registers the cli virtual tool
         import tests.gauntlet.exec_looks  # noqa: F401 - registers look_plan/chart_golden
         import tests.gauntlet.exec_parity  # noqa: F401 - registers parity_pair
@@ -410,10 +433,25 @@ class ScouterAdapter:
         routed = RoutedSession(self, layer, run, session_factory=self.session_factory)
         # (final fix I7): open the product session HERE, under the runner's
         # session-open cap, not lazily inside the first case's hard cap.
-        body = self._next_body(layer, run)
+        # (pre-night-1 N2): the runner names the case it opens for.
+        body = routed_body(next_case) if next_case is not None else self._next_body(layer, run)
         if body is not None:
-            routed.open_body(body)
+            self._opening = routed
+            try:
+                routed.open_body(body)
+            finally:
+                if self._opening is routed:
+                    self._opening = None
         return routed
+
+    def abort_open(self) -> dict:
+        """(pre-night-1 N1): engine hook, called from the runner thread when
+        open_session exceeds session_open_cap_s. Aborts only the in-flight
+        RoutedSession (the pids it launched); typed result."""
+        routed, self._opening = self._opening, None
+        if routed is None:
+            return {"ok": True, "how": "nothing_opening", "killed": []}
+        return routed.abort()
 
     @staticmethod
     def _next_body(layer: str, run) -> str | None:

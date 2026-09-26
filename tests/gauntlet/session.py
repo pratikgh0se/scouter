@@ -156,6 +156,22 @@ class DtControl:
 
         return dtprocess.terminate(responsive=responsive)
 
+    def kill_launched(self, rec) -> bool:
+        """(pre-night-1 N1): SIGKILL the exact darktable `rec` recorded at
+        launch (pid + start time), whatever SCOUTER_CACHE says now. True when
+        a signal was sent."""
+        import signal
+
+        from scouter.core import dtprocess
+
+        if rec is None or dtprocess._lstart(rec.pid) != rec.start_time:
+            return False
+        try:
+            os.kill(rec.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            return False
+        return True
+
 
 class ScouterSession:
     """Implements gauntlet.adapter.Session for tool-mode layers."""
@@ -182,6 +198,11 @@ class ScouterSession:
         #: an observation; mcp_dead marks the session for reopen.
         self.mcp_deaths: list[str] = []
         self.mcp_dead = False
+        #: (pre-night-1 N1): what this session launched, so an abort from the
+        #: runner thread kills exactly that, even mid-open.
+        self.aborted = False
+        self.launched = None  # dtprocess.Launched of our darktable
+        self._mcp_pending = None  # the MCP client while it initialises
 
     # -- lifecycle -------------------------------------------------------
 
@@ -189,6 +210,7 @@ class ScouterSession:
         from tests.gauntlet.benchmark.run_editor_benchmark import McpClient
 
         client = McpClient([PY, "-m", "scouter.mcp.server"], env, cwd, cwd / "mcp.stderr")
+        self._mcp_pending = client  # (N1): killable while initialize() hangs
         client.initialize()
         return client
 
@@ -204,6 +226,8 @@ class ScouterSession:
         self._launch(self.staged.frames["hero"])
         try:
             self.mcp = self.mcp_factory(self.staged.env, self.root)
+            self._mcp_pending = None
+            self._check_aborted()
             if self.floors_fn is not None:
                 self.floors, deterministic = self.floors_fn(self.staged.frames["hero"])
                 if not deterministic:
@@ -213,6 +237,10 @@ class ScouterSession:
             self.abort()
             raise
         return self
+
+    def _check_aborted(self) -> None:
+        if self.aborted:
+            raise SessionBlocked("session aborted by the runner (open cap)")
 
     def _quit(self, why: str) -> None:
         """Quit the owned darktable; refuse to go on (and so to launch a second
@@ -229,11 +257,16 @@ class ScouterSession:
         assert self.staged is not None
         failures: list[str] = []
         for _attempt in (1, 2):
+            self._check_aborted()
             try:
-                self.dt.launch(frame, self.staged.library, self.root / "darktable.log")
+                rec = self.dt.launch(frame, self.staged.library, self.root / "darktable.log")
             except LaunchError as e:  # dtprocess already stopped the unowned process
                 failures.append(f"LaunchError: {e}")
                 continue
+            self.launched = rec or self.launched
+            if self.aborted:  # (N1): the abort landed during the launch
+                self.abort()
+                self._check_aborted()
             ready = self.dt.ready(LAUNCH_READY_S)
             if ready.get("ready"):
                 self.current_frame = frame
@@ -260,14 +293,28 @@ class ScouterSession:
         self.relaunch(dst)
         return dst
 
-    def abort(self) -> None:
-        self.dt.terminate(responsive=False)
-        if self.mcp is not None:
+    def abort(self) -> dict:
+        """Kill our darktable and MCP child. (pre-night-1 N1): a repeated
+        abort (the late open thread after the runner's) never re-reads the
+        owner record -- SCOUTER_CACHE may name the next session's by then --
+        and only kills the pids this session recorded. Returns a typed result."""
+        again, self.aborted = self.aborted, True
+        res = {"ok": True, "how": "repeat_abort"} if again else \
+            (self.dt.terminate(responsive=False) or {})
+        killed = []
+        kill = getattr(self.dt, "kill_launched", None)
+        if self.launched is not None and kill is not None and kill(self.launched):
+            killed.append(getattr(self.launched, "pid", self.launched))
+        for client in (self.mcp, self._mcp_pending):
+            proc = getattr(client, "proc", None)
             try:
-                self.mcp.proc.kill()
+                if proc is not None and proc.poll() is None:
+                    proc.kill()
+                    killed.append(proc.pid)
             except Exception:  # noqa: BLE001
                 pass
-            self.mcp = None
+        self.mcp = self._mcp_pending = None
+        return {"ok": bool(res.get("ok")) or bool(killed), "darktable": res, "killed": killed}
 
     def close(self) -> None:
         # (final fix M2): darktable is quit even when the MCP close raises.

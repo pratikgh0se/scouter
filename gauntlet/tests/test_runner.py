@@ -321,3 +321,63 @@ def test_adapter_harness_allowance_extends_the_case_cap(tmp_path):
         case_mod.Case.budget_cap_s = orig
     assert run.read_result("alpha-0")["verdict"]["outcome"] == "verified"
     assert seen[0] == "alpha-0" and a.aborts == 0
+
+
+# -- pre-night-1 N1/N2: adapter-tunable open cap, abort_open, next-case hint ---
+
+def test_open_cap_is_adapter_tunable(tmp_path):
+    a, run = _setup(tmp_path)
+    assert Runner(a, run).session_open_cap_s == 180.0  # engine default
+    a.session_open_cap_s = 420.0
+    assert Runner(a, run).session_open_cap_s == 420.0
+    assert Runner(a, run, session_open_cap_s=5.0).session_open_cap_s == 5.0  # explicit wins
+
+
+def test_an_over_cap_open_is_aborted_through_the_adapter_hook(tmp_path):
+    import threading
+
+    a, run = _setup(tmp_path)
+    a.session_open_cap_s = 0.2
+    released = threading.Event()
+    calls = []
+
+    def hung_open(layer, run_root):
+        released.wait(5)
+        return ToySession(a)
+
+    def abort_open():
+        calls.append("abort_open")
+        released.set()
+        return {"ok": True, "killed": [4321]}
+
+    a.open_session, a.abort_open = hung_open, abort_open
+    Runner(a, run, max_consecutive_open_failures=1).run_layers(layers=["alpha"])
+    assert calls == ["abort_open"]
+    ev = run.read_result("alpha-0")["observation"]["hang_evidence"]
+    assert any("abort_open" in e and "4321" in e for e in ev)
+
+
+def test_a_failing_abort_open_is_folded_into_the_evidence(tmp_path):
+    a, run = _setup(tmp_path)
+    a.session_open_cap_s = 0.1
+    a.open_session = lambda layer, run_root: time.sleep(1)
+
+    def bad():
+        raise OSError("kill failed")
+    a.abort_open = bad
+    Runner(a, run, max_consecutive_open_failures=1).run_layers(layers=["alpha"])
+    ev = run.read_result("alpha-0")["observation"]["hang_evidence"]
+    assert any("abort_open failed" in e for e in ev)
+
+
+def test_open_session_is_told_the_case_it_opens_for(tmp_path):
+    """N2: under --case / --only-failed the adapter cannot guess the next case."""
+    a, run = _setup(tmp_path)
+    seen = []
+
+    def open_session(layer, run_root, next_case=None):
+        seen.append(next_case.id if next_case else None)
+        return ToySession(a)
+    a.open_session = open_session
+    Runner(a, run).run_layers(layers=["alpha"], case_ids={"alpha-2"})
+    assert seen == ["alpha-2"]
