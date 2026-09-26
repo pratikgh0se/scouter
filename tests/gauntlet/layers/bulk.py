@@ -104,12 +104,15 @@ def generate(tax: Taxonomy) -> list[Case]:
         n = 120
         steps = [] if verb == "library_import" else [_import(n)]
         if verb == "job_run":
+            steps.extend([*_hero_edit(), _s("preset_save", 12.0, name="{preset}", confirm=True)])
             steps.append(_s("job_run", PER_FRAME_S * n, job_slug="{job_slug}", preset="{preset}",
                             hero="{job_frame:1}", confirm=True))
         elif verb == "export_run":
             steps.append(_s("export_run", PER_FRAME_S * n, images="{job_frames}",
                             preset="{export_preset}", out_dir="{out_dir}", confirm=True))
         elif verb == "style_apply_set":
+            steps.extend([*_hero_edit(), _s("style_extract", 30.0, image="{job_frame:1}",
+                          name="{style}", modules=["temperature"], confirm=True)])
             steps.append(_s("style_apply_set", PER_FRAME_S * n, name="{style}",
                             job_slug="{job_slug}", confirm=True))
         else:

@@ -13,6 +13,7 @@ from gauntlet.case import Case
 from tests.gauntlet import observe
 from tests.gauntlet.corpus import build_card, delete_card
 from tests.gauntlet.execute import substitute
+from tests.gauntlet.session import SessionBlocked
 
 STATS_SAMPLE = 10
 
@@ -51,15 +52,19 @@ def run_bulk_case(session, case: Case) -> Observation:
         if kill_at:
             killer = threading.Thread(target=_kill_after, args=(session, kill_at), daemon=True)
             killer.start()
-        for st in case.steps:
-            args = substitute(st.args, session, obs.calls)
-            rec = session.call(st.tool, args, st.budget_s, write=st.write)
-            obs.calls.append(rec)
-            if kill_at and rec.error:
-                session.relaunch()
-                again = session.call(st.tool, args, st.budget_s, write=st.write)
-                obs.calls.append(again)
-                obs.extra["journal_resumed"] = "resum" in json.dumps(again.envelope or {})
+        try:
+            for st in case.steps:
+                args = substitute(st.args, session, obs.calls)
+                rec = session.call(st.tool, args, st.budget_s, write=st.write)
+                obs.calls.append(rec)
+                if kill_at and rec.error:
+                    session.relaunch()
+                    again = session.call(st.tool, args, st.budget_s, write=st.write)
+                    obs.calls.append(again)
+                    obs.extra["journal_resumed"] = "resum" in json.dumps(again.envelope or {})
+        except SessionBlocked as e:
+            obs.blocked = f"session: {e}"
+            obs.hang_evidence.append(f"session: {e}")
         job_files = [f for f in frames if f.exists()]
         obs.extra["changed_n"] = count_changed(job_files, before)
         obs.extra["reported_n"] = reported_n([c.envelope for c in obs.calls if c.write])
