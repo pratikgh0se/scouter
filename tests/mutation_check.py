@@ -61,6 +61,10 @@ def sh(argv, cwd=None, timeout=300, input_text=None):
                             text=True, timeout=timeout, input=input_text)
     except subprocess.TimeoutExpired:
         return 124, "timed out"
+    except OSError as exc:
+        # B0: an interpreter path that does not exist (or is not executable)
+        # must read as a runner problem, never crash the gate.
+        return 127, str(exc)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
@@ -144,9 +148,20 @@ def added_line_numbers(repo, base, head, path):
 
 
 def test_defs(source):
-    """{(class_or_None, funcname): (lineno, end_lineno)} for every test* def -
-    pytest collects both bare module-level functions and TestCase-style
-    methods, so both are in scope here."""
+    """{(class_or_None, funcname): (lineno, end_lineno)} for every test* def
+    pytest would actually collect - a module-level function, or a method
+    directly in a class body. Fix round 10 (B3, HTC gate-rows audit): a
+    `def test(self)` NESTED inside another function (e.g. a `_make()`
+    factory whose closures get `setattr`-copied onto a class, one per data
+    row) is NOT itself a collected item - pytest only ever sees the closure
+    under whatever name `setattr` gave it. Counting the nested def as a
+    fake "test" node produced real false positives: a bogus "no assert"
+    static flag on the factory closure, and a weaken run against a node id
+    (`Class::test`) pytest reports "no match" for (rc 4, silently read as a
+    false-green "FAIL (good)" before fix round 10's B0). `func_depth` tracks
+    nesting inside ANY function/method (not just class methods), so a
+    closure is excluded regardless of whether its enclosing function is
+    itself module-level or a method."""
     out = {}
     try:
         tree = ast.parse(source)
@@ -156,6 +171,7 @@ def test_defs(source):
     class Visitor(ast.NodeVisitor):
         def __init__(self):
             self.cls = None
+            self.func_depth = 0
 
         def visit_ClassDef(self, node):
             prev, self.cls = self.cls, node.name
@@ -163,15 +179,74 @@ def test_defs(source):
             self.cls = prev
 
         def _fn(self, node):
-            if node.name.startswith("test"):
+            if self.func_depth == 0 and node.name.startswith("test"):
                 out[(self.cls, node.name)] = (node.lineno, getattr(node, "end_lineno", node.lineno))
+            self.func_depth += 1
             self.generic_visit(node)
+            self.func_depth -= 1
 
         visit_FunctionDef = _fn
         visit_AsyncFunctionDef = _fn
 
     Visitor().visit(tree)
     return out
+
+
+def nested_test_like_defs(source):
+    """{(enclosing_class_or_None, funcname): (lineno, end_lineno)} for every
+    `def test*` NESTED inside another function - the shape `test_defs`
+    deliberately excludes (B3). Used only to notice "a changed range touched
+    a nested test-shaped closure" so its enclosing class's REAL collected
+    items (dynamically generated, one per data row) can be treated as
+    changed too - see `changed_test_functions`."""
+    out = {}
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return out
+
+    class Visitor(ast.NodeVisitor):
+        def __init__(self):
+            self.cls = None
+            self.func_depth = 0
+
+        def visit_ClassDef(self, node):
+            prev, self.cls = self.cls, node.name
+            self.generic_visit(node)
+            self.cls = prev
+
+        def _fn(self, node):
+            if self.func_depth > 0 and node.name.startswith("test"):
+                out[(self.cls, node.name)] = (node.lineno, getattr(node, "end_lineno", node.lineno))
+            self.func_depth += 1
+            self.generic_visit(node)
+            self.func_depth -= 1
+
+        visit_FunctionDef = _fn
+        visit_AsyncFunctionDef = _fn
+
+    Visitor().visit(tree)
+    return out
+
+
+def collected_item_names(root, rel_path, python, timeout=60):
+    """Real pytest node ids `pytest --collect-only -q` reports for
+    `rel_path`, as a `{class_or_None: [method_or_function, ...]}` map (B3).
+    Never raises - a failed collection just yields `{}`, so callers fall
+    back to the AST-only view rather than crash."""
+    rc, out = sh([python, "-m", "pytest", "--collect-only", "-q", rel_path],
+                 cwd=root, timeout=timeout)
+    result = {}
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if "::" not in line or not line.startswith(rel_path):
+            continue
+        parts = line.split("::")
+        if len(parts) == 2:
+            result.setdefault(None, []).append(parts[1])
+        elif len(parts) >= 3:
+            result.setdefault(parts[1], []).append(parts[-1])
+    return result
 
 
 def changed_test_functions(repo, base, head, path, status, added):
@@ -218,23 +293,70 @@ def revert_to_base(repo, base, scratch, path, status):
     target.write_text(content, encoding="utf-8")
 
 
-def run_pytest(root, node_ids, timeout=180):
-    """Run exactly `node_ids` with `-k "not host"` (host tests need real
-    darktable and never run in this check). Returns (rc, out); rc 5 means
-    "every selected test was filtered out by -k", distinct from a real pass
-    or a real failure - callers must not read it as either.
+def gate_python(repo):
+    """The interpreter EVERY pytest subprocess this gate spawns must use:
+    `<repo>/.venv/bin/python` when the repo being checked has one, else
+    `sys.executable` (whichever interpreter is running this gate process
+    right now) - never a bare "python3" resolved via the CALLER's ambient
+    PATH (fix round 9's root cause, promoted to round 10's B0: the HTC
+    integrator's gate ran under Homebrew's system python3, which has no
+    pytest; every internal pytest subprocess then exited 1 with "No module
+    named pytest", and the tool read that bare non-zero exit as a genuine
+    test failure - "FAIL (good)" on every single row, a false green/red
+    that never actually discriminated anything). Resolved once, from the
+    ORIGINAL `--repo` (which is what a real caller's venv lives next to) -
+    a scratch worktree never gets a copy of an untracked `.venv/` of its
+    own, so reusing that same absolute path for every subprocess, regardless
+    of which throwaway worktree is the `cwd`, is what makes this work."""
+    venv_python = Path(repo).resolve() / ".venv" / "bin" / "python"
+    if venv_python.exists():
+        return str(venv_python)
+    return sys.executable
 
-    Uses `sys.executable`, never the bare string "python3" (root cause of a
-    real integrator-reproduced failure: invoking this script via an absolute
-    interpreter path, e.g. `.venv/bin/python -m pytest ...`, does not put
-    that venv's `bin/` on PATH - a bare "python3" subprocess then silently
-    resolves to whatever system interpreter PATH happens to find, which may
-    lack pytest entirely. `sys.executable` is always the interpreter actually
-    running this process, so every internal check subprocess matches it
-    regardless of how - or from where - the caller was invoked)."""
+
+def check_pytest_available(python, cwd):
+    """(ok, detail). B0's mandatory precheck, run once before any check:
+    `<python> -m pytest --version`. A gate that cannot even confirm pytest
+    is importable must refuse outright (exit 2, "environment error") -
+    never silently produce a table that looks like a real verdict."""
+    rc, out = sh([python, "-m", "pytest", "--version"], cwd=str(cwd), timeout=30)
+    if rc != 0:
+        return False, f"pytest unavailable under {python}: {(out or '').strip()[:300]}"
+    return True, (out or "").strip()
+
+
+# B0: pytest's own summary line ("3 failed, 2 passed in 0.12s", "1 error in
+# 0.01s", ...). A run counts as a genuine, discriminating FAILURE only when
+# rc == 1 AND this line reports >=1 "failed" - never rc alone, which a
+# broken interpreter, an internal error or a bad node id can also produce.
+PYTEST_FAILED_SUMMARY_RE = re.compile(r"\b(\d+) failed\b")
+
+
+def classify_pytest_outcome(rc, out):
+    """"passed" (rc 0: nothing failed - the mutation did NOT discriminate),
+    "failed" (rc 1 AND the summary line reports >=1 failed: a genuine,
+    discriminating failure), or "error_runner" (anything else: rc 2/3/4,
+    "no tests ran", "not found"/"no match in any of", or no recognizable
+    summary line at all - a RUNNER problem, never a verdict about the test,
+    and never read as either a pass or a fail)."""
+    out = out or ""
+    if rc == 0:
+        return "passed"
+    if rc == 1 and PYTEST_FAILED_SUMMARY_RE.search(out):
+        return "failed"
+    return "error_runner"
+
+
+def run_pytest(root, node_ids, python, timeout=180):
+    """Run exactly `node_ids` with `-k "not host"` (host tests need real
+    darktable and never run in this check) under `python` (from
+    `gate_python`, NEVER a bare "python3" - see `gate_python`'s docstring).
+    Returns (rc, out); rc 5 means "every selected test was filtered out by
+    -k", distinct from a real pass or a real failure - callers must not read
+    it as either."""
     if not node_ids:
         return 0, "no tests selected"
-    argv = [sys.executable, "-m", "pytest", *node_ids, "-k", "not host", "-q"]
+    argv = [python, "-m", "pytest", *node_ids, "-k", "not host", "-q"]
     return sh(argv, cwd=root, timeout=timeout)
 
 
@@ -325,6 +447,74 @@ def new_module_import_error(out, new_prod_files):
         if m2 and m2.group(1) == attr and m2.group(2) in (package, dotted.rsplit(".", 1)[0] if "." in dotted else ""):
             return True
     return False
+
+
+# B1 (round 10, HTC gate-rows audit): `cannot import name 'X' from 'M'` (or
+# the AttributeError-shaped equivalent) is not the same failure as `M` not
+# existing at all (new_module_import_error, above) - `M` DOES exist at base,
+# it just does not define `X` yet, because the range ADDED `X` to `M`. That
+# is not a test-quality signal either.
+ATTRIBUTE_ERROR_RE = re.compile(r"AttributeError: module '([\w.]+)' has no attribute '(\w+)'")
+
+
+def _module_path_for_dotted(dotted, candidate_files):
+    for f in candidate_files:
+        d, _, _ = _prod_module_candidates(f)
+        if d == dotted:
+            return f
+    return None
+
+
+def _top_level_names(source):
+    """Set of names bound at module top level: function/class defs and
+    simple `NAME = ...` / `NAME: T = ...` assignments. Enough to recognize
+    "the range added a new class/function/constant to this module"."""
+    names = set()
+    try:
+        tree = ast.parse(source or "")
+    except SyntaxError:
+        return names
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    names.add(t.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+    return names
+
+
+def analyze_symbol_import_error(out, repo, base, head, reverted_prod_files):
+    """None (not this shape - stays a plain "error"), or
+    `(state, module_path, symbol, additions_only)` for the B1 shape: the
+    collection error names a symbol `X` missing from module `M`, `M` is one
+    of `reverted_prod_files` (so IT exists at base, just not with `X` yet),
+    and `X` is a name HEAD's `M` defines but base's `M` does not - i.e. the
+    range itself added `X` to `M`. `additions_only` is True when every one of
+    base's top-level names is still present in HEAD's `M` (a pure addition,
+    safe to restore in full) - the caller reruns with `M` kept at HEAD in
+    that case; otherwise the caller reads it as an unresolvable n/a."""
+    out = out or ""
+    m = CANNOT_IMPORT_RE.search(out) or ATTRIBUTE_ERROR_RE.search(out)
+    if not m:
+        return None
+    if m.re is ATTRIBUTE_ERROR_RE:
+        module_dotted, symbol = m.group(1), m.group(2)
+    else:
+        symbol, module_dotted = m.group(1), m.group(2)
+    module_path = _module_path_for_dotted(module_dotted, reverted_prod_files)
+    if module_path is None:
+        return None
+    base_src = show_file(repo, base, module_path) or ""
+    head_src = show_file(repo, head, module_path) or ""
+    base_names = _top_level_names(base_src)
+    head_names = _top_level_names(head_src)
+    if symbol not in head_names or symbol in base_names:
+        return None  # not something the range added to this module
+    additions_only = base_names <= head_names
+    return module_path, symbol, additions_only
 
 
 def _import_names(source):
@@ -484,12 +674,80 @@ def apply_weakening(text, func_ranges):
     return None, None
 
 
-def static_flags(source, lineno, end_lineno):
+HELPER_CALL_RE = re.compile(r"\bself\.(\w+)\(|(?<![.\w])([a-zA-Z_]\w*)\(")
+
+
+def _all_top_level_functions(source):
+    """{(class_or_None, name): (lineno, end_lineno)} for EVERY function or
+    method defined at module level or directly in a class body - any name,
+    not just test* (B4: used to resolve a same-file helper a test body
+    calls, one level deep)."""
+    out = {}
+    try:
+        tree = ast.parse(source or "")
+    except SyntaxError:
+        return out
+
+    class Visitor(ast.NodeVisitor):
+        def __init__(self):
+            self.cls = None
+            self.func_depth = 0
+
+        def visit_ClassDef(self, node):
+            prev, self.cls = self.cls, node.name
+            self.generic_visit(node)
+            self.cls = prev
+
+        def _fn(self, node):
+            if self.func_depth == 0:
+                out[(self.cls, node.name)] = (node.lineno, getattr(node, "end_lineno", node.lineno))
+            self.func_depth += 1
+            self.generic_visit(node)
+            self.func_depth -= 1
+
+        visit_FunctionDef = _fn
+        visit_AsyncFunctionDef = _fn
+
+    Visitor().visit(tree)
+    return out
+
+
+def _asserts_via_helper(source, body, own_class, all_funcs):
+    """B4: a test body with no `assert` of its own still counts as asserting
+    when it calls a helper - `self.<name>(...)` (a method on the SAME class,
+    or its base class within this file, when the base's own name ends in
+    `Fixture`/`Base` - a common test-base-class convention) or a bare
+    `<name>(...)` (a module-level function in this file) - whose OWN body
+    contains `assert`. Returns the helper name, or None (a genuinely
+    assert-free chain still flags)."""
+    for m in HELPER_CALL_RE.finditer(body):
+        name = m.group(1) or m.group(2)
+        if not name or name.startswith("assert"):
+            continue
+        candidates = [(own_class, name), (None, name)]
+        for cls, fname in all_funcs:
+            if fname == name and cls and cls != own_class and (cls.endswith("Fixture") or cls.endswith("Base")):
+                candidates.append((cls, name))
+        for key in candidates:
+            if key in all_funcs:
+                s2, e2 = all_funcs[key]
+                lines = source.splitlines()
+                helper_body = "\n".join(lines[s2 - 1:e2])
+                if "assert" in helper_body:
+                    return name
+    return None
+
+
+def static_flags(source, lineno, end_lineno, own_class=None, all_funcs=None):
     lines = source.splitlines()
     body = "\n".join(lines[lineno - 1:end_lineno])
     flags = []
     if "assert" not in body:
-        flags.append("no assert in the function body")
+        helper = _asserts_via_helper(source, body, own_class, all_funcs or {})
+        if helper:
+            flags.append(f"info: asserts via helper {helper}")
+        else:
+            flags.append("no assert in the function body")
     if TAUTOLOGY_RE.search(body):
         flags.append("assertTrue(True) / assert True - a tautology")
     if BARE_EXCEPT_RE.search(body):
@@ -516,9 +774,15 @@ def _cell(state, why=None):
     so a reviewer sees it ran against code the range didn't touch), or
     "no_functions" (round 8: the changed test FILE has zero new/changed test
     FUNCTIONS - a decorator-only or fixture-signature edit - so there was
-    nothing to select and run at all). Every state but plain True/False,
-    fallback_bad and marker_mismatch is n/a, not a fail, and not counted
-    against the gate - the weaken column carries the requirement instead."""
+    nothing to select and run at all), "error_runner" (round 10 B0: rc 2/3/4,
+    no tests ran, not found/no match, or no recognizable pytest summary line
+    at all - a RUNNER problem, BAD in both columns, never a pass or a fail),
+    "reverted_symbol_napt"/"symbol_kept_ok"/"symbol_kept_bad" (round 10 B1:
+    the collection error is a name the range itself added to a reverted
+    module - see `analyze_symbol_import_error`). Every state but plain
+    True/False, fallback_bad, marker_mismatch, error_runner and
+    symbol_kept_bad is n/a, not a fail, and not counted against the gate -
+    the weaken column carries the requirement instead."""
     if state is None:
         return "n/a"
     if state == "new_module":
@@ -537,11 +801,20 @@ def _cell(state, why=None):
         return f"did not fail (BAD) [{why}]" if why else "did not fail (BAD) [weaken: file-level fallback]"
     if state == "error":
         return "ERROR (not discriminating)"
+    if state == "error_runner":
+        return f"error (runner): {why}" if why else "error (runner)"
+    if state == "reverted_symbol_napt":
+        return f"n/a (reverted symbol {why} imported at collection)"
+    if state == "symbol_kept_ok":
+        return f"FAIL (good) [revert: {why}]"
+    if state == "symbol_kept_bad":
+        return f"did not fail (BAD) [revert: {why}]"
     return "FAIL (good)" if state else "did not fail (BAD)"
 
 
 def check_range(repo, base, head):
     repo = Path(repo).resolve()
+    python = gate_python(repo)
     changed = changed_files(repo, base, head)
     test_files = [f for f in changed if is_test_file(f)]
     prod_files = [f for f in changed if f.endswith(".py") and not is_test_file(f) and not is_test_support_file(f)]
@@ -553,22 +826,64 @@ def check_range(repo, base, head):
         return True, [], "no new/changed test files in this range"
 
     per_file_funcs = {}
+    pending_generated = {}  # f -> a representative (lineno, end_lineno) to resolve (B3)
     for f in test_files:
         status = file_status(repo, base, head, f)
         added = added_line_numbers(repo, base, head, f)
         funcs = changed_test_functions(repo, base, head, f, status, added)
         per_file_funcs[f] = (status, funcs)
+        head_src = show_file(repo, head, f)
+        nested = nested_test_like_defs(head_src) if head_src is not None else {}
+        # No lexical link is assumed between a nested closure and the class
+        # it ends up attached to (a `setattr(SomeClass, name, factory(...))`
+        # pattern, the audit's real shape, has NONE - the factory is usually
+        # a plain MODULE-level function) - `cls` here is whatever lexically
+        # encloses the closure, almost always None, and is not used as a
+        # filter for that reason.
+        for (_n_cls, _n_name), (s, e) in nested.items():
+            if status == "A" or any(s <= ln <= e for ln in added):
+                pending_generated[f] = (s, e)
+                break
+
+    # B3 (HTC gate-rows audit): a changed test-shaped closure NESTED inside a
+    # factory (e.g. `_make()`, one call per JSON example, `setattr`-copied
+    # onto some class at module load time) is not itself a collected item -
+    # resolve what pytest REALLY collects for the whole file and union in
+    # every real item not already known from the AST-only view, using the
+    # changed closure's own line range (where the shared assertion logic
+    # actually lives) as their location for the weaken step below.
+    if pending_generated:
+        with tempfile.TemporaryDirectory(prefix="mutation-check-collect-") as tmp:
+            cwt = make_worktree(repo, head, Path(tmp))
+            try:
+                for f, (s, e) in pending_generated.items():
+                    real = collected_item_names(cwt, f, python)
+                    status, funcs = per_file_funcs[f]
+                    existing = {(cls, name) for cls, name, _, _ in funcs}
+                    added_funcs = list(funcs)
+                    for r_cls, r_names in real.items():
+                        for r_name in r_names:
+                            if (r_cls, r_name) not in existing:
+                                added_funcs.append((r_cls, r_name, s, e))
+                                existing.add((r_cls, r_name))
+                    per_file_funcs[f] = (status, added_funcs)
+            finally:
+                remove_worktree(repo, cwt)
 
     # ---- (d) static flags, read straight from HEAD ----
     static_by_file = {}
     for f, (status, funcs) in per_file_funcs.items():
         src = show_file(repo, head, f)
+        all_funcs = _all_top_level_functions(src)
         flags = []
+        hard_flag = False
         for cls, name, s, e in funcs:
-            for flag in static_flags(src, s, e):
+            for flag in static_flags(src, s, e, own_class=cls, all_funcs=all_funcs):
                 flags.append(f"{cls + '.' if cls else ''}{name}: {flag}")
+                if not flag.startswith("info:"):
+                    hard_flag = True
         static_by_file[f] = flags
-        if flags:
+        if hard_flag:
             ok = False
 
     # ---- (b) revert-mutation, one worktree, production reverted to base ----
@@ -632,8 +947,44 @@ def check_range(repo, base, head):
                                               "no production file changed in this range is imported by this test file")
                         continue
                     ids = sorted({node_id(f, cls, name) for cls, name, _, _ in funcs})
-                    rc, out = run_pytest(wt, ids)
+                    rc, out = run_pytest(wt, ids, python)
                     if is_collection_error(out):
+                        symbol_hit = analyze_symbol_import_error(out, repo, base, head, prod_files)
+                        if symbol_hit is not None:
+                            module_path, symbol, additions_only = symbol_hit
+                            if not additions_only:
+                                # B1 fallback: M's diff is not a pure
+                                # addition (removed/changed existing names
+                                # too) - restoring it whole is not safe to
+                                # call a clean revert. n/a; the weaken column
+                                # carries the requirement, as with new_module.
+                                revert_by_file[f] = ("reverted_symbol_napt", symbol)
+                                continue
+                            # B1 (row 459 audit, HTC gate-rows): `M` exists at
+                            # base, it just doesn't define `X` yet - the range
+                            # ADDED `X` to `M`. Keep M at HEAD (restoring only
+                            # what the range purely added) and rerun once -
+                            # this measures the test's OWN discrimination
+                            # without also blaming it for a collection error
+                            # that isn't its fault.
+                            head_module_src = show_file(repo, head, module_path)
+                            (wt / module_path).write_text(head_module_src, encoding="utf-8")
+                            try:
+                                rc2, out2 = run_pytest(wt, ids, python)
+                            finally:
+                                revert_to_base(repo, base, wt, module_path,
+                                               file_status(repo, base, head, module_path))
+                            outcome2 = classify_pytest_outcome(rc2, out2)
+                            label = f"{module_path} kept at head for import of {symbol}"
+                            if outcome2 == "error_runner":
+                                revert_by_file[f] = ("error_runner", out2[-400:])
+                                ok = False
+                            elif outcome2 == "failed":
+                                revert_by_file[f] = ("symbol_kept_ok", label)
+                            else:
+                                revert_by_file[f] = ("symbol_kept_bad", label)
+                                ok = False
+                            continue
                         if new_module_import_error(out, new_prod_files):
                             # n/a, not a fail: the module the test imports
                             # simply doesn't exist yet at base - the weaken
@@ -646,10 +997,15 @@ def check_range(repo, base, head):
                     if rc == NO_TESTS_COLLECTED_RC:
                         revert_by_file[f] = (None, "n/a - only host-only tests changed (filtered by -k 'not host')")
                         continue
-                    failed = rc != 0
-                    revert_by_file[f] = (failed, out[-800:])
-                    if not failed:
+                    outcome = classify_pytest_outcome(rc, out)
+                    if outcome == "error_runner":
+                        revert_by_file[f] = ("error_runner", out[-400:])
                         ok = False
+                    else:
+                        failed = outcome == "failed"
+                        revert_by_file[f] = (failed, out[-800:])
+                        if not failed:
+                            ok = False
             finally:
                 remove_worktree(repo, wt)
     else:
@@ -696,7 +1052,7 @@ def check_range(repo, base, head):
                     run_ids = ids
                 target.write_text(mutated, encoding="utf-8")
                 try:
-                    rc, out = run_pytest(wt, run_ids)
+                    rc, out = run_pytest(wt, run_ids, python)
                 finally:
                     target.write_text(original, encoding="utf-8")
                 if is_collection_error(out):
@@ -706,7 +1062,12 @@ def check_range(repo, base, head):
                 if rc == NO_TESTS_COLLECTED_RC:
                     weaken_by_func[f] = (None, "n/a - only host-only tests changed (filtered by -k 'not host')")
                     continue
-                failed = rc != 0
+                outcome = classify_pytest_outcome(rc, out)
+                if outcome == "error_runner":
+                    weaken_by_func[f] = ("error_runner", out[-400:])
+                    ok = False
+                    continue
+                failed = outcome == "failed"
                 if fallback:
                     weaken_by_func[f] = ("fallback_ok" if failed else "fallback_bad", what)
                 else:
@@ -745,6 +1106,16 @@ def main(argv=None):
     ap.add_argument("--head", required=True)
     ap.add_argument("--repo", default=".")
     a = ap.parse_args(argv)
+    # B0 (round 10): refuse outright, before any check, if this gate cannot
+    # even confirm pytest is importable under the interpreter it is about to
+    # use - never silently produce a table that looks like a real verdict
+    # (the HTC integrator's exact failure: every row read "FAIL (good)"
+    # because the interpreter had no pytest at all).
+    python = gate_python(a.repo)
+    env_ok, env_detail = check_pytest_available(python, a.repo)
+    if not env_ok:
+        print(f"environment error: {env_detail}")
+        return 2
     ok, rows, note = check_range(a.repo, a.base, a.head)
     if note:
         print(note)
