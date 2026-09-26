@@ -233,3 +233,53 @@ def test_never_launches_a_second_darktable_when_quit_fails(corpus, tmp_path):
     with pytest.raises(sess.SessionBlocked, match="relaunch: darktable did not quit"):
         s.relaunch()
     assert dt.launches == 1
+
+
+# -- final fix I3: MCP-server deaths are crashes -----------------------------
+
+class _ExitedProc:
+    def __init__(self, rc):
+        self.rc = rc
+
+    def poll(self):
+        return self.rc
+
+
+class DeadMcp(FakeMcp):
+    """An MCP server whose process has exited: every call is a transport error."""
+
+    def __init__(self, rc=1):
+        super().__init__()
+        self.proc = _ExitedProc(rc)
+
+    def call_tool(self, tool, args, timeout):
+        raise BrokenPipeError("[Errno 32] Broken pipe")
+
+
+def test_a_dead_mcp_server_is_recorded_and_marks_the_session_for_reopen(corpus, tmp_path):
+    s = _session(corpus, tmp_path, mcp=DeadMcp(rc=-11)).open()
+    rec = s.call("darkroom_set", {"module": "exposure"}, 3.5, write=True)
+    assert rec.error.startswith("transport:")
+    assert s.mcp_deaths == ["mcp_server_death: exit -11"] and s.mcp_dead
+    assert s.take_mcp_deaths() == ["mcp_server_death: exit -11"] and s.mcp_deaths == []
+
+
+def test_a_live_mcp_transport_error_is_not_a_death(corpus, tmp_path):
+    mcp = DeadMcp()
+    mcp.proc = _ExitedProc(None)  # still running
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    s.call("darkroom_set", {"module": "exposure"}, 3.5, write=True)
+    assert s.mcp_deaths == [] and not s.mcp_dead
+
+
+def test_close_quits_darktable_even_when_the_mcp_close_raises(corpus, tmp_path):
+    """(final fix M2)."""
+    class BadCloseMcp(FakeMcp):
+        def close(self):
+            raise BrokenPipeError("mcp stdin gone")
+
+    dt = FakeDt()
+    s = _session(corpus, tmp_path, dt, mcp=BadCloseMcp()).open()
+    with pytest.raises(BrokenPipeError):
+        s.close()
+    assert dt.terminated == [None] and s.mcp is None

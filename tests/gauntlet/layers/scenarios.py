@@ -5,7 +5,14 @@ from __future__ import annotations
 
 from gauntlet.case import Case, Check, Expect, Step, case_id
 from tests.gauntlet.checkmap import RequestPlan, plan_request
-from tests.gauntlet.layers.common import BUDGET_SAY, frame, m1_restored, stat_check, step
+from tests.gauntlet.layers.common import (
+    AGENT_TURN_TIMEOUT_S,
+    BUDGET_SAY,
+    frame,
+    m1_restored,
+    stat_check,
+    step,
+)
 from tests.gauntlet.p0 import select_p0
 from tests.gauntlet.taxonomy import Taxonomy
 
@@ -148,6 +155,9 @@ def agent_case(req: dict, plan: RequestPlan, tax: Taxonomy, tier: str) -> Case:
     role = cmap["role_for_problem"][req["problem"]]
     meta = {"sentence": req["sentence"], "class": plan.klass, "genre": req["genre"],
             "followups": list(req["followups"])}
+    # (final fix C1): the case has no steps; its hard cap is every claude turn
+    # (initial + each follow-up) at its timeout plus the usual 30 s slack.
+    meta["cap_s"] = (1 + len(meta["followups"])) * (AGENT_TURN_TIMEOUT_S + 30.0)
     if plan.klass in ("impossible", "out"):
         meta["roadmap_key"] = nearest_phrase(req, tax)[1]
         expect = Expect("refuse")

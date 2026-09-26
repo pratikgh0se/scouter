@@ -128,3 +128,26 @@ def test_contaminated_frame_is_restaged(corpus, tmp_path, monkeypatch):
         "fingerprint": "x", "params": {"exposure.exposure": 1.3}, "units": {}})
     assert execute.isolate(s, frame, "hero") is True
     assert s.staged.frames["hero"] != frame and dt.launches == 2
+
+
+def test_a_virtual_tool_that_blocks_stops_the_later_steps(corpus, tmp_path, monkeypatch):
+    """(final fix M3): a virtual tool setting obs.blocked itself ends the case."""
+    from gauntlet.adapter import CallRecord
+
+    def blocks(session, case, step, obs):
+        obs.blocked = "session: frame switch failed"
+        return CallRecord("blocker", {}, {"ok": False})
+
+    monkeypatch.setitem(execute.VIRTUAL, "blocker", blocks)
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
+                                                                 "params": {}, "units": {}})
+    mcp = FakeMcp()
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    case = Case(id="c9", layer="looks", tier="P1", mode="tool",
+                steps=[Step("blocker", {}, 8.0, False),
+                       Step("darkroom_set", {"module": "exposure"}, 3.5, True)],
+                expect=Expect("edit"), body="olympus", frame_role="hero")
+    obs = execute.run_tool_case(s, case)
+    assert obs.blocked == "session: frame switch failed"
+    assert [c.tool for c in obs.calls] == ["blocker"]
+    assert "darkroom_set" not in [t for t, _ in mcp.calls]

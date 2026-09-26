@@ -485,6 +485,17 @@ def _hang_case(session, case: Case) -> Observation:
     return obs
 
 
+def healed(env: dict | None) -> bool:
+    """(final fix I4): did this envelope report a watchdog heal? The registry
+    puts it in `data.healed` (the retried verb) or, when the verb was not
+    retried, in `error.detail.healed`."""
+    env = env or {}
+    data = env.get("data") or {}
+    detail = (env.get("error") or {}).get("detail") or {}
+    return bool((isinstance(data, dict) and data.get("healed"))
+                or (isinstance(detail, dict) and detail.get("healed")))
+
+
 def watchdog_probe(session, case, step, obs) -> CallRecord:
     """The 4 watchdog cases (spec 3.5) through `scouter doctor` and a SIGSTOPped
     owned darktable; `foreign_pid` uses a sleeper process the runner owns.
@@ -537,8 +548,9 @@ def watchdog_probe(session, case, step, obs) -> CallRecord:
             first = session.call("darkroom_enable", {"module": "exposure"}, 90.0, write=True)
             detail["first"] = first.envelope
             if scen == "auto_heal_once":
-                ok = bool((first.envelope or {}).get("healed")) and \
-                    (first.envelope or {}).get("ok")
+                # (final fix I4): the heal is reported in data.healed (a
+                # retried verb) -- never at the envelope's top level.
+                ok = healed(first.envelope) and bool((first.envelope or {}).get("ok"))
             else:
                 _owned_kill(signal.SIGSTOP)
                 second = session.call("darkroom_enable", {"module": "exposure"}, 90.0,

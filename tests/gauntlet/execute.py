@@ -139,6 +139,8 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
         else:
             rec = session.call(st.tool, args, st.budget_s, write=st.write)
         obs.calls.append(rec)
+        if obs.blocked:  # (final fix M3): a virtual tool blocked the case itself
+            break
         if rec.error == "timeout" and rec.health == "unresponsive":
             obs.blocked = "hang"
             obs.hang_evidence.append(f"{st.tool}: no answer in {st.budget_s + 30:.0f}s, "

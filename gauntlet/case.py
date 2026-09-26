@@ -79,11 +79,19 @@ class Case:
             self.repro = f"python -m gauntlet run --case {self.id} --stamp <stamp>"
 
     def budget_cap_s(self) -> float:
-        """Spec 2.3: each step's hard cap is budget + 30 s; the case cap is their sum."""
+        """Spec 2.3: each step's hard cap is budget + 30 s; the case cap is their sum.
+
+        (final fix C1): a case whose work is not a list of steps (an agent
+        conversation) may declare its own cap in `meta["cap_s"]`; the cap is
+        the larger of that and the step sum (30 s when neither exists)."""
         steps = list(self.steps)
         for f in self.followups:
             steps.extend(_step(s) for s in f.get("steps", []))
-        return sum(s.budget_s + 30.0 for s in steps) or 30.0
+        cap = sum(s.budget_s + 30.0 for s in steps) or 30.0
+        declared = self.meta.get("cap_s")
+        if isinstance(declared, (int, float)) and not isinstance(declared, bool):
+            cap = max(cap, float(declared))
+        return cap
 
     def to_dict(self) -> dict:
         d = asdict(self)

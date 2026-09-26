@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
+import subprocess
 from collections import Counter
 from pathlib import Path
 
-from gauntlet.adapter import LayerSpec
+from gauntlet.adapter import LayerSpec, RefuseRun
 from gauntlet.case import Case
 from tests.gauntlet import corpus as corpus_mod
 from tests.gauntlet import taxonomy
@@ -38,6 +40,13 @@ CRASH_DIR = Path.home() / "Library" / "Logs" / "DiagnosticReports"
 SOURCED_GATE_MIN = 0.90
 INFERRED_GATE = ("confidence", ("inferred",), 0.95)
 PROCESS_DIR = "_process"
+#: (final fix I7) the harness's own time inside a case, added to its hard cap
+#: by the engine (Runner.case_cap_s): isolation resets / a contaminated-frame
+#: relaunch (base), plus a share per render a stats case does (before/after
+#: raster + before/after preview). Harness slowness must not read as a hang.
+HARNESS_BASE_S = 90.0
+HARNESS_PER_RENDER_S = 45.0
+RENDERS_PER_STATS_CASE = 4
 LIVE_LAYERS = {"coverage", "scenarios", "scenarios_agent", "bulk", "looks", "robustness",
                "parity", "guide"}
 
@@ -83,6 +92,57 @@ def point_cache(cache: Path, *gauntlet_roots: Path, carry: bool = True) -> None:
         shutil.copyfile(old, new)
 
 
+def adopt_leftover_owner(run, process_cache: Path, *, owned_pid=None) -> Path | None:
+    """(final fix I1): after a killed run, the owner record of the darktable it
+    left running sits in the killed session's cache (it reaches the process
+    cache only through abort/close). Point the process cache at the newest
+    session record that owned_pid() still accepts, so the next session quits
+    that darktable as ours instead of refusing it as foreign. Returns the
+    adopted record, or None (the process cache is then left as it was)."""
+    from scouter.core import dtprocess
+
+    owned_pid = owned_pid or dtprocess.owned_pid
+    process_cache.mkdir(parents=True, exist_ok=True)
+    os.environ["SCOUTER_CACHE"] = str(process_cache)
+    target = process_cache / dtprocess.OWNER_FILE
+    if owned_pid() is not None:
+        return None  # the process record is already live and ours
+    original = target.read_bytes() if target.exists() else None
+
+    def mtime(p: Path) -> float:
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    records = sorted(Path(run.sessions_dir).glob(f"*/*/cache/{dtprocess.OWNER_FILE}"),
+                     key=mtime, reverse=True)
+    for rec in records:
+        try:
+            shutil.copyfile(rec, target)
+        except OSError:
+            continue
+        if owned_pid() is not None:
+            return rec
+    if original is None:
+        target.unlink(missing_ok=True)
+    else:
+        target.write_bytes(original)
+    return None
+
+
+_SESSION_DIR = re.compile(r"^(\d+)-")
+
+
+def highest_session_n(layer_dir: Path) -> int:
+    """(final fix I1): the highest NNN of `<layer_dir>/NNN-body` (0 if none)."""
+    try:
+        names = [p.name for p in layer_dir.iterdir() if p.is_dir()]
+    except OSError:
+        return 0
+    return max((int(m.group(1)) for n in names if (m := _SESSION_DIR.match(n))), default=0)
+
+
 def tag_sourced_components(cases: list[Case]) -> list[Case]:
     """Add `sourced_component` to every sourced looks check tag (carry 2)."""
     for c in cases:
@@ -106,13 +166,17 @@ class RoutedSession:
     """One ScouterSession per body, opened lazily; cases dispatch by layer."""
 
     def __init__(self, adapter: ScouterAdapter, layer: str, run, *,
-                 session_factory=None) -> None:
+                 session_factory=None, agent_factory=None) -> None:
         self.adapter = adapter
         self.layer = layer
         self.run = run
         self.current = None
-        self.n = 0
+        self.agent = None  # the AgentSession of the running agent case (final fix C1)
+        # (final fix I1): a resumed run numbers after the dirs already there,
+        # never reusing one whose sidecars/library an earlier session edited.
+        self.n = highest_session_n(run.sessions_dir / layer)
         self.session_factory = session_factory or self._scouter_session
+        self.agent_factory = agent_factory or self._agent_session
 
     @staticmethod
     def _scouter_session(corpus, root: Path, body: str, run_root: Path):
@@ -122,8 +186,15 @@ class RoutedSession:
         return ScouterSession(corpus, root, body, run_root=run_root,
                               floors_fn=lambda f: noise_floors(f, root / "floor"))
 
+    @staticmethod
+    def _agent_session(inner):
+        from tests.gauntlet.agent import AgentSession
+
+        return AgentSession(inner)
+
     def _session(self, body: str):
-        if self.current is not None and self.current.body == body:
+        if self.current is not None and self.current.body == body and \
+                not getattr(self.current, "mcp_dead", False):  # (final fix I3): reopen
             return self.current
         if self.current is not None:
             old, self.current = self.current, None
@@ -138,6 +209,18 @@ class RoutedSession:
         self.current.open()
         return self.current
 
+    def open_body(self, body: str):
+        """(final fix I7): open the session for `body` now (eager open). On a
+        failure nothing is left half-open and the process cache is restored;
+        the error reaches the runner (a typed session_open result, or a
+        RefuseRun for a foreign darktable)."""
+        try:
+            return self._session(body)
+        except BaseException:
+            self.current = None
+            self._back_to_process_cache()
+            raise
+
     def _roots(self) -> tuple[Path, Path]:
         return self.adapter.runs_root, self.run.root
 
@@ -147,9 +230,8 @@ class RoutedSession:
     def run_case(self, case: Case):
         from gauntlet.adapter import Observation
         from tests.gauntlet import exec_bulk, faults
-        from tests.gauntlet.agent import AgentSession
         from tests.gauntlet.execute import run_tool_case
-        from tests.gauntlet.session import ForeignDarktable, SessionBlocked
+        from tests.gauntlet.session import SessionBlocked
 
         if self.current is not None:
             # (fix round 1, N1): a capped abort/close of an earlier session that
@@ -160,27 +242,52 @@ class RoutedSession:
                 point_cache(mine, *self._roots(), carry=False)
         try:
             s = self._session(routed_body(case))
-        except (SessionBlocked, ForeignDarktable) as e:
+        except SessionBlocked as e:
             self.current = None
             return Observation(blocked=f"session: {e}", hang_evidence=[f"session: {e}"])
+        except RefuseRun:
+            # (final fix I2): ForeignDarktable -- the engine stops the run and
+            # writes no case result.
+            self.current = None
+            raise
         # Park (agent usage limit) is deliberately not caught: the runner parks.
         if self.layer == "bulk":
-            return exec_bulk.run_bulk_case(s, case)
-        if self.layer == "robustness":
-            return faults.run_fault_case(s, case)
-        if self.layer == "scenarios_agent":
-            return AgentSession(s).run_case(case)
-        return run_tool_case(s, case)
+            obs = exec_bulk.run_bulk_case(s, case)
+        elif self.layer == "robustness":
+            obs = faults.run_fault_case(s, case)
+        elif self.layer == "scenarios_agent":
+            # (final fix C1): keep the handle so abort() can kill its claude.
+            self.agent = self.agent_factory(s)
+            obs = self.agent.run_case(case)
+        else:
+            obs = run_tool_case(s, case)
+        # (final fix I3): an MCP-server death inside this case is a crash.
+        take = getattr(s, "take_mcp_deaths", None)
+        deaths = take() if take is not None else []
+        if deaths and isinstance(obs, Observation):
+            obs.crash_reports.extend(deaths)
+        return obs
+
+    def _stop_agent(self) -> None:
+        """Kill a running agent case's claude process group (final fix C1)."""
+        agent, self.agent = self.agent, None
+        if agent is not None:
+            agent.aborted = True
+            agent.stop_claude()
 
     def abort(self) -> None:
-        if self.current is not None:
-            old, self.current = self.current, None
-            try:
-                old.abort()
-            finally:
-                self._back_to_process_cache()
+        try:
+            self._stop_agent()
+        finally:
+            if self.current is not None:
+                old, self.current = self.current, None
+                try:
+                    old.abort()
+                finally:
+                    self._back_to_process_cache()
 
     def close(self) -> None:
+        self._stop_agent()
         if self.current is not None:
             old, self.current = self.current, None
             try:
@@ -200,6 +307,9 @@ class ScouterAdapter:
         self._look_gates: tuple | None = None
         self._install: dict[str, object] = {}
         self._originals_now: dict[str | None, dict] = {}
+        #: RoutedSession's ScouterSession factory (None = the real one); a seam
+        #: for tests, which never launch darktable.
+        self.session_factory = None
 
     # -- data --------------------------------------------------------------
 
@@ -283,6 +393,7 @@ class ScouterAdapter:
         if layer == "offline":
             return OfflineSession()
         isolate_process(self.runs_root / PROCESS_DIR)
+        adopt_leftover_owner(run, self.runs_root / PROCESS_DIR / "cache")
         self._record_originals(run.root)
         if layer == "install":
             # The runner may reopen (hard cap, rotation): hand back the same
@@ -296,7 +407,60 @@ class ScouterAdapter:
 
             if not (run.root / "chart" / "chart-v1.pfm").exists():
                 write_chart(run.root)
-        return RoutedSession(self, layer, run)
+        routed = RoutedSession(self, layer, run, session_factory=self.session_factory)
+        # (final fix I7): open the product session HERE, under the runner's
+        # session-open cap, not lazily inside the first case's hard cap.
+        body = self._next_body(layer, run)
+        if body is not None:
+            routed.open_body(body)
+        return routed
+
+    @staticmethod
+    def _next_body(layer: str, run) -> str | None:
+        """The routed body of the layer's first case without a result (the
+        case the runner runs next), else of its first case; None when the run
+        has no cases for it (the session then opens lazily)."""
+        try:
+            cases = [c for c in run.read_cases() if c.layer == layer]
+        except (OSError, ValueError):
+            return None
+        if not cases:
+            return None
+        done = run.done_ids()
+        nxt = next((c for c in cases if c.id not in done), cases[0])
+        return routed_body(nxt)
+
+    def harness_allowance_s(self, case: Case) -> float:
+        """(final fix I7): engine hook -- see HARNESS_BASE_S."""
+        if case.layer not in LIVE_LAYERS:
+            return 0.0
+        from tests.gauntlet.execute import STAT_METRICS
+
+        renders = RENDERS_PER_STATS_CASE if any(
+            c.metric in STAT_METRICS for c in case.expect.checks) else 0
+        return HARNESS_BASE_S + renders * HARNESS_PER_RENDER_S
+
+    def foreign_pids(self) -> list[int]:
+        from scouter.core import dtprocess
+
+        return dtprocess.foreign_pids()
+
+    def preflight(self, run, layer: str) -> str | None:
+        """(final fix I2): refuse a live layer while a darktable this runner did
+        not launch is running (or when that cannot be told). Our own leftover
+        from a killed run is adopted first (I1), so it reads as ours."""
+        if layer not in LIVE_LAYERS:
+            return None
+        isolate_process(self.runs_root / PROCESS_DIR)
+        adopt_leftover_owner(run, self.runs_root / PROCESS_DIR / "cache")
+        try:
+            foreign = self.foreign_pids()
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return f"cannot tell whether a foreign darktable runs ({type(e).__name__}: {e})"
+        if foreign:
+            return (f"foreign darktable: pids {foreign} were not launched by the gauntlet; "
+                    "quit them first (the runner never signals them)")
+        return None
 
     def _record_originals(self, run_root: Path) -> None:
         path = run_root / "originals.before.json"

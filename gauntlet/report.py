@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from gauntlet.adapter import Adapter
 from gauntlet.case import Case, dumps
-from gauntlet.evaluate import POINTS, canonical_outcome
+from gauntlet.evaluate import POINTS, canonical_outcome, is_hang
 from gauntlet.store import RunDir, atomic_write_text
 
 SERVED = ("verified", "over_budget")
@@ -59,8 +59,7 @@ def _is_hang(r: dict) -> bool:
     """(fix round 1, I1): failed_hang only ever comes from blocked == 'hang_twice';
     the runner's own hard_cap timeout, and an adapter's 'hang: ...' blocked
     reason, are hangs too and must not read as 0."""
-    blocked = _blocked(r) or ""
-    return _outcome(r) == "failed_hang" or blocked == "hard_cap" or blocked.startswith("hang")
+    return is_hang(_outcome(r), _blocked(r))  # (final fix I6): one shared helper
 
 
 def layer_table(results: list[dict], adapter: Adapter) -> list[dict]:
@@ -219,14 +218,25 @@ def build(run: RunDir, adapter: Adapter, cases: list[Case], results: list[dict],
     #: that fail the bar (e.g. originals changed); optional, default none.
     blockers_fn = getattr(adapter, "signoff_blockers", None)
     blockers = list(blockers_fn(run)) if blockers_fn else []
+    #: (final fix I5): release bar 6 -- one full run of ONE commit. Every
+    #: result names the commit it ran on ("" = unknown, which fails), and
+    #: every adapter layer must have cases (a partial generation fails).
+    commits = sorted({str(r.get("commit") or "") for r in valid})
+    one_commit = len(commits) == 1 and commits[0] != ""
+    generated_layers = {c.layer for c in cases}
+    layers_without_cases = [spec.name for spec in sorted(adapter.layers(), key=lambda x: x.order)
+                            if spec.name not in generated_layers]
     signoff = {
         "crashes": len(crashes), "silent_failures": len(silent), "hangs": len(hangs),
         #: (fix round 1, I4): zero P0 cases must not read as a met bar.
         "p0": f"{p0_pass}/{p0_total}", "p0_all_pass": p0_total > 0 and p0_pass == p0_total,
         "p1_gates_ok": gates_ok, "cases_missing": missing, "missing_ids": missing_ids,
         "orphan_result_ids": orphan_ids, "blocked": blocked_counts,
+        "commits": commits, "one_commit": one_commit,
+        "layers_without_cases": layers_without_cases,
         "release_bar_met": not crashes and not silent and not hangs and p0_total > 0
-        and p0_pass == p0_total and gates_ok and missing == 0 and not blockers,
+        and p0_pass == p0_total and gates_ok and missing == 0 and not blockers
+        and one_commit and not layers_without_cases,
         "blockers": blockers,
         "contact_sheet_reviewed": "[ ] (Pratik ticks by hand)",
         "lines": adapter.signoff_lines(run),
@@ -257,6 +267,10 @@ def markdown(rep: dict) -> str:
          f"- Hangs: {s8['hangs']}",
          "- Blocked: " + ", ".join(f"{k}={v}" for k, v in s8["blocked"].items()),
          f"- P0: {s8['p0']}", f"- P1 gates: {'ok' if s8['p1_gates_ok'] else 'NOT met'}",
+         "- Commits: " + (", ".join(c or "(unknown)" for c in s8["commits"]) or "-")
+         + ("" if s8["one_commit"] else " (**NOT one commit**)"),
+         "- Layers with no generated cases: "
+         + (", ".join(s8["layers_without_cases"]) or "none"),
          f"- Cases missing (not run): {s8['cases_missing']}",
          *[f"  - `{i}`" for i in s8["missing_ids"]],
          f"- Orphan result files (stale, not in cases.jsonl): {len(s8['orphan_result_ids'])}",

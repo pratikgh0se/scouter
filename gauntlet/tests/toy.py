@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from gauntlet.adapter import CallRecord, LayerSpec, Observation, Park
+from gauntlet.adapter import CallRecord, LayerSpec, Observation, Park, RefuseRun
 from gauntlet.case import Case, Check, Expect, Step, case_id
 
 
@@ -16,6 +16,8 @@ class ToySession:
         behaviour = self.adapter.behaviours.get(case.id, "ok")
         if behaviour == "park":
             raise Park("usage limit", until=None)
+        if behaviour == "refuse":
+            raise RefuseRun("foreign darktable: pid 4242")
         if behaviour == "sleep":
             import time
             time.sleep(case.meta.get("sleep_s", 5))

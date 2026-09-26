@@ -159,12 +159,49 @@ def test_robustness_keeps_generator_order(tmp_path):
     assert ids.index("rob-wd_auto_heal") < ids.index("rob-wd_heal_cap")
 
 
-def test_a_foreign_darktable_is_a_typed_session_block(pinned_env, fake_corpus):
-    """Carry 7: executors never raise on a session failure."""
+def test_a_foreign_darktable_refuses_the_run(pinned_env, fake_corpus):
+    """(final fix I2, supersedes carry 7 for this one failure): a foreign
+    darktable is not a per-case result (thousands would be written and
+    --resume would treat them done); it refuses the run."""
+    from gauntlet.adapter import RefuseRun
+
     _, _, routed, _ = _routed(pinned_env, fake_corpus, dt=FakeDt(foreign=[4242]))
-    obs = routed.run_case(_case())
-    assert obs.blocked.startswith("session: ") and "4242" in obs.blocked
+    with pytest.raises(RefuseRun, match="4242"):
+        routed.run_case(_case())
     assert routed.current is None
+
+
+def test_preflight_refuses_a_live_layer_while_a_foreign_darktable_runs(pinned_env):
+    a = ScouterAdapter(pinned_env / "runs")
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+    a.foreign_pids = lambda: [4242]
+    assert "4242" in a.preflight(run, "coverage")
+    assert a.preflight(run, "offline") is None  # no darktable needed
+    a.foreign_pids = lambda: []
+    assert a.preflight(run, "coverage") is None
+
+
+def test_preflight_refuses_when_it_cannot_tell(pinned_env):
+    a = ScouterAdapter(pinned_env / "runs")
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+
+    def unknown():
+        raise OSError("pgrep failed")
+    a.foreign_pids = unknown
+    assert "cannot tell" in a.preflight(run, "coverage")
+
+
+def test_runner_stops_on_a_foreign_darktable_without_case_results(pinned_env, monkeypatch):
+    """End to end through the engine: preflight refuses, no result is written."""
+    from gauntlet.runner import Runner
+
+    monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals", lambda: {})
+    a = ScouterAdapter(pinned_env / "runs")
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+    run.write_cases([_case("coverage"), _case("coverage", "sony_a7")])
+    a.foreign_pids = lambda: [4242]
+    s = Runner(a, run).run_layers(layers=["coverage"])
+    assert s.status.startswith("blocked: foreign darktable") and run.read_results() == []
 
 
 def test_a_failed_launch_is_a_typed_session_block(pinned_env, fake_corpus):
@@ -279,3 +316,150 @@ def test_isolate_process_pins_the_library_db(pinned_env):
     adapter_mod.isolate_process(root)
     assert os.environ["SCOUTER_DARKTABLE_LIBRARY_DB"] == str(root / "library" / "library.db")
     assert os.environ["SCOUTER_CACHE"] == str(root / "cache")
+
+
+# -- final fix I1: resume after a killed run ---------------------------------
+
+def _fake_owned(pid_ok):
+    """owned_pid stand-in: accepts the record at the CURRENT owner_path() only
+    when its pid is `pid_ok` (never runs ps, never signals)."""
+    def owned():
+        try:
+            pid = json.loads(dtprocess.owner_path().read_text())["pid"]
+        except (OSError, ValueError, KeyError):
+            return None
+        return pid if pid == pid_ok else None
+    return owned
+
+
+def test_resume_adopts_a_killed_sessions_owner_record(pinned_env):
+    """A killed run left its darktable's owner record in a session cache; on
+    resume that darktable must read as ours (quit), not foreign (block all)."""
+    runs = pinned_env / "runs"
+    run = RunDir(runs, "stamp").ensure()
+    stale = run.sessions_dir / "coverage" / "001-olympus" / "cache"
+    live = run.sessions_dir / "coverage" / "002-sony_a7" / "cache"
+    for d, pid in ((stale, 111), (live, 777)):
+        d.mkdir(parents=True)
+        (d / dtprocess.OWNER_FILE).write_text(json.dumps({"pid": pid}))
+    process_cache = runs / adapter_mod.PROCESS_DIR / "cache"
+    process_cache.mkdir(parents=True)
+    adopted = adapter_mod.adopt_leftover_owner(run, process_cache, owned_pid=_fake_owned(777))
+    assert adopted == live / dtprocess.OWNER_FILE
+    assert json.loads((process_cache / dtprocess.OWNER_FILE).read_text())["pid"] == 777
+
+
+def test_resume_without_a_live_leftover_changes_nothing(pinned_env):
+    runs = pinned_env / "runs"
+    run = RunDir(runs, "stamp").ensure()
+    stale = run.sessions_dir / "coverage" / "001-olympus" / "cache"
+    stale.mkdir(parents=True)
+    (stale / dtprocess.OWNER_FILE).write_text(json.dumps({"pid": 111}))
+    process_cache = runs / adapter_mod.PROCESS_DIR / "cache"
+    process_cache.mkdir(parents=True)
+    assert adapter_mod.adopt_leftover_owner(run, process_cache,
+                                            owned_pid=_fake_owned(777)) is None
+    assert not (process_cache / dtprocess.OWNER_FILE).exists()
+
+
+def test_open_session_adopts_before_the_first_body(pinned_env, monkeypatch):
+    seen = []
+    monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals", lambda: {})
+    monkeypatch.setattr(adapter_mod, "adopt_leftover_owner",
+                        lambda run, cache, **kw: seen.append((run.root, cache)))
+    a = ScouterAdapter(pinned_env / "runs")
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+    a.open_session("parity", run)
+    assert seen == [(run.root, pinned_env / "runs" / adapter_mod.PROCESS_DIR / "cache")]
+
+
+def test_resumed_session_dirs_number_after_the_highest(pinned_env, fake_corpus):
+    """A resumed run must not reuse an old NNN-body dir (edited sidecars/library)."""
+    _, run, _, _ = _routed(pinned_env, fake_corpus)
+    (run.sessions_dir / "coverage" / "007-olympus").mkdir(parents=True)
+    (run.sessions_dir / "coverage" / "003-sony_a7").mkdir(parents=True)
+    _, _, routed, _ = _routed(pinned_env, fake_corpus)
+    s = routed._session("olympus")
+    assert s.root.name == "008-olympus"
+
+
+def test_mcp_death_reaches_the_observation_and_the_session_reopens(pinned_env, fake_corpus,
+                                                                    monkeypatch):
+    """(final fix I3): release bar 1 counts MCP-server deaths as crashes."""
+    from gauntlet.adapter import Observation
+    from gauntlet.evaluate import evaluate
+    from tests.gauntlet import execute
+    from tests.gauntlet.policy import POLICY
+
+    def dies(s, c):
+        s.mcp_deaths.append("mcp_server_death: exit 1")
+        s.mcp_dead = True
+        return Observation()
+
+    monkeypatch.setattr(execute, "run_tool_case", dies)
+    _, _, routed, _ = _routed(pinned_env, fake_corpus)
+    case = _case()
+    obs = routed.run_case(case)
+    assert obs.crash_reports == ["mcp_server_death: exit 1"]
+    assert evaluate(case, obs, POLICY).outcome == "crash"
+    first = routed.current
+    monkeypatch.setattr(execute, "run_tool_case", lambda s, c: Observation())
+    routed.run_case(case)
+    assert routed.current is not first  # the dead session was replaced
+
+
+# -- final fix I7: eager open + harness allowance ------------------------------
+
+def test_harness_allowance_is_a_base_plus_a_share_per_render(tmp_path):
+    from gauntlet.case import Check
+
+    a = ScouterAdapter(tmp_path)
+    plain = _case()
+    assert a.harness_allowance_s(plain) == adapter_mod.HARNESS_BASE_S
+    stats = Case(id="c-s", layer="coverage", tier="P1", mode="tool", steps=[],
+                 expect=Expect("edit", [Check("M2", stat="L_mean", sign=1)]), body="olympus")
+    assert a.harness_allowance_s(stats) == \
+        adapter_mod.HARNESS_BASE_S + adapter_mod.RENDERS_PER_STATS_CASE * \
+        adapter_mod.HARNESS_PER_RENDER_S
+    assert a.harness_allowance_s(Case(**{**vars(plain), "layer": "offline"})) == 0.0
+
+
+def _write_run(pinned_env, cases):
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+    run.write_cases(cases)
+    return run
+
+
+def test_open_session_opens_the_first_body_eagerly(pinned_env, fake_corpus, monkeypatch):
+    """The product session opens inside open_session (the runner's 180 s open
+    cap), not lazily inside the first case's cap."""
+    monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals", lambda: {})
+    a = ScouterAdapter(pinned_env / "runs")
+    a._corpus = fake_corpus
+    run = _write_run(pinned_env, [_case("coverage", "sony_a7"), _case("coverage", "olympus")])
+    run.write_result("coverage-x-sony_a7", {"id": "coverage-x-sony_a7"})  # done: resume
+    dts = []
+
+    def factory(corpus, root, body, run_root):
+        d = FakeDt()
+        dts.append(d)
+        return sess.ScouterSession(corpus, root, body, dt=d, run_root=run_root,
+                                   mcp_factory=lambda env, cwd: FakeMcp())
+    a.session_factory = factory
+    routed = a.open_session("coverage", run)
+    assert routed.current is not None and routed.current.body == "olympus"
+    assert dts[0].launches == 1
+
+
+def test_eager_open_failure_raises_to_the_runner_and_leaves_no_session(pinned_env, fake_corpus,
+                                                                       monkeypatch):
+    monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals", lambda: {})
+    a = ScouterAdapter(pinned_env / "runs")
+    a._corpus = fake_corpus
+    run = _write_run(pinned_env, [_case("coverage")])
+    a.session_factory = lambda corpus, root, body, run_root: sess.ScouterSession(
+        corpus, root, body, dt=FakeDt(ready=(False, False)), run_root=run_root,
+        mcp_factory=lambda env, cwd: FakeMcp())
+    with pytest.raises(sess.SessionBlocked):
+        a.open_session("coverage", run)
+    assert dtprocess.owner_path().parent == pinned_env / "runs" / adapter_mod.PROCESS_DIR / "cache"

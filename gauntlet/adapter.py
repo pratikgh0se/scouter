@@ -67,6 +67,18 @@ class Park(Exception):
         self.until = until
 
 
+class RefuseRun(Exception):
+    """(final fix I2): the machine is not in a state the run may go on in
+    (e.g. a product process the runner did not start is running). Raised by
+    an adapter's `preflight`, `open_session` or a session's `run_case`: the
+    runner writes NO case result, stops the run and reports the status
+    `blocked: <reason>`. A later `--resume` picks up where it stopped."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class Session(Protocol):
     def run_case(self, case: Case) -> Observation: ...
     def abort(self) -> None: ...
@@ -80,7 +92,12 @@ class Adapter(Protocol):
 
     Optional (looked up with getattr, default none):
     `signoff_blockers(run) -> list[str]`: product sign-off items that fail the
-    release bar; the report lists them under S8 "blockers"."""
+    release bar; the report lists them under S8 "blockers".
+    `preflight(run, layer) -> str | None` (final fix I2): called before each
+    layer that has cases to run; a returned reason (or a raised RefuseRun)
+    stops the run with status `blocked: <reason>` and writes no case result.
+    `harness_allowance_s(case) -> float` (final fix I7): seconds added to the
+    case's hard cap for the harness's own work inside a case (default 0)."""
 
     name: str
 
