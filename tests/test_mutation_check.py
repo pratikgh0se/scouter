@@ -574,6 +574,95 @@ class TargetsPredateRangeMarker(unittest.TestCase):
         self.assertEqual(mc.extract_marker(top), ("abc1234", "right at the top"))
 
 
+class WeakeningTargetsOnlyTheChangedFunction(unittest.TestCase):
+    """Fix round 6: the assertion-weakening mutation must land INSIDE a test
+    function that is new or changed in the range - an old, untouched test
+    earlier in the same file must never be the one mutated, even when its
+    own assertion would otherwise be the first one `apply_weakening` would
+    find by scanning the whole file top to bottom."""
+
+    def test_an_old_test_first_then_a_new_test_below_it_only_mutates_the_new_one(self):
+        text = (
+            "def test_old():\n"
+            "    assert 1 == 1\n\n\n"
+            "def test_new():\n"
+            "    assert 2 == 2\n"
+        )
+        # test_old's def is line 1, body line 2; test_new's def is line 5,
+        # body line 6. Only the new function's range is passed - exactly
+        # what check_range does (func_ranges comes from
+        # changed_test_functions, new/changed only).
+        new_func_range = [(5, 6)]
+        mutated, what = mc.apply_weakening(text, new_func_range)
+        self.assertIsNotNone(mutated)
+        self.assertEqual(what, "assert a == b -> assert a != b")
+        self.assertIn("    assert 1 == 1\n", mutated)
+        self.assertIn("    assert 2 != 2\n", mutated)
+        self.assertNotIn("assert 1 != 1", mutated)
+
+    def test_end_to_end_old_test_first_new_test_below_still_discriminates_correctly(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_BUGGY)
+            write_test(root, "from production import add\n\n\ndef test_placeholder():\n    assert callable(add)\n")
+            base = commit_all(root, "base: buggy add(), one old test")
+
+            (root / "production.py").write_text(PROD_FIXED)
+            write_test(root,
+                       "from production import add\n\n\n"
+                       "def test_placeholder():\n"
+                       "    assert callable(add)\n\n\n"
+                       "def test_add_returns_the_sum():\n"
+                       "    assert add(2, 3) == 5\n")
+            head = commit_all(root, "fix add(); old test untouched, new test added below it")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertTrue(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertEqual(names, "test_add_returns_the_sum")
+            self.assertIn("FAIL (good)", weak_cell)
+            self.assertNotIn("fallback", weak_cell)
+
+
+class WeakeningFallsBackToFileLevelWhenTheChangedFunctionHasNoAssert(unittest.TestCase):
+    """Fix round 6, second half: when the new/changed test function(s)
+    contain literally no assertion at all (the static flag already reports
+    this separately), the weaken column falls back to the file's first
+    assertion anywhere and always says so in the table - pass or fail."""
+
+    def test_no_assert_in_the_new_test_falls_back_and_is_labelled(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            write_test(root,
+                       "from production import add\n\n\n"
+                       "def test_old_with_a_real_check():\n"
+                       "    assert add(2, 3) == 5\n")
+            base = commit_all(root, "base: one old test with a real assertion")
+
+            write_test(root,
+                       "from production import add\n\n\n"
+                       "def test_old_with_a_real_check():\n"
+                       "    assert add(2, 3) == 5\n\n\n"
+                       "def test_new_makes_a_call_but_checks_nothing():\n"
+                       "    add(2, 3)\n")
+            head = commit_all(root, "add a new test with no assert at all")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)  # the static "no assert" flag alone fails the gate
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("no assert", flags_cell)
+            self.assertIn("weaken: file-level fallback", weak_cell)
+            # It ran against the old test's real assertion and that DID fail
+            # (good) - still labelled, so a reviewer knows it wasn't the new
+            # test.
+            self.assertIn("FAIL (good)", weak_cell)
+
+
 class SkippedTestIsFlagged(unittest.TestCase):
     def test_xfail_mark_on_a_new_test_is_a_static_flag(self):
         with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:

@@ -373,6 +373,19 @@ def references_prod_file(test_import_names, prod_file):
     return bool(test_import_names & candidates)
 
 
+def any_assert_in_ranges(text, func_ranges):
+    """True when at least one of `func_ranges` (the new/changed test
+    functions) contains the word `assert` anywhere in its body - i.e. the
+    static-flags "no assert" case, computed the same way, but as a boolean
+    gate for round 6's file-level fallback rather than a report line."""
+    lines = text.splitlines(keepends=True)
+    for start, end in func_ranges:
+        body = "".join(lines[start - 1:min(end, len(lines))])
+        if "assert" in body:
+            return True
+    return False
+
+
 def apply_weakening(text, func_ranges):
     """Flip the FIRST discriminating assertion INSIDE one of `func_ranges`.
     Returns (new_text, what) or (None, None)."""
@@ -426,9 +439,13 @@ def _cell(state, why=None):
     imported by this test file - fix round 4), "targets_predate_range" (an
     explicit, sha-bound marker says so - fix round 5, `why` is the marker's
     reason) or "marker_mismatch" (a marker is present but its sha does not
-    match this gate's --base - fix round 5, never silently ignored). Every
-    state but plain True/False and marker_mismatch is n/a, not a fail, and
-    not counted against the gate - the weaken column carries the
+    match this gate's --base - fix round 5, never silently ignored),
+    "fallback_ok"/"fallback_bad" (the weaken column, round 6: the changed
+    function(s) had no assertion at all, so the mutation ran against the
+    file's first assertion anywhere instead - always labelled, pass or fail,
+    so a reviewer sees it ran against code the range didn't touch). Every
+    state but plain True/False, fallback_bad and marker_mismatch is n/a, not
+    a fail, and not counted against the gate - the weaken column carries the
     requirement instead."""
     if state is None:
         return "n/a"
@@ -440,6 +457,10 @@ def _cell(state, why=None):
         return f"n/a (targets predate range: {why})"
     if state == "marker_mismatch":
         return f"marker mismatch (BAD): {why}" if why else "marker mismatch (BAD)"
+    if state == "fallback_ok":
+        return f"FAIL (good) [{why}]" if why else "FAIL (good) [weaken: file-level fallback]"
+    if state == "fallback_bad":
+        return f"did not fail (BAD) [{why}]" if why else "did not fail (BAD) [weaken: file-level fallback]"
     if state == "error":
         return "ERROR (not discriminating)"
     return "FAIL (good)" if state else "did not fail (BAD)"
@@ -556,13 +577,35 @@ def check_range(repo, base, head):
                 original = target.read_text(encoding="utf-8")
                 func_ranges = [(s, e) for _, _, s, e in funcs]
                 mutated, what = apply_weakening(original, func_ranges)
+                fallback = False
+                if mutated is None and not any_assert_in_ranges(original, func_ranges):
+                    # Round 6: the changed function(s) contain no assertion at
+                    # all (the static flag (d) already reports this
+                    # separately) - the ONLY thing left to weaken is
+                    # somewhere else in the file. Never silent: `what`
+                    # carries "weaken: file-level fallback" into the table
+                    # either way, so a reviewer sees this ran against code
+                    # the range didn't even touch.
+                    all_lines = len(original.splitlines())
+                    mutated, what = apply_weakening(original, [(1, all_lines)])
+                    if mutated is not None:
+                        what = f"weaken: file-level fallback ({what})"
+                        fallback = True
                 ids = sorted({node_id(f, cls, name) for cls, name, _, _ in funcs})
                 if mutated is None:
                     weaken_by_func[f] = (None, "no assertEqual/assertTrue/`==` assert found to flip")
                     continue
+                if fallback:
+                    # The file-level fallback may have mutated an assertion
+                    # OUTSIDE the changed function(s) - run every test in the
+                    # file, not just `ids`, or a fallback mutation to an old,
+                    # unselected test could never be observed failing.
+                    run_ids = sorted({node_id(f, cls, name) for cls, name in test_defs(original)})
+                else:
+                    run_ids = ids
                 target.write_text(mutated, encoding="utf-8")
                 try:
-                    rc, out = run_pytest(wt, ids)
+                    rc, out = run_pytest(wt, run_ids)
                 finally:
                     target.write_text(original, encoding="utf-8")
                 if is_collection_error(out):
@@ -573,7 +616,10 @@ def check_range(repo, base, head):
                     weaken_by_func[f] = (None, "n/a - only host-only tests changed (filtered by -k 'not host')")
                     continue
                 failed = rc != 0
-                weaken_by_func[f] = (failed, what if failed else f"{what}, but the file still passed: {out[-400:]}")
+                if fallback:
+                    weaken_by_func[f] = ("fallback_ok" if failed else "fallback_bad", what)
+                else:
+                    weaken_by_func[f] = (failed, what if failed else f"{what}, but the file still passed: {out[-400:]}")
                 if not failed:
                     ok = False
         finally:
@@ -586,7 +632,7 @@ def check_range(repo, base, head):
         weak_ok, weak_why = weaken_by_func.get(f, (None, "-"))
         flags = static_by_file.get(f, [])
         rev_cell = _cell(rev_ok, rev_why)
-        weak_cell = _cell(weak_ok)
+        weak_cell = _cell(weak_ok, weak_why)
         flags_cell = "; ".join(flags) if flags else "none"
         rows.append((f, names, rev_cell, weak_cell, flags_cell))
 
