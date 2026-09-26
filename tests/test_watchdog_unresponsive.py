@@ -98,9 +98,28 @@ class UnresponsiveTest(unittest.TestCase):
         for state, code in (("alive", 0), ("starting", 0), ("unresponsive", 1)):
             with mock.patch.object(dtbridge, "health", return_value={"state": state,
                                                                      "ping_ms": 3}), \
+                    mock.patch.object(dtprocess, "running_pids", return_value=[4242]), \
                     mock.patch("builtins.print") as out:
                 self.assertEqual(cli.main(["doctor", "--ping"]), code)
             self.assertEqual(json.loads(out.call_args[0][0])["watchdog"], state)
+
+    def test_doctor_ping_with_no_darktable_reads_not_running(self) -> None:
+        """Task 29 review carry-over: no process is not "unresponsive"."""
+        from scouter.cli import main as cli
+
+        with mock.patch.object(dtbridge, "health", return_value={"state": "unresponsive",
+                                                                 "ping_ms": 5000}), \
+                mock.patch.object(dtprocess, "running_pids", return_value=[]), \
+                mock.patch("builtins.print") as out:
+            self.assertEqual(cli.main(["doctor", "--ping"]), 1)
+        self.assertEqual(json.loads(out.call_args[0][0])["watchdog"], "not_running")
+        with mock.patch.object(dtbridge, "health", return_value={"state": "unresponsive",
+                                                                 "ping_ms": 5000}), \
+                mock.patch.object(dtprocess, "running_pids",
+                                  side_effect=subprocess.TimeoutExpired("pgrep", 5)), \
+                mock.patch("builtins.print") as out:
+            self.assertEqual(cli.main(["doctor", "--ping"]), 1)
+        self.assertEqual(json.loads(out.call_args[0][0])["watchdog"], "unresponsive")
 
 
 class DoctorWatchdogTest(unittest.TestCase):

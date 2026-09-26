@@ -170,6 +170,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print only the watchdog line; exit 0 when darktable answers, 1 when not",
     )
+    doctor.add_argument(
+        "--heal",
+        dest="heal",
+        action="store_true",
+        help="quit and relaunch the darktable Scouter launched (never a user's), then wait "
+        "for gui_ready; exits 0 when healed",
+    )
     doctor.set_defaults(_verb=None, _args=[])
 
     setup_parser = groups.add_parser(
@@ -298,9 +305,9 @@ def _doctor() -> dict:
 def _doctor_watchdog(report: dict) -> None:
     """Watchdog design 2.5: ping state, gui_ready, the darktable pid and who
     launched it. Report lines only."""
-    from scouter.core import dtbridge, dtprocess
+    from scouter.core import dtprocess
 
-    h = dtbridge.health()
+    h = _watchdog_health()
     report["watchdog"] = h["state"]
     report["watchdog_line"] = f"watchdog: ping {h['state']} ({h.get('ping_ms')} ms)"
     report["gui_ready"] = h.get("gui_ready")
@@ -322,6 +329,35 @@ def _doctor_watchdog(report: dict) -> None:
     else:
         pid, who = None, "-"
     report["darktable_pid_line"] = f"darktable pid: {pid or '-'} ({who})"
+
+    from scouter import config
+    from scouter.core import watchdog
+    from scouter.paths import current_job
+
+    try:
+        wd = config.load().watchdog
+    except ScouterError:
+        wd = config.WatchdogConfig()
+    used = watchdog.heals_used(current_job())
+    report["auto_heal_line"] = (f"auto_heal: {'on' if wd.auto_heal else 'off'}, heals this job: "
+                                f"{used}/{wd.max_heals_per_job}")
+
+
+def _watchdog_health() -> dict:
+    """`dtbridge.health()`, except that no answer with NO darktable process
+    reads `not_running`, not `unresponsive` (Task 29 review carry-over). A
+    pgrep that cannot answer leaves `unresponsive` as it was."""
+    from scouter.core import dtbridge, dtprocess
+
+    h = dtbridge.health()
+    if h["state"] == "unresponsive":
+        try:
+            running = dtprocess.running_pids()
+        except (OSError, subprocess.SubprocessError):
+            running = None
+        if running == []:
+            h = {**h, "state": "not_running"}
+    return h
 
 
 def _doctor_config(report: dict) -> None:
@@ -436,12 +472,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if namespace.group == "doctor" and getattr(namespace, "ping", False):
-        from scouter.core import dtbridge
-
-        h = dtbridge.health()
+        h = _watchdog_health()
         return emit({"verb": "doctor", "watchdog": h["state"], "ping_ms": h.get("ping_ms"),
-                     "ok": h["state"] != "unresponsive"},
-                    0 if h["state"] != "unresponsive" else 1)
+                     "ok": h["state"] not in ("unresponsive", "not_running")},
+                    0 if h["state"] not in ("unresponsive", "not_running") else 1)
+
+    if namespace.group == "doctor" and getattr(namespace, "heal", False):
+        from scouter.core import watchdog
+        from scouter.paths import current_job
+
+        res = watchdog.heal_darktable(current_job(), 60.0)
+        watchdog.telemetry(current_job(), "watchdog.heal", res["outcome"], res.get("ms", 0), res)
+        return emit({"verb": "doctor", **res, "ok": res["outcome"] == "healed"},
+                    0 if res["outcome"] == "healed" else 1)
 
     if namespace.group == "doctor":
         report = _doctor()
