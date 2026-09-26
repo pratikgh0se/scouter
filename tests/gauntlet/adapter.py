@@ -106,13 +106,15 @@ class RoutedSession:
     """One ScouterSession per body, opened lazily; cases dispatch by layer."""
 
     def __init__(self, adapter: ScouterAdapter, layer: str, run, *,
-                 session_factory=None) -> None:
+                 session_factory=None, agent_factory=None) -> None:
         self.adapter = adapter
         self.layer = layer
         self.run = run
         self.current = None
+        self.agent = None  # the AgentSession of the running agent case (final fix C1)
         self.n = 0
         self.session_factory = session_factory or self._scouter_session
+        self.agent_factory = agent_factory or self._agent_session
 
     @staticmethod
     def _scouter_session(corpus, root: Path, body: str, run_root: Path):
@@ -121,6 +123,12 @@ class RoutedSession:
 
         return ScouterSession(corpus, root, body, run_root=run_root,
                               floors_fn=lambda f: noise_floors(f, root / "floor"))
+
+    @staticmethod
+    def _agent_session(inner):
+        from tests.gauntlet.agent import AgentSession
+
+        return AgentSession(inner)
 
     def _session(self, body: str):
         if self.current is not None and self.current.body == body:
@@ -147,7 +155,6 @@ class RoutedSession:
     def run_case(self, case: Case):
         from gauntlet.adapter import Observation
         from tests.gauntlet import exec_bulk, faults
-        from tests.gauntlet.agent import AgentSession
         from tests.gauntlet.execute import run_tool_case
         from tests.gauntlet.session import ForeignDarktable, SessionBlocked
 
@@ -169,18 +176,31 @@ class RoutedSession:
         if self.layer == "robustness":
             return faults.run_fault_case(s, case)
         if self.layer == "scenarios_agent":
-            return AgentSession(s).run_case(case)
+            # (final fix C1): keep the handle so abort() can kill its claude.
+            self.agent = self.agent_factory(s)
+            return self.agent.run_case(case)
         return run_tool_case(s, case)
 
+    def _stop_agent(self) -> None:
+        """Kill a running agent case's claude process group (final fix C1)."""
+        agent, self.agent = self.agent, None
+        if agent is not None:
+            agent.aborted = True
+            agent.stop_claude()
+
     def abort(self) -> None:
-        if self.current is not None:
-            old, self.current = self.current, None
-            try:
-                old.abort()
-            finally:
-                self._back_to_process_cache()
+        try:
+            self._stop_agent()
+        finally:
+            if self.current is not None:
+                old, self.current = self.current, None
+                try:
+                    old.abort()
+                finally:
+                    self._back_to_process_cache()
 
     def close(self) -> None:
+        self._stop_agent()
         if self.current is not None:
             old, self.current = self.current, None
             try:

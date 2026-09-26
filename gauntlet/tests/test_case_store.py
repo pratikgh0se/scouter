@@ -111,3 +111,15 @@ def test_engine_is_stdlib_only_and_imports_no_product():
                 if n.split(".")[0] not in allowed:
                     bad.append(f"{path.relative_to(ENGINE)}: {n}")
     assert bad == []
+
+
+def test_budget_cap_honours_a_case_declared_cap():
+    """(final fix C1): a case whose work is not expressed as steps (an agent
+    conversation) declares its own cap in meta["cap_s"]; the engine uses the
+    larger of that and the step sum, never the bare 30 s fallback."""
+    c = Case(id="x", layer="l", tier="P0", mode="agent", steps=[], expect=Expect("refuse"),
+             meta={"cap_s": 1260.0})
+    assert c.budget_cap_s() == pytest.approx(1260.0)
+    c2 = _case()
+    c2.meta["cap_s"] = 1.0  # a smaller declared cap never shrinks the step sum
+    assert c2.budget_cap_s() == pytest.approx(3.5 + 30)

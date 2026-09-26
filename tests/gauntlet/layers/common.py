@@ -19,6 +19,8 @@ WRITE_TOOLS = frozenset({
 BUDGET_MOVE = 3.5
 BUDGET_SAY = 8.0
 BUDGET_COMMIT = 12.0
+#: One `claude -p` turn's timeout in agent mode (tests/gauntlet/agent.py uses it).
+AGENT_TURN_TIMEOUT_S = 600
 UNITS = {"EV": "EV", "K": "K", "%": "%", "°": "°", "ratio": "ratio", "—": "ratio"}
 
 

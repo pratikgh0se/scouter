@@ -6,7 +6,9 @@ stops the batch the case parks (gauntlet.adapter.Park) and resumes later."""
 from __future__ import annotations
 
 import json
+import os
 import re
+import signal
 import subprocess
 import time
 from datetime import datetime, timedelta
@@ -15,12 +17,13 @@ from pathlib import Path
 from gauntlet.adapter import CallRecord, Observation, Park
 from gauntlet.case import Case
 from tests.gauntlet import observe
+from tests.gauntlet.layers.common import AGENT_TURN_TIMEOUT_S
 from tests.gauntlet.session import SessionBlocked
 
 LIMIT_RE = re.compile(r"(usage limit|rate limit|limit reached|limit will reset|"
                       r"out of (extra )?usage|5-hour limit|weekly limit)", re.I)
 RESET_RE = re.compile(r"resets? (?:at )?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", re.I)
-TURN_TIMEOUT_S = 600
+TURN_TIMEOUT_S = AGENT_TURN_TIMEOUT_S
 
 
 def parse_stream(lines: list[str]) -> dict:
@@ -89,25 +92,68 @@ def claude_argv(prompt: str, mcp_json: Path, resume: str | None = None) -> list[
     return argv
 
 
+class AgentAborted(RuntimeError):
+    """The session was aborted (hard cap): no further claude turn may start."""
+
+
 class AgentSession:
     """Implements gauntlet.adapter.Session for layer scenarios_agent. Wraps a
-    ScouterSession (darktable + staged frames); the MCP server is Claude's."""
+    ScouterSession (darktable + staged frames); the MCP server is Claude's.
 
-    def __init__(self, inner, *, run=subprocess.run, clock=time.monotonic) -> None:
+    (final fix C1): each `claude -p` turn runs through Popen in its own
+    process group (start_new_session) and the live handle is kept, so
+    abort() -- the runner's hard-cap path -- kills the whole group (claude
+    and the MCP server it spawned) instead of leaving it running up to
+    TURN_TIMEOUT_S against the next session's darktable."""
+
+    def __init__(self, inner, *, popen=subprocess.Popen, killpg=os.killpg,
+                 clock=time.monotonic) -> None:
         self.inner = inner
-        self.run = run
+        self.popen = popen
+        self.killpg = killpg
         self.clock = clock
+        self.proc = None
+        self.aborted = False
 
     def _turn(self, prompt: str, resume: str | None) -> dict:
+        if self.aborted:
+            raise AgentAborted("agent session aborted; no further claude turn")
         path = self.inner.root / "mcp.json"
         path.write_text(json.dumps(mcp_config(self.inner.staged)))
-        p = self.run(claude_argv(prompt, path, resume), capture_output=True, text=True,
-                     timeout=TURN_TIMEOUT_S, cwd=str(self.inner.root))
-        parsed = parse_stream(p.stdout.splitlines())
+        proc = self.popen(claude_argv(prompt, path, resume), stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True,
+                          cwd=str(self.inner.root), start_new_session=True)
+        self.proc = proc
+        try:
+            stdout, _ = proc.communicate(timeout=TURN_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            self.stop_claude()
+            raise
+        finally:
+            if self.proc is proc and proc.poll() is not None:
+                self.proc = None
+        if self.aborted:
+            raise AgentAborted("agent session aborted during a claude turn")
+        parsed = parse_stream((stdout or "").splitlines())
         if parsed["limit"]:
             raise Park(f"agent usage limit: {parsed['limit'][:120]}",
                        until=reset_time(parsed["limit"]))
         return parsed
+
+    def stop_claude(self) -> None:
+        """Kill the running claude turn's process group (ours: we started it
+        with start_new_session, so its pgid is its pid) and reap it."""
+        proc, self.proc = self.proc, None
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            self.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            proc.communicate(timeout=10)
+        except Exception:  # noqa: BLE001 - reaping is best effort
+            pass
 
     @staticmethod
     def _record_calls(obs: Observation, calls: list[dict]) -> None:
@@ -171,7 +217,14 @@ class AgentSession:
         return obs
 
     def abort(self) -> None:
-        self.inner.abort()
+        self.aborted = True
+        try:
+            self.stop_claude()
+        finally:
+            self.inner.abort()
 
     def close(self) -> None:
-        self.inner.close()
+        try:
+            self.stop_claude()
+        finally:
+            self.inner.close()

@@ -24,3 +24,14 @@ def test_out_impossible_partial_carry_roadmap_key():
     for c in tool + agent:
         if c.meta["class"] in ("out", "impossible", "partial"):
             assert c.meta.get("roadmap_key"), c.id
+
+
+def test_agent_cases_get_a_real_cap():
+    """(final fix C1): an agent case's cap covers every claude turn (initial
+    + each follow-up) at TURN_TIMEOUT_S, not the 30 s fallback."""
+    from tests.gauntlet.agent import TURN_TIMEOUT_S
+
+    _, agent = scenarios.generate(taxonomy.load())
+    for c in agent:
+        turns = 1 + len(c.meta["followups"])
+        assert c.budget_cap_s() >= turns * TURN_TIMEOUT_S, c.id
