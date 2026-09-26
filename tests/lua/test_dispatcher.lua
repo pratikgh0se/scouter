@@ -3026,6 +3026,71 @@ do
   view_state.current = "darkroom"
 end
 
+-- Row 431 regression (bench 20260926t083159z): history_commit on a freshly
+-- opened, UNEDITED frame never answered. Nothing to write, so no_bounce
+-- reports sidecar_written=false and auto falls back to the bounce, whose
+-- waits (5s leave, 20s return retried once, 1.5s sidecar, per attempt) knew
+-- nothing of the caller's timeout: the server's bridge gave up at 60s, the
+-- MCP client at 30s, the worker kept grinding. With `budget_ms` every wait is
+-- clamped to what is left, and no bounce starts that cannot be paid for.
+do
+  local tmp = os.tmpname()
+  local f = io.open(tmp, "w"); f:write("unedited frame, import-time sidecar"); f:close()
+  local img, backing = make_db_backed_image(107, tmp)
+  backing.is_altered = false          -- a frame nobody has edited
+  backing.rating_writes_nothing = true -- the flush finds nothing to write
+  images_by_id[107] = img
+  stub_dt.gui.action_images = {img}
+  view_state.current = "darkroom"
+
+  local slept = 0
+  local real_sleep = stub_dt.control.sleep
+  stub_dt.control.sleep = function(ms) slept = slept + (ms or 0); return real_sleep(ms) end
+  -- A cold darkroom: a pressed view switch does not land within any budget.
+  view_state.switch_lag_sleeps = 1e9
+
+  local c = plugin.methods["history.commit"]({strategy = "auto", image_id = 107,
+                                              budget_ms = 3000})
+  assertTrue(slept <= 3100, "the commit spent at most its 3000ms budget waiting, not "
+    .. slept .. "ms")
+  assertEq(c.sidecar_written == true, false, "and reports nothing written")
+  assertEq(c.ok, false, "honestly not ok")
+
+  -- A budget too small for any bounce: no_bounce's answer, no view switch.
+  view_state.pending, view_state.pending_sleeps = nil, nil
+  view_state.current = "darkroom"
+  slept = 0
+  local switches = view_state.action_switches or 0
+  local c2 = plugin.methods["history.commit"]({strategy = "auto", image_id = 107,
+                                               budget_ms = 500})
+  assertTrue(slept <= 600, "a 500ms budget waits at most 500ms, not " .. slept .. "ms")
+  assertEq(view_state.action_switches or 0, switches, "and never starts a bounce")
+  assertEq(c2.budget_exhausted, true, "saying the budget, not darktable, ended it")
+  assertEq(c2.strategy_used, "no_bounce", "with no_bounce's own result")
+
+  -- Explicit bounce strategy, no budget for even one bounce: no switch.
+  local c3 = plugin.methods["history.commit"]({strategy = "view_bounce_action", budget_ms = 0})
+  assertEq(view_state.action_switches or 0, switches, "a spent budget presses nothing")
+  assertEq(c3.budget_exhausted, true, "and says so")
+  assertEq(c3.attempts_used, 0, "zero bounces")
+
+  -- No budget given: the old fixed waits, unchanged (and the budget from the
+  -- calls above is not left behind).
+  view_state.switch_lag_sleeps = 0
+  view_state.pending, view_state.pending_sleeps = nil, nil
+  view_state.current = "darkroom"
+  local c4 = plugin.methods["history.commit"]({strategy = "auto", image_id = 107, attempts = 1})
+  assertEq(c4.budget_exhausted, nil, "without budget_ms nothing is cut short")
+  assertEq(c4.strategy_used, "view_bounce_action", "and auto still falls back to the bounce")
+
+  stub_dt.control.sleep = real_sleep
+  images_by_id[107] = nil
+  stub_dt.gui.selection_now = nil
+  stub_dt.gui.action_images = {}
+  view_state.current = "darkroom"
+  os.remove(tmp)
+end
+
 -- ---- Report ----------------------------------------------------------------
 if #failures > 0 then
   io.stderr:write("FAILED:\n")

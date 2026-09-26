@@ -401,9 +401,10 @@ def test_history_commit_reports_cpu_ms_not_ms():
     body = body[1].split("\nmethods[", 1)[0]
     assert "os.clock()" in body, "history.commit no longer times itself with os.clock()"
     assert "os.time()" not in body, "history.commit must not time itself with os.time()"
-    assert body.count("cpu_ms = (os.clock()") == 3, (
+    assert body.count("cpu_ms = (os.clock()") == 4, (
         "history.commit must report cpu_ms = (os.clock() - started) * 1000 on "
-        "its three own return paths (sidecar success, sidecar failure, view_bounce)"
+        "its four own return paths (sidecar success, sidecar failure, view_bounce, "
+        "and row 431's budget spent before any bounce)"
     )
     # Row 429: the no_bounce result (also auto's first rung) is built by
     # run_no_bounce, from the same `started`.
@@ -527,7 +528,7 @@ def test_commit_view_bounce_retry_sleeps_first():
     body = source.split("local function commit_view_bounce", 1)
     assert len(body) == 2, "commit_view_bounce not found in the plugin"
     body = body[1].split("\nend", 1)[0]
-    assert body.count("dt.control.sleep(VIEW_BOUNCE_DWELL_MS)") == 2, (
+    assert body.count("yield_sleep(VIEW_BOUNCE_DWELL_MS)") == 2, (
         "commit_view_bounce must dwell in the lighttable before the first "
         "attempt AND again before the retry of the second switch"
     )

@@ -19,7 +19,8 @@ from urllib.parse import quote
 
 from scouter import metrics, paths
 from scouter.core import dtbridge, xmp
-from scouter.errors import CommitTimeout, DbLocked, NotInDarkroom, UsageError
+from darktable_mcp.bridge.client import BridgeTimeoutError
+from scouter.errors import BridgeTimeout, CommitTimeout, DbLocked, NotInDarkroom, UsageError
 from scouter.registry import ArgSpec, Verb, register
 from scouter.types import ChangedResult, CommitResult, HistoryEntry, HistoryResult
 
@@ -31,6 +32,10 @@ POLL_INTERVAL_S = 0.05
 #: `darkroom.set_param` pre-check, task 12) asks for `attempts=1` and
 #: `expect_change=False` instead, and pays one bounce, not two.
 DEFAULT_COMMIT_ATTEMPTS = 2
+#: Row 431: how much sooner than the caller's `timeout_s` the plugin's own
+#: `budget_ms` runs out, so its answer (and the sidecar poll after it) still
+#: lands inside the caller's wait.
+_BRIDGE_MARGIN_S = 0.5
 
 #: Every strategy the plugin's `history.commit` accepts (row 422 added
 #: `view_bounce_action` and `no_bounce`; see darktable_mcp.lua).
@@ -498,7 +503,7 @@ def commit(
     timeout_s: float = 5.0,
     strategy: str = "auto",
     attempts: int = DEFAULT_COMMIT_ATTEMPTS,
-    expect_change: bool = True,
+    expect_change: bool | None = None,
     job: str | None = None,
 ) -> CommitResult:
     """Make darktable write this image's history to its sidecar, then verify.
@@ -519,8 +524,30 @@ def commit(
     it is the CALLER's job (`darkroom.set_param`'s mid path) to
     independently confirm the requested state via readback before trusting
     it -- only that readback earns a watermark.
+
+    Row 431 (bench 20260926t083159z: `history_commit` on an unedited frame,
+    `timeout_s=10`, never answered). `expect_change=None` (the default)
+    means: expect a change only when Scouter journalled an uncommitted write
+    for this image. With none pending, darktable gets one no_bounce look
+    (which still commits an edit it has already flushed to library.db) and
+    no bounce; if the history did not move, the answer is `noop=True`
+    within ~2s. Pass `expect_change=True` to force the full bounce (e.g. an
+    edit made by hand in darktable seconds ago). And `timeout_s` now bounds
+    the WHOLE call: the plugin gets `budget_ms` a little under it, and the
+    bridge wait itself is capped at what is left.
     """
     job = job or paths.current_job()
+    started = time.monotonic()
+    deadline = started + timeout_s
+    target = image if image is not None else _darkroom_image()
+    # A writer, so an unknown path may be imported (that is `darkroom.open`'s
+    # documented job); reads below never pass `may_import`.
+    resolved = dtbridge.resolve_image(target, may_import=True)
+    probe_only = False
+    if expect_change is None:
+        pending = pending_uncommitted_keys(job, resolved.image_id)
+        expect_change = bool(pending)
+        probe_only = not pending
     if not expect_change:
         # Mirrors the Lua handler's own clamp (nit, fix round 1):
         # `expect_change=False` always means exactly one bounce, regardless
@@ -528,16 +555,11 @@ def commit(
         # bypasses the bridge (a test double, or a future strategy that
         # never reaches Lua) still gets the same contract.
         attempts = 1
-    target = image if image is not None else _darkroom_image()
-    # A writer, so an unknown path may be imported (that is `darkroom.open`'s
-    # documented job); reads below never pass `may_import`.
-    resolved = dtbridge.resolve_image(target, may_import=True)
     sidecar = xmp.sidecar_path(resolved.path)
     before_ns, before_size = _sidecar_signature(sidecar)
     before_history = _history_fingerprint(sidecar) if sidecar.exists() else None
     metadata_only_rewrites = 0
 
-    started = time.monotonic()
     if strategy not in COMMIT_STRATEGIES:
         raise UsageError(f"unknown strategy {strategy!r} (valid: {', '.join(COMMIT_STRATEGIES)})")
     params = {"strategy": strategy, "attempts": attempts, "expect_change": expect_change}
@@ -547,7 +569,30 @@ def commit(
         # Row 429: "auto" starts with no_bounce (falling back to the
         # view_bounce_action bounce), so it needs the image too.
         params["image_id"] = resolved.image_id
-    result = dtbridge.call("history.commit", params)
+    # Row 431: the plugin stops waiting a little before the caller does, and
+    # the bridge wait itself never outlives `timeout_s` (it used to wait the
+    # bridge's own 60s default, whatever the caller asked for).
+    params["budget_ms"] = max(0, int((deadline - time.monotonic() - _BRIDGE_MARGIN_S) * 1000))
+    try:
+        result = dtbridge.call(
+            "history.commit", params, timeout=max(deadline - time.monotonic(), 0.05)
+        )
+    except BridgeTimeout as e:
+        if not isinstance(e.__cause__, BridgeTimeoutError):
+            raise
+        raise CommitTimeout(
+            f"darktable did not answer history.commit for {sidecar} within "
+            f"{timeout_s:g}s (strategy {strategy})",
+            fix="darktable's Lua worker is busy or stuck; check `scouter doctor`, "
+            "or leave and re-enter the darkroom, then retry",
+            detail={
+                "strategy_used": strategy,
+                "image_id": resolved.image_id,
+                "xmp": str(sidecar),
+                "ms": int((time.monotonic() - started) * 1000),
+                "bridge_timeout": True,
+            },
+        ) from e
     strategy_used = str(result.get("strategy_used", strategy))
     ok = bool(result.get("ok", True))
     view_after = str(result.get("view_after", "unknown"))
@@ -555,6 +600,27 @@ def commit(
 
     def _watermark() -> None:
         watermark_write(job, resolved.image_id, resolved.xmp_path)
+
+    if probe_only and ok and sidecar_written is False:
+        return CommitResult(
+            image_id=resolved.image_id,
+            path=resolved.path,
+            strategy_used=strategy_used,
+            committed=False,
+            changed=False,
+            confirmed=False,
+            noop=True,
+            view_after=view_after,
+            ms=int((time.monotonic() - started) * 1000),
+            xmp_mtime=sidecar.stat().st_mtime if sidecar.exists() else None,
+            warnings=[
+                f"nothing to commit for {sidecar}: Scouter has no uncommitted write "
+                "for this image, and darktable's flush left the sidecar's history "
+                "unchanged. An edit made by hand in darktable that it has not yet "
+                "saved to its library is not seen by this check; pass "
+                "expect_change=true to force a view bounce."
+            ],
+        )
 
     if not expect_change and ok and sidecar_written is False:
         return CommitResult(
@@ -610,7 +676,6 @@ def commit(
             warnings=warnings,
         )
 
-    deadline = started + timeout_s
     while time.monotonic() < deadline:
         found = _poll()
         if found is not None:
@@ -803,8 +868,10 @@ for verb in (
             ArgSpec(
                 "expect_change",
                 "bool",
-                default=True,
-                help="False forces attempts=1 and reports a confirmed no-op as "
+                default=None,
+                help="default: expect a change only when Scouter has an uncommitted "
+                "write for this image, else answer noop=true promptly; True forces the "
+                "full bounce; False forces attempts=1 and reports a confirmed no-op as "
                 "ok/changed=false instead of raising commit_timeout",
             ),
         ),

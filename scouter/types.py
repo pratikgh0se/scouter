@@ -184,6 +184,11 @@ class CommitResult(Payload):
     # nothing to flush". A caller must never stamp a watermark, or otherwise
     # treat the sidecar as known-fresh, from a `confirmed=False` result.
     confirmed: bool = True
+    # Row 431: True when there was nothing to commit -- Scouter had no
+    # uncommitted write journalled for this image, and darktable's flush left
+    # the sidecar's history as it was. `committed`/`changed`/`confirmed` are
+    # all False alongside it: a no-op never earns a watermark.
+    noop: bool = False
 
 
 @dataclass
