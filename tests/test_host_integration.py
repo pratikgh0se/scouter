@@ -22,6 +22,8 @@ import time
 import unittest
 from pathlib import Path
 
+import pytest
+
 DARKTABLE = Path("/Applications/darktable.app/Contents/MacOS/darktable")
 HERO = Path("/Users/pratik/Pictures/EditingTrial/P6281348.ORF")
 PLUGIN_SRC = Path(__file__).resolve().parent.parent / "darktable_mcp" / "lua" / "darktable_mcp.lua"
@@ -69,6 +71,7 @@ def _quit(proc: subprocess.Popen[bytes]) -> None:
 
 
 @unittest.skipUnless(not _MISSING, SKIP_REASON)
+@pytest.mark.host
 class HeroEditIntegrationTest(unittest.TestCase):
     """One test method: the conversation is a sequence, not independent cases."""
 

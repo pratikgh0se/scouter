@@ -21,6 +21,8 @@ import unittest
 from pathlib import Path
 from typing import Any, Callable
 
+import pytest
+
 from tests import host_support as hs
 
 RUN = os.environ.get("SCOUTER_HOST_TESTS") == "1" and hs.DARKTABLE.exists()
@@ -207,6 +209,7 @@ def _scratch() -> None:
 
 
 @unittest.skipUnless(RUN, REASON)
+@pytest.mark.host
 class ProbeCandidatePathsHostTest(unittest.TestCase):
     """§10.1: ONE darktable launch per candidate path (an unknown path wedges the worker)."""
 
@@ -244,6 +247,7 @@ class ProbeCandidatePathsHostTest(unittest.TestCase):
 
 
 @unittest.skipUnless(RUN, REASON)
+@pytest.mark.host
 class Phase3LiveHostTest(unittest.TestCase):
     """§10.2 slots, §10.3 signs, preset round trip and timing, in ONE launch."""
 
