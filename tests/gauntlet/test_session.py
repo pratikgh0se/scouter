@@ -270,3 +270,16 @@ def test_a_live_mcp_transport_error_is_not_a_death(corpus, tmp_path):
     s = _session(corpus, tmp_path, mcp=mcp).open()
     s.call("darkroom_set", {"module": "exposure"}, 3.5, write=True)
     assert s.mcp_deaths == [] and not s.mcp_dead
+
+
+def test_close_quits_darktable_even_when_the_mcp_close_raises(corpus, tmp_path):
+    """(final fix M2)."""
+    class BadCloseMcp(FakeMcp):
+        def close(self):
+            raise BrokenPipeError("mcp stdin gone")
+
+    dt = FakeDt()
+    s = _session(corpus, tmp_path, dt, mcp=BadCloseMcp()).open()
+    with pytest.raises(BrokenPipeError):
+        s.close()
+    assert dt.terminated == [None] and s.mcp is None

@@ -270,10 +270,13 @@ class ScouterSession:
             self.mcp = None
 
     def close(self) -> None:
-        if self.mcp is not None:
-            self.mcp.close()
-            self.mcp = None
-        self.dt.terminate()
+        # (final fix M2): darktable is quit even when the MCP close raises.
+        try:
+            if self.mcp is not None:
+                mcp, self.mcp = self.mcp, None
+                mcp.close()
+        finally:
+            self.dt.terminate()
 
     # -- calls -----------------------------------------------------------
 
