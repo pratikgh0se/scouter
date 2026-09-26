@@ -885,6 +885,139 @@ local function clamp_to_budget(budget_ms)
   return budget_ms
 end
 
+-- ---- GUI-ready gate (row 433) ---------------------------------------------
+--
+-- Benchmark run 3 (2026-09-26, bench-runs/20260926t092247z and every bench
+-- run that day): each launch deadlocked darktable ITSELF on the first
+-- history.commit, ~2.4s after launch -- "not responding", 0% CPU, osascript
+-- quit ignored, SIGKILL needed. The macOS hang report
+-- (/Library/Logs/DiagnosticReports/darktable_2026-09-26-150440_*.hang):
+--   pool-1: run_async_thread_main -> ... -> gtk_wrap ->
+--           g_main_context_invoke_full -> dt_lua_gtk_wrap_callback ->
+--           g_mutex_lock          "Deadlocked: pool-1 -> pool-1"
+--   main:   apple_main -> dt_gui_gtk_run -> gtk_main -> g_main_loop_run ->
+--           g_main_context_wait_internal (waiting to OWN the context)
+--   lua thread: alien_job_dispatch -> dt_lua_lock_internal (waiting)
+--
+-- darktable 5.4.1 src/lua/call.c gtk_wrap (665-667): lock end_mutex, then
+-- g_main_context_invoke_full(NULL, ...), then g_cond_wait. GLib runs the
+-- callback INLINE when the calling thread can acquire the default context,
+-- i.e. whenever nobody owns it -- which is the case from dt_lua_init
+-- (darktable.c ~1949, where this plugin loads and the worker starts) until
+-- the main thread enters gtk_main (gtk.c 1631), because dt_init pumps no
+-- events after Lua init. The inline dt_lua_gtk_wrap_callback re-locks the
+-- same non-recursive end_mutex (call.c 639): the pool thread waits on
+-- itself forever, holding the context, and gtk_main never gets it.
+-- In that window darktable already answers view.current = darkroom (the
+-- command-line image is loaded in dt_init), so a launcher that polls for the
+-- darkroom and then calls history.commit (no_bounce's first step is
+-- dt.gui.selection, gtk-wrapped) hits it every time.
+--
+-- The gate: no request other than the read-only EXEMPT ones is served until
+-- darktable's main loop is provably running. Proof = the first
+-- "pixelpipe-processing-complete" event: after Lua init the darkroom starts
+-- a pipe only from expose() (views/darkroom.c 682-684), a GTK draw, which
+-- only gtk_main dispatches. A lighttable launch runs no pipe, so the gate
+-- also opens GUI_READY_FALLBACK_S after the plugin loaded. A request that
+-- arrives while the gate is closed yields (dt.control.sleep) up to its
+-- budget_ms (or GUI_READY_WAIT_MS) and is then refused as gui_not_ready --
+-- a typed, retryable answer instead of a wedged darktable.
+local GUI_READY_EVENT = "pixelpipe-processing-complete"
+local GUI_READY_EVENT_NAME = "darktable_mcp_gui_ready"
+local GUI_READY_FALLBACK_S = 20
+local GUI_READY_POLL_MS = 100
+-- How long a gated verb with no `budget_ms` of its own waits for the gate.
+-- Review of row 433: it MUST stay well inside the Python client's timeout for
+-- that method (darktable_mcp/bridge/client.py DEFAULT_TIMEOUTS) -- a wait at
+-- or past the client's timeout turns the honest gui_not_ready answer into
+-- "no response at all" (a generic bridge_timeout, plus a stale response file).
+-- Rule, pinned by tests/test_dtbridge.py: every wait <= half the client's
+-- timeout. Default 2s covers the 5-10s verbs (darkroom.status/action,
+-- module.*, view_transport); longer-budget verbs may wait for a slow first
+-- render. history.commit sends its own budget_ms, which wins.
+local GUI_READY_WAIT_MS = 2000
+local GUI_GATE_WAIT_MS = {
+  ["darkroom.open"] = 20000,
+  ["history.commit"] = 20000,
+  ["import_batch"] = 20000,
+  ["apply_preset"] = 20000,
+  ["image.rate"] = 20000,
+  ["style.apply"] = 20000,
+  ["style.import_file"] = 20000,
+  ["darktable_mcp.probe_main_thread"] = 20000,
+  ["view_photos"] = 10000,
+  ["rate_photos"] = 10000,
+  ["image.color_labels"] = 10000,
+  ["style.create_from_current"] = 10000,
+  ["style.export_file"] = 10000,
+  ["darkroom.apply_style"] = 10000,
+  ["list_styles"] = 5000,
+  ["snapshot.take"] = 5000,
+  ["style.delete"] = 5000,
+}
+
+local function gui_gate_wait_ms(method)
+  return GUI_GATE_WAIT_MS[method] or GUI_READY_WAIT_MS
+end
+
+-- Verbs that touch no gtk-wrapped API (dt.gui.action / selection / mimic /
+-- display_image): served with the gate closed, so a launcher's readiness
+-- poll and `scouter doctor` still answer during startup.
+local GUI_GATE_EXEMPT = {
+  ["view.current"] = true,
+  ["darkroom.current"] = true,
+  ["darktable_mcp.diag"] = true,
+  ["image.lookup"] = true,
+}
+
+local gui_gate = {open = false, source = nil, loaded_at = os.time(), opened_at = nil,
+                  event_registered = false}
+
+function gui_gate.open_now(source)
+  if not gui_gate.open then
+    gui_gate.open = true
+    gui_gate.source = source
+    gui_gate.opened_at = os.time()
+  end
+end
+
+-- Test hook: back to "just launched".
+function gui_gate.reset()
+  gui_gate.open, gui_gate.source, gui_gate.opened_at = false, nil, nil
+  gui_gate.loaded_at = os.time()
+end
+
+local function gui_ready()
+  if gui_gate.open then return true end
+  if os.time() - gui_gate.loaded_at >= GUI_READY_FALLBACK_S then
+    gui_gate.open_now("fallback_elapsed")
+    return true
+  end
+  return false
+end
+
+-- Yield until the gate opens or `budget_ms` is spent. Returns (open, waited).
+local function wait_for_gui_gate(budget_ms)
+  local waited = 0
+  while not gui_ready() do
+    if waited >= budget_ms then return false, waited end
+    if not (dt.control and dt.control.sleep) then return false, waited end
+    yield_sleep(GUI_READY_POLL_MS)
+    waited = waited + GUI_READY_POLL_MS
+  end
+  return true, waited
+end
+
+do
+  local ok_get, register = pcall(function() return dt.register_event end)
+  if ok_get and type(register) == "function" then
+    local ok = pcall(register, GUI_READY_EVENT_NAME, GUI_READY_EVENT, function()
+      gui_gate.open_now(GUI_READY_EVENT)
+    end)
+    gui_gate.event_registered = ok and true or false
+  end
+end
+
 -- A bounce needs about a second on the host (row 429: 0.75-1.07s) before its
 -- sidecar wait even starts; with less left than this, one is not started.
 local COMMIT_MIN_BOUNCE_MS = 1000
@@ -1112,6 +1245,11 @@ methods["darktable_mcp.diag"] = function()
     default_commit_strategy = "auto",
     auto_commit_order = {"no_bounce", "view_bounce_action"},
     view = current_view_name(),
+    -- Row 433: is darktable's GTK main loop provably running yet?
+    gui_ready = gui_ready(),
+    gui_ready_source = gui_gate.source,
+    gui_ready_event_registered = gui_gate.event_registered,
+    since_load_s = os.time() - gui_gate.loaded_at,
   }
 end
 
@@ -2676,6 +2814,21 @@ local function handle(req)
   if not fn then
     return {id = req.id, error = "unknown method: " .. tostring(req.method)}
   end
+  if not GUI_GATE_EXEMPT[req.method] then
+    -- Row 433: never let a GUI-touching verb run before gtk_main does.
+    local params = type(req.params) == "table" and req.params or nil
+    local caller_budget = params and tonumber(params.budget_ms) or nil
+    local open, waited = wait_for_gui_gate(caller_budget or gui_gate_wait_ms(req.method))
+    if not open then
+      return {id = req.id, error = string.format(
+        "gui_not_ready: darktable's main loop has not started yet (no pixelpipe has "
+        .. "finished %ds after the plugin loaded; waited %dms). Nothing was done; "
+        .. "retry in a few seconds.", os.time() - gui_gate.loaded_at, waited)}
+    end
+    if caller_budget and waited > 0 then
+      params.budget_ms = math.max(0, caller_budget - waited)
+    end
+  end
   local ok, result_or_err = pcall(fn, req.params)
   if not ok then
     return {id = req.id, error = "handler raised: " .. tostring(result_or_err)}
@@ -3030,4 +3183,15 @@ return {
   },
   module_actions = MODULE_ACTIONS,
   sidecar_action_paths = SIDECAR_ACTION_PATHS,
+  -- Row 433: the GUI-ready gate.
+  gui_gate = gui_gate,
+  gui_ready = gui_ready,
+  gui_gate_exempt = GUI_GATE_EXEMPT,
+  gui_gate_wait_ms = gui_gate_wait_ms,
+  gui_ready_timing = {
+    fallback_s = GUI_READY_FALLBACK_S,
+    wait_ms = GUI_READY_WAIT_MS,
+    wait_ms_by_method = GUI_GATE_WAIT_MS,
+    poll_ms = GUI_READY_POLL_MS,
+  },
 }
