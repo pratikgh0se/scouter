@@ -13,9 +13,15 @@ from tests.gauntlet.execute import VIRTUAL, substitute
 
 def cli(session, case, step, obs) -> CallRecord:
     argv = substitute(list(step.args["argv"]), session, obs.calls)
-    p = subprocess.run([sys.executable, "-m", "scouter", *argv], env=session.staged.env,
-                       capture_output=True, text=True, timeout=step.budget_s + 30,
-                       cwd=str(session.root))
+    try:
+        p = subprocess.run([sys.executable, "-m", "scouter", *argv], env=session.staged.env,
+                           capture_output=True, text=True, timeout=step.budget_s + 30,
+                           cwd=str(session.root))
+    except subprocess.TimeoutExpired:
+        obs.blocked = "hang: scouter cli exceeded budget"
+        obs.hang_evidence.append(f"cli {' '.join(argv)}: no answer in "
+                                 f"{step.budget_s + 30:.0f}s")
+        return CallRecord("cli", {"argv": argv}, None, error="timeout", write=True)
     try:
         env = json.loads(p.stdout)
     except ValueError:
