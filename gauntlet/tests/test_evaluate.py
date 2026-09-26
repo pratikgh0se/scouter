@@ -357,3 +357,86 @@ def test_i8_a_uses_m1_key_and_b_uses_reported_key():
                           _snap("b", **{"exposure.exposure": 0.7, "sigmoid.contrast": 1.8})),
                      POLICY)
     assert wrong.silent_failure.startswith("b: reported exposure.exposure")
+
+
+def _say_env(moves, key="warmer"):
+    return _ok({"key": key, "phrase": key, "moves": moves})
+
+
+def _move(module, param, **kw):
+    return {"module": module, "param": param, "outcome": "ok", "committed": True,
+            "noop": False, **kw}
+
+
+WARM_BEFORE = {"temperature.temperature": 4924.6, "temperature.coeff_r": 1.914,
+               "temperature.coeff_b": 1.820, "temperature.preset": 4}
+WARM_AFTER = {"temperature.temperature": 5123.7, "temperature.coeff_r": 1.959,
+              "temperature.coeff_b": 1.768, "temperature.preset": 2}
+
+
+def test_smoke_s1a_b_uses_the_moves_not_the_phrase_key():
+    """Smoke S1-A: darkroom_say's data.key is the PHRASE key ("warmer"), not a
+    module.param; rule (b) must read the moves' module.param instead."""
+    chk = Check("M1", kind="changed", target={"key": "temperature.temperature", "unit": "K"})
+    case = _edit_case([chk], {"changed": True},
+                      steps=[Step("darkroom_say", {"phrase": "warmer"}, write=True)])
+    env = _say_env([_move("temperature", "temperature")])
+    v = evaluate(case, _obs(env, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)), POLICY)
+    assert v.outcome == "verified", v.silent_failure
+    # a phrase whose move moved a different param is still a (b), named by module.param
+    wrong = _say_env([_move("exposure", "exposure")])
+    v = evaluate(_edit_case([], {"changed": True}),
+                 _obs(wrong, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)), POLICY)
+    assert v.silent_failure.startswith("b: reported exposure.exposure but"), v.silent_failure
+
+
+def test_smoke_s1a_multi_move_phrase_and_keyless_envelope():
+    both = _say_env([_move("exposure", "exposure"), _move("temperature", "temperature")])
+    v = evaluate(_edit_case([], {"changed": True}),
+                 _obs(both, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)), POLICY)
+    assert v.outcome == "verified", v.silent_failure
+    # a phrase key with no moves names no param: (b) is skipped, never compared to "warmer"
+    bare = _ok({"key": "warmer"})
+    v = evaluate(_edit_case([], {"changed": True}),
+                 _obs(bare, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)), POLICY)
+    assert v.outcome == "verified", v.silent_failure
+    # noop moves are not reports of a change; only the non-noop move counts
+    mixed = _say_env([_move("temperature", "temperature", noop=True),
+                      _move("exposure", "exposure")])
+    v = evaluate(_edit_case([], {"changed": True}),
+                 _obs(mixed, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)), POLICY)
+    assert v.silent_failure.startswith("b: reported exposure.exposure but"), v.silent_failure
+
+
+def test_smoke_r1_i1_all_noop_say_that_changed_the_sidecar_is_silent():
+    """Review I1: every move answered noop (e.g. clamped) yet params changed."""
+    allnoop = _say_env([_move("temperature", "temperature", noop=True)])
+    v = evaluate(_edit_case([], {"changed": True}),
+                 _obs(allnoop, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)), POLICY)
+    assert v.outcome == "silent_failure", v.outcome
+    assert v.silent_failure.startswith("f: every move answered noop but the sidecar changed")
+    # same fingerprint but a param changed still counts
+    v = evaluate(_edit_case([], None),
+                 _obs(allnoop, _snap("a", **WARM_BEFORE), _snap("a", **WARM_AFTER)), POLICY)
+    assert v.silent_failure.startswith("f: every move answered noop"), v.silent_failure
+    # an honest all-noop say that changed nothing is not a silent failure
+    v = evaluate(_edit_case([], None),
+                 _obs(allnoop, _snap("a", **WARM_BEFORE), _snap("a", **WARM_BEFORE)), POLICY)
+    assert v.silent_failure is None
+
+
+def test_smoke_r1_a_is_per_reported_key():
+    """Review minor (a): a committed non-noop move whose key did not change is an (a)
+    when the case expects a change, even if another reported key did change."""
+    two = _say_env([_move("temperature", "temperature"), _move("exposure", "exposure")])
+    before = {**WARM_BEFORE, "exposure.exposure": 0.7}
+    after = {**WARM_AFTER, "exposure.exposure": 0.7}
+    v = evaluate(_edit_case([], {"changed": True}),
+                 _obs(two, _snap("a", **before), _snap("b", **after)), POLICY)
+    assert v.silent_failure == "a: reported ok but exposure.exposure did not change"
+    # an uncommitted move is not a report of a change
+    unc = _say_env([_move("temperature", "temperature"),
+                    _move("exposure", "exposure", committed=False)])
+    v = evaluate(_edit_case([], {"changed": True}),
+                 _obs(unc, _snap("a", **before), _snap("b", **after)), POLICY)
+    assert v.outcome == "verified", v.silent_failure

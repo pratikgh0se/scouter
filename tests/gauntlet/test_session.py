@@ -15,6 +15,7 @@ class FakeDt:
         self._ready = list(ready)
         self._health = health
         self.launches = 0
+        self.launched = []
         self.terminated = []
         self.terminate_ok = terminate_ok
 
@@ -26,6 +27,7 @@ class FakeDt:
 
     def launch(self, frame, library, log):
         self.launches += 1
+        self.launched.append(frame)
 
     def ready(self, timeout_s):
         return {"ready": self._ready.pop(0) if self._ready else True}
@@ -49,6 +51,8 @@ class FakeMcp:
     def call_tool(self, tool, args, timeout):
         self.calls.append((tool, args))
         a = self.answers.get(tool, {"ok": True, "outcome": "ok", "data": {}})
+        if isinstance(a, list):  # answered in order; the last one repeats
+            a = a.pop(0) if len(a) > 1 else a[0]
         if isinstance(a, Exception):
             raise a
         return a
@@ -180,6 +184,36 @@ def test_ensure_frame_sets_current_only_on_success(corpus, tmp_path):
     s = _session(corpus, tmp_path, dt=dt, mcp=slow).open()
     assert s.ensure_frame("dark") == s.staged.frames["dark"]
     assert dt.launches == 2 and s.current_frame == s.staged.frames["dark"]
+
+
+WRONG_IMAGE = {"ok": False, "outcome": "error", "data": {},
+               "error": {"code": "not_in_darkroom", "detail": {"method": "darkroom.open"},
+                         "message": "handler raised: darktable_mcp.lua:1586: wrong image "
+                                    "loaded: asked for 2, darkroom shows 1 after 15000ms"}}
+
+
+def test_smoke_s2_frame_imported_mid_session_relaunches_on_it(corpus, tmp_path):
+    """Smoke S2: darktable cannot load a frame imported into the SAME running
+    session (product honest limit R20: 'wrong image loaded' -> not_in_darkroom).
+    ensure_frame relaunches darktable on that frame, then re-opens it once."""
+    ok = {"ok": True, "outcome": "ok", "data": {}}
+    mcp = FakeMcp({"darkroom_open": [WRONG_IMAGE, ok]})
+    dt = FakeDt()
+    s = _session(corpus, tmp_path, dt=dt, mcp=mcp).open()
+    dark = s.staged.frames["dark"]
+    assert s.ensure_frame("dark") == dark
+    assert dt.launched == [s.staged.frames["hero"], dark] and s.current_frame == dark
+    assert dt.terminated == [False]  # the quit ladder ran before the relaunch
+    assert [c[0] for c in mcp.calls] == ["darkroom_open", "darkroom_open"]
+
+
+def test_smoke_s2_relaunches_at_most_once_then_blocks(corpus, tmp_path):
+    mcp = FakeMcp({"darkroom_open": [WRONG_IMAGE]})
+    dt = FakeDt()
+    s = _session(corpus, tmp_path, dt=dt, mcp=mcp).open()
+    with pytest.raises(sess.SessionBlocked, match="frame dark .*after a relaunch"):
+        s.ensure_frame("dark")
+    assert dt.launches == 2 and len(mcp.calls) == 2
 
 
 def test_never_launches_a_second_darktable_when_quit_fails(corpus, tmp_path):
