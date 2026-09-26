@@ -1,0 +1,141 @@
+"""Layer 4 executors: `chart_golden` (P7 + per-run calibration) and
+`look_plan` (a look's reachable targets -> absolute Scouter moves)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from gauntlet.adapter import CallRecord
+from tests.gauntlet import chart_render
+from tests.gauntlet.execute import VIRTUAL
+from tests.gauntlet.session import SessionBlocked
+
+CAL_FILE = "calibration.json"
+
+
+def _cal_path(session) -> Path:
+    return session.run_root / "chart" / CAL_FILE
+
+
+def chart_golden(session, case, step, obs) -> CallRecord:
+    try:
+        frame = session.ensure_frame("chart")
+        work = session.root / "render"
+        first = chart_render.render_stats(frame, work / "golden-a.ppm")
+        second = chart_render.render_stats(frame, work / "golden-b.ppm")
+        repeat = chart_render.compare_golden(second, golden=_tmp_golden(session, first))
+        golden = chart_render.compare_golden(first)
+        chart_render.write_golden_candidate(session.run_root, first)
+        obs.extra["patch_de"] = golden["patch_de"] or repeat["patch_de"]
+        obs.extra["golden"] = golden
+        cal: dict[str, float | None] = {}
+        for key, amount in chart_render.PROBE.items():
+            module, param = key.split(".")
+            session.call("darkroom_adjust", {"module": module, "param": param, "delta": amount},
+                         8.0, write=True)
+            after = chart_render.render_stats(frame, work / f"cal-{key}.ppm")
+            cal[key] = chart_render.slope(first, after, key, amount)
+            session.call("darkroom_undo_last", {}, 8.0, write=True)
+        cal["_base_slope"] = first["chart_tone"]["slope"]
+        cal["_base_C"] = first["chart_chromatic"]["C"]
+        (session.run_root / "chart").mkdir(parents=True, exist_ok=True)
+        _cal_path(session).write_text(json.dumps(cal, indent=2, sort_keys=True) + "\n")
+        obs.extra["calibration"] = cal
+        obs.extra["calibration_ok"] = all(v not in (None, 0.0) for k, v in cal.items()
+                                          if not k.startswith("_"))
+        return CallRecord("chart_golden", {}, {"ok": True, "outcome": "ok",
+                                               "data": {"golden": golden["verdict"]}})
+    except SessionBlocked as e:
+        obs.blocked = f"session: {e}"
+        return CallRecord("chart_golden", {}, error=f"blocked: {e}")
+
+
+def _tmp_golden(session, stats) -> Path:
+    p = session.root / "render" / "repeat-golden.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"labs": chart_render.labs(stats)}))
+    return p
+
+
+def plan_moves(look: dict, cal: dict, current: dict) -> tuple[list[tuple[str, str, float]],
+                                                               list[str]]:
+    """[(module, param, absolute value)], notes. Linear per-param solve."""
+    from scouter.core import vocab
+
+    t = look["targets"]
+    moves: list[tuple[str, str, float]] = []
+    notes: list[str] = []
+
+    def add(key: str, delta_metric: float) -> None:
+        s = cal.get(key)
+        if not s:
+            notes.append(f"no calibration for {key}")
+            return
+        module, param = key.split(".")
+        row = vocab.spec(module, param)
+        base = current.get(key, row.neutral if row.neutral is not None else 0.0)
+        target, _clamped = vocab.clamp(row, base + delta_metric / s)
+        moves.append((module, param, round(target, 4)))
+
+    tone = t.get("tone") or {}
+    for k, key in (("shadows_ev", "colorbalancergb.shadows_luminance"),
+                   ("mids_ev", "colorbalancergb.midtones_luminance"),
+                   ("highlights_ev", "colorbalancergb.highlights_luminance")):
+        if tone.get(k):
+            add(key, tone[k])
+    if tone.get("contrast"):
+        if "_base_slope" in cal:  # contrast is a fraction of the untouched slope
+            add("sigmoid.contrast", tone["contrast"] * cal["_base_slope"])
+        else:
+            notes.append("no base slope measured")
+    sat = t.get("saturation_delta") or 0
+    if sat == -1:
+        moves.append(("colorbalancergb", "global_saturation", -0.5))
+        notes.append("monochrome approximated by global saturation at its lower bound")
+    elif sat:
+        if "_base_C" in cal:  # saturation is a fraction of the untouched mean C*
+            add("colorbalancergb.global_chroma", sat * cal["_base_C"])
+        else:
+            notes.append("no base chroma measured")
+    gc = t.get("grey_cast") or {}
+    if gc.get("b"):
+        add("temperature.temperature", gc["b"])
+    if gc.get("a"):
+        moves.append(("temperature", "tint", 0.9 if gc["a"] > 0 else 1.1))
+    st = t.get("split_toning") or {}
+    for end, zone in (("shadow", "shadows"), ("highlight", "highlights")):
+        if st.get(f"{end}_hue") is not None and st.get(f"{end}_sat"):
+            moves.append(("colorbalancergb", f"{zone}_hue", float(st[f"{end}_hue"]) % 360))
+            moves.append(("colorbalancergb", f"{zone}_chroma", min(0.3, float(st[f"{end}_sat"]))))
+    if t.get("black_lift"):
+        add("exposure.black", t["black_lift"])
+    return moves, notes
+
+
+def look_plan(session, case, step, obs) -> CallRecord:
+    try:
+        from tests.gauntlet.taxonomy import load
+
+        look = next(x for x in load().looks if x["id"] == step.args["look_id"])
+        cal = json.loads(_cal_path(session).read_text()) if _cal_path(session).exists() else {}
+        moves, notes = plan_moves(look, cal, obs.before.get("params", {}))
+        sub = []
+        for module, param, value in moves:
+            r = session.call("darkroom_set", {"module": module, "param": param, "value": value},
+                             8.0, write=True)
+            sub.append({"tool": "darkroom_set", "module": module, "param": param, "value": value,
+                        "ok": bool((r.envelope or {}).get("ok")), "error": r.error})
+        obs.extra["look_moves"] = sub
+        obs.extra["look_notes"] = notes
+        ok = all(m["ok"] for m in sub)
+        return CallRecord("look_plan", step.args, {"ok": ok, "outcome": "ok" if ok else
+                                                   "error:partial", "data": {"moves": sub}},
+                          write=True)
+    except SessionBlocked as e:
+        obs.blocked = f"session: {e}"
+        return CallRecord("look_plan", step.args, error=f"blocked: {e}")
+
+
+VIRTUAL["chart_golden"] = chart_golden
+VIRTUAL["look_plan"] = look_plan
