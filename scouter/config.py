@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime
 import difflib
 import json
+import math
 import os
 import shutil
 from dataclasses import asdict, dataclass, field
@@ -131,6 +132,22 @@ class WatchdogConfig:
     auto_heal: bool = False
     max_heals_per_job: int = 1
     heal_budget_s: float = 60.0
+
+    def __post_init__(self) -> None:
+        # Fix round 1 (I3): the loader does not type-check sections, and here a
+        # wrong type is a safety issue ("false" is truthy and would turn the
+        # heal on; a string budget would crash after darktable was killed).
+        if type(self.auto_heal) is not bool:
+            raise UsageError(f"`watchdog.auto_heal` must be true or false, got {self.auto_heal!r}",
+                             detail={"key": "watchdog.auto_heal"})
+        n = self.max_heals_per_job
+        if type(n) is not int or n < 0:
+            raise UsageError(f"`watchdog.max_heals_per_job` must be an integer >= 0, got {n!r}",
+                             detail={"key": "watchdog.max_heals_per_job"})
+        b = self.heal_budget_s
+        if type(b) not in (int, float) or not math.isfinite(b) or b <= 0:
+            raise UsageError(f"`watchdog.heal_budget_s` must be a number > 0, got {b!r}",
+                             detail={"key": "watchdog.heal_budget_s"})
 
 
 @dataclass(frozen=True)
