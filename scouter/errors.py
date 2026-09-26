@@ -313,7 +313,8 @@ EXIT_CODES: dict[str, int] = {
     "darktable_unresponsive": 24,
     # Gauntlet §5.4's refusal set: a module that cannot take this write in the
     # mode darktable holds it in (first use: white balance, camera reference late).
-    "module_unavailable": 25,
+    # 25 is taken by write_unverified on fix/htc-applied-verify (merges first).
+    "module_unavailable": 26,
 }
 
 ERROR_CLASSES: tuple[type[ScouterError], ...] = (

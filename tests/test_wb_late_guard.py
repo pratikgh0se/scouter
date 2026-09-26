@@ -205,7 +205,8 @@ class ModuleUnavailableErrorTest(_WbLateFixture):
     def test_code_is_in_the_refusal_set_with_an_exit_code(self) -> None:
         self.assertEqual(ModuleUnavailable.code, "module_unavailable")
         self.assertIn(ModuleUnavailable, errors.ERROR_CLASSES)
-        self.assertIn("module_unavailable", errors.EXIT_CODES)
+        # 26, not 25: fix/htc-applied-verify's write_unverified takes 25.
+        self.assertEqual(errors.EXIT_CODES["module_unavailable"], 26)
 
 
 class UndoOfALateModeMoveWarnsTest(_test_wb.UndoViaKelvinInversionTest):
