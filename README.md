@@ -240,6 +240,19 @@ item rather than rewriting history — so your own Ctrl-Z still works.
 
 These are load-bearing, not incidental — read them before scripting against Scouter:
 
+- **Row 461: on darktable 5.4.x `auto` is the view bounce only; `no_bounce`
+  is opt-in and unsafe there.** Gauntlet night1-20260926 found 15 writes where
+  `no_bounce`'s rating touch rewrote the sidecar from an arbitrary *older*
+  library.db state (history_end 112 -> 92, 145 -> 35, ...) and the row 430
+  "history changed" check accepted it. So `auto` now goes straight to
+  `view_bounce_action` on 5.4.x (and when the version is unreadable); only
+  `--strategy no_bounce` still runs it. On every path a rewrite whose
+  history_end went back is refused (`commit_timeout` with
+  `detail.stale_rewrite`), and a stale `no_bounce` rewrite puts the
+  pre-commit sidecar back (`stale_rewrite_restored`). darkroom writers also
+  pass the module they touched, and a rewrite counts only when the newest
+  history item is that module's new state (row 434). The row 429/430 notes
+  below describe the old `auto` order and are superseded on 5.4.x.
 - **The commit trigger: `no_bounce` first, a view bounce as the fallback --
   but `no_bounce` does not land the edit on darktable 5.4.1 (row 430).**
   darktable writes the XMP sidecar only when the history is flushed (leaving

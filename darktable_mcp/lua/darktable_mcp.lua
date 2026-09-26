@@ -1235,6 +1235,31 @@ methods["view.current"] = function()
   return {view = current_view_name()}
 end
 
+-- Row 461 (controller ruling on row 434): on darktable 5.4.x no_bounce has
+-- never been shown to commit (row 430: the synchronize-selection flush does
+-- not carry the darkroom edit to library.db), and its rating touch rewrote
+-- the sidecar from an arbitrary OLDER library.db state 15 times in gauntlet
+-- night1-20260926 (history_end 112 -> 92, 145 -> 35, ...). So there `auto`
+-- goes straight to view_bounce_action. no_bounce stays an explicit opt-in
+-- strategy, unsafe on 5.4.x. An unreadable version is treated as 5.4.x.
+-- Enforcer: tests/lua/test_dispatcher.lua "row 461" block.
+local function darktable_version_string()
+  local ok, v = pcall(function() return dt.configuration and dt.configuration.version end)
+  if ok and type(v) == "string" then return v end
+  return nil
+end
+
+local function auto_tries_no_bounce()
+  local v = darktable_version_string()
+  if v == nil or v:match("^5%.4") then return false end
+  return true
+end
+
+local function auto_commit_order()
+  if auto_tries_no_bounce() then return {"no_bounce", "view_bounce_action"} end
+  return {"view_bounce_action"}
+end
+
 -- `scouter doctor`'s plugin line (row 422, reshaped in row 429 when the
 -- proxy was removed): which view-switch transport and commit strategy this
 -- plugin uses by default. Read-only; presses nothing.
@@ -1243,7 +1268,8 @@ methods["darktable_mcp.diag"] = function()
     view_switch_transport = view_switch_transport,
     view_transports = {"action"},
     default_commit_strategy = "auto",
-    auto_commit_order = {"no_bounce", "view_bounce_action"},
+    auto_commit_order = auto_commit_order(),
+    darktable_version = darktable_version_string(),
     view = current_view_name(),
     -- Row 433: is darktable's GTK main loop provably running yet?
     gui_ready = gui_ready(),
@@ -1950,6 +1976,35 @@ local function history_items(sig)
   return hend, items
 end
 
+-- Row 461 rule 1, applied on EVERY commit path with or without an expected
+-- module: a rewrite whose history_end went BACK is a stale rewrite (an older
+-- library.db state), never a commit. Returns the reason, or nil.
+local function history_end_went_back(before_sig, after_sig)
+  local before_end = history_items(before_sig)
+  local after_end = history_items(after_sig)
+  if before_end ~= nil and after_end ~= nil and after_end < before_end then
+    return "history_end went back from " .. before_end .. " to " .. after_end
+      .. ": the sidecar was rewritten from an older library.db state, not from this edit"
+  end
+  return nil
+end
+
+-- Put the pre-commit sidecar back after a stale rewrite (row 461): the
+-- rating touch already overwrote it with an older history. Written to a
+-- temp file and renamed, so a reader never sees a torn file. true on success.
+local function restore_sidecar(path, text)
+  if type(path) ~= "string" or type(text) ~= "string" then return false end
+  local tmp = path .. ".scouter-restore"
+  local f = io.open(tmp, "w")
+  if not f then return false end
+  local ok_w = f:write(text)
+  f:close()
+  if not ok_w then os.remove(tmp); return false end
+  local ok_mv = os.rename(tmp, path)
+  if not ok_mv then os.remove(tmp); return false end
+  return true
+end
+
 local function history_advanced_as_expected(before_sig, after_sig, expect_module)
   local after_end, after_items = history_items(after_sig)
   if after_end == nil then return false, "the rewritten sidecar has no readable history_end" end
@@ -2042,6 +2097,13 @@ local function commit_no_bounce(image, before, sidecar, history_before, expect_m
     return {ok = false, steps = steps, view = view, detail = "could not narrow the selection: " .. why}
   end
 
+  -- Row 461: the pre-commit copy, to put back if the rewrite turns out stale.
+  local snapshot = nil
+  if sidecar then
+    local fh = io.open(sidecar, "r")
+    if fh then snapshot = fh:read("*a"); fh:close() end
+  end
+
   if view == "lighttable" then
     local ok_call, _, nan = pcall(gui_action, SIDECAR_ACTION_PATHS[1], 0, "button", "activate", 1)
     step("write_sidecar_files_action", ok_call and not nan,
@@ -2074,6 +2136,7 @@ local function commit_no_bounce(image, before, sidecar, history_before, expect_m
   local written, waited = nil, 0
   local detail = nil
   local stale = nil
+  local restored = nil
   if sidecar then
     written, waited = wait_for_sidecar(sidecar, before)
     step("sidecar_changed", written, tostring(waited) .. "ms")
@@ -2094,24 +2157,36 @@ local function commit_no_bounce(image, before, sidecar, history_before, expect_m
         detail = "the sidecar was rewritten after " .. waited .. "ms but its history is "
           .. "unchanged: the synchronize-selection flush did not carry the darkroom's "
           .. "edit into library.db, so the rating touch re-wrote the old history"
-      elseif type(expect_module) == "string" and expect_module ~= "" then
-        -- Row 434: changed is not enough; it must have changed as this write
-        -- expects (see history_advanced_as_expected).
-        local as_expected, why = history_advanced_as_expected(history_before, history_after,
-                                                              expect_module)
-        step("history_as_expected", as_expected, as_expected
-             and ("newest item is " .. expect_module) or why)
-        if not as_expected then
+      else
+        -- Row 461 rule 1 (always), then row 434 (with an expected module):
+        -- changed is not enough, it must have changed as this write expects.
+        local why = history_end_went_back(history_before, history_after)
+        step("history_end_not_back", why == nil, why or "history_end did not go back")
+        if why == nil and type(expect_module) == "string" and expect_module ~= "" then
+          local as_expected, why_e = history_advanced_as_expected(history_before, history_after,
+                                                                  expect_module)
+          step("history_as_expected", as_expected, as_expected
+               and ("newest item is " .. expect_module) or why_e)
+          if not as_expected then why = why_e end
+        end
+        if why ~= nil then
           written = false
           stale = true
-          detail = "the sidecar was rewritten after " .. waited .. "ms but not with this "
-            .. "edit (" .. why .. "); the darkroom's history is still only in memory"
+          restored = restore_sidecar(sidecar, snapshot)
+          step("restore_sidecar", restored, restored and "pre-commit sidecar put back"
+               or "could not put the pre-commit sidecar back")
+          detail = "stale_rewrite: the sidecar was rewritten after " .. waited .. "ms but not "
+            .. "with this edit (" .. why .. "); "
+            .. (restored and "the pre-commit sidecar was restored"
+                or "the pre-commit sidecar could NOT be restored")
+            .. "; the darkroom's history is still only in memory"
         end
       end
     end
   end
   return {ok = written == true, steps = steps, view = current_view_name(),
-          written = written, waited = waited, detail = detail, stale = stale}
+          written = written, waited = waited, detail = detail, stale = stale,
+          restored = restored}
 end
 
 -- The only strategies history.commit understands. Anything else is a
@@ -2164,6 +2239,7 @@ local function run_no_bounce(p, started)
     -- Row 434: the sidecar WAS rewritten, but with a history that is not
     -- this write's (an older library.db state). Never an honest no-op.
     stale_rewrite = r.stale or nil,
+    stale_rewrite_restored = r.stale and (r.restored == true) or nil,
   }
 end
 
@@ -2210,7 +2286,12 @@ methods["history.commit"] = function(p)
   -- a clean selection (the same contract as a bounce that wrote nothing:
   -- sidecar_written = false reports it, the Python readback decides).
   local fallback_from = nil
-  if strategy == "auto" then
+  local no_bounce_skipped = nil
+  if strategy == "auto" and not auto_tries_no_bounce() then
+    -- Row 461: unsafe on this build; straight to the bounce.
+    no_bounce_skipped = "darktable " .. tostring(darktable_version_string())
+      .. ": no_bounce is unsafe here (row 461), auto uses view_bounce_action only"
+  elseif strategy == "auto" then
     local nb = run_no_bounce(p, started)
     if nb.sidecar_written == true then return nb end
     -- Row 434: a stale rewrite is not "nothing changed" -- the sidecar now
@@ -2254,6 +2335,7 @@ methods["history.commit"] = function(p)
   local image = darkroom_image()
   local sidecar = image_sidecar_path(image)
   local before = sidecar and sidecar_signature(sidecar) or nil
+  local history_before_bounce = sidecar and sidecar_history_signature(sidecar) or nil
 
   -- COMMIT_BOUNCE_ATTEMPTS is now the DEFAULT for `attempts`, not a constant.
   -- A caller who already knows the history may not change (the Python layer's
@@ -2316,6 +2398,13 @@ methods["history.commit"] = function(p)
   end
 
   local detail = result.error
+  -- Row 461 rule 1 on the bounce path too: a sidecar whose history_end went
+  -- back is refused, never reported as the commit.
+  local stale_why = nil
+  if written == true and history_before_bounce ~= nil then
+    stale_why = history_end_went_back(history_before_bounce, sidecar_history_signature(sidecar))
+    if stale_why then detail = "stale_rewrite: " .. stale_why end
+  end
   if detail == nil and written == false then
     detail = "the view bounce completed " .. attempt_count
       .. " time(s) but " .. tostring(sidecar) .. " did not change within "
@@ -2330,8 +2419,10 @@ methods["history.commit"] = function(p)
     -- does not expect a change, a bounce that wrote nothing is still a success:
     -- sidecar_written = false reports the fact, and the Python readback resolves
     -- whether the requested state is the state on disk.
-    ok = result.ok and (written ~= false or not expect_change),
+    ok = result.ok and (written ~= false or not expect_change) and stale_why == nil,
     detail = detail,
+    stale_rewrite = stale_why and true or nil,
+    no_bounce_skipped = no_bounce_skipped,
     view_after = result.view,
     cpu_ms = (os.clock() - started) * 1000,
     sidecar = sidecar,

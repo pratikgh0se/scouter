@@ -1,6 +1,6 @@
 {
   "subject": "history.commit expect_module check (row 434): scouter.core.history._history_advanced_as_expected and the Lua plugin's history_advanced_as_expected",
-  "source_run": "gauntlet night1-20260926 (approved recorded run), per-case JSON under ~/Pictures/ScouterScratch/gauntlet/night1-20260926/cases/; triage cluster P-stale-history-reported-ok",
+  "source_run": "gauntlet night1-20260926 (approved recorded run), per-case JSON under ~/Pictures/ScouterScratch/gauntlet/night1-20260926/cases/; triage cluster P-stale-history-reported-ok. history_end values, values and targets are recorded; the [op, value] \"newest\" pairs are reconstructed from the flat params (the case JSON stores no history items), and history_end alone decides the four refusals",
   "examples": [
     {"case": "cov-phrase-faded_blacks-olympus-touch", "expect_module": "exposure",
      "before": {"history_end": 112, "newest": ["exposure", "black=-0.000244"]},

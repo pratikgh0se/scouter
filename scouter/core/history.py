@@ -523,6 +523,34 @@ def _history_items(fingerprint: str | None) -> tuple[int | None, dict[int, str]]
     return (int(m.group(1)) if m else None), items
 
 
+def _history_end_went_back(before: str | None, after: str | None) -> str | None:
+    """Row 461 rule 1, on EVERY commit (with or without `expect_module`): a
+    sidecar whose history_end went back was rewritten from an older
+    library.db state and is never a commit. The reason, or `None`.
+    Mirrors the Lua plugin's `history_end_went_back`.
+    Enforcer: tests/test_history_expected.py (StaleRewriteTest)."""
+    before_end, _ = _history_items(before)
+    after_end, _ = _history_items(after)
+    if before_end is not None and after_end is not None and after_end < before_end:
+        return (
+            f"history_end went back from {before_end} to {after_end}: the sidecar was "
+            "rewritten from an older library.db state, not from this edit"
+        )
+    return None
+
+
+def _restore_sidecar(sidecar: Path, text: str) -> bool:
+    """Put the pre-commit sidecar back (temp file + rename, never torn)."""
+    tmp = sidecar.with_name(sidecar.name + ".scouter-restore")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(sidecar)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        return False
+    return True
+
+
 def _history_advanced_as_expected(
     before: str | None, after: str | None, expect_module: str
 ) -> tuple[bool, str | None]:
@@ -629,10 +657,9 @@ def commit_expecting(
     Row 431 (bench 20260926t083159z: `history_commit` on an unedited frame,
     `timeout_s=10`, never answered). `expect_change=None` (the default)
     means: expect a change only when Scouter journalled an uncommitted write
-    for this image. With none pending, darktable gets one no_bounce look
-    (which still commits an edit it has already flushed to library.db) and
-    no bounce; if the history did not move, the answer is `noop=True`
-    within ~2s. Pass `expect_change=True` to force the full bounce (e.g. an
+    for this image. With none pending, darktable gets one look (on 5.4.x,
+    since row 461, a single view bounce; elsewhere one no_bounce look and no
+    bounce); if the history did not move, the answer is `noop=True`. Pass `expect_change=True` to force the full bounce (e.g. an
     edit made by hand in darktable seconds ago). And `timeout_s` now bounds
     the WHOLE call: the plugin gets `budget_ms` a little under it, and the
     bridge wait itself is capped at what is left.
@@ -659,6 +686,12 @@ def commit_expecting(
     sidecar = xmp.sidecar_path(resolved.path)
     before_ns, before_size = _sidecar_signature(sidecar)
     before_history = _history_fingerprint(sidecar) if sidecar.exists() else None
+    # Row 461: the pre-commit copy, restored if a no_bounce rewrite is stale
+    # and the plugin could not put it back itself.
+    try:
+        snapshot: str | None = sidecar.read_text(encoding="utf-8") if sidecar.exists() else None
+    except OSError:
+        snapshot = None
     metadata_only_rewrites = 0
     stale_rewrite: str | None = None
 
@@ -708,6 +741,32 @@ def commit_expecting(
 
     def _watermark() -> None:
         watermark_write(job, resolved.image_id, resolved.xmp_path)
+
+    if result.get("stale_rewrite"):
+        # Row 461: the plugin saw the sidecar rewritten with a history that is
+        # not this edit (history_end went back, or not the expected module).
+        # Refused on every path -- never a no-op, never a commit, never a
+        # watermark. The second look is ours: re-read the sidecar.
+        restored = bool(result.get("stale_rewrite_restored"))
+        if not restored and strategy_used == "no_bounce" and snapshot is not None:
+            restored = _restore_sidecar(sidecar, snapshot)
+        raise CommitTimeout(
+            f"stale_rewrite: darktable rewrote {sidecar} with an older history, not this "
+            f"edit ({result.get('detail')}); "
+            + ("the pre-commit sidecar was restored" if restored
+               else "the sidecar was NOT restored"),
+            fix="leave and re-enter the darkroom (the bounce writes the in-memory history), "
+            "then read the history back",
+            detail={
+                "strategy_used": strategy_used,
+                "image_id": resolved.image_id,
+                "xmp": str(sidecar),
+                "stale_rewrite": result.get("detail"),
+                "stale_rewrite_restored": restored,
+                "sidecar_end_now": _history_items(_history_fingerprint(sidecar))[0],
+                "ms": int((time.monotonic() - started) * 1000),
+            },
+        )
 
     if probe_only and ok and sidecar_written is False:
         return CommitResult(
@@ -765,16 +824,19 @@ def commit_expecting(
             nonlocal metadata_only_rewrites
             metadata_only_rewrites += 1
             return None
-        if expect_module:
+        after_history = _history_fingerprint(sidecar)
+        why = _history_end_went_back(before_history, after_history)
+        as_expected = why is None
+        if as_expected and expect_module:
             as_expected, why = _history_advanced_as_expected(
-                before_history, _history_fingerprint(sidecar), expect_module
+                before_history, after_history, expect_module
             )
-            if not as_expected:
-                # Row 434: rewritten, but not with this edit -- keep polling
-                # (the fallback bounce may still land) and never report it.
-                nonlocal stale_rewrite
-                stale_rewrite = why
-                return None
+        if not as_expected:
+            # Rows 434/461: rewritten, but not with this edit -- keep polling
+            # (the fallback bounce may still land) and never report it.
+            nonlocal stale_rewrite
+            stale_rewrite = why
+            return None
         warnings: list[str] = []
         if view_after != "darkroom":
             warnings.append(
@@ -827,6 +889,7 @@ def commit_expecting(
                 else None
             ),
             "sidecar_rewritten_not_this_edit": stale_rewrite,
+            "stale_rewrite": stale_rewrite,
         },
     )
 

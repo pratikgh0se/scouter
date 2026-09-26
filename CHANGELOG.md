@@ -5,6 +5,25 @@ branch, which fixes defects found by the E12 live evaluation against real
 darktable (`Knowledge/Scouter - E12 live evaluation 2026-09-24.md` in the
 vault; decision row 407).
 
+## Unreleased (fix/htc-stale-history, rows 434 and 461)
+
+On darktable 5.4.x, `history.commit` `auto` now goes straight to
+`view_bounce_action`, and `no_bounce` runs only as an explicit strategy,
+documented as unsafe on 5.4.1. The reason is gauntlet night1-20260926: in 15
+cases `no_bounce`'s rating touch rewrote the sidecar from an older
+library.db state (for example cov-phrase-faded_blacks-olympus-touch,
+history_end 112 -> 92, with the params of a case three moves earlier). Row
+430's "history changed" check accepted those rewrites as commits. Fixes:
+- A history_end that went back is refused as `stale_rewrite` on every
+  path, in both Lua and Python, with or without an expected module.
+- A stale `no_bounce` rewrite restores the pre-commit sidecar
+  (`stale_rewrite_restored`).
+- Darkroom writers pass `expect_module`, so a rewrite counts only when the
+  newest history item is that module's new state.
+- New tests: `tests/test_history_expected.py`, with intent examples in
+  `tests/intent/history_commit_expected.json`, the "row 434" and "row 461"
+  Lua blocks, and an AST wiring test.
+
 ## Unreleased (fix/adjust-commit)
 
 Row 430 (host acceptance run on darktable 5.4.1, 2026-09-26): row 429's

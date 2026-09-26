@@ -314,6 +314,11 @@ for _, img in pairs(images_by_id) do
   end
 end
 
+-- Row 461: on darktable 5.4.x `auto` skips no_bounce. Most commit tests
+-- below exercise the no_bounce-first order, so the stub reports a build
+-- outside 5.4.x; the "row 461" block switches it to 5.4.1.
+stub_dt.configuration = {version = "5.6.0"}
+
 -- Make `require("darktable")` return our stub by pre-populating package.loaded.
 package.loaded.darktable = stub_dt
 
@@ -2944,6 +2949,7 @@ do
     .. tostring(nb.detail))
   assertEq(nb.ok, false, "no_bounce does not claim it")
   assertEq(nb.stale_rewrite, true, "and flags the rewrite as stale")
+  assertEq(nb.stale_rewrite_restored, true, "and puts the pre-commit sidecar back (row 461)")
   assertTrue(nb.detail:find("went back from 112 to 92", 1, true) ~= nil, "detail: " .. nb.detail)
 
   -- auto, even with expect_change=false (the no-op pre-check path): a stale
@@ -2987,6 +2993,102 @@ do
   os.remove(tmp)
 end
 
+-- Row 461 (controller ruling on row 434's review): on darktable 5.4.x auto
+-- never runs no_bounce; a history_end that went back is refused on every
+-- path with or without expect_module; and a stale no_bounce rewrite puts the
+-- pre-commit sidecar back (stale_rewrite_restored).
+do
+  local tmp = os.tmpname()
+  local function put(text) local h = io.open(tmp, "w"); h:write(text); h:close() end
+  local function get() local h = io.open(tmp, "r"); local t = h:read("*a"); h:close(); return t end
+  local db_xmp = xmp_with_history(92, "exposure", "black_0.0098", "db")
+  local touches = 0
+  local backing = {id = 108, filename = "DB_108.ORF", path = "/photos", rating = 2,
+                   sidecar = tmp, is_altered = true}
+  local img = setmetatable({}, {
+    __index = backing,
+    __newindex = function(_, k, v)
+      backing[k] = v
+      if k == "rating" then
+        touches = touches + 1
+        put(db_xmp:gsub('change_timestamp="db"', 'change_timestamp="db' .. string.rep("0", touches) .. '"'))
+      end
+    end,
+  })
+  images_by_id[108] = img
+  stub_dt.gui.action_images = {img}
+  view_state.current = "darkroom"
+  action_returns["views/darkroom/synchronize selection"] = "nan"
+  local real_configuration = stub_dt.configuration
+  local original_action = stub_dt.gui.action
+  local function bounce_writes(text)
+    stub_dt.gui.action = function(path, ...)
+      local r = original_action(path, ...)
+      if path == "global/switch views/lighttable" then put(text) end
+      return r
+    end
+  end
+
+  -- (1) darktable 5.4.1, and an unreadable version: auto goes straight to
+  -- the bounce -- the rating touch never runs, so no stale rewrite can happen.
+  for _, conf in ipairs({{version = "5.4.1"}, false}) do
+    stub_dt.configuration = conf or nil
+    local d = plugin.methods["darktable_mcp.diag"]()
+    assertEq(#d.auto_commit_order, 1, "one strategy in auto's order")
+    assertEq(d.auto_commit_order[1], "view_bounce_action", "and it is the action bounce")
+    put(xmp_with_history(112, "exposure", "black_m0.0002", "s"))
+    bounce_writes(xmp_with_history(113, "exposure", "black_m0.0027", "bounce"))
+    local t0 = touches
+    local c = plugin.methods["history.commit"]({strategy = "auto", image_id = 108, attempts = 1})
+    stub_dt.gui.action = original_action
+    assertEq(touches, t0, "no rating touch on 5.4.x / unknown")
+    assertEq(c.strategy_used, "view_bounce_action", "auto is the bounce")
+    assertEq(c.ok, true, "and commits: " .. tostring(c.detail))
+    assertEq(c.fallback_from, nil, "no no_bounce attempt to fall back from")
+    assertTrue(type(c.no_bounce_skipped) == "string", "and says why no_bounce was skipped")
+  end
+  stub_dt.configuration = real_configuration
+
+  -- (2) explicit no_bounce, NO expect_module: a history_end that went back
+  -- is still refused, and the pre-commit sidecar is restored.
+  local pre = xmp_with_history(112, "exposure", "black_m0.0002", "s")
+  put(pre)
+  local nb = plugin.methods["history.commit"]({strategy = "no_bounce", image_id = 108})
+  assertEq(nb.ok, false, "a regressed history is not a commit, even without expect_module")
+  assertEq(nb.sidecar_written, false, "not written")
+  assertEq(nb.stale_rewrite, true, "flagged stale")
+  assertEq(nb.stale_rewrite_restored, true, "and restored")
+  assertEq(get(), pre, "the sidecar on disk is the pre-commit copy again")
+  assertTrue(nb.detail:find("stale_rewrite", 1, true) ~= nil, "detail: " .. tostring(nb.detail))
+
+  -- (3) auto on a build that tries no_bounce, stale rewrite, and no budget
+  -- for the bounce: honest failure, sidecar restored.
+  put(pre)
+  local switches = view_state.action_switches or 0
+  local c3 = plugin.methods["history.commit"]({strategy = "auto", image_id = 108, budget_ms = 500})
+  assertEq(view_state.action_switches or 0, switches, "no bounce started")
+  assertEq(c3.ok, false, "not ok")
+  assertEq(c3.stale_rewrite, true, "stale_rewrite survives to the answer")
+  assertEq(c3.stale_rewrite_restored, true, "restored")
+  assertEq(get(), pre, "sidecar is the pre-commit copy")
+
+  -- (4) the bounce path: a sidecar whose history_end went back is refused too.
+  put(pre)
+  bounce_writes(xmp_with_history(92, "exposure", "black_0.0098", "bounce"))
+  local c4 = plugin.methods["history.commit"]({strategy = "view_bounce_action", attempts = 1})
+  stub_dt.gui.action = original_action
+  assertEq(c4.ok, false, "a regressed bounce write is not a commit")
+  assertEq(c4.stale_rewrite, true, "flagged stale")
+  assertTrue(c4.detail:find("went back from 112 to 92", 1, true) ~= nil, "detail: " .. tostring(c4.detail))
+
+  action_returns["views/darkroom/synchronize selection"] = nil
+  images_by_id[108] = nil
+  stub_dt.gui.selection_now = nil
+  stub_dt.gui.action_images = {}
+  view_state.current = "darkroom"
+  os.remove(tmp)
+end
+
 -- no_bounce in the darkroom: narrow the selection, flush history to the DB
 -- with "synchronize selection", rewrite the XMP from the DB with a rating
 -- touch, and confirm on disk -- never switching views.
@@ -3015,7 +3117,7 @@ do
   for _, st in ipairs(c.steps) do names[#names + 1] = st.step .. "=" .. tostring(st.ok) end
   assertEq(table.concat(names, ","),
     "select=true,synchronize_selection_db_flush=true,rating_touch_xmp_from_db=true,sidecar_changed=true,"
-    .. "history_changed=true",
+    .. "history_changed=true,history_end_not_back=true",
     "the ladder's steps are reported in order")
 
   -- is_altered false: the flush is SKIPPED (it would dereference an empty

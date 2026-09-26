@@ -111,11 +111,79 @@ class CommitWithExpectModuleTest(unittest.TestCase):
                                           expect_module="exposure")
         self.assertTrue(result.committed)
 
-    def test_without_expect_module_the_old_changed_rule_stands(self) -> None:
+    def test_without_expect_module_a_history_end_that_went_back_is_still_refused(self) -> None:
+        # Row 461 rule 1: the public verb, moves._precommit and the preset
+        # flushes pass no module; a regressed history is refused for them too.
         self._bridge(xmp(92, "exposure", "black_0.0098", "db"))
+        with self.assertRaises(CommitTimeout) as ctx:
+            history.commit(image=str(self.raw), timeout_s=0.3, expect_change=True)
+        self.assertIn("went back from 112 to 92", str(ctx.exception.detail.get("stale_rewrite")))
+        self.assertNotIn("expect_module", self.sent[0])
+
+    def test_without_expect_module_a_forward_change_still_commits(self) -> None:
+        self._bridge(xmp(113, "sigmoid", "c1.7", "db"))
         result = history.commit(image=str(self.raw), timeout_s=2.0, expect_change=True)
         self.assertTrue(result.committed)
-        self.assertNotIn("expect_module", self.sent[0])
+
+    def test_the_precommit_path_refuses_a_stale_rewrite(self) -> None:
+        # moves.py:318 / presets.py:135: expect_change=False, one attempt, no module.
+        from scouter.core import darkroom
+
+        self._bridge(xmp(92, "exposure", "black_0.0098", "db"))
+        with self.assertRaises(CommitTimeout):
+            darkroom._commit("j", 12, strategy="auto", attempts=1, expect_change=False)
+
+
+class StaleRewriteReportedByThePluginTest(unittest.TestCase):
+    """Row 461: the plugin flags `stale_rewrite`; Python refuses it at once and
+    restores the pre-commit sidecar when the plugin could not."""
+
+    def setUp(self) -> None:
+        self.cache = TempCache()
+        root = self.cache.start()
+        self.raw = root / "P6281348.ORF"
+        self.raw.write_bytes(b"raw")
+        self.sidecar = Path(str(self.raw) + ".xmp")
+        self.pre = xmp(112, "exposure", "black_m0.0002", "s")
+        self.sidecar.write_text(self.pre)
+
+    def tearDown(self) -> None:
+        dtbridge.set_bridge(None)
+        self.cache.stop()
+
+    def _bridge(self, *, restored: bool) -> None:
+        def commit(params: dict) -> dict:
+            self.sidecar.write_text(xmp(92, "exposure", "black_0.0098", "db"))
+            if restored:
+                self.sidecar.write_text(self.pre)
+            return {"strategy_used": "no_bounce", "ok": False, "view_after": "darkroom",
+                    "sidecar_written": False, "stale_rewrite": True,
+                    "stale_rewrite_restored": restored or None,
+                    "detail": "stale_rewrite: history_end went back from 112 to 92"}
+
+        dtbridge.set_bridge(FakeBridge({
+            "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+            "history.commit": commit,
+        }))
+
+    def test_python_restores_when_the_plugin_could_not(self) -> None:
+        self._bridge(restored=False)
+        t0 = time.monotonic()
+        with self.assertRaises(CommitTimeout) as ctx:
+            history.commit_expecting(image=str(self.raw), timeout_s=3.0, expect_change=False,
+                                     strategy="no_bounce")
+        self.assertLess(time.monotonic() - t0, 1.0, "refused at once, no poll to the deadline")
+        self.assertTrue(ctx.exception.detail["stale_rewrite_restored"])
+        self.assertEqual(ctx.exception.detail["sidecar_end_now"], 112)
+        self.assertEqual(self.sidecar.read_text(), self.pre)
+        self.assertIn("stale_rewrite", str(ctx.exception))
+
+    def test_plugin_restore_is_reported_and_never_a_noop(self) -> None:
+        self._bridge(restored=True)
+        with self.assertRaises(CommitTimeout) as ctx:
+            history.commit_expecting(image=str(self.raw), timeout_s=3.0, expect_change=False)
+        self.assertTrue(ctx.exception.detail["stale_rewrite_restored"])
+        self.assertEqual(self.sidecar.read_text(), self.pre)
 
 
 if __name__ == "__main__":
