@@ -5,8 +5,8 @@ from tests.gauntlet.layers import offline
 
 def test_offline_count_ids_tier():
     cases = offline.generate(taxonomy.load())
-    assert len(cases) == offline.EXPECTED == 2719
-    assert len({c.id for c in cases}) == 2719
+    assert len(cases) == offline.EXPECTED == 3214
+    assert len({c.id for c in cases}) == 3214
     assert {c.tier for c in cases} == {"P2"} and {c.mode for c in cases} == {"offline"}
 
 
@@ -29,9 +29,11 @@ def test_tax_allowed_keys_include_the_phrases_own_synonym_key():
     assert "warmer" in c143.meta["allowed_keys"]
 
 
-#: Pinned 2026-09-26 (item 3): the ONLY off-tax cases whose allowed_keys go
-#: beyond their owning module's keys, and the one key each gains -- the
-#: phrase is, verbatim, a synonym of that vocabulary key.
+#: Pinned 2026-09-26 (item 3), extended after the row 437 vocab families
+#: (grain/vignette, lens, denoise/sharpen) landed their own phrases: the ONLY
+#: off-tax cases whose allowed_keys go beyond their owning module's keys, and
+#: the one key each gains -- the phrase is, verbatim, a synonym of that
+#: vocabulary key.
 GROWN = {
     "off-tax-071": ("deeper shadows", "deepen_shadows"),
     "off-tax-072": ("open the shadows", "lift_shadows"),
@@ -53,6 +55,14 @@ GROWN = {
     "off-tax-195": ("more saturated", "more_saturation"),
     "off-tax-196": ("less saturated", "less_saturation"),
     "off-tax-209": ("blue shadows", "cool_shadows"),
+    "off-tax-220": ("clean up the noise", "denoise_more"),
+    "off-tax-234": ("sharpen it", "sharpen_more"),
+    "off-tax-237": ("crisper", "sharpen_more"),
+    "off-tax-239": ("sharpen", "sharpen_more"),
+    "off-tax-274": ("fix the distortion", "lens_on"),
+    "off-tax-307": ("add a vignette", "darker_corners"),
+    "off-tax-313": ("add grain", "more_grain"),
+    "off-tax-319": ("film grain", "more_grain"),
 }
 
 
@@ -61,7 +71,7 @@ def test_tax_allowed_keys_do_not_grow_for_a_phrase_with_no_synonym_match():
     gain a key just because some other phrase happens to resolve near it --
     a resolution to an unrelated capability still fails. Per case, equality:
     allowed_keys is exactly the owning module's keys, plus the one pinned
-    synonym key for the 20 GROWN cases and nothing for every other case."""
+    synonym key for the 28 GROWN cases and nothing for every other case."""
     tax = taxonomy.load()
     owner = tax.phrase_module()
     tax_cases = [c for c in offline.generate(tax) if c.id.startswith("off-tax-")]

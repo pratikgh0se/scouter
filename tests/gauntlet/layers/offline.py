@@ -1,7 +1,7 @@
 """Layer 0: the offline resolver sweep (spec 3.0), P2, no darktable.
 
 979 phrase/sentence cases (378 taxonomy phrases + 601 request sentences) and
-89 synonyms x 15 forms = 1,335 grammar cases. Total 2,314."""
+149 synonyms x 15 forms = 2,235 grammar cases. Total 3,214."""
 
 from __future__ import annotations
 
@@ -120,5 +120,5 @@ def generate(tax: Taxonomy) -> list[Case]:
     return cases
 
 
-#: 378 taxonomy phrases + 601 sentences + every synonym x 15 forms (89 today -> 2,314).
+#: 378 taxonomy phrases + 601 sentences + every synonym x 15 forms (149 today -> 3,214).
 EXPECTED = 378 + 601 + sum(len(p.synonyms) for p in phrases.PHRASES) * 15
