@@ -25,8 +25,31 @@ BENCH_ROLES = {
     "sony_a7": {"dark": "sony/DSC01425.ARW", "blown": "sony/DSC01431.ARW",
                 "hero": "sony/DSC01426.ARW"},
 }
-ROLES = ("dark", "bright", "blown", "hero", "flat", "warm_cast", "cool_cast", "noisy", "neutral")
+ROLES = ("dark", "bright", "blown", "hero", "flat", "warm_cast", "cool_cast", "noisy", "neutral",
+         "hero_bright")
 FRAME_BYTES = 20 * 1024 * 1024
+
+#: Cluster D / row 458 (2026-09-27): the olympus `hero` (P6281348.ORF) surveys
+#: at L_mean 119.2 -- near the darkest frame in the corpus -- so the 10
+#: touch-floor residual phrases (see tests/test_touch_floor.py
+#: KNOWN_RESIDUAL) have too little headroom for a "touch" move to clear its
+#: floor. `hero_bright` is a normally-exposed stand-in: P5240141.ORF, picked
+#: from the embedded-JPEG-preview luminance survey as the frame closest to
+#: mid-grey (L_mean 126.99 vs. mid-grey 128.0; runners-up P5240125.ORF at
+#: 125.12 and P5240146.ORF at 131.17). It lives under a COPY outside
+#: EditingTrial (SCRATCH/frames-bright), not among the surveyed TRIAL
+#: originals, so it is injected as an absolute path rather than picked by
+#: `pick_roles`'s stat comparisons.
+EXTRA_ROLES: dict[str, dict[str, str]] = {
+    "olympus": {"hero_bright": str(SCRATCH / "frames-bright" / "P5240141.ORF")},
+}
+#: sha256 of each EXTRA_ROLES copy, recorded at copy time so a test can catch
+#: silent drift or corruption of the frames-bright copy.
+EXTRA_ROLE_SHA256: dict[str, dict[str, str]] = {
+    "olympus": {
+        "hero_bright": "e96d46c74bd3984215ee4735be0907e2ec9731836cc242ca57e99b0acc624626",
+    },
+}
 
 
 class OriginalPathRefused(ValueError):
@@ -69,6 +92,32 @@ def sha256_originals(root: Path | None = None) -> dict[str, str]:
                 h.update(chunk)
         out[str(p.relative_to(base))] = h.hexdigest()
     return out
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def verify_extra_roles() -> dict[str, str]:
+    """sha256 every EXTRA_ROLES copy against EXTRA_ROLE_SHA256; returns the
+    mismatches (empty dict means every copy is byte-identical to what was
+    recorded when it was made)."""
+    mismatches = {}
+    for body, roles in EXTRA_ROLES.items():
+        for role, abs_path in roles.items():
+            want = EXTRA_ROLE_SHA256.get(body, {}).get(role)
+            p = Path(abs_path)
+            if want is None or not p.exists():
+                mismatches[f"{body}.{role}"] = "missing"
+                continue
+            got = sha256_file(p)
+            if got != want:
+                mismatches[f"{body}.{role}"] = f"want {want}, got {got}"
+    return mismatches
 
 
 def free_space_ok(path: Path, need_bytes: int) -> bool:
@@ -126,6 +175,13 @@ def pick_roles(frames: list[Surveyed]) -> dict[str, dict[str, str]]:
         for r, rel in BENCH_ROLES.get(body, {}).items():
             if any(f.rel == rel for f in fs):
                 roles[body][r] = rel
+        for r, abs_path in EXTRA_ROLES.get(body, {}).items():
+            roles[body][r] = abs_path
+    # EXTRA_ROLES point at copies outside TRIAL, so they don't depend on the
+    # survey finding any frames for that body (e.g. an empty/partial survey
+    # in a test) -- make sure they're still present.
+    for body, extra in EXTRA_ROLES.items():
+        roles.setdefault(body, {}).update(extra)
     return roles
 
 

@@ -58,6 +58,18 @@ def test_survey_roles_and_bench_override(trial, tmp_path):
     assert roles["sony_a7"]["hero"] == "sony/DSC1.ARW"
 
 
+def test_hero_bright_extra_role_is_injected_and_copy_sha_matches():
+    """Cluster D / row 458: hero_bright is an olympus-only role pointing at a
+    COPY outside EditingTrial (corpus.EXTRA_ROLES), and its sha256 must match
+    what was recorded when the copy was made (corpus.EXTRA_ROLE_SHA256)."""
+    roles = corpus.pick_roles([])
+    assert roles["olympus"]["hero_bright"] == str(
+        corpus.SCRATCH / "frames-bright" / "P5240141.ORF"
+    )
+    mismatches = corpus.verify_extra_roles()
+    assert mismatches == {}, mismatches
+
+
 def test_card_duplication_round_robin_and_disk_check(trial, tmp_path, monkeypatch):
     doc = {"frames": [{"rel": "P1.ORF", "body": "olympus"}, {"rel": "P2.ORF", "body": "olympus"}],
            "roles": {}}
