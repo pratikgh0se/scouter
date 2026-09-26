@@ -56,9 +56,14 @@ class SetResult(Payload):
     previous: float | None = None
     committed: bool = False
     source: str = "xmp"
-    # Task 12: True only on the zero-bounce, zero-bridge-write shortcut --
-    # the requested value already matches a FRESH-watermarked sidecar.
+    # Task 12: True on the zero-bounce, zero-bridge-write shortcut -- the
+    # requested value already matches a FRESH-watermarked sidecar -- and (row
+    # 433) whenever darktable wrote nothing because the sidecar, read back,
+    # already held the effective requested state.
     noop: bool = False
+    # Row 433: darktable stored a declared hard limit, not `requested`
+    # (`applied` is the bound; a warning names it).
+    clamped: bool = False
 
 
 @dataclass
@@ -68,6 +73,9 @@ class ModuleResult(Payload):
     instance: int = 0
     enabled: bool | None = None
     committed: bool = False
+    # Row 433: darktable wrote nothing because the module was already in the
+    # requested state (confirmed from the sidecar).
+    noop: bool = False
 
 
 @dataclass

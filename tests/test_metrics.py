@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from scouter import metrics, registry
-from tests.scouter_fakes import FakeBridge, TempCache, with_new_history_hash
+from tests.scouter_fakes import FakeBridge, TempCache, with_new_history_hash, with_param_value
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "P6281348.ORF.xmp"
 
@@ -273,8 +273,11 @@ class WriteVerbSingleEventTest(unittest.TestCase):
 
         def fake_commit(_params: dict) -> dict:
             time.sleep(0.01)  # guarantee the mtime tick
-            # a real rewrite, like darktable's own
-            self.sidecar.write_text(with_new_history_hash(text))
+            # a real rewrite, like darktable's own -- carrying the value
+            # that was set (row 433: an unchanged value is an unverified write)
+            self.sidecar.write_text(
+                with_new_history_hash(with_param_value(text, "exposure", "exposure", 1.2))
+            )
             return {
                 "strategy_used": "sidecar_action",
                 "ok": True,

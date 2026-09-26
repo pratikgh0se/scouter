@@ -368,6 +368,31 @@ def _invert(samples: list[dict], ratio: float, coeffs: list[float] | None = None
     return k, info
 
 
+def expected_ratio(camera: str, kelvin: float) -> float | None:
+    """The r/b ratio `camera`'s measured table predicts at `kelvin` -- the
+    forward direction of `_invert_ratio`, linear between the bracketing
+    samples. `None` with no table, or outside the measured range (never
+    extrapolated). Used to verify a Kelvin write in the coefficient domain,
+    where darktable's own write is exact and the table's Kelvin snap
+    (`_EXACT_TOLERANCE`) does not apply (row 433)."""
+    try:
+        table = load_table(camera)
+    except ValueError:
+        return None
+    if not table:
+        return None
+    samples = table["samples"]
+    for lo, hi in zip(samples, samples[1:]):
+        k_lo, k_hi = float(lo["kelvin"]), float(hi["kelvin"])
+        if k_lo <= kelvin <= k_hi:
+            r_lo, r_hi = _ratio(lo["coeffs"]), _ratio(hi["coeffs"])
+            frac = (kelvin - k_lo) / (k_hi - k_lo) if k_hi != k_lo else 0.0
+            return r_lo + frac * (r_hi - r_lo)
+    if len(samples) == 1 and float(samples[0]["kelvin"]) == kelvin:
+        return _ratio(samples[0]["coeffs"])
+    return None
+
+
 def _invert_ratio(samples: list[dict], ratio: float) -> tuple[float | None, dict]:
     """Bisect the sorted `samples` on `r = coeff_r / coeff_b`, then interpolate
     linearly between the two bracketing entries.

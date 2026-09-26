@@ -253,6 +253,29 @@ class DarktableUnresponsive(BridgeTimeout):
     )
 
 
+class WriteUnverified(ScouterError):
+    """A write verb committed, but the value read back from the sidecar is not
+    the one it asked for, and no darktable hard limit explains the difference
+    (row 433 silent-failure fix, night-1 gauntlet `cov-phrase-faded_blacks-
+    olympus-touch`: target -0.0027, sidecar 0.0098, reported ok).
+
+    Raised instead of an `ok` envelope, never instead of a clamp: a value that
+    darktable pinned to one of its own hard bounds is reported as
+    `clamped: true`. `detail` carries `requested`, `expected` (what darktable
+    should have stored), `applied` (what the sidecar says), `previous`,
+    `tolerance` and `history_end`. The journal entry is kept: the action was
+    sent, so `undo_last` can still revert it.
+    """
+
+    code = "write_unverified"
+    fix = (
+        "darktable was sent the value but the sidecar does not show it (it may have been "
+        "rewritten from an older library state). Read the value again with bounce "
+        "(`scouter darkroom get <module> <param> --bounce`, MCP darkroom_get bounce=true) "
+        "and retry the move if it is still not there; `undo_last` reverts this write"
+    )
+
+
 #: Process exit codes. 0/1/2 follow shell convention; the rest are one per error
 #: class, so a shell script can branch on the failure without parsing JSON.
 EXIT_CODES: dict[str, int] = {
@@ -294,6 +317,9 @@ EXIT_CODES: dict[str, int] = {
     "noop": 23,
     # Watchdog (spec 6): a timed-out call whose health ping also failed.
     "darktable_unresponsive": 24,
+    # Row 433 night-1 fix: a committed write whose read-back value is not the
+    # one requested (and not a darktable clamp).
+    "write_unverified": 25,
 }
 
 ERROR_CLASSES: tuple[type[ScouterError], ...] = (
@@ -316,6 +342,7 @@ ERROR_CLASSES: tuple[type[ScouterError], ...] = (
     NotPinned,
     StateLocked,
     DarktableUnresponsive,
+    WriteUnverified,
 )
 
 

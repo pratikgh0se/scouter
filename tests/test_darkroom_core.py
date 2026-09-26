@@ -9,7 +9,7 @@ from unittest import mock
 from scouter.core import darkroom, dtbridge, journal
 from scouter.errors import CommitTimeout, NotInDarkroom, ScouterError, UsageError, WrongView
 from scouter.types import CommitResult
-from tests.scouter_fakes import FakeBridge, TempCache, with_new_history_hash
+from tests.scouter_fakes import FakeBridge, TempCache, with_new_history_hash, with_param_value
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "P6281348.ORF.xmp"
 
@@ -27,6 +27,7 @@ class _DarkroomFixture(unittest.TestCase):
         self.raw = root / "P6281348.ORF"
         self.raw.write_bytes(b"not really a raw")
         shutil.copy(FIXTURE, str(self.raw) + ".xmp")
+        self.sent: dict = {}
         self.bridge = FakeBridge(
             {
                 # No "darkroom.open" stub here (fix round 2, blocker 1): none of
@@ -41,12 +42,7 @@ class _DarkroomFixture(unittest.TestCase):
                     "source": "action_images",
                 },
                 "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-                "darkroom.action": lambda p: {
-                    "nan": False,
-                    "status": p.get("value"),
-                    "view": "darkroom",
-                    **p,
-                },
+                "darkroom.action": self._action,
                 "darkroom.status": {"position": 0.6429, "nan": False, "view": "darkroom"},
                 "module.enable": {
                     "module": "exposure",
@@ -80,11 +76,37 @@ class _DarkroomFixture(unittest.TestCase):
 
         def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True):
             self.commit_calls.append((job, image, strategy, attempts, expect_change))
+            self._land_sent()
             return CommitResult(committed=True, changed=expect_change, warnings=[])
 
         self._commit_patcher = mock.patch("scouter.core.darkroom._commit", side_effect=fake_commit)
         self._commit_patcher.start()
         self.addCleanup(self._commit_patcher.stop)
+
+    def _action(self, p: dict) -> dict:
+        # Remember what darktable was sent, per slider, so a commit can land
+        # it in the sidecar the way darktable would (row 433).
+        self.sent.clear()
+        key = next((k for k, v in dtbridge.ACTION_PATHS.items() if v == p.get("path")), None)
+        if p.get("effect") == "set" and key is not None:
+            self.sent[key] = p.get("value")
+        return {"nan": False, "status": p.get("value"), "view": "darkroom", **p}
+
+    def _land_sent(self) -> None:
+        """A committed set lands in the sidecar (row 433): without this the
+        fixture sidecar keeps its old value and the write is, correctly,
+        `write_unverified`."""
+        last = self.bridge.calls[-1][0] if self.bridge.calls else None
+        if last != "darkroom.action":
+            self.sent.clear()
+            return
+        sidecar = Path(str(self.raw) + ".xmp")
+        text = sidecar.read_text()
+        for (module, param), value in self.sent.items():
+            if module in ("exposure", "sigmoid") and value is not None:
+                text = with_param_value(text, module, param, value)
+        sidecar.write_text(text)
+        self.sent.clear()
 
     def tearDown(self) -> None:
         dtbridge.set_bridge(None)
@@ -260,6 +282,10 @@ class DarkroomCoreTest(_DarkroomFixture):
         flag was True must never feed the fallback, even though its `after`
         exists and a later write is commit=False."""
         darkroom.set_param(module="exposure", param="exposure", value=2.0, commit=True)
+        # The committed 2.0 landed in the sidecar (row 433 double); put the
+        # fixture's 1.5500002 back so the honest XMP read and the (wrong)
+        # journal fallback give different answers.
+        shutil.copy(FIXTURE, str(self.raw) + ".xmp")
         darkroom.set_param(module="exposure", param="exposure", value=9.0, commit=False)
         entries = journal.read_all("job-test")
         # If the (wrong) fallback fired, before would be 2.0; the honest,
@@ -862,12 +888,17 @@ class DarkroomCommitSeamTest(unittest.TestCase):
         self.raw = root / "P6281348.ORF"
         self.raw.write_bytes(b"not really a raw")
         shutil.copy(FIXTURE, str(self.raw) + ".xmp")
+        self.sent: dict = {}
 
         def commit_response(p: dict) -> dict:
             # Simulate darktable writing the sidecar on commit: bump its
             # mtime forward so history.commit's poll loop sees it advance.
             sidecar = Path(str(self.raw) + ".xmp")
-            sidecar.write_text(with_new_history_hash(sidecar.read_text()))
+            text = sidecar.read_text()
+            if self.sent.get("value") is not None:
+                # Row 433: darktable's rewrite carries the value it was sent.
+                text = with_param_value(text, "exposure", "exposure", self.sent["value"])
+            sidecar.write_text(with_new_history_hash(text))
             future = time.time() + 2
             os.utime(sidecar, (future, future))
             return {
@@ -895,7 +926,7 @@ class DarkroomCommitSeamTest(unittest.TestCase):
                 "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
                 "darkroom.action": lambda p: {
                     "nan": False,
-                    "status": p.get("value"),
+                    "status": self.sent.update(value=p.get("value")) or p.get("value"),
                     "view": "darkroom",
                     **p,
                 },

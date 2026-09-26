@@ -321,7 +321,9 @@ scouter --pretty metrics summary --since 7d
 `16` encryption_unavailable · `17` manifest_unauthenticated ·
 `18` export_all_failed · `19` no_sidecar · `20` value_unknown ·
 `21` not_pinned · `22` state_locked · `23` noop
-(`darkroom undo-last` with nothing to undo, on a real, non-dry call)
+(`darkroom undo-last` with nothing to undo, on a real, non-dry call) ·
+`24` darktable_unresponsive · `25` write_unverified (a committed write whose
+read-back value is not the one asked for, and no darktable limit explains it)
 
 ### Tests
 

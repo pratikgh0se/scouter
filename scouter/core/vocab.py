@@ -207,6 +207,82 @@ def clamp(s: ParamSpec, value: float) -> tuple[float, bool]:
     return value, False
 
 
+#: darktable's OWN hard limits (its params `$MIN`/`$MAX`), where Scouter has
+#: host evidence of them -- not Scouter's safe range (`lo`/`hi`), which is
+#: narrower and enforced before anything is sent. A `set` beyond one of these
+#: is stored AT the bound by darktable, silently: night-1 gauntlet (row 433,
+#: darktable 5.4.1) `cov-sigmoid.skew-*-set_hi_plus`/`set_lo_minus` (1.1 ->
+#: 1.0, -1.1 -> -1.0) and `cov-colorbalancergb.*_chroma-*-set_lo_minus`
+#: (-0.02 -> 0, no history item written). `None` = that side not proven.
+#: Only a bound declared here may explain a read-back mismatch as a clamp;
+#: anything else is a `write_unverified` error, never a guessed clamp.
+DT_HARD_BOUNDS: dict[tuple[str, str], tuple[float | None, float | None]] = {
+    ("sigmoid", "skew"): (-1.0, 1.0),
+    ("colorbalancergb", "shadows_chroma"): (0.0, None),
+    ("colorbalancergb", "midtones_chroma"): (0.0, None),
+    ("colorbalancergb", "highlights_chroma"): (0.0, None),
+}
+
+
+def dt_effective(module: str, param: str, value: float) -> tuple[float, float | None]:
+    """What darktable will actually store for a `set` of `value`:
+    `(stored, bound)`. `bound` is the declared hard limit that clamped it, or
+    `None`. A hue row (`wraps`) is stored modulo 360."""
+    s = spec(module, param)
+    if s is not None and s.wraps:
+        return value % 360.0, None
+    lo, hi = DT_HARD_BOUNDS.get((module, param), (None, None))
+    if lo is not None and value < lo:
+        return lo, lo
+    if hi is not None and value > hi:
+        return hi, hi
+    return value, None
+
+
+#: Fallback read-back tolerance for a pair with no vocabulary row (every
+#: pinned pair has one today): the historical `darkroom._close` tolerance.
+_FALLBACK_TOLERANCE = 1e-4
+#: float32 relative epsilon (2**-23), times a small safety factor: the XMP
+#: stores float32, so a read-back can never be closer than this.
+_F32_EPS = 2.0 ** -23
+
+
+def _distance(s: ParamSpec | None, a: float, b: float) -> float:
+    if s is not None and s.wraps:
+        d = abs(a - b) % 360.0
+        return min(d, 360.0 - d)
+    return abs(a - b)
+
+
+def verify_tolerance(module: str, param: str, value: float | None = None,
+                     previous: float | None = None) -> float:
+    """How close a read-back must be to the value asked for (row 433).
+
+    A tenth of the row's step: darktable's sliders round to their displayed
+    digits (night 1: exposure black -0.002744 is stored -0.0027, 4.4e-5 off;
+    colour zones strength 2.1 -> 2.100015), far below a tenth of any step.
+    Never looser than half the requested change (`value` vs `previous`), so
+    "did not move at all" can never pass as "landed": a move smaller than
+    the slider's own rounding is then honestly unverifiable. Never tighter
+    than float32's resolution at `value` (the XMP stores float32)."""
+    s = spec(module, param)
+    floor = max(1e-9, 4 * _F32_EPS * abs(value or 0.0))
+    tol = _FALLBACK_TOLERANCE if s is None or s.step <= 0 else s.step / 10.0
+    if value is not None and previous is not None:
+        tol = min(tol, _distance(s, value, previous) / 2.0)
+    return max(tol, floor)
+
+
+def values_match(module: str, param: str, a: float | None, b: float | None,
+                 previous: float | None = None) -> bool:
+    """Read-back `a` agrees with the value asked for, `b`, within
+    `verify_tolerance` (circularly, for a hue row). `None` never matches."""
+    if a is None or b is None:
+        return False
+    s = spec(module, param)
+    return _distance(s, a, b) <= verify_tolerance(module, param, b, previous)
+
+
 def to_display(s: ParamSpec, value: float) -> float:
     return value * s.display_scale
 
