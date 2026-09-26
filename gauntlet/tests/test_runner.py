@@ -188,3 +188,55 @@ def test_session_abort_and_close_failures_are_swallowed(tmp_path):
     assert doc is not None and doc["verdict"]["outcome"] == "blocked"
     assert any("abort" in e.lower() for e in doc["observation"]["hang_evidence"])
     assert run.read_result("alpha-3") is not None
+
+
+# -- final fix I2: a run-level refusal stops the run, writes no case result ----
+
+def test_preflight_refusal_stops_the_run_and_writes_nothing(tmp_path):
+    from gauntlet.cli import EXIT_REFUSED  # noqa: F401 - the CLI names the status
+
+    a, run = _setup(tmp_path)
+    a.preflight = lambda run, layer: "foreign darktable: pid 4242"
+    s = Runner(a, run).run_layers()
+    assert s.status == "blocked: foreign darktable: pid 4242"
+    assert a.ran == [] and a.sessions == 0 and run.read_results() == []
+    prog = json.loads(run.progress_json.read_text())
+    assert prog["status"] == "blocked: foreign darktable: pid 4242"
+
+
+def test_preflight_raising_refuse_run_stops_the_run(tmp_path):
+    from gauntlet.adapter import RefuseRun
+
+    a, run = _setup(tmp_path)
+
+    def pre(run, layer):
+        if layer == "beta":
+            raise RefuseRun("foreign darktable")
+    a.preflight = pre
+    s = Runner(a, run).run_layers()
+    assert s.status == "blocked: foreign darktable"
+    assert {r["layer"] for r in run.read_results()} == {"alpha"}
+
+
+def test_refuse_run_mid_layer_writes_no_result_and_stops(tmp_path):
+    a, run = _setup(tmp_path, behaviours={"alpha-1": "refuse"})
+    s = Runner(a, run).run_layers()
+    assert s.status.startswith("blocked: foreign darktable")
+    assert run.read_result("alpha-1") is None and run.read_result("alpha-2") is None
+    assert run.read_result("alpha-0") is not None and "beta-0" not in a.ran
+    # resume re-runs it once the machine is clean
+    b = ToyAdapter()
+    Runner(b, run).run_layers(resume=True)
+    assert b.ran[:3] == ["alpha-1", "alpha-2", "alpha-3"]
+
+
+def test_refuse_run_from_open_session_writes_no_result(tmp_path):
+    from gauntlet.adapter import RefuseRun
+
+    a, run = _setup(tmp_path)
+
+    def refuse(layer, run_root):
+        raise RefuseRun("foreign darktable")
+    a.open_session = refuse
+    s = Runner(a, run).run_layers()
+    assert s.status == "blocked: foreign darktable" and run.read_results() == []

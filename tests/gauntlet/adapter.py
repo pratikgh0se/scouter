@@ -8,10 +8,11 @@ import json
 import os
 import re
 import shutil
+import subprocess
 from collections import Counter
 from pathlib import Path
 
-from gauntlet.adapter import LayerSpec
+from gauntlet.adapter import LayerSpec, RefuseRun
 from gauntlet.case import Case
 from tests.gauntlet import corpus as corpus_mod
 from tests.gauntlet import taxonomy
@@ -210,7 +211,7 @@ class RoutedSession:
         from gauntlet.adapter import Observation
         from tests.gauntlet import exec_bulk, faults
         from tests.gauntlet.execute import run_tool_case
-        from tests.gauntlet.session import ForeignDarktable, SessionBlocked
+        from tests.gauntlet.session import SessionBlocked
 
         if self.current is not None:
             # (fix round 1, N1): a capped abort/close of an earlier session that
@@ -221,9 +222,14 @@ class RoutedSession:
                 point_cache(mine, *self._roots(), carry=False)
         try:
             s = self._session(routed_body(case))
-        except (SessionBlocked, ForeignDarktable) as e:
+        except SessionBlocked as e:
             self.current = None
             return Observation(blocked=f"session: {e}", hang_evidence=[f"session: {e}"])
+        except RefuseRun:
+            # (final fix I2): ForeignDarktable -- the engine stops the run and
+            # writes no case result.
+            self.current = None
+            raise
         # Park (agent usage limit) is deliberately not caught: the runner parks.
         if self.layer == "bulk":
             return exec_bulk.run_bulk_case(s, case)
@@ -372,6 +378,28 @@ class ScouterAdapter:
             if not (run.root / "chart" / "chart-v1.pfm").exists():
                 write_chart(run.root)
         return RoutedSession(self, layer, run)
+
+    def foreign_pids(self) -> list[int]:
+        from scouter.core import dtprocess
+
+        return dtprocess.foreign_pids()
+
+    def preflight(self, run, layer: str) -> str | None:
+        """(final fix I2): refuse a live layer while a darktable this runner did
+        not launch is running (or when that cannot be told). Our own leftover
+        from a killed run is adopted first (I1), so it reads as ours."""
+        if layer not in LIVE_LAYERS:
+            return None
+        isolate_process(self.runs_root / PROCESS_DIR)
+        adopt_leftover_owner(run, self.runs_root / PROCESS_DIR / "cache")
+        try:
+            foreign = self.foreign_pids()
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return f"cannot tell whether a foreign darktable runs ({type(e).__name__}: {e})"
+        if foreign:
+            return (f"foreign darktable: pids {foreign} were not launched by the gauntlet; "
+                    "quit them first (the runner never signals them)")
+        return None
 
     def _record_originals(self, run_root: Path) -> None:
         path = run_root / "originals.before.json"

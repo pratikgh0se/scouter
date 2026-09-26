@@ -159,12 +159,49 @@ def test_robustness_keeps_generator_order(tmp_path):
     assert ids.index("rob-wd_auto_heal") < ids.index("rob-wd_heal_cap")
 
 
-def test_a_foreign_darktable_is_a_typed_session_block(pinned_env, fake_corpus):
-    """Carry 7: executors never raise on a session failure."""
+def test_a_foreign_darktable_refuses_the_run(pinned_env, fake_corpus):
+    """(final fix I2, supersedes carry 7 for this one failure): a foreign
+    darktable is not a per-case result (thousands would be written and
+    --resume would treat them done); it refuses the run."""
+    from gauntlet.adapter import RefuseRun
+
     _, _, routed, _ = _routed(pinned_env, fake_corpus, dt=FakeDt(foreign=[4242]))
-    obs = routed.run_case(_case())
-    assert obs.blocked.startswith("session: ") and "4242" in obs.blocked
+    with pytest.raises(RefuseRun, match="4242"):
+        routed.run_case(_case())
     assert routed.current is None
+
+
+def test_preflight_refuses_a_live_layer_while_a_foreign_darktable_runs(pinned_env):
+    a = ScouterAdapter(pinned_env / "runs")
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+    a.foreign_pids = lambda: [4242]
+    assert "4242" in a.preflight(run, "coverage")
+    assert a.preflight(run, "offline") is None  # no darktable needed
+    a.foreign_pids = lambda: []
+    assert a.preflight(run, "coverage") is None
+
+
+def test_preflight_refuses_when_it_cannot_tell(pinned_env):
+    a = ScouterAdapter(pinned_env / "runs")
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+
+    def unknown():
+        raise OSError("pgrep failed")
+    a.foreign_pids = unknown
+    assert "cannot tell" in a.preflight(run, "coverage")
+
+
+def test_runner_stops_on_a_foreign_darktable_without_case_results(pinned_env, monkeypatch):
+    """End to end through the engine: preflight refuses, no result is written."""
+    from gauntlet.runner import Runner
+
+    monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals", lambda: {})
+    a = ScouterAdapter(pinned_env / "runs")
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+    run.write_cases([_case("coverage"), _case("coverage", "sony_a7")])
+    a.foreign_pids = lambda: [4242]
+    s = Runner(a, run).run_layers(layers=["coverage"])
+    assert s.status.startswith("blocked: foreign darktable") and run.read_results() == []
 
 
 def test_a_failed_launch_is_a_typed_session_block(pinned_env, fake_corpus):

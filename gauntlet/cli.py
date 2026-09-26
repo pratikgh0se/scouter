@@ -25,6 +25,8 @@ from gauntlet.runner import Runner
 from gauntlet.store import RunDir, atomic_write_text, new_stamp
 
 EXIT_PARKED = 75
+#: (final fix I2): the run was refused (e.g. a foreign product process runs).
+EXIT_REFUSED = 3
 
 
 def _config(args: argparse.Namespace) -> dict:
@@ -128,7 +130,9 @@ def main(argv: list[str] | None = None) -> int:
             tiers=set(args.tier) if args.tier else None, prefixes=tuple(args.prefix),
             where=_where(args.where))
         print(f"{run.root}: ran {summary.ran}, parked {len(summary.parked)}, "
-              f"stopped layers {summary.stopped_layers or '-'}")
+              f"stopped layers {summary.stopped_layers or '-'}, status {summary.status}")
+        if summary.status.startswith("blocked"):
+            return EXIT_REFUSED
         return EXIT_PARKED if summary.parked else 0
     if args.cmd == "report":
         rep = report_mod.write(run, adapter, {"commit": _commit()})

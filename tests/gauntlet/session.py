@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from gauntlet.adapter import CallRecord
+from gauntlet.adapter import CallRecord, RefuseRun
 from scouter.core.dtprocess import LaunchError
 from tests.gauntlet.corpus import Corpus, copy_readonly
 
@@ -29,8 +29,10 @@ class SessionBlocked(RuntimeError):
     """darktable could not be brought to gui_ready (twice)."""
 
 
-class ForeignDarktable(RuntimeError):
-    """A darktable this runner did not launch is running: refuse to start."""
+class ForeignDarktable(RefuseRun):
+    """A darktable this runner did not launch is running: refuse to start.
+    (final fix I2): a RefuseRun, so the engine stops the run and writes no
+    case result instead of blocking every case."""
 
 
 @dataclass

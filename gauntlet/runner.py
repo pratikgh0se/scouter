@@ -7,7 +7,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from gauntlet.adapter import Adapter, Observation, Park
+from gauntlet.adapter import Adapter, Observation, Park, RefuseRun
 from gauntlet.case import Case
 from gauntlet.evaluate import FAIL, Verdict, evaluate
 from gauntlet.progress import Progress
@@ -41,6 +41,14 @@ class RunSummary:
 
 class _Timeout(Exception):
     pass
+
+
+class _Refused(Exception):
+    """Internal: a RefuseRun reached the layer loop (final fix I2)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 def _call_with_cap(fn, cap_s: float):
@@ -115,6 +123,7 @@ class Runner:
         if layers:
             specs = [s for s in specs if s.name in layers]
         summary = RunSummary()
+        refused: str | None = None
         for spec in specs:
             all_layer = [c for c in cases if c.layer == spec.name]
             todo = self._select(cases, spec.name, resume=resume, only_failed=only_failed,
@@ -124,14 +133,39 @@ class Runner:
                                 sum(c.tier == "P0" for c in all_layer), spec.live)
             if not todo:
                 continue
-            self.progress.start_layer(spec.name)
-            status = self._run_layer(spec.name, todo, summary, wait_on_park)
+            refused = self._preflight(spec.name)
+            if refused is None:
+                self.progress.start_layer(spec.name)
+                try:
+                    status = self._run_layer(spec.name, todo, summary, wait_on_park)
+                except _Refused as r:
+                    refused = r.reason
+            if refused is not None:
+                #: (final fix I2): no case result is written; the run stops.
+                summary.stopped_layers.append(spec.name)
+                self.progress.log(f"- layer {spec.name}: run refused -- {refused}")
+                self.progress.end_layer(spec.name, "blocked")
+                break
             self.progress.end_layer(spec.name, status)
             if status == "stopped_crash":
                 summary.stopped_layers.append(spec.name)
-        summary.status = "parked" if summary.parked else "done"
+        if refused is not None:
+            summary.status = f"blocked: {refused}"
+        else:
+            summary.status = "parked" if summary.parked else "done"
         self.progress.finish(summary.status)
         return summary
+
+    def _preflight(self, layer: str) -> str | None:
+        """The adapter's optional run-level check before a layer (final fix I2)."""
+        pre = getattr(self.adapter, "preflight", None)
+        if pre is None:
+            return None
+        try:
+            reason = pre(self.run, layer)
+        except RefuseRun as e:
+            return e.reason
+        return str(reason) if reason else None
 
     def _open_session(self, layer: str):
         """Open a session under the same hard-cap machinery as a case (fix
@@ -140,6 +174,8 @@ class Runner:
             session = _call_with_cap(lambda: self.adapter.open_session(layer, self.run),
                                      self.session_open_cap_s)
             return session, None
+        except RefuseRun as e:
+            raise _Refused(e.reason) from e
         except _Timeout as e:
             return None, str(e)
         except Exception as e:  # noqa: BLE001 - a launch failure is a case result
@@ -215,6 +251,11 @@ class Runner:
                         continue
                     summary.parked.extend(c.id for c in todo[i:])
                     return "parked"
+                except RefuseRun as e:
+                    # (final fix I2): the machine refuses the run; this case
+                    # gets no result (resume reruns it) and the run stops.
+                    summary.skipped += len(todo) - i
+                    raise _Refused(e.reason) from e
                 except _Timeout as e:
                     old, session = session, None
                     evidence = [str(e), *self._safe_abort(old)]
