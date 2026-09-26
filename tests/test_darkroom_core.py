@@ -551,6 +551,10 @@ class DarkroomCoreTest(_DarkroomFixture):
         assert result.undone is not None
         self.assertTrue(result.undone["verified"])
         self.assertEqual(len(self.commit_calls), 1)
+        # Row 461 (review I3): the commit must expect THIS module, not go
+        # in blind -- a behavioural oracle alongside CommitWiringTest's
+        # static AST check that the call site passes expect_module at all.
+        self.assertEqual(self.commit_modules[-1], "exposure")
         # The journal must not be stuck: a second call is a clean "nothing
         # to undo" noop, not a repeat of the same failure.
         second = darkroom.undo_last()

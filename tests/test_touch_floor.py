@@ -122,9 +122,12 @@ class TouchFloorTest(unittest.TestCase):
             with self.subTest(row=f"{spec.module}.{spec.param}"):
                 self.assertGreater(spec.step, 0)
                 # A toggle's one "notch" is the whole 0/1 flip, not a
-                # quarter-range slider move (Task 33, row 437 family 2).
+                # quarter-range slider move (Task 33, row 437 family 2) --
+                # still checked, just against the whole range, not a quarter.
                 if spec.param != "__enabled":
                     self.assertLessEqual(spec.step, (spec.hi - spec.lo) / 4)
+                else:
+                    self.assertEqual(spec.step, spec.hi - spec.lo)
 
 
 class LadderMonotonicTest(unittest.TestCase):

@@ -20,8 +20,13 @@ INTENSITY_WORDS = {"a little bit": 0.5, "a tiny bit": 0.5, "a touch": 0.5, "a li
 EXPLICIT = {"EV": ("0.5 ev", "1 ev", "2 ev"), "K": ("200k", "500k", "1000k"),
             "%": ("2%", "5%", "10%"), "°": ("10°", "20°", "45°"), "ratio": ("0.1", "0.2", "0.5")}
 #: The capability ids that resolve to a phrase key in check_map (phrase -> key).
+#: Row 437 families (t32/t33/t34) added grain/vignette, lens/ashift/crop and
+#: denoiseprofile/sharpen as real phrase-move modules; kept current by
+#: `test_served_modules_cover_every_taxonomy_named_phrase_module` below, which
+#: fails the moment this list falls behind phrases.PHRASES again.
 SERVED_MODULES = {"exposure", "sigmoid", "temperature", "colorbalancergb", "filmicrgb",
-                  "colorzones"}
+                  "colorzones", "grain", "vignette", "lens", "ashift", "crop",
+                  "denoiseprofile", "sharpen"}
 
 
 def _key_for_phrase(phrase: str) -> str | None:

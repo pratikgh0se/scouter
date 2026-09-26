@@ -29,11 +29,14 @@ def test_tax_allowed_keys_include_the_phrases_own_synonym_key():
     assert "warmer" in c143.meta["allowed_keys"]
 
 
-#: Pinned 2026-09-26 (item 3), extended after the row 437 vocab families
-#: (grain/vignette, lens, denoise/sharpen) landed their own phrases: the ONLY
-#: off-tax cases whose allowed_keys go beyond their owning module's keys, and
-#: the one key each gains -- the phrase is, verbatim, a synonym of that
-#: vocabulary key.
+#: Pinned 2026-09-26 (item 3): the ONLY off-tax cases whose allowed_keys go
+#: beyond their owning module's keys, and the one key each gains -- the
+#: phrase is, verbatim, a synonym of that vocabulary key. The row 437 vocab
+#: families (grain/vignette, lens, denoise/sharpen) mostly do NOT add
+#: entries here: SERVED_MODULES now covers those modules directly, so a
+#: taxonomy phrase filed under its own now-served module gets its key from
+#: ownership, not from this list. off-tax-239 ("sharpen", filed under
+#: `diffuse`) is the one genuine cross-module case.
 GROWN = {
     "off-tax-071": ("deeper shadows", "deepen_shadows"),
     "off-tax-072": ("open the shadows", "lift_shadows"),
@@ -55,14 +58,7 @@ GROWN = {
     "off-tax-195": ("more saturated", "more_saturation"),
     "off-tax-196": ("less saturated", "less_saturation"),
     "off-tax-209": ("blue shadows", "cool_shadows"),
-    "off-tax-220": ("clean up the noise", "denoise_more"),
-    "off-tax-234": ("sharpen it", "sharpen_more"),
-    "off-tax-237": ("crisper", "sharpen_more"),
     "off-tax-239": ("sharpen", "sharpen_more"),
-    "off-tax-274": ("fix the distortion", "lens_on"),
-    "off-tax-307": ("add a vignette", "darker_corners"),
-    "off-tax-313": ("add grain", "more_grain"),
-    "off-tax-319": ("film grain", "more_grain"),
 }
 
 
@@ -71,7 +67,7 @@ def test_tax_allowed_keys_do_not_grow_for_a_phrase_with_no_synonym_match():
     gain a key just because some other phrase happens to resolve near it --
     a resolution to an unrelated capability still fails. Per case, equality:
     allowed_keys is exactly the owning module's keys, plus the one pinned
-    synonym key for the 28 GROWN cases and nothing for every other case."""
+    synonym key for the 21 GROWN cases and nothing for every other case."""
     tax = taxonomy.load()
     owner = tax.phrase_module()
     tax_cases = [c for c in offline.generate(tax) if c.id.startswith("off-tax-")]
@@ -86,3 +82,19 @@ def test_tax_allowed_keys_do_not_grow_for_a_phrase_with_no_synonym_match():
             assert any(p.key == key and text in p.synonyms for p in phrases.PHRASES)
             want.add(key)
         assert c.meta["allowed_keys"] == sorted(want), c.id
+
+
+def test_served_modules_cover_every_taxonomy_named_phrase_module():
+    """The bug behind off-tax-235/I1: `SERVED_MODULES` is a hand-maintained
+    list, and a new vocabulary family (row 437's grain/vignette, lens, or
+    denoise/sharpen) can add real phrase-move modules the taxonomy already
+    names without anyone updating it -- so the taxonomy-ownership oracle
+    silently stays blind to a module it should already recognise. Every
+    module a phrase actually moves (`@tone` excepted: it is a resolver
+    fiction for `sigmoid`/`filmicrgb`, never a taxonomy module id) that the
+    taxonomy ALSO names must be in `SERVED_MODULES`."""
+    tax = taxonomy.load()
+    taxonomy_module_ids = {m["id"] for m in tax.modules}
+    phrase_modules = {mv.module for p in phrases.PHRASES for mv in p.moves} - {"@tone"}
+    missing = (phrase_modules & taxonomy_module_ids) - offline.SERVED_MODULES
+    assert missing == set(), f"SERVED_MODULES is stale: missing {sorted(missing)}"
