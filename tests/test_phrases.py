@@ -7,7 +7,7 @@ import json
 import unittest
 from pathlib import Path
 
-from scouter.core import phrases
+from scouter.core import phrases, vocab
 from scouter.errors import UsageError
 
 GOLDEN = Path(__file__).resolve().parent / "fixtures" / "phrases_golden.json"
@@ -137,13 +137,29 @@ class PhraseRulesTest(unittest.TestCase):
         self.assertEqual(phrases.resolve("less contrast").moves[0].module, phrases.TONE)
 
     def test_every_phrase_targets_a_vocabulary_row(self) -> None:
-        # Fix round 1, M6: `phrases.row_for` is the single place that maps a
-        # `@tone`/`crop` move to its representative vocabulary row.
+        # The oracle is the vocabulary registry itself (`vocab.PARAMS`), not
+        # `phrases.row_for` (the code under test): every move's own row must
+        # be registered. A `@tone` move needs the contrast row on BOTH tone
+        # modules; a `crop` move (param `aspect`) needs all four crop sides.
+        registry = {(s.module, s.param): s for s in vocab.PARAMS}
+        crop_sides = [("crop", side) for side in ("left", "right", "top", "bottom")]
         for phrase in phrases.PHRASES:
             for mv in phrase.moves:
-                row = phrases.row_for(mv)
                 with self.subTest(key=phrase.key, move=f"{mv.module}.{mv.param}"):
-                    self.assertIsNotNone(row)
+                    if mv.module == phrases.TONE:
+                        needed = [("sigmoid", mv.param), ("filmicrgb", mv.param)]
+                        own = ("sigmoid", mv.param)
+                    elif mv.module == "crop":
+                        needed = crop_sides
+                        own = ("crop", "left")
+                    else:
+                        needed = [(mv.module, mv.param)]
+                        own = (mv.module, mv.param)
+                    for row in needed:
+                        self.assertIn(row, registry)
+                    # row_for (used by gauntlet's layers) must hand back that
+                    # registered row, never a stand-in
+                    self.assertIs(phrases.row_for(mv), registry[own])
 
     def test_synonyms_are_unique_across_phrases(self) -> None:
         seen: dict[str, str] = {}
