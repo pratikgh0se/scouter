@@ -67,6 +67,29 @@ def test_flatten_drops_unnamed_slots_and_adds_enabled():
     assert flat["units"]["sigmoid.__enabled"] == "bool"
 
 
+def test_ensure_frame_blocked_is_returned_as_observation(corpus, tmp_path):
+    bad = FakeMcp({"darkroom_open": {"ok": False, "outcome": "error",
+                                     "error": {"code": "not_found"}, "data": {}}})
+    s = _session(corpus, tmp_path, mcp=bad).open()
+    case = Case(id="c3", layer="scenarios", tier="P0", mode="tool", steps=[],
+                expect=Expect("edit"), body="olympus", frame_role="dark")
+    obs = execute.run_tool_case(s, case)
+    assert obs.blocked.startswith("session:") and obs.calls == []
+
+
+def test_isolate_refresh_blocked_is_returned_as_observation(corpus, tmp_path, monkeypatch):
+    dt = FakeDt(ready=(True, False, False))
+    s = _session(corpus, tmp_path, dt).open()
+    frame = s.ensure_frame("hero")
+    s.baselines[str(frame)] = {"exposure.exposure": 0.7}
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {
+        "fingerprint": "x", "params": {"exposure.exposure": 1.3}, "units": {}})
+    case = Case(id="c4", layer="scenarios", tier="P0", mode="tool", steps=[],
+                expect=Expect("edit"), body="olympus", frame_role="hero")
+    obs = execute.run_tool_case(s, case)
+    assert obs.blocked.startswith("session:") and dt.launches == 3
+
+
 def test_contaminated_frame_is_restaged(corpus, tmp_path, monkeypatch):
     dt = FakeDt()
     s = _session(corpus, tmp_path, dt).open()

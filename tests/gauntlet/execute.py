@@ -12,6 +12,7 @@ from gauntlet.adapter import CallRecord, Observation
 from gauntlet.case import Case
 from tests.gauntlet import observe
 from tests.gauntlet.corpus import guard
+from tests.gauntlet.session import SessionBlocked
 
 _PH = re.compile(r"\{([a-z_0-9]+)(?::([^}]+))?\}")
 #: Virtual tools, registered by the layer executors (tests/gauntlet/exec_*.py):
@@ -93,10 +94,16 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
     obs = Observation()
     t0 = clock()
     role = case.frame_role or "hero"
-    frame = session.ensure_frame(role)
-    if isolate(session, frame, role):
+    try:
         frame = session.ensure_frame(role)
-        obs.extra["contaminated_restaged"] = True
+        if isolate(session, frame, role):
+            frame = session.ensure_frame(role)
+            obs.extra["contaminated_restaged"] = True
+    except SessionBlocked as e:
+        obs.blocked = f"session: {e}"
+        obs.hang_evidence.append(f"session: {e}")
+        obs.wall_s = clock() - t0
+        return obs
     kelvin = observe.kelvin_for(CAMERA.get(case.body or ""))
     obs.before = observe.snapshot(frame, kelvin)
     snaps = [obs.before["params"]]
