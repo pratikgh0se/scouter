@@ -319,58 +319,119 @@ def new_module_import_error(out, new_prod_files):
 
 
 def _import_names(source):
-    """Set of module-name strings a test file's `import`/`from ... import`
-    statements reference - the full dotted path, every dotted prefix, and the
-    bare last component (the last covers a `sys.path` hack that imports a
-    submodule by its bare stem, same as `new_module_import_error`'s bare-stem
-    match). A bare relative import (`from . import x`, no module name) is
-    skipped - too ambiguous to resolve without walking the package tree, and
-    skipping it only means this file falls through to running the revert
-    check as before (never a false n/a)."""
-    names = set()
+    """Set of dotted MODULE paths a test file's `import`/`from ... import`
+    statements genuinely execute - fix round 7: no bare last-component
+    addition and no "the whole base package is a candidate for any of its
+    submodules" - `import a.b.c` really does execute `a`, `a.b` and `a.b.c`
+    (Python imports every ancestor package), so all three are real
+    candidates; but `from pkg import x, y` must resolve to `pkg.x` and
+    `pkg.y` specifically (the two submodules x/y might be), NEVER to bare
+    `pkg` standing in for some OTHER, unrelated submodule under the same
+    package. `pkg` itself IS a legitimate candidate here (pkg/__init__.py
+    genuinely executes to make the from-import work), so it is one of the
+    dotted PREFIXES added for the base - it is just never added as a stand-in
+    for `pkg.x`/`pkg.y` themselves. A bare relative import (`from . import
+    x`, no module name) is skipped - too ambiguous to resolve without
+    walking the package tree, and skipping it only means this file falls
+    through to running the revert check as before (never a false n/a).
+
+    Returns `(dotted, bare)`: `dotted` is matched by exact dotted-path
+    equality (round 7's precision fix); `bare` is a SEPARATE set of
+    genuinely unqualified, dot-free `import x` names (the `sys.path` hack
+    case: a test that inserts a tools dir onto `sys.path` and does a plain
+    `import toolkit` carries no package-qualifying information at all, so
+    that one case is still matched against a production file's bare last
+    component - it is not the "shared package" ambiguity round 7 fixes,
+    since there is no package name here to be ambiguous about)."""
+    dotted = set()
+    bare = set()
     try:
         tree = ast.parse(source or "")
     except SyntaxError:
-        return names
+        return dotted, bare
 
-    def add_dotted(dotted):
-        names.add(dotted)
-        parts = dotted.split(".")
-        names.add(parts[-1])
-        for i in range(1, len(parts)):
-            names.add(".".join(parts[:i]))
+    def add_prefixes(name):
+        parts = name.split(".")
+        for i in range(1, len(parts) + 1):
+            dotted.add(".".join(parts[:i]))
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                add_dotted(alias.name)
+                add_prefixes(alias.name)
+                if "." not in alias.name:
+                    bare.add(alias.name)
         elif isinstance(node, ast.ImportFrom):
             if node.level and not node.module:
                 continue
             base = node.module or ""
             if base:
-                add_dotted(base)
+                add_prefixes(base)
             for alias in node.names:
-                names.add(alias.name)
                 if base:
-                    names.add(f"{base}.{alias.name}")
-    return names
+                    dotted.add(f"{base}.{alias.name}")
+                else:
+                    bare.add(alias.name)
+    return dotted, bare
+
+
+def expand_via_init_reexports(repo, head, dotted_names):
+    """Fix round 7, the `__init__` case: `from pkg import name` where
+    `pkg/__init__.py` itself does `from pkg.sub import name` (or `from .sub
+    import name`) re-exports `name` from `sub`, not from a same-named
+    `pkg/name.py` that may not even exist - add `pkg.sub` (and `pkg.sub.name`)
+    as additional candidates for every "pkg.name"-shaped entry in
+    `dotted_names` whose `pkg/__init__.py` does this. Only ever ADDS
+    candidates - a package with no such re-export, or no `__init__.py` at
+    all, is untouched. Takes and returns just the `dotted` half of
+    `_import_names`'s result - the `bare` half needs no expansion, since it
+    already carries no package to resolve through an `__init__.py`."""
+    expanded = set(dotted_names)
+    for cand in list(dotted_names):
+        pkg, sep, attr = cand.rpartition(".")
+        if not sep:
+            continue
+        init_path = pkg.replace(".", "/") + "/__init__.py"
+        src = show_file(repo, head, init_path)
+        if not src:
+            continue
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            for alias in node.names:
+                exported = alias.asname or alias.name
+                if exported != attr:
+                    continue
+                if node.level:
+                    sub_base = node.module or ""
+                    resolved = pkg if not sub_base else f"{pkg}.{sub_base}"
+                else:
+                    resolved = node.module or ""
+                if resolved:
+                    expanded.add(resolved)
+                    expanded.add(f"{resolved}.{alias.name}")
+    return expanded
 
 
 def references_prod_file(test_import_names, prod_file):
-    """True when `test_import_names` (from `_import_names`) plausibly
-    references `prod_file` - matched the same generous way
-    `new_module_import_error` matches a missing-module message, since both
-    are working from the same "a name the test imports vs. a file path"
-    mismatch."""
+    """True when `test_import_names` (a `(dotted, bare)` pair - `dotted` from
+    `_import_names`, optionally widened by `expand_via_init_reexports`;
+    `bare` from `_import_names` unchanged) references `prod_file` - fix
+    round 7: exact dotted-path membership for anything package-qualified
+    (never a bare shared top-level package: a test doing `from pkg import a`
+    must not look like it also references an unrelated `pkg/b.py` merely
+    because both live under `pkg` - only `pkg` itself, i.e. `pkg/__init__.py`,
+    and `pkg.a` are real candidates for that import), plus a bare
+    last-component match ONLY for genuinely unqualified `import x` names
+    (the `sys.path`-hack case, which carries no package to be ambiguous
+    about in the first place)."""
+    dotted_names, bare_names = test_import_names
     dotted, attr, package = _prod_module_candidates(prod_file)
-    candidates = {dotted, attr}
-    if package:
-        candidates.add(package)
-    parts = dotted.split(".")
-    for i in range(1, len(parts) + 1):
-        candidates.add(".".join(parts[:i]))
-    return bool(test_import_names & candidates)
+    return dotted in dotted_names or attr in bare_names
 
 
 def any_assert_in_ranges(text, func_ranges):
@@ -535,7 +596,9 @@ def check_range(repo, base, head):
                     # added for pre-existing code) - reverting production it
                     # never touches can never discriminate it, and reading
                     # that as "did not fail (BAD)" would be a false alarm.
-                    test_imports = _import_names(show_file(repo, head, f))
+                    dotted_names, bare_names = _import_names(show_file(repo, head, f))
+                    dotted_names = expand_via_init_reexports(repo, head, dotted_names)
+                    test_imports = (dotted_names, bare_names)
                     if not any(references_prod_file(test_imports, pf) for pf in prod_files):
                         revert_by_file[f] = ("no_prod_change",
                                               "no production file changed in this range is imported by this test file")

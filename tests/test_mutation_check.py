@@ -663,6 +663,102 @@ class WeakeningFallsBackToFileLevelWhenTheChangedFunctionHasNoAssert(unittest.Te
             self.assertIn("FAIL (good)", weak_cell)
 
 
+class ReferencesProdFileResolvesToSpecificSubmodules(unittest.TestCase):
+    """Fix round 7: `from pkg import a, b` must resolve to the specific
+    submodules `pkg/a.py`, `pkg/b.py` (and subpackages) - never to the bare
+    `pkg` standing in for some OTHER, unrelated submodule under the same
+    package. Mirrors the literal case from the audit: a test doing
+    `from capsule import db, incidents` with `db.py` changed and
+    `incidents.py` unchanged must count only `db.py`."""
+
+    def _make_pkg(self, root, db_body, incidents_body):
+        (root / "pkg").mkdir(exist_ok=True)
+        (root / "pkg" / "__init__.py").write_text("")
+        (root / "pkg" / "db.py").write_text(db_body)
+        (root / "pkg" / "incidents.py").write_text(incidents_body)
+
+    def test_importing_both_names_with_only_one_changed_counts_only_that_one(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            self._make_pkg(root, "def get(x):\n    return x - x\n", "INCIDENTS = []\n")
+            write_test(root, "from pkg import db, incidents\n\n\ndef test_placeholder():\n    assert db\n")
+            base = commit_all(root, "base: buggy db.get(), incidents.py untouched throughout")
+
+            (root / "pkg" / "db.py").write_text("def get(x):\n    return x\n")
+            write_test(root,
+                       "from pkg import db, incidents\n\n\n"
+                       "def test_get_returns_its_argument():\n"
+                       "    assert db.get(3) == 3\n"
+                       "    assert incidents.INCIDENTS == []\n")
+            head = commit_all(root, "fix db.get(); incidents.py never changes in this range")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertTrue(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("FAIL (good)", rev_cell)  # correctly recognized as referencing db.py
+            self.assertIn("FAIL (good)", weak_cell)
+
+    def test_importing_the_unchanged_sibling_only_reads_no_production_change(self):
+        """The regression this round actually guards against: incidents.py
+        (unrelated) changes; the test imports ONLY db (unchanged) from the
+        same package. The OLD bare-package match would have treated "pkg" as
+        a stand-in for incidents.py too and wrongly run (and fail) the
+        revert; the fix must read n/a (no production change) instead."""
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            self._make_pkg(root, "def get(x):\n    return x\n", "INCIDENTS = []\n")
+            write_test(root, "from pkg import db\n\n\ndef test_placeholder():\n    assert db\n")
+            base = commit_all(root, "base: db.py already correct, incidents.py about to change")
+
+            (root / "pkg" / "incidents.py").write_text("INCIDENTS = ['fixed']\n")
+            write_test(root,
+                       "from pkg import db\n\n\n"
+                       "def test_get_returns_its_argument():\n"
+                       "    assert db.get(3) == 3\n")
+            head = commit_all(root, "change incidents.py (unrelated); new test only imports db")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertTrue(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertEqual(rev_cell, "n/a (no production change)")
+            self.assertIn("FAIL (good)", weak_cell)
+
+
+class ReferencesProdFileHandlesInitReexports(unittest.TestCase):
+    """Fix round 7, the `__init__` case: `pkg/__init__.py` doing `from
+    pkg._core import shared` re-exports `shared` from `_core`, not from a
+    same-named `pkg/shared.py` (which does not exist) - `from pkg import
+    shared` must still be recognized as referencing `pkg/_core.py`."""
+
+    def test_a_name_reexported_through_init_is_traced_to_its_real_submodule(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "pkg").mkdir()
+            (root / "pkg" / "__init__.py").write_text("from pkg._core import shared\n")
+            (root / "pkg" / "_core.py").write_text("def shared(x):\n    return x - x\n")
+            write_test(root, "from pkg import shared\n\n\ndef test_placeholder():\n    assert shared\n")
+            base = commit_all(root, "base: buggy shared(), re-exported through __init__")
+
+            (root / "pkg" / "_core.py").write_text("def shared(x):\n    return x\n")
+            write_test(root,
+                       "from pkg import shared\n\n\n"
+                       "def test_shared_returns_its_argument():\n"
+                       "    assert shared(3) == 3\n")
+            head = commit_all(root, "fix _core.shared(), only ever imported via the pkg re-export")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertTrue(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("FAIL (good)", rev_cell)  # NOT "n/a (no production change)"
+            self.assertIn("FAIL (good)", weak_cell)
+
+
 class SkippedTestIsFlagged(unittest.TestCase):
     def test_xfail_mark_on_a_new_test_is_a_static_flag(self):
         with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
