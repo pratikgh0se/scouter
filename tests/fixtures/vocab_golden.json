@@ -786,5 +786,53 @@
     "watch": "what the new edge cuts off",
     "why": "moves the bottom edge of the crop",
     "wraps": false
+  },
+  {
+    "candidate_paths": [
+      "iop/denoiseprofile/strength"
+    ],
+    "concept": "detail",
+    "default": null,
+    "display_scale": 1.0,
+    "hi": 4.0,
+    "lo": 0.0,
+    "module": "denoiseprofile",
+    "neutral": 1.0,
+    "note": "",
+    "param": "strength",
+    "pinned_path": null,
+    "reachable": true,
+    "status": "candidate",
+    "step": 0.1,
+    "ui": "denoise (profiled) \u203a strength",
+    "unit": "ratio",
+    "value_source": "xmp",
+    "watch": "fine texture and skin: too much looks waxy",
+    "why": "how hard the profiled denoiser smooths noise for this camera and ISO",
+    "wraps": false
+  },
+  {
+    "candidate_paths": [
+      "iop/sharpen/amount"
+    ],
+    "concept": "detail",
+    "default": null,
+    "display_scale": 1.0,
+    "hi": 2.0,
+    "lo": 0.0,
+    "module": "sharpen",
+    "neutral": 0.5,
+    "note": "",
+    "param": "amount",
+    "pinned_path": null,
+    "reachable": true,
+    "status": "candidate",
+    "step": 0.1,
+    "ui": "sharpen \u203a amount",
+    "unit": "ratio",
+    "value_source": "xmp",
+    "watch": "halos along high-contrast edges and amplified noise",
+    "why": "adds edge contrast so detail looks crisper",
+    "wraps": false
   }
 ]

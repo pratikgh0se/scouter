@@ -71,7 +71,8 @@ class VocabShapeTest(unittest.TestCase):
         # every XMP slot the sentinel method found, so only tint (no value
         # source) stays absolute_only and colorzones.curves unreachable.
         # Task 32 (row 437) then added grain.strength and vignette.brightness
-        # as candidates, pending their own host probe.
+        # as candidates, pending their own host probe; Task 34 (row 437) added
+        # denoiseprofile.strength and sharpen.amount the same way.
         by = {}
         for s in vocab.PARAMS:
             by.setdefault(vocab.status(s), set()).add(f"{s.module}.{s.param}")
@@ -83,11 +84,14 @@ class VocabShapeTest(unittest.TestCase):
         # (tests/test_host_colorcal.py); Task 33 (row 437 family 2, geometry)
         # adds ashift.rotation and the four crop margins, unpinned until their
         # own probe -- lens.__enabled is live immediately (module whitelist,
-        # not a path/slot pin). All still await a host probe.
+        # not a path/slot pin); Task 34 (row 437 family 3, detail) adds
+        # denoiseprofile.strength and sharpen.amount the same way. All still
+        # await a host probe.
         self.assertEqual(
             by.get("candidate"),
             {"grain.strength", "vignette.brightness", "channelmixerrgb.temperature",
-             "ashift.rotation", "crop.left", "crop.right", "crop.top", "crop.bottom"},
+             "ashift.rotation", "crop.left", "crop.right", "crop.top", "crop.bottom",
+             "denoiseprofile.strength", "sharpen.amount"},
         )
         self.assertEqual(len(by["live"]), 23)
         for row in ("colorbalancergb.shadows_hue", "colorbalancergb.highlights_chroma",

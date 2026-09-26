@@ -67,6 +67,11 @@ CONCEPTS: dict[str, tuple[str, str]] = {
                  "aberration -- turn it off only to see the raw optic. Rotation levels a tilted "
                  "horizon, cropping the corners as it turns. A crop preset moves all four margins "
                  "at once to centre a target aspect ratio inside the frame."),
+    "detail": ("Denoise and sharpen",
+               "Profiled denoise smooths sensor noise using a per-camera, per-ISO profile; "
+               "sharpen adds edge contrast so detail reads crisper on screen. They pull in "
+               "opposite directions, so push one and watch the other: too much denoise looks "
+               "waxy, too much sharpening halos high-contrast edges and amplifies noise."),
 }
 
 

@@ -146,6 +146,15 @@ PHRASES: tuple[Phrase, ...] = (
     Phrase("crop_4x5", ("crop to 4:5", "crop 4:5", "portrait crop for instagram"), (_crop(0.8),)),
     Phrase("crop_16x9", ("crop to 16:9", "crop 16:9", "widescreen crop"), (_crop(16 / 9),)),
     Phrase("crop_3x2", ("crop to 3:2", "crop 3:2"), (_crop(1.5),)),
+    Phrase("denoise_more", ("reduce noise", "less noise", "denoise", "denoise more",
+                            "more denoising", "clean up the noise"),
+           (_adj("denoiseprofile", "strength", 1),)),
+    Phrase("denoise_less", ("less denoising", "denoise less", "keep more texture"),
+           (_adj("denoiseprofile", "strength", -1),)),
+    Phrase("sharpen_more", ("sharpen", "sharper", "more sharpening", "crisper",
+                            "sharpen it"), (_adj("sharpen", "amount", 1),)),
+    Phrase("sharpen_less", ("less sharpening", "sharpen less", "less crunchy"),
+           (_adj("sharpen", "amount", -1),)),
 )
 
 _INDEX: dict[str, Phrase] = {syn: p for p in PHRASES for syn in p.synonyms}
