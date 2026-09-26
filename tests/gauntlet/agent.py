@@ -15,6 +15,7 @@ from pathlib import Path
 from gauntlet.adapter import CallRecord, Observation, Park
 from gauntlet.case import Case
 from tests.gauntlet import observe
+from tests.gauntlet.session import SessionBlocked
 
 LIMIT_RE = re.compile(r"(usage limit|rate limit|limit reached|limit will reset|"
                       r"out of (extra )?usage|5-hour limit|weekly limit)", re.I)
@@ -108,25 +109,8 @@ class AgentSession:
                        until=reset_time(parsed["limit"]))
         return parsed
 
-    def run_case(self, case: Case) -> Observation:
-        t0 = self.clock()
-        frame = self.inner.ensure_frame(case.frame_role or "hero")
-        kelvin = observe.kelvin_for({"olympus": "em10iii"}.get(case.body or ""))
-        obs = Observation(before=observe.snapshot(frame, kelvin))
-        stats = any(c.metric in ("M2", "M3", "M4", "M5", "M6") for c in case.expect.checks)
-        masks = None
-        if stats:
-            r = observe.render_raster(frame, self.inner.root / "render" / "before.ppm")
-            obs.stats_before, masks = observe.stats(r)
-            obs.floors = dict(self.inner.floors)
-        prompt = f"{case.meta['sentence']}\n\nThe photo open in darktable is {frame}."
-        parsed = self._turn(prompt, None)  # a Park here parks the whole case (fresh on resume)
-        texts = [parsed["text"]]
-        calls = list(parsed["tool_calls"])
-        for f in case.meta.get("followups", []):
-            more = self._turn(f, parsed["session_id"])
-            texts.append(more["text"])
-            calls.extend(more["tool_calls"])
+    @staticmethod
+    def _record_calls(obs: Observation, calls: list[dict]) -> None:
         for c in calls:
             env = None
             if isinstance(c["result"], str):
@@ -139,6 +123,44 @@ class AgentSession:
                                         write=name.startswith(("darkroom_set", "darkroom_adjust",
                                                                "darkroom_say", "preset_",
                                                                "darkroom_undo"))))
+
+    def run_case(self, case: Case) -> Observation:
+        t0 = self.clock()
+        obs = Observation()
+        try:
+            frame = self.inner.ensure_frame(case.frame_role or "hero")
+        except SessionBlocked as e:
+            obs.blocked = f"session: {e}"
+            obs.hang_evidence.append(f"session: {e}")
+            obs.wall_s = self.clock() - t0
+            return obs
+        kelvin = observe.kelvin_for({"olympus": "em10iii"}.get(case.body or ""))
+        obs.before = observe.snapshot(frame, kelvin)
+        stats = any(c.metric in ("M2", "M3", "M4", "M5", "M6") for c in case.expect.checks)
+        masks = None
+        if stats:
+            r = observe.render_raster(frame, self.inner.root / "render" / "before.ppm")
+            obs.stats_before, masks = observe.stats(r)
+            obs.floors = dict(self.inner.floors)
+        prompt = f"{case.meta['sentence']}\n\nThe photo open in darktable is {frame}."
+        texts: list[str] = []
+        calls: list[dict] = []
+        try:
+            parsed = self._turn(prompt, None)  # a Park here parks the whole case (fresh on resume)
+            texts.append(parsed["text"])
+            calls.extend(parsed["tool_calls"])
+            for f in case.meta.get("followups", []):
+                more = self._turn(f, parsed["session_id"])
+                texts.append(more["text"])
+                calls.extend(more["tool_calls"])
+        except subprocess.TimeoutExpired as e:
+            obs.blocked = "hang: claude turn exceeded TURN_TIMEOUT_S"
+            obs.hang_evidence.append(f"hang: claude turn exceeded TURN_TIMEOUT_S: {e}")
+            self._record_calls(obs, calls)
+            obs.agent_text = "\n\n".join(texts) if texts else None
+            obs.wall_s = self.clock() - t0
+            return obs
+        self._record_calls(obs, calls)
         obs.agent_text = "\n\n".join(texts)
         obs.after = observe.snapshot(frame, kelvin)
         if stats:

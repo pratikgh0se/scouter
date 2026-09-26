@@ -1,10 +1,12 @@
 import json
+import subprocess
 from datetime import datetime
 
 import pytest
 
 from gauntlet.adapter import Park
 from tests.gauntlet import agent
+from tests.gauntlet.session import SessionBlocked
 
 
 def _lines(*msgs):
@@ -73,3 +75,55 @@ def test_limit_mid_followup_parks_the_whole_case(tmp_path, monkeypatch):
                 meta={"sentence": "warm it", "followups": ["more"]})
     with pytest.raises(Park):
         s.run_case(case)
+
+
+def test_turn_timeout_blocks_instead_of_raising(tmp_path, monkeypatch):
+    """A hung `claude` process (subprocess.TimeoutExpired) must not escape
+    run_case as a bare exception; the runner would mislabel it harness_error."""
+    from gauntlet.case import Case, Expect
+
+    class Inner:
+        root = tmp_path
+        floors = {}
+        touched = set()
+        staged = type("S", (), {"env": {"PYTHONPATH": "."}})()
+
+        def ensure_frame(self, role):
+            return tmp_path / "f.ORF"
+
+    def run(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="claude", timeout=agent.TURN_TIMEOUT_S)
+
+    monkeypatch.setattr(agent.observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
+                                                                      "params": {}})
+    s = agent.AgentSession(Inner(), run=run)
+    case = Case(id="sca-y", layer="scenarios_agent", tier="P0", mode="agent", steps=[],
+                expect=Expect("refuse"), body="olympus", frame_role="hero",
+                meta={"sentence": "warm it", "followups": []})
+    obs = s.run_case(case)
+    assert obs.blocked and obs.blocked.startswith("hang:")
+    assert any("hang:" in e for e in obs.hang_evidence)
+
+
+def test_ensure_frame_session_blocked_blocks_instead_of_raising(tmp_path):
+    """SessionBlocked from ensure_frame (failed frame switch) must be turned
+    into a blocked Observation, matching execute.run_tool_case's handling."""
+    from gauntlet.case import Case, Expect
+
+    class Inner:
+        root = tmp_path
+        floors = {}
+        touched = set()
+        staged = type("S", (), {"env": {"PYTHONPATH": "."}})()
+
+        def ensure_frame(self, role):
+            raise SessionBlocked("frame switch failed")
+
+    s = agent.AgentSession(Inner(), run=lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("run must not be called")))
+    case = Case(id="sca-z", layer="scenarios_agent", tier="P0", mode="agent", steps=[],
+                expect=Expect("refuse"), body="olympus", frame_role="hero",
+                meta={"sentence": "warm it", "followups": []})
+    obs = s.run_case(case)
+    assert obs.blocked == "session: frame switch failed"
+    assert "session: frame switch failed" in obs.hang_evidence
