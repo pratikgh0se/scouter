@@ -304,6 +304,17 @@ class ScouterSession:
                 self.current_frame = path
             elif rec.error == "timeout" and rec.health == "unresponsive":
                 self.relaunch(path)  # sets current_frame only once gui_ready
+            elif rec.error == "not_in_darkroom":
+                # Smoke S2: darktable cannot load a frame imported into the
+                # SAME running session (product honest limit R20, "wrong image
+                # loaded"). Relaunch on the frame, then open it once more so the
+                # job records it as its opened image.
+                self.relaunch(path)
+                again = self.call("darkroom_open", {"image": str(path)}, 30.0)
+                if not (again.error is None and (again.envelope or {}).get("ok")):
+                    raise SessionBlocked(
+                        f"darkroom_open did not open frame {role} ({path}) after a relaunch "
+                        f"on it: error={again.error!r} health={again.health!r}")
             else:
                 raise SessionBlocked(f"darkroom_open did not open frame {role} ({path}): "
                                      f"error={rec.error!r} health={rec.health!r}")
