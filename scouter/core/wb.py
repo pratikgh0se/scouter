@@ -104,6 +104,12 @@ class NonMonotonicTable(ScouterError):
 #: How close `target` has to be to a sample's own ratio to call it `exact`
 #: rather than interpolated.
 _EXACT_TOLERANCE = 0.01
+#: W4 (row 437): the table is measured at one tint (the file's `tint`, 1.0).
+#: r/b alone is tint-dependent, so a frame at another tint inverts to a wrong
+#: Kelvin (5934 K read back for a 5500 K set). When the observed g-normalised
+#: (r, b) sits farther than this from the table's own curve at the inverted
+#: Kelvin, the Kelvin is not readable: answer None with a reason instead.
+_OFF_CURVE_TOLERANCE = 0.03
 
 #: `calibrate`'s own measured cost (task 11 host runs): about how long one
 #: Kelvin point (a `darkroom.set` + commit + XMP readback) takes.
@@ -288,7 +294,51 @@ def _ratio(coeffs: list[float]) -> float:
     return float(coeffs[0]) / b
 
 
-def _invert(samples: list[dict], ratio: float) -> tuple[float | None, dict]:
+def _off_curve(samples: list[dict], k: float, coeffs: list[float] | None) -> float | None:
+    """Relative distance between the observed g-normalised (r, b) and the
+    table's (r, b) interpolated at Kelvin `k`. None when coeffs are absent."""
+    if not coeffs or len(coeffs) < 3 or not coeffs[1]:
+        return None
+    r_obs, b_obs = coeffs[0] / coeffs[1], coeffs[2] / coeffs[1]
+    ks = [p["kelvin"] for p in samples]
+    i = max(0, min(len(ks) - 2, next((j for j in range(len(ks) - 1) if ks[j] <= k <= ks[j + 1]),
+                                    len(ks) - 2)))
+    lo, hi = samples[i], samples[i + 1]
+    f = 0.0 if hi["kelvin"] == lo["kelvin"] else (k - lo["kelvin"]) / (hi["kelvin"] - lo["kelvin"])
+
+    def norm(p: dict) -> tuple[float, float]:
+        c = p["coeffs"]
+        return c[0] / c[1], c[2] / c[1]
+
+    (rl, bl), (rh, bh) = norm(lo), norm(hi)
+    r_t, b_t = rl + f * (rh - rl), bl + f * (bh - bl)
+    return ((r_obs - r_t) ** 2 + (b_obs - b_t) ** 2) ** 0.5 / (r_t ** 2 + b_t ** 2) ** 0.5
+
+
+def _invert(samples: list[dict], ratio: float, coeffs: list[float] | None = None,
+            *, strict: bool = False) -> tuple[float | None, dict]:
+    """`strict=True` (the `wb.kelvin` verb's readback) answers None with a
+    reason when the coefficients are off the calibrated curve; internal
+    callers (relative moves, undo, style) keep the r/b answer and get an
+    `approximate` warning, so a warmer/cooler move still works at any tint."""
+    k, info = _invert_ratio(samples, ratio)
+    if k is None:
+        return k, info
+    dist = _off_curve(samples, k, coeffs)
+    info["off_curve"] = dist
+    if dist is not None and dist > _OFF_CURVE_TOLERANCE and not strict:
+        info["approximate"] = True
+        return k, info
+    if dist is not None and dist > _OFF_CURVE_TOLERANCE:
+        return None, {**info, "interpolated": False, "exact": False, "reason": (
+            f"these coefficients are {100 * dist:.0f}% off the calibrated curve: the frame's "
+            "tint is not the table's calibrated tint, and r/b alone cannot give Kelvin at "
+            "another tint. Set tint back to 1.0, or re-run `scouter wb calibrate` "
+            "for this tint; the slider value itself was applied.")}
+    return k, info
+
+
+def _invert_ratio(samples: list[dict], ratio: float) -> tuple[float | None, dict]:
     """Bisect the sorted `samples` on `r = coeff_r / coeff_b`, then interpolate
     linearly between the two bracketing entries.
 
@@ -423,6 +473,7 @@ def kelvin(
     camera: str | None = None,
     *,
     image: str | int | None = None,
+    strict: bool = False,
 ) -> dict:
     """Invert Kelvin from `coeffs` (r, g, b, ...) against `camera`'s table, or
     from `image`'s own committed XMP (which also supplies `camera`, via EXIF).
@@ -465,7 +516,7 @@ def kelvin(
 
     table_ref = {"path": str(_table_path(camera)), "synthetic": bool(table.get("synthetic"))}
     target = _ratio(coeffs)
-    k, info = _invert(table["samples"], target)
+    k, info = _invert(table["samples"], target, list(coeffs), strict=strict)
     return {
         "kelvin": k,
         "camera": camera,
@@ -487,7 +538,7 @@ def kelvin_verb(image: str | int, *, job: str | None = None) -> KelvinResult:
     top-level verb"). This wrapper is what a direct CLI/MCP call goes through.
     """
     job = job or current_job()
-    result = kelvin(image=image)
+    result = kelvin(image=image, strict=True)
     return KelvinResult(
         kelvin=result["kelvin"],
         interpolated=result["interpolated"],
