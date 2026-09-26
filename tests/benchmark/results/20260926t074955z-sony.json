@@ -1,0 +1,2267 @@
+{
+  "schema": "scouter-editor-benchmark-result/1",
+  "run_id": "20260926t074955z",
+  "label": "phase3-v2",
+  "body": "sony",
+  "plan_version": "v2",
+  "tasks_revision": 2,
+  "camera": "Sony ILCE-7 (A7) and NEX-5N (.ARW)",
+  "git": {
+    "sha": "55d05615194f839e1ddb277a36e35afc1e91a021",
+    "branch": "bench/editor",
+    "dirty": true
+  },
+  "started": "2026-09-26T07:49:55.565570+00:00",
+  "finished": "2026-09-26T08:04:23.644723+00:00",
+  "environment": {
+    "mcp_server": "python -m scouter.mcp.server (README: command scouter-mcp), SCOUTER_JOB unset",
+    "tools": [
+      "darkroom_open",
+      "darkroom_set",
+      "darkroom_nudge",
+      "darkroom_enable",
+      "darkroom_reset",
+      "darkroom_undo_last",
+      "darkroom_status",
+      "darkroom_describe_history",
+      "history_read",
+      "history_commit",
+      "history_changed",
+      "scout_stats",
+      "scout_preview",
+      "scout_compare",
+      "style_extract",
+      "style_apply",
+      "outliers_list",
+      "style_apply_set",
+      "export_run",
+      "export_release",
+      "export_verify",
+      "library_import",
+      "library_verify",
+      "library_register",
+      "library_jobs",
+      "library_relocate",
+      "cull_propose",
+      "cull_apply",
+      "config_init",
+      "config_show",
+      "backup_run",
+      "backup_verify",
+      "metrics_summary",
+      "wb_kelvin",
+      "wb_calibrate",
+      "vocab_list",
+      "vocab_resolve",
+      "darkroom_get",
+      "darkroom_adjust",
+      "darkroom_say",
+      "preset_save",
+      "preset_list",
+      "preset_apply",
+      "preset_apply_job",
+      "job_run"
+    ],
+    "paths": {
+      "body": "sony",
+      "run_id": "20260926t074955z",
+      "frame:dark": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01425.ARW",
+      "framename:dark": "DSC01425.ARW",
+      "framebase:dark": "DSC01425.ARW",
+      "frame:bright": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC07452.ARW",
+      "framename:bright": "DSC07452.ARW",
+      "framebase:bright": "DSC07452.ARW",
+      "frame:blown": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01431.ARW",
+      "framename:blown": "DSC01431.ARW",
+      "framebase:blown": "DSC01431.ARW",
+      "frame:hero": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01426.ARW",
+      "framename:hero": "DSC01426.ARW",
+      "framebase:hero": "DSC01426.ARW",
+      "card": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/card",
+      "job_slug": "bench-sony-0926074955",
+      "preset": "scouter-bench-sony-0926074955",
+      "out_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/exports",
+      "job:1": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0926074955/raw/2026-09-14_bench-sony-0926074955_ilce7_0001.arw",
+      "job:2": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0926074955/raw/2026-09-14_bench-sony-0926074955_ilce7_0002.arw",
+      "job:3": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0926074955/raw/2026-09-14_bench-sony-0926074955_ilce7_0003.arw",
+      "job:4": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0926074955/raw/2026-09-14_bench-sony-0926074955_ilce7_0004.arw",
+      "job:5": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0926074955/raw/2026-09-14_bench-sony-0926074955_ilce7_0005.arw",
+      "job:6": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0926074955/raw/2026-09-14_bench-sony-0926074955_ilce7_0006.arw"
+    },
+    "run_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony"
+  },
+  "sessions": [
+    {
+      "id": "calib",
+      "skipped": "wb_calibrate is off for sony"
+    },
+    {
+      "id": "A",
+      "role": "dark",
+      "launch": {
+        "settle_s": 0.0,
+        "ok": true,
+        "launch_to_darkroom_s": 2.36,
+        "ready_s": 2.42,
+        "loaded": {
+          "image_id": 48,
+          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01425.ARW",
+          "source": "action_images",
+          "view": "darkroom"
+        },
+        "error": null
+      },
+      "setup": [
+        {
+          "tool": "history_commit",
+          "args": {
+            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01425.ARW",
+            "timeout_s": 10
+          },
+          "envelope": {
+            "data": {},
+            "error": {
+              "code": "commit_timeout",
+              "detail": {
+                "bridge_detail": "the view bounce completed 2 time(s) but /Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01425.ARW.xmp did not change within 3000ms of waiting -- darktable writes a sidecar only when the history actually changes, so this is expected when the requested value is the one the image already had",
+                "image_id": 48,
+                "ms": 10024,
+                "ok": false,
+                "strategy_used": "view_bounce_action",
+                "view_after": "darkroom",
+                "xmp": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01425.ARW.xmp"
+              },
+              "fix": "darktable did not write the XMP in time; leave and re-enter the darkroom, or raise the commit timeout",
+              "message": "darktable did not write /Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01425.ARW.xmp within 10s using the view_bounce_action strategy",
+              "outcome": "error"
+            },
+            "job": "mcp-20260926-074955-33922",
+            "layer": "mcp",
+            "ms": 10141,
+            "ok": false,
+            "outcome": "error:commit_timeout",
+            "verb": "history.commit"
+          },
+          "wall_s": 10.149
+        }
+      ],
+      "tasks": [
+        "E1",
+        "T4",
+        "S2"
+      ],
+      "hung_first_launch": {
+        "setup": [
+          {
+            "tool": "history_commit",
+            "args": {
+              "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01425.ARW",
+              "timeout_s": 10
+            },
+            "envelope": null,
+            "wall_s": 30.01,
+            "transport_error": "TimeoutError: tools/call did not answer within 30.0s"
+          }
+        ],
+        "quit": {
+          "ok": true,
+          "how": "SIGKILL"
+        },
+        "relaunch": {
+          "settle_s": 0.0,
+          "ok": true,
+          "launch_to_darkroom_s": 2.24,
+          "ready_s": 2.35,
+          "loaded": {
+            "image_id": 48,
+            "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01425.ARW",
+            "source": "action_images",
+            "view": "darkroom"
+          },
+          "error": null
+        }
+      },
+      "quit": {
+        "ok": true,
+        "how": "osascript"
+      }
+    },
+    {
+      "id": "B",
+      "role": "bright",
+      "launch": {
+        "settle_s": 0.0,
+        "ok": true,
+        "launch_to_darkroom_s": 2.18,
+        "ready_s": 2.29,
+        "loaded": {
+          "image_id": 49,
+          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC07452.ARW",
+          "source": "action_images",
+          "view": "darkroom"
+        },
+        "error": null
+      },
+      "setup": [
+        {
+          "tool": "history_commit",
+          "args": {
+            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC07452.ARW",
+            "timeout_s": 10
+          },
+          "envelope": null,
+          "wall_s": 30.008,
+          "transport_error": "TimeoutError: tools/call did not answer within 30.0s"
+        }
+      ],
+      "tasks": [],
+      "hung_first_launch": {
+        "setup": [
+          {
+            "tool": "history_commit",
+            "args": {
+              "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC07452.ARW",
+              "timeout_s": 10
+            },
+            "envelope": null,
+            "wall_s": 30.007,
+            "transport_error": "TimeoutError: tools/call did not answer within 30.0s"
+          }
+        ],
+        "quit": {
+          "ok": true,
+          "how": "SIGKILL"
+        },
+        "relaunch": {
+          "settle_s": 0.0,
+          "ok": true,
+          "launch_to_darkroom_s": 2.14,
+          "ready_s": 2.25,
+          "loaded": {
+            "image_id": 49,
+            "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC07452.ARW",
+            "source": "action_images",
+            "view": "darkroom"
+          },
+          "error": null
+        }
+      },
+      "hung_again": true,
+      "quit": {
+        "ok": true,
+        "how": "SIGKILL"
+      }
+    },
+    {
+      "id": "B2",
+      "role": "blown",
+      "launch": {
+        "settle_s": 0.0,
+        "ok": true,
+        "launch_to_darkroom_s": 2.39,
+        "ready_s": 2.5,
+        "loaded": {
+          "image_id": 50,
+          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01431.ARW",
+          "source": "action_images",
+          "view": "darkroom"
+        },
+        "error": null
+      },
+      "setup": [
+        {
+          "tool": "history_commit",
+          "args": {
+            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01431.ARW",
+            "timeout_s": 10
+          },
+          "envelope": null,
+          "wall_s": 30.01,
+          "transport_error": "TimeoutError: tools/call did not answer within 30.0s"
+        }
+      ],
+      "tasks": [
+        "E2"
+      ],
+      "hung_first_launch": {
+        "setup": [
+          {
+            "tool": "history_commit",
+            "args": {
+              "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01431.ARW",
+              "timeout_s": 10
+            },
+            "envelope": null,
+            "wall_s": 30.01,
+            "transport_error": "TimeoutError: tools/call did not answer within 30.0s"
+          }
+        ],
+        "quit": {
+          "ok": true,
+          "how": "SIGKILL"
+        },
+        "relaunch": {
+          "settle_s": 0.0,
+          "ok": true,
+          "launch_to_darkroom_s": 2.08,
+          "ready_s": 2.18,
+          "loaded": {
+            "image_id": 50,
+            "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01431.ARW",
+            "source": "action_images",
+            "view": "darkroom"
+          },
+          "error": null
+        }
+      },
+      "hung_again": true,
+      "quit": {
+        "ok": true,
+        "how": "SIGKILL"
+      }
+    },
+    {
+      "id": "C",
+      "role": "hero",
+      "launch": {
+        "settle_s": 0.0,
+        "ok": true,
+        "launch_to_darkroom_s": 2.34,
+        "ready_s": 2.46,
+        "loaded": {
+          "image_id": 51,
+          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01426.ARW",
+          "source": "action_images",
+          "view": "darkroom"
+        },
+        "error": null
+      },
+      "setup": [
+        {
+          "tool": "library_import",
+          "args": {
+            "source": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/card",
+            "job_slug": "bench-sony-0926074955",
+            "confirm": true
+          },
+          "envelope": {
+            "data": {
+              "assumed_camera": [],
+              "camera": "ilce7",
+              "camera_make": "SONY",
+              "camera_model": "ILCE-7",
+              "camera_models": [
+                "ILCE-7"
+              ],
+              "cameras": [
+                "ilce7"
+              ],
+              "date": "2026-09-14",
+              "duplicates": [],
+              "files": [
+                {
+                  "bytes": 24805376,
+                  "camera": "ilce7",
+                  "camera_make": "SONY",
+                  "camera_model": "ILCE-7",
+                  "captured_at": "2026-09-14 09:20:03",
+                  "dest": "raw/2026-09-14_bench-sony-0926074955_ilce7_0001.arw",
+                  "exposure_time": 0.016666666666666666,
+                  "f_number": 3.5,
+                  "iso": 2000,
+                  "seq": 1,
+                  "sha256": "761cfa5e4394569855403070abb3df010c621853b6d9250a1b461e0e50a4a799",
+                  "source_name": "DSC01427.ARW",
+                  "status": "copied",
+                  "subsec": 0
+                },
+                {
+                  "bytes": 24805376,
+                  "camera": "ilce7",
+                  "camera_make": "SONY",
+                  "camera_model": "ILCE-7",
+                  "captured_at": "2026-09-14 09:20:10",
+                  "dest": "raw/2026-09-14_bench-sony-0926074955_ilce7_0002.arw",
+                  "exposure_time": 0.016666666666666666,
+                  "f_number": 3.5,
+                  "iso": 2000,
+                  "seq": 2,
+                  "sha256": "b346969a8aee5471ac49fc885aafcc479cd7b13493d9b62a4e00c6c43f2d258d",
+                  "source_name": "DSC01428.ARW",
+                  "status": "copied",
+                  "subsec": 0
+                },
+                {
+                  "bytes": 24805376,
+                  "camera": "ilce7",
+                  "camera_make": "SONY",
+                  "camera_model": "ILCE-7",
+                  "captured_at": "2026-09-14 09:20:57",
+                  "dest": "raw/2026-09-14_bench-sony-0926074955_ilce7_0003.arw",
+                  "exposure_time": 0.016666666666666666,
+                  "f_number": 4.5,
+                  "iso": 3200,
+                  "seq": 3,
+                  "sha256": "e5416388702f3327f7d2d26497a0f6f3880cbbe8e4f86f9fde2e183b47f308d0",
+                  "source_name": "DSC01429.ARW",
+                  "status": "copied",
+                  "subsec": 0
+                },
+                {
+                  "bytes": 24805376,
+                  "camera": "ilce7",
+                  "camera_make": "SONY",
+                  "camera_model": "ILCE-7",
+                  "captured_at": "2026-09-14 09:21:24",
+                  "dest": "raw/2026-09-14_bench-sony-0926074955_ilce7_0004.arw",
+                  "exposure_time": 0.00625,
+                  "f_number": 3.5,
+                  "iso": 6400,
+                  "seq": 4,
+                  "sha256": "3584c4e663f6047c6930dc8d3408dca84a05efdb0222fe33fd39462e08a9ad51",
+                  "source_name": "DSC01430.ARW",
+                  "status": "copied",
+                  "subsec": 0
+                },
+                {
+                  "bytes": 24674304,
+                  "camera": "ilce7",
+                  "camera_make": "SONY",
+                  "camera_model": "ILCE-7",
+                  "captured_at": "2026-09-14 09:22:25",
+                  "dest": "raw/2026-09-14_bench-sony-0926074955_ilce7_0005.arw",
+                  "exposure_time": 0.5,
+                  "f_number": 3.5,
+                  "iso": 50,
+                  "seq": 5,
+                  "sha256": "1f67053850072f5b891154e0c7292aead5da788f78e12a28f9d239c413535a1b",
+                  "source_name": "DSC01431.ARW",
+                  "status": "copied",
+                  "subsec": 0
+                },
+                {
+                  "bytes": 24674304,
+                  "camera": "ilce7",
+                  "camera_make": "SONY",
+                  "camera_model": "ILCE-7",
+                  "captured_at": "2026-09-14 09:22:31",
+                  "dest": "raw/2026-09-14_bench-sony-0926074955_ilce7_0006.arw",
+                  "exposure_time": 0.5,
+                  "f_number": 3.5,
+                  "iso": 50,
+                  "seq": 6,
+                  "sha256": "128bf325cdfb5688ce2f17ebd324318e31bf491c8310271a4d2f7f8349801b73",
+                  "source_name": "DSC01432.ARW",
+                  "status": "copied",
+                  "subsec": 0
+                }
+              ],
+              "film_roll_registered": false,
+              "image_id": null,
+              "imported": 0,
+              "job_slug": "bench-sony-0926074955",
+              "outcome": "ok",
+              "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0926074955",
+              "plan": [],
+              "reason": null,
+              "recursive_honoured": null,
+              "scan_incomplete": null,
+              "skipped_no_body": [],
+              "skipped_other_camera": [],
+              "source_root": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/card",
+              "source_roots": [
+                "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/card"
+              ],
+              "totals": {
+                "bytes": 148570112,
+                "copied": 6,
+                "duplicate_pairs": 0,
+                "job_bytes": 148570112,
+                "job_files": 6,
+                "plan_hashed_bytes": 0,
+                "plan_hashed_files": 0,
+                "planned": 6,
+                "skipped_identical": 0
+              },
+              "warnings": [
+                "start darktable and run `scouter doctor`; the Lua plugin must be installed (`darktable-mcp install-plugin`) and darktable restarted"
+              ]
+            },
+            "job": "mcp-20260926-074955-33922",
+            "layer": "mcp",
+            "ms": 120272,
+            "ok": true,
+            "outcome": "ok",
+            "verb": "library.import"
+          },
+          "wall_s": 150.393
+        },
+        {
+          "tool": "history_commit",
+          "args": {
+            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01426.ARW",
+            "timeout_s": 10
+          },
+          "envelope": null,
+          "wall_s": 30.006,
+          "transport_error": "TimeoutError: tools/call did not answer within 30.0s"
+        }
+      ],
+      "tasks": [
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "T1",
+        "T2",
+        "T3",
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "F1",
+        "F2",
+        "F3",
+        "F4",
+        "F5",
+        "F6",
+        "U1",
+        "U2",
+        "L1",
+        "L2",
+        "S1",
+        "F7"
+      ],
+      "hung_first_launch": {
+        "setup": [
+          {
+            "tool": "history_commit",
+            "args": {
+              "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01426.ARW",
+              "timeout_s": 10
+            },
+            "envelope": null,
+            "wall_s": 30.01,
+            "transport_error": "TimeoutError: tools/call did not answer within 30.0s"
+          },
+          {
+            "tool": "library_import",
+            "args": {
+              "source": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/card",
+              "job_slug": "bench-sony-0926074955",
+              "confirm": true
+            },
+            "envelope": {
+              "data": {
+                "assumed_camera": [],
+                "camera": "ilce7",
+                "camera_make": "SONY",
+                "camera_model": "ILCE-7",
+                "camera_models": [
+                  "ILCE-7"
+                ],
+                "cameras": [
+                  "ilce7"
+                ],
+                "date": "2026-09-14",
+                "duplicates": [],
+                "files": [
+                  {
+                    "bytes": 24805376,
+                    "camera": "ilce7",
+                    "camera_make": "SONY",
+                    "camera_model": "ILCE-7",
+                    "captured_at": "2026-09-14 09:20:03",
+                    "dest": "raw/2026-09-14_bench-sony-0926074955_ilce7_0001.arw",
+                    "exposure_time": 0.016666666666666666,
+                    "f_number": 3.5,
+                    "iso": 2000,
+                    "seq": 1,
+                    "sha256": "761cfa5e4394569855403070abb3df010c621853b6d9250a1b461e0e50a4a799",
+                    "source_name": "DSC01427.ARW",
+                    "status": "copied",
+                    "subsec": 0
+                  },
+                  {
+                    "bytes": 24805376,
+                    "camera": "ilce7",
+                    "camera_make": "SONY",
+                    "camera_model": "ILCE-7",
+                    "captured_at": "2026-09-14 09:20:10",
+                    "dest": "raw/2026-09-14_bench-sony-0926074955_ilce7_0002.arw",
+                    "exposure_time": 0.016666666666666666,
+                    "f_number": 3.5,
+                    "iso": 2000,
+                    "seq": 2,
+                    "sha256": "b346969a8aee5471ac49fc885aafcc479cd7b13493d9b62a4e00c6c43f2d258d",
+                    "source_name": "DSC01428.ARW",
+                    "status": "copied",
+                    "subsec": 0
+                  },
+                  {
+                    "bytes": 24805376,
+                    "camera": "ilce7",
+                    "camera_make": "SONY",
+                    "camera_model": "ILCE-7",
+                    "captured_at": "2026-09-14 09:20:57",
+                    "dest": "raw/2026-09-14_bench-sony-0926074955_ilce7_0003.arw",
+                    "exposure_time": 0.016666666666666666,
+                    "f_number": 4.5,
+                    "iso": 3200,
+                    "seq": 3,
+                    "sha256": "e5416388702f3327f7d2d26497a0f6f3880cbbe8e4f86f9fde2e183b47f308d0",
+                    "source_name": "DSC01429.ARW",
+                    "status": "copied",
+                    "subsec": 0
+                  },
+                  {
+                    "bytes": 24805376,
+                    "camera": "ilce7",
+                    "camera_make": "SONY",
+                    "camera_model": "ILCE-7",
+                    "captured_at": "2026-09-14 09:21:24",
+                    "dest": "raw/2026-09-14_bench-sony-0926074955_ilce7_0004.arw",
+                    "exposure_time": 0.00625,
+                    "f_number": 3.5,
+                    "iso": 6400,
+                    "seq": 4,
+                    "sha256": "3584c4e663f6047c6930dc8d3408dca84a05efdb0222fe33fd39462e08a9ad51",
+                    "source_name": "DSC01430.ARW",
+                    "status": "copied",
+                    "subsec": 0
+                  },
+                  {
+                    "bytes": 24674304,
+                    "camera": "ilce7",
+                    "camera_make": "SONY",
+                    "camera_model": "ILCE-7",
+                    "captured_at": "2026-09-14 09:22:25",
+                    "dest": "raw/2026-09-14_bench-sony-0926074955_ilce7_0005.arw",
+                    "exposure_time": 0.5,
+                    "f_number": 3.5,
+                    "iso": 50,
+                    "seq": 5,
+                    "sha256": "1f67053850072f5b891154e0c7292aead5da788f78e12a28f9d239c413535a1b",
+                    "source_name": "DSC01431.ARW",
+                    "status": "copied",
+                    "subsec": 0
+                  },
+                  {
+                    "bytes": 24674304,
+                    "camera": "ilce7",
+                    "camera_make": "SONY",
+                    "camera_model": "ILCE-7",
+                    "captured_at": "2026-09-14 09:22:31",
+                    "dest": "raw/2026-09-14_bench-sony-0926074955_ilce7_0006.arw",
+                    "exposure_time": 0.5,
+                    "f_number": 3.5,
+                    "iso": 50,
+                    "seq": 6,
+                    "sha256": "128bf325cdfb5688ce2f17ebd324318e31bf491c8310271a4d2f7f8349801b73",
+                    "source_name": "DSC01432.ARW",
+                    "status": "copied",
+                    "subsec": 0
+                  }
+                ],
+                "film_roll_registered": false,
+                "image_id": null,
+                "imported": 0,
+                "job_slug": "bench-sony-0926074955",
+                "outcome": "ok",
+                "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0926074955",
+                "plan": [],
+                "reason": null,
+                "recursive_honoured": null,
+                "scan_incomplete": null,
+                "skipped_no_body": [],
+                "skipped_other_camera": [],
+                "source_root": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/card",
+                "source_roots": [
+                  "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/card"
+                ],
+                "totals": {
+                  "bytes": 148570112,
+                  "copied": 6,
+                  "duplicate_pairs": 0,
+                  "job_bytes": 148570112,
+                  "job_files": 6,
+                  "plan_hashed_bytes": 0,
+                  "plan_hashed_files": 0,
+                  "planned": 6,
+                  "skipped_identical": 0
+                },
+                "warnings": [
+                  "start darktable and run `scouter doctor`; the Lua plugin must be installed (`darktable-mcp install-plugin`) and darktable restarted"
+                ]
+              },
+              "job": "mcp-20260926-074955-33922",
+              "layer": "mcp",
+              "ms": 120272,
+              "ok": true,
+              "outcome": "ok",
+              "verb": "library.import"
+            },
+            "wall_s": 150.393
+          }
+        ],
+        "quit": {
+          "ok": true,
+          "how": "SIGKILL"
+        },
+        "relaunch": {
+          "settle_s": 0.0,
+          "ok": true,
+          "launch_to_darkroom_s": 2.78,
+          "ready_s": 2.9,
+          "loaded": {
+            "image_id": 51,
+            "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01426.ARW",
+            "source": "action_images",
+            "view": "darkroom"
+          },
+          "error": null
+        }
+      },
+      "hung_again": true,
+      "quit": {
+        "ok": true,
+        "how": "osascript"
+      }
+    }
+  ],
+  "cleanup": [],
+  "tasks": [
+    {
+      "id": "E1",
+      "category": "exposure",
+      "sentence": "This one came out dark. Bring it up a full stop.",
+      "frames": {
+        "dark": "DSC01425.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_say",
+          "args": {
+            "phrase": "brighter by 1 ev"
+          }
+        }
+      ],
+      "plan_used": "v2",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 8,
+      "calls": [
+        {
+          "tool": "darkroom_say",
+          "args": {
+            "phrase": "brighter by 1 ev"
+          },
+          "envelope": {
+            "data": {
+              "explain": [
+                "exposure \u203a exposure up +1 EV (0.7 EV \u2192 1.7 EV): brightens or darkens the whole frame evenly, before any tone mapping; watch the highlights for clipping and the shadows for noise."
+              ],
+              "group": "say-1",
+              "image_id": 48,
+              "intensity": 1.0,
+              "key": "brighter",
+              "moves": [
+                {
+                  "applied": 0.699999988079071,
+                  "clamped": false,
+                  "committed": true,
+                  "delta": 1.0,
+                  "explain": [],
+                  "image_id": 48,
+                  "instance": 0,
+                  "module": "exposure",
+                  "noop": false,
+                  "outcome": "ok",
+                  "param": "exposure",
+                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01425.ARW",
+                  "plan": [
+                    {
+                      "action": "darkroom.adjust",
+                      "ms_precommit": 0,
+                      "ms_read": 1,
+                      "ms_set": 1529
+                    }
+                  ],
+                  "previous": 0.699999988079071,
+                  "reason": null,
+                  "source": "xmp",
+                  "summary": "exposure \u203a exposure: +1 EV (0.7 EV \u2192 0.7 EV)",
+                  "target": 1.699999988079071,
+                  "unit": "EV",
+                  "warnings": []
+                }
+              ],
+              "outcome": "ok",
+              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01425.ARW",
+              "phrase": "brighter by 1 ev",
+              "plan": [
+                {
+                  "action": "precommit",
+                  "bounced": true,
+                  "ms": 2043,
+                  "reason": "first move on this image in this session"
+                }
+              ],
+              "reason": null,
+              "refused": [],
+              "summary": "exposure \u203a exposure: +1 EV (0.7 EV \u2192 0.7 EV)",
+              "warnings": []
+            },
+            "job": "mcp-20260926-074955-33922",
+            "layer": "mcp",
+            "ms": 3803,
+            "ok": true,
+            "outcome": "ok",
+            "verb": "darkroom.say"
+          },
+          "wall_s": 3.809
+        }
+      ],
+      "context_calls": [],
+      "assertions": {
+        "set_ok": {
+          "ok": true,
+          "measured": "ok",
+          "type": "step_ok"
+        },
+        "delta": {
+          "ok": false,
+          "measured": 0.0,
+          "expected": 1.0,
+          "type": "param_delta"
+        },
+        "near": {
+          "ok": false,
+          "measured": 0.0,
+          "expected": 1.0,
+          "type": "param_delta"
+        },
+        "refused": {
+          "ok": false,
+          "measured": null,
+          "expected": "any typed error",
+          "type": "step_error"
+        },
+        "untouched": {
+          "ok": true,
+          "measured": {
+            "dark": {
+              "before": 11,
+              "after": 11,
+              "changed": false
+            }
+          },
+          "type": "history_unchanged"
+        }
+      },
+      "score": "fail",
+      "outcome": "reported_ok_unverified",
+      "wall_s": 3.809,
+      "snapshots": {
+        "before": {
+          "dark": {
+            "exists": true,
+            "history_end": 11,
+            "entries": 11,
+            "fingerprint": "c00e67b036b632df",
+            "modules": {
+              "sigmoid": {
+                "num": 10,
+                "enabled": true,
+                "decoded": {
+                  "contrast": 1.5,
+                  "skew": 0.0,
+                  "f2": 100.0,
+                  "f3": 0.015200000256299973,
+                  "f4": 0.0,
+                  "f5": 100.0,
+                  "f6": 0.0,
+                  "f7": 0.0,
+                  "f8": 0.0,
+                  "f9": 0.0,
+                  "f10": 0.0,
+                  "f11": 0.0,
+                  "f12": 0.0,
+                  "f13": 0.0
+                }
+              },
+              "exposure": {
+                "num": 8,
+                "enabled": true,
+                "decoded": {
+                  "mode": 0,
+                  "black": -0.000244140625,
+                  "exposure": 0.699999988079071,
+                  "deflicker_percentile": 50.0,
+                  "deflicker_target_level": -4.0,
+                  "compensate_exposure_bias": 1,
+                  "_tail": 1
+                }
+              },
+              "temperature": {
+                "num": 5,
+                "enabled": true,
+                "decoded": {
+                  "coeff_r": 2.140625,
+                  "coeff_g": 1.0,
+                  "coeff_b": 2.1484375,
+                  "coeff_g2": 0.0,
+                  "preset": 4
+                }
+              }
+            }
+          }
+        },
+        "after": {
+          "dark": {
+            "exists": true,
+            "history_end": 11,
+            "entries": 11,
+            "fingerprint": "c00e67b036b632df",
+            "modules": {
+              "sigmoid": {
+                "num": 10,
+                "enabled": true,
+                "decoded": {
+                  "contrast": 1.5,
+                  "skew": 0.0,
+                  "f2": 100.0,
+                  "f3": 0.015200000256299973,
+                  "f4": 0.0,
+                  "f5": 100.0,
+                  "f6": 0.0,
+                  "f7": 0.0,
+                  "f8": 0.0,
+                  "f9": 0.0,
+                  "f10": 0.0,
+                  "f11": 0.0,
+                  "f12": 0.0,
+                  "f13": 0.0
+                }
+              },
+              "exposure": {
+                "num": 8,
+                "enabled": true,
+                "decoded": {
+                  "mode": 0,
+                  "black": -0.000244140625,
+                  "exposure": 0.699999988079071,
+                  "deflicker_percentile": 50.0,
+                  "deflicker_target_level": -4.0,
+                  "compensate_exposure_bias": 1,
+                  "_tail": 1
+                }
+              },
+              "temperature": {
+                "num": 5,
+                "enabled": true,
+                "decoded": {
+                  "coeff_r": 2.140625,
+                  "coeff_g": 1.0,
+                  "coeff_b": 2.1484375,
+                  "coeff_g2": 0.0,
+                  "preset": 4
+                }
+              }
+            }
+          }
+        }
+      },
+      "settle": null
+    },
+    {
+      "id": "T4",
+      "category": "contrast_tone",
+      "sentence": "The shadows look milky. Crush the blacks a touch.",
+      "frames": {
+        "dark": "DSC01425.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_say",
+          "args": {
+            "phrase": "deeper blacks by 0.01"
+          }
+        }
+      ],
+      "plan_used": "v2",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 8,
+      "calls": [
+        {
+          "tool": "darkroom_say",
+          "args": {
+            "phrase": "deeper blacks by 0.01"
+          },
+          "envelope": {
+            "data": {
+              "explain": [
+                "exposure \u203a black level correction up +0.01 (-0.0002441 \u2192 0.009756): moves the point that renders as pure black; watch the darkest areas: a few thousandths is a visible change."
+              ],
+              "group": "say-2",
+              "image_id": 48,
+              "intensity": 1.0,
+              "key": "deeper_blacks",
+              "moves": [
+                {
+                  "applied": -0.000244140625,
+                  "clamped": false,
+                  "committed": true,
+                  "delta": 0.01,
+                  "explain": [],
+                  "image_id": 48,
+                  "instance": 0,
+                  "module": "exposure",
+                  "noop": false,
+                  "outcome": "ok",
+                  "param": "black",
+                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01425.ARW",
+                  "plan": [
+                    {
+                      "action": "darkroom.adjust",
+                      "ms_precommit": 0,
+                      "ms_read": 0,
+                      "ms_set": 688
+                    }
+                  ],
+                  "previous": -0.000244140625,
+                  "reason": null,
+                  "source": "xmp",
+                  "summary": "exposure \u203a black level correction: +0.01 (-0.0002441 \u2192 -0.0002441)",
+                  "target": 0.009755859375,
+                  "unit": "ratio",
+                  "warnings": []
+                }
+              ],
+              "outcome": "ok",
+              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01425.ARW",
+              "phrase": "deeper blacks by 0.01",
+              "plan": [
+                {
+                  "action": "precommit",
+                  "bounced": false,
+                  "ms": 0,
+                  "reason": "sidecar is newer than the last move on this image"
+                }
+              ],
+              "reason": null,
+              "refused": [],
+              "summary": "exposure \u203a black level correction: +0.01 (-0.0002441 \u2192 -0.0002441)",
+              "warnings": []
+            },
+            "job": "mcp-20260926-074955-33922",
+            "layer": "mcp",
+            "ms": 912,
+            "ok": true,
+            "outcome": "ok",
+            "verb": "darkroom.say"
+          },
+          "wall_s": 0.915
+        }
+      ],
+      "context_calls": [],
+      "assertions": {
+        "set_ok": {
+          "ok": true,
+          "measured": "ok",
+          "type": "step_ok"
+        },
+        "delta": {
+          "ok": false,
+          "measured": 0.0,
+          "expected": 0.01,
+          "type": "param_delta"
+        },
+        "direction": {
+          "ok": false,
+          "measured": 0.0,
+          "expected": "sign 1",
+          "type": "param_direction"
+        },
+        "refused": {
+          "ok": false,
+          "measured": null,
+          "expected": "any typed error",
+          "type": "step_error"
+        },
+        "untouched": {
+          "ok": true,
+          "measured": {
+            "dark": {
+              "before": 11,
+              "after": 11,
+              "changed": false
+            }
+          },
+          "type": "history_unchanged"
+        }
+      },
+      "score": "fail",
+      "outcome": "reported_ok_unverified",
+      "wall_s": 0.915,
+      "snapshots": {
+        "before": {
+          "dark": {
+            "exists": true,
+            "history_end": 11,
+            "entries": 11,
+            "fingerprint": "c00e67b036b632df",
+            "modules": {
+              "sigmoid": {
+                "num": 10,
+                "enabled": true,
+                "decoded": {
+                  "contrast": 1.5,
+                  "skew": 0.0,
+                  "f2": 100.0,
+                  "f3": 0.015200000256299973,
+                  "f4": 0.0,
+                  "f5": 100.0,
+                  "f6": 0.0,
+                  "f7": 0.0,
+                  "f8": 0.0,
+                  "f9": 0.0,
+                  "f10": 0.0,
+                  "f11": 0.0,
+                  "f12": 0.0,
+                  "f13": 0.0
+                }
+              },
+              "exposure": {
+                "num": 8,
+                "enabled": true,
+                "decoded": {
+                  "mode": 0,
+                  "black": -0.000244140625,
+                  "exposure": 0.699999988079071,
+                  "deflicker_percentile": 50.0,
+                  "deflicker_target_level": -4.0,
+                  "compensate_exposure_bias": 1,
+                  "_tail": 1
+                }
+              },
+              "temperature": {
+                "num": 5,
+                "enabled": true,
+                "decoded": {
+                  "coeff_r": 2.140625,
+                  "coeff_g": 1.0,
+                  "coeff_b": 2.1484375,
+                  "coeff_g2": 0.0,
+                  "preset": 4
+                }
+              }
+            }
+          }
+        },
+        "after": {
+          "dark": {
+            "exists": true,
+            "history_end": 11,
+            "entries": 11,
+            "fingerprint": "c00e67b036b632df",
+            "modules": {
+              "sigmoid": {
+                "num": 10,
+                "enabled": true,
+                "decoded": {
+                  "contrast": 1.5,
+                  "skew": 0.0,
+                  "f2": 100.0,
+                  "f3": 0.015200000256299973,
+                  "f4": 0.0,
+                  "f5": 100.0,
+                  "f6": 0.0,
+                  "f7": 0.0,
+                  "f8": 0.0,
+                  "f9": 0.0,
+                  "f10": 0.0,
+                  "f11": 0.0,
+                  "f12": 0.0,
+                  "f13": 0.0
+                }
+              },
+              "exposure": {
+                "num": 8,
+                "enabled": true,
+                "decoded": {
+                  "mode": 0,
+                  "black": -0.000244140625,
+                  "exposure": 0.699999988079071,
+                  "deflicker_percentile": 50.0,
+                  "deflicker_target_level": -4.0,
+                  "compensate_exposure_bias": 1,
+                  "_tail": 1
+                }
+              },
+              "temperature": {
+                "num": 5,
+                "enabled": true,
+                "decoded": {
+                  "coeff_r": 2.140625,
+                  "coeff_g": 1.0,
+                  "coeff_b": 2.1484375,
+                  "coeff_g2": 0.0,
+                  "preset": 4
+                }
+              }
+            }
+          }
+        }
+      },
+      "settle": null
+    },
+    {
+      "id": "S2",
+      "category": "finishing",
+      "sentence": "It's ISO 6400 and it shows. Clean up the noise.",
+      "frames": {
+        "dark": "DSC01425.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_enable",
+          "args": {
+            "module": "denoiseprofile"
+          }
+        }
+      ],
+      "plan_used": "v2=v1",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 10,
+      "calls": [
+        {
+          "tool": "darkroom_enable",
+          "args": {
+            "module": "denoiseprofile"
+          },
+          "envelope": {
+            "data": {
+              "action": "enable",
+              "committed": true,
+              "enabled": null,
+              "image_id": 48,
+              "instance": 0,
+              "module": "denoiseprofile",
+              "outcome": "ok",
+              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t074955z/sony/frames/DSC01425.ARW",
+              "plan": [],
+              "reason": null,
+              "warnings": []
+            },
+            "job": "mcp-20260926-074955-33922",
+            "layer": "mcp",
+            "ms": 1085,
+            "ok": true,
+            "outcome": "ok",
+            "verb": "darkroom.enable"
+          },
+          "wall_s": 1.089
+        }
+      ],
+      "context_calls": [],
+      "assertions": {
+        "ok": {
+          "ok": true,
+          "measured": "ok",
+          "type": "step_ok"
+        },
+        "active": {
+          "ok": false,
+          "measured": null,
+          "note": null,
+          "type": "module_active"
+        },
+        "refused": {
+          "ok": false,
+          "measured": null,
+          "expected": "any typed error",
+          "type": "step_error"
+        },
+        "untouched": {
+          "ok": true,
+          "measured": {
+            "dark": {
+              "before": 11,
+              "after": 11,
+              "changed": false
+            }
+          },
+          "type": "history_unchanged"
+        }
+      },
+      "score": "fail",
+      "outcome": "reported_ok_unverified",
+      "wall_s": 1.089,
+      "snapshots": {
+        "before": {
+          "dark": {
+            "exists": true,
+            "history_end": 11,
+            "entries": 11,
+            "fingerprint": "c00e67b036b632df",
+            "modules": {
+              "sigmoid": {
+                "num": 10,
+                "enabled": true,
+                "decoded": {
+                  "contrast": 1.5,
+                  "skew": 0.0,
+                  "f2": 100.0,
+                  "f3": 0.015200000256299973,
+                  "f4": 0.0,
+                  "f5": 100.0,
+                  "f6": 0.0,
+                  "f7": 0.0,
+                  "f8": 0.0,
+                  "f9": 0.0,
+                  "f10": 0.0,
+                  "f11": 0.0,
+                  "f12": 0.0,
+                  "f13": 0.0
+                }
+              },
+              "exposure": {
+                "num": 8,
+                "enabled": true,
+                "decoded": {
+                  "mode": 0,
+                  "black": -0.000244140625,
+                  "exposure": 0.699999988079071,
+                  "deflicker_percentile": 50.0,
+                  "deflicker_target_level": -4.0,
+                  "compensate_exposure_bias": 1,
+                  "_tail": 1
+                }
+              },
+              "temperature": {
+                "num": 5,
+                "enabled": true,
+                "decoded": {
+                  "coeff_r": 2.140625,
+                  "coeff_g": 1.0,
+                  "coeff_b": 2.1484375,
+                  "coeff_g2": 0.0,
+                  "preset": 4
+                }
+              }
+            }
+          }
+        },
+        "after": {
+          "dark": {
+            "exists": true,
+            "history_end": 11,
+            "entries": 11,
+            "fingerprint": "c00e67b036b632df",
+            "modules": {
+              "sigmoid": {
+                "num": 10,
+                "enabled": true,
+                "decoded": {
+                  "contrast": 1.5,
+                  "skew": 0.0,
+                  "f2": 100.0,
+                  "f3": 0.015200000256299973,
+                  "f4": 0.0,
+                  "f5": 100.0,
+                  "f6": 0.0,
+                  "f7": 0.0,
+                  "f8": 0.0,
+                  "f9": 0.0,
+                  "f10": 0.0,
+                  "f11": 0.0,
+                  "f12": 0.0,
+                  "f13": 0.0
+                }
+              },
+              "exposure": {
+                "num": 8,
+                "enabled": true,
+                "decoded": {
+                  "mode": 0,
+                  "black": -0.000244140625,
+                  "exposure": 0.699999988079071,
+                  "deflicker_percentile": 50.0,
+                  "deflicker_target_level": -4.0,
+                  "compensate_exposure_bias": 1,
+                  "_tail": 1
+                }
+              },
+              "temperature": {
+                "num": 5,
+                "enabled": true,
+                "decoded": {
+                  "coeff_r": 2.140625,
+                  "coeff_g": 1.0,
+                  "coeff_b": 2.1484375,
+                  "coeff_g2": 0.0,
+                  "preset": 4
+                }
+              }
+            }
+          }
+        }
+      },
+      "settle": null
+    },
+    {
+      "id": "E2",
+      "category": "exposure",
+      "sentence": "The sky's blown out. Pull the highlights back.",
+      "frames": {
+        "blown": "DSC01431.ARW"
+      },
+      "plan": [
+        {
+          "tool": "scout_stats",
+          "args": {
+            "image": "{frame:blown}",
+            "px": 512
+          }
+        },
+        {
+          "tool": "darkroom_say",
+          "args": {
+            "phrase": "darker by 0.7 ev"
+          }
+        },
+        {
+          "tool": "scout_stats",
+          "args": {
+            "image": "{frame:blown}",
+            "px": 512
+          }
+        }
+      ],
+      "plan_used": "v2",
+      "revised_in": 2,
+      "agent_note": "No highlight tool is pinned (tone equalizer, highlight reconstruction and filmic are not reachable), so the competent move with the reachable tools is to lower exposure 0.7 EV and check the histogram before and after.",
+      "agent_response": null,
+      "budget_s": 20,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "W1",
+      "category": "white_balance",
+      "sentence": "Warm it up a little.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_say",
+          "args": {
+            "phrase": "warmer by 600k"
+          }
+        },
+        {
+          "tool": "wb_kelvin",
+          "args": {
+            "image": "{frame:hero}"
+          }
+        }
+      ],
+      "plan_used": "v2",
+      "revised_in": null,
+      "agent_note": "Kelvin is read first; with no table the agent can only guess an absolute 6500 K.",
+      "agent_response": null,
+      "budget_s": 10,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "W2",
+      "category": "white_balance",
+      "sentence": "Now it's too warm. Cool it down.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_say",
+          "args": {
+            "phrase": "cooler by 900k"
+          }
+        },
+        {
+          "tool": "wb_kelvin",
+          "args": {
+            "image": "{frame:hero}"
+          }
+        }
+      ],
+      "plan_used": "v2",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 10,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "W3",
+      "category": "white_balance",
+      "sentence": "There's a green cast. Push it a touch toward magenta.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_set",
+          "args": {
+            "module": "temperature",
+            "param": "tint",
+            "value": 0.92
+          }
+        }
+      ],
+      "plan_used": "v2=v1",
+      "revised_in": null,
+      "agent_note": "tint has no readable value source, so the move is absolute: 0.92 (neutral 1.0; below 1 is magenta per the phase 3 spec's sign table, not yet host-verified).",
+      "agent_response": null,
+      "budget_s": 8,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "W4",
+      "category": "white_balance",
+      "sentence": "Match daylight.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_set",
+          "args": {
+            "module": "temperature",
+            "param": "temperature",
+            "value": 5500
+          }
+        },
+        {
+          "tool": "wb_kelvin",
+          "args": {
+            "image": "{frame:hero}"
+          }
+        }
+      ],
+      "plan_used": "v2=v1",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 8,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "T1",
+      "category": "contrast_tone",
+      "sentence": "Give it more punch. Add contrast.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_say",
+          "args": {
+            "phrase": "more contrast by 0.3"
+          }
+        }
+      ],
+      "plan_used": "v2",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 8,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "T2",
+      "category": "contrast_tone",
+      "sentence": "Soften the midtone contrast a little.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_enable",
+          "args": {
+            "module": "colorbalancergb"
+          }
+        },
+        {
+          "tool": "darkroom_adjust",
+          "args": {
+            "module": "colorbalancergb",
+            "param": "contrast",
+            "delta": -0.1
+          }
+        }
+      ],
+      "plan_used": "v2",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 12,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "T3",
+      "category": "contrast_tone",
+      "sentence": "Skew the tone curve a bit, try 0.2.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_set",
+          "args": {
+            "module": "sigmoid",
+            "param": "skew",
+            "value": 0.2
+          }
+        }
+      ],
+      "plan_used": "v2=v1",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 8,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "C1",
+      "category": "colour",
+      "sentence": "Boost the colour saturation a bit.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_say",
+          "args": {
+            "phrase": "more saturation by 20%"
+          }
+        }
+      ],
+      "plan_used": "v2",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 12,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "C2",
+      "category": "colour",
+      "sentence": "Add a little vibrance.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_say",
+          "args": {
+            "phrase": "more vibrance by 15%"
+          }
+        }
+      ],
+      "plan_used": "v2",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 8,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "C3",
+      "category": "colour",
+      "sentence": "Shift the greens toward yellow.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_say",
+          "args": {
+            "phrase": "shift the greens toward yellow"
+          }
+        }
+      ],
+      "plan_used": "v2",
+      "revised_in": null,
+      "agent_note": "Color zones stores zones as curves; the agent tries the natural slider and reports the refusal.",
+      "agent_response": null,
+      "budget_s": 8,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "C4",
+      "category": "colour",
+      "sentence": "Grade it: warm the shadows, cool the highlights.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_set",
+          "args": {
+            "module": "colorbalancergb",
+            "param": "shadows_hue",
+            "value": 60
+          }
+        },
+        {
+          "tool": "darkroom_set",
+          "args": {
+            "module": "colorbalancergb",
+            "param": "shadows_chroma",
+            "value": 0.1
+          }
+        },
+        {
+          "tool": "darkroom_set",
+          "args": {
+            "module": "colorbalancergb",
+            "param": "highlights_hue",
+            "value": 220
+          }
+        },
+        {
+          "tool": "darkroom_set",
+          "args": {
+            "module": "colorbalancergb",
+            "param": "highlights_chroma",
+            "value": 0.1
+          }
+        }
+      ],
+      "plan_used": "v2=v1",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 20,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "F1",
+      "category": "workflow",
+      "sentence": "Hmm, no. Undo that.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_undo_last",
+          "args": {}
+        }
+      ],
+      "plan_used": "v2",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 8,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "F2",
+      "category": "workflow",
+      "sentence": "Undo the last two changes.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_undo_last",
+          "args": {}
+        },
+        {
+          "tool": "darkroom_undo_last",
+          "args": {}
+        }
+      ],
+      "plan_used": "v2",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 16,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "F3",
+      "category": "workflow",
+      "sentence": "Save this look as a preset called scouter-bench-sony-0926074955.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "preset_save",
+          "args": {
+            "name": "{preset}",
+            "modules": [
+              "exposure",
+              "sigmoid",
+              "temperature",
+              "colorbalancergb"
+            ],
+            "description": "Scouter editor benchmark look"
+          }
+        }
+      ],
+      "plan_used": "v2",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 15,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "F4",
+      "category": "workflow",
+      "sentence": "Apply scouter-bench-sony-0926074955 to these three: DSC01427.ARW, DSC01428.ARW, DSC01429.ARW.",
+      "frames": {
+        "job:1": "2026-09-14_bench-sony-0926074955_ilce7_0001.arw",
+        "job:2": "2026-09-14_bench-sony-0926074955_ilce7_0002.arw",
+        "job:3": "2026-09-14_bench-sony-0926074955_ilce7_0003.arw"
+      },
+      "plan": [
+        {
+          "tool": "preset_apply_job",
+          "args": {
+            "name": "{preset}",
+            "job_slug": "{job_slug}",
+            "exclude": [
+              "{job:4}",
+              "{job:5}",
+              "{job:6}"
+            ],
+            "confirm": true
+          }
+        }
+      ],
+      "plan_used": "v2",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 45,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "F5",
+      "category": "workflow",
+      "sentence": "Now apply it to the rest of the job.",
+      "frames": {
+        "job:1": "2026-09-14_bench-sony-0926074955_ilce7_0001.arw",
+        "job:2": "2026-09-14_bench-sony-0926074955_ilce7_0002.arw",
+        "job:3": "2026-09-14_bench-sony-0926074955_ilce7_0003.arw",
+        "job:4": "2026-09-14_bench-sony-0926074955_ilce7_0004.arw",
+        "job:5": "2026-09-14_bench-sony-0926074955_ilce7_0005.arw",
+        "job:6": "2026-09-14_bench-sony-0926074955_ilce7_0006.arw"
+      },
+      "plan": [
+        {
+          "tool": "preset_apply_job",
+          "args": {
+            "name": "{preset}",
+            "job_slug": "{job_slug}",
+            "exclude": [
+              "{job:1}",
+              "{job:2}",
+              "{job:3}"
+            ],
+            "confirm": true
+          }
+        }
+      ],
+      "plan_used": "v2",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 45,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "F6",
+      "category": "workflow",
+      "sentence": "Export a client proof of this one.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "export_run",
+          "args": {
+            "images": [
+              "{frame:hero}"
+            ],
+            "preset": "client-proof",
+            "out_dir": "{out_dir}"
+          }
+        }
+      ],
+      "plan_used": "v2=v1",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 30,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "U1",
+      "category": "unreachable",
+      "sentence": "Brighten just her face. Mask it and lift it a third of a stop.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [],
+      "plan_used": "v2=v1",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": "Refuse: Scouter has no mask or local-adjustment tool; every move is a global module parameter (phase 3 non-goal). Offer the global alternative (+0.3 EV) instead, and do not apply it unasked.",
+      "budget_s": 2,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "U2",
+      "category": "unreachable",
+      "sentence": "Remove the person walking through the left of the frame.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [],
+      "plan_used": "v2=v1",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": "Refuse: no retouch, heal, clone or inpaint tool exists in Scouter, and retouch is on the style never_include list.",
+      "budget_s": 2,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "L1",
+      "category": "lens",
+      "sentence": "The corners are dark. Fix the lens vignetting.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_enable",
+          "args": {
+            "module": "lens"
+          }
+        }
+      ],
+      "plan_used": "v2=v1",
+      "revised_in": null,
+      "agent_note": "darktable's lens correction module (op `lens`) corrects distortion, TCA and vignetting from the lens profile when enabled; its params are not decoded, so which corrections are on is not read back.",
+      "agent_response": null,
+      "budget_s": 10,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "L2",
+      "category": "lens",
+      "sentence": "And correct the barrel distortion.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_enable",
+          "args": {
+            "module": "lens"
+          }
+        }
+      ],
+      "plan_used": "v2=v1",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 10,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "S1",
+      "category": "finishing",
+      "sentence": "Sharpen it a little for the web.",
+      "frames": {
+        "hero": "DSC01426.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_enable",
+          "args": {
+            "module": "sharpen"
+          }
+        }
+      ],
+      "plan_used": "v2=v1",
+      "revised_in": null,
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 10,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    },
+    {
+      "id": "F7",
+      "category": "workflow",
+      "sentence": "Open DSC07452.ARW. I want to work on that one next.",
+      "frames": {
+        "hero": "DSC01426.ARW",
+        "bright": "DSC07452.ARW"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_open",
+          "args": {
+            "image": "{frame:bright}"
+          }
+        },
+        {
+          "tool": "darkroom_describe_history",
+          "args": {}
+        }
+      ],
+      "plan_used": "v2=v1",
+      "revised_in": null,
+      "agent_note": "The bright frame was imported in an EARLIER darktable session (session B), so this probes whether the R20 limit is only same-session.",
+      "agent_response": null,
+      "budget_s": 15,
+      "calls": [],
+      "context_calls": [],
+      "assertions": {},
+      "score": "fail",
+      "outcome": "blocked",
+      "wall_s": 0.0,
+      "snapshots": {}
+    }
+  ],
+  "summary": {
+    "tasks": 27,
+    "counts": {
+      "pass": 0,
+      "partial": 0,
+      "fail": 27
+    },
+    "outcomes": {
+      "reported_ok_unverified": 3,
+      "blocked": 24
+    },
+    "by_category": {
+      "exposure": {
+        "pass": 0,
+        "partial": 0,
+        "fail": 2,
+        "tasks": 2,
+        "points": 0.0,
+        "score_pct": 0.0
+      },
+      "contrast_tone": {
+        "pass": 0,
+        "partial": 0,
+        "fail": 4,
+        "tasks": 4,
+        "points": 0.0,
+        "score_pct": 0.0
+      },
+      "finishing": {
+        "pass": 0,
+        "partial": 0,
+        "fail": 2,
+        "tasks": 2,
+        "points": 0.0,
+        "score_pct": 0.0
+      },
+      "white_balance": {
+        "pass": 0,
+        "partial": 0,
+        "fail": 4,
+        "tasks": 4,
+        "points": 0.0,
+        "score_pct": 0.0
+      },
+      "colour": {
+        "pass": 0,
+        "partial": 0,
+        "fail": 4,
+        "tasks": 4,
+        "points": 0.0,
+        "score_pct": 0.0
+      },
+      "workflow": {
+        "pass": 0,
+        "partial": 0,
+        "fail": 7,
+        "tasks": 7,
+        "points": 0.0,
+        "score_pct": 0.0
+      },
+      "unreachable": {
+        "pass": 0,
+        "partial": 0,
+        "fail": 2,
+        "tasks": 2,
+        "points": 0.0,
+        "score_pct": 0.0
+      },
+      "lens": {
+        "pass": 0,
+        "partial": 0,
+        "fail": 2,
+        "tasks": 2,
+        "points": 0.0,
+        "score_pct": 0.0
+      }
+    },
+    "median_task_s": 1.089,
+    "median_darkroom_set_s": null,
+    "points": 0.0
+  }
+}
