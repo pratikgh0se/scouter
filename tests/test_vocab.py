@@ -40,15 +40,21 @@ class VocabShapeTest(unittest.TestCase):
             with self.subTest(row=f"{s.module}.{s.param}"):
                 self.assertNotIn((s.module, s.param), seen)
                 seen.add((s.module, s.param))
-                self.assertIn(s.unit, ("EV", "K", "ratio", "%", "°", "—"))
+                self.assertIn(s.unit, ("EV", "K", "ratio", "%", "°", "—", "bool"))
                 self.assertIn(s.value_source, ("xmp", "wb_table", "none"))
                 self.assertIn(s.concept, vocab.CONCEPT_IDS)
+                is_toggle = s.param == "__enabled"
                 if s.reachable:
                     self.assertLess(s.lo, s.hi)
                     self.assertGreater(s.step, 0)
-                    self.assertLessEqual(s.step, (s.hi - s.lo) / 4)
+                    # A toggle's one "notch" is the whole 0/1 flip, not a
+                    # quarter-range slider move -- it is pinned by the module
+                    # whitelist (vocab.status), never by ACTION_PATHS/candidates.
+                    if not is_toggle:
+                        self.assertLessEqual(s.step, (s.hi - s.lo) / 4)
                     self.assertTrue(s.why and s.watch)
-                if (s.module, s.param) not in dtbridge.ACTION_PATHS and s.reachable:
+                unpinned = (s.module, s.param) not in dtbridge.ACTION_PATHS
+                if unpinned and s.reachable and not is_toggle:
                     self.assertTrue(s.candidate_paths, "an unpinned reachable row needs candidates")
                 self.assertEqual(s.display_scale, 100.0 if s.unit == "%" else 1.0)
 

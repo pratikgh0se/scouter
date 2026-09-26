@@ -57,6 +57,11 @@ CONCEPTS: dict[str, tuple[str, str]] = {
                 "A darktable style is a saved list of module settings. Applying one appends those "
                 "settings to an image's history, so it acts like a filter you can stack; it never "
                 "replaces what is there, and each application is visible in the history panel."),
+    "geometry": ("Lens, rotation and crop",
+                 "Lens correction removes the profile's own distortion, vignetting and chromatic "
+                 "aberration -- turn it off only to see the raw optic. Rotation levels a tilted "
+                 "horizon, cropping the corners as it turns. A crop preset moves all four margins "
+                 "at once to centre a target aspect ratio inside the frame."),
 }
 
 

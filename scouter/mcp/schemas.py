@@ -159,6 +159,18 @@ TOOL_SPECS: list[dict] = [
         ),
     },
     {
+        "name": "darkroom_disable",
+        "description": "Disable a module on the darkroom image.",
+        "inputSchema": _schema(
+            {
+                "module": {"type": "string", "description": "darktable module"},
+                "instance": INSTANCE,
+                "dry_run": DRY_RUN,
+            },
+            ["module"],
+        ),
+    },
+    {
         "name": "darkroom_reset",
         "description": "Reset a module to its defaults. DESTRUCTIVE: the module's "
         "parameters are discarded and Scouter cannot undo it (only the "

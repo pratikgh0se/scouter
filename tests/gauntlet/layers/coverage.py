@@ -60,12 +60,18 @@ def _signed(label: str, n: int) -> str:
 
 
 def live_params() -> list[vocab.ParamSpec]:
-    return [s for s in vocab.PARAMS if vocab.status(s) == "live"]
+    # `__enabled` toggle rows are not numeric set/adjust targets (there is no
+    # lo/hi/mid to sweep) -- they are exercised by module_cases' enable/
+    # disable checks and by their own toggle phrases (phrase_cases).
+    return [s for s in vocab.PARAMS if vocab.status(s) == "live" and s.param != "__enabled"]
 
 
 def _row(mv: phrases.Move) -> vocab.ParamSpec:
-    return vocab.spec("sigmoid", "contrast") if mv.module == phrases.TONE else \
-        vocab.spec(mv.module, mv.param)
+    if mv.module == phrases.TONE:
+        return vocab.spec("sigmoid", "contrast")
+    if mv.module == "crop":
+        return vocab.spec("crop", "left")
+    return vocab.spec(mv.module, mv.param)
 
 
 def _mid(s: vocab.ParamSpec) -> float:
@@ -247,6 +253,12 @@ def _phrase_expect(p: phrases.Phrase, sign: float = 1.0) -> Expect:
         row = _row(mv)
         if mv.kind == "set":
             checks.append(m1_equals(row.module, row.param, mv.value, row.unit))
+        elif mv.kind == "toggle":
+            checks.append(m1_equals(row.module, row.param, mv.value, row.unit))
+        elif mv.kind == "crop":
+            # A crop preset moves four rows at once; the "changed": True on
+            # the Expect already covers it, so no single-key M1 check here.
+            continue
         else:
             checks.append(Check("M1", kind="changed", sign=int(sign * (1 if mv.notches > 0 else -1)),  # noqa: E501
                                 target={"key": key(row.module, row.param), "unit": row.unit}))

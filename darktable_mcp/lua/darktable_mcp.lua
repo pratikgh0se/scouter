@@ -1421,6 +1421,8 @@ methods["darkroom.current"] = function()
     image_id = tonumber(image.id),
     path = _image_full_path(image),
     source = source,
+    width = image.width,
+    height = image.height,
   }
 end
 

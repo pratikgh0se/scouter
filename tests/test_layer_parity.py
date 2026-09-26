@@ -16,6 +16,7 @@ EXPECTED_VERBS = {
     "darkroom.set",
     "darkroom.nudge",
     "darkroom.enable",
+    "darkroom.disable",
     "darkroom.reset",
     "darkroom.undo_last",
     "darkroom.status",

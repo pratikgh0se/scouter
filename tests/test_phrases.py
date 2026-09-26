@@ -105,9 +105,16 @@ class PhraseRulesTest(unittest.TestCase):
     def test_every_phrase_targets_a_vocabulary_row(self) -> None:
         for phrase in phrases.PHRASES:
             for mv in phrase.moves:
-                module = "sigmoid" if mv.module == phrases.TONE else mv.module
-                with self.subTest(key=phrase.key, move=f"{module}.{mv.param}"):
-                    self.assertIsNotNone(vocab.spec(module, mv.param))
+                if mv.module == phrases.TONE:
+                    module, param = "sigmoid", mv.param
+                elif mv.kind == "crop":
+                    # A crop move carries the target aspect, not one row; the
+                    # left margin row stands in for the whole crop group.
+                    module, param = "crop", "left"
+                else:
+                    module, param = mv.module, mv.param
+                with self.subTest(key=phrase.key, move=f"{module}.{param}"):
+                    self.assertIsNotNone(vocab.spec(module, param))
 
     def test_synonyms_are_unique_across_phrases(self) -> None:
         seen: dict[str, str] = {}

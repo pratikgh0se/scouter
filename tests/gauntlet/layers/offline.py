@@ -74,8 +74,12 @@ def generate(tax: Taxonomy) -> list[Case]:
         cases.append(_resolve_case(case_id(PREFIX, "req", r["id"]), r["sentence"], allowed,
                                    {"file": "requests.json", "id": r["id"]}))
     for p in phrases.PHRASES:
-        row = vocab.spec("sigmoid", "contrast") if p.moves[0].module == "@tone" else \
-            vocab.spec(p.moves[0].module, p.moves[0].param)
+        if p.moves[0].module == "@tone":
+            row = vocab.spec("sigmoid", "contrast")
+        elif p.moves[0].module == "crop":
+            row = vocab.spec("crop", "left")
+        else:
+            row = vocab.spec(p.moves[0].module, p.moves[0].param)
         one_move = len(p.moves) == 1 and p.moves[0].kind == "adjust"
         for syn in p.synonyms:
             forms = [("bare", syn, 1.0)]

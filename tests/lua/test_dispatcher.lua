@@ -39,7 +39,7 @@ end
 -- so dt.database[id] always resolves via __index without colliding with
 -- the iteration storage.
 local images_by_id = {
-  [101] = {id = 101, filename = "DSC_0001.NEF", path = "/photos", rating = 5},
+  [101] = {id = 101, filename = "DSC_0001.NEF", path = "/photos", rating = 5, width = 6000, height = 4000},
   [102] = {id = 102, filename = "DSC_0002.NEF", path = "/photos", rating = 3},
   [103] = {id = 103, filename = "OTHER.NEF",   path = "/photos", rating = 4},
 }
@@ -2212,6 +2212,8 @@ assertEq(cur1.view, "darkroom", "darkroom.current reports the current view")
 assertEq(cur1.image_id, 101, "darkroom.current reports the loaded image id")
 assertEq(cur1.path, "/photos/DSC_0001.NEF", "darkroom.current reports the loaded image path")
 assertEq(cur1.source, "action_images", "darkroom.current reports where the answer came from")
+assertEq(cur1.width, 6000, "darkroom.current reports the loaded image width")
+assertEq(cur1.height, 4000, "darkroom.current reports the loaded image height")
 
 view_state.current = "lighttable"
 stub_dt.gui.action_images = {}

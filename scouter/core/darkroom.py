@@ -936,6 +936,22 @@ def enable(
     )
 
 
+@metrics.instrumented("darkroom.disable")
+def disable(
+    module: str, *, instance: int = 0, dry_run: bool = False, job: str | None = None
+) -> ModuleResult:
+    """Disable a module (the plugin's `module.disable`). Not gated: re-enable undoes it."""
+    return _do_module_action(
+        "disable",
+        "module.disable",
+        module=module,
+        instance=instance,
+        dry_run=dry_run,
+        confirm=True,
+        job=job,
+    )
+
+
 @metrics.instrumented("darkroom.reset")
 def reset(
     module: str,
@@ -1737,6 +1753,15 @@ for verb in (
         writes=True,
         gated=False,
         summary="Enable a module.",
+    ),
+    Verb(
+        id="darkroom.disable",
+        group="darkroom",
+        fn=disable,
+        args=(MODULE_ARG, INSTANCE_ARG, DRY_RUN_ARG),
+        writes=True,
+        gated=False,
+        summary="Disable one module on the open image.",
     ),
     Verb(
         id="darkroom.reset",

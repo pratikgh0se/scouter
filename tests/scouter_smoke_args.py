@@ -39,6 +39,7 @@ SMOKE_ARGS: dict[str, dict] = {
     },  # real write path AND a real commit (see install_doubles)
     "darkroom.nudge": {"module": "exposure", "param": "exposure", "steps": 1, "dry_run": True},
     "darkroom.enable": {"module": "exposure", "dry_run": True},
+    "darkroom.disable": {"module": "exposure", "dry_run": True},
     "darkroom.reset": {"module": "exposure"},  # gated: dry run by default
     "darkroom.undo_last": {"dry_run": True},
     "darkroom.status": {"module": "exposure", "param": "exposure"},

@@ -224,6 +224,34 @@
     "name": "darkroom_describe_history"
   },
   {
+    "description": "Disable a module on the darkroom image.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "default": false,
+          "description": "plan only: return what would happen and send nothing",
+          "type": "boolean"
+        },
+        "instance": {
+          "default": 0,
+          "description": "module instance (darktable's multi_priority)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "module": {
+          "description": "darktable module",
+          "type": "string"
+        }
+      },
+      "required": [
+        "module"
+      ],
+      "type": "object"
+    },
+    "name": "darkroom_disable"
+  },
+  {
     "description": "Enable a module on the darkroom image.",
     "inputSchema": {
       "additionalProperties": false,

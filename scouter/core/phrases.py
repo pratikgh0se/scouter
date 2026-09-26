@@ -27,7 +27,7 @@ TONE_ROUTES = ["sigmoid", "filmicrgb"]
 class Move:
     module: str
     param: str
-    kind: str  # "adjust" | "set"
+    kind: str  # "adjust" | "set" | "toggle" | "crop"
     notches: float | None = None
     value: float | None = None
 
@@ -55,6 +55,14 @@ def _adj(module: str, param: str, notches: float) -> Move:
 
 def _set(module: str, param: str, value: float) -> Move:
     return Move(module, param, "set", value=value)
+
+
+def _toggle(module: str, on: bool) -> Move:
+    return Move(module, "__enabled", "toggle", value=1.0 if on else 0.0)
+
+
+def _crop(aspect: float) -> Move:
+    return Move("crop", "aspect", "crop", value=aspect)
 
 
 CB = "colorbalancergb"
@@ -114,6 +122,20 @@ PHRASES: tuple[Phrase, ...] = (
                             "less colour grade"),
            (_adj(CB, "shadows_chroma", -1), _adj(CB, "midtones_chroma", -1),
             _adj(CB, "highlights_chroma", -1))),
+    Phrase("lens_on", ("correct the lens", "lens correction", "turn on lens correction",
+                       "fix the distortion", "fix lens distortion", "remove chromatic aberration"),
+           (_toggle("lens", True),)),
+    Phrase("lens_off", ("turn off lens correction", "no lens correction"),
+           (_toggle("lens", False),)),
+    Phrase("rotate_right", ("rotate right", "rotate clockwise", "tilt right"),
+           (_adj("ashift", "rotation", 1),)),
+    Phrase("rotate_left", ("rotate left", "rotate counterclockwise", "rotate anticlockwise",
+                           "tilt left"), (_adj("ashift", "rotation", -1),)),
+    Phrase("crop_square", ("crop square", "square crop", "crop to 1:1", "make it square"),
+           (_crop(1.0),)),
+    Phrase("crop_4x5", ("crop to 4:5", "crop 4:5", "portrait crop for instagram"), (_crop(0.8),)),
+    Phrase("crop_16x9", ("crop to 16:9", "crop 16:9", "widescreen crop"), (_crop(16 / 9),)),
+    Phrase("crop_3x2", ("crop to 3:2", "crop 3:2"), (_crop(1.5),)),
 )
 
 _INDEX: dict[str, Phrase] = {syn: p for p in PHRASES for syn in p.synonyms}
@@ -136,7 +158,7 @@ _UNIT_ALIASES = {"ev": "EV", "k": "K", "%": "%", "°": "°", "deg": "°", "degre
 
 def normalise(text: str) -> str:
     text = text.lower().replace("color", "colour")
-    text = re.sub(r"[^a-z0-9.+%° -]", " ", text)
+    text = re.sub(r"[^a-z0-9.+%°: -]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -147,6 +169,8 @@ def _tone_spec() -> vocab.ParamSpec:
 def _row(move: Move) -> vocab.ParamSpec:
     if move.module == TONE:
         return _tone_spec()
+    if move.module == "crop":
+        return vocab.spec("crop", "left")  # type: ignore[return-value]
     return vocab.spec(move.module, move.param)  # type: ignore[return-value]
 
 
@@ -181,10 +205,14 @@ def resolve(text: str, amount: float | None = None) -> Resolution:
             core = pattern.sub(" ", core, count=1)
             factor = f
             break
-    for filler in FILLER:
-        core = re.sub(rf"\b{re.escape(filler)}\b", " ", core)
-    core = " ".join(t for t in core.split() if t not in _DROP_TOKENS)
-    phrase = _INDEX.get(core)
+    # A synonym registered verbatim wins outright (row 437: "make it square"
+    # would otherwise lose its own "make it" to the filler strip below).
+    phrase = _INDEX.get(core.strip())
+    if phrase is None:
+        for filler in FILLER:
+            core = re.sub(rf"\b{re.escape(filler)}\b", " ", core)
+        core = " ".join(t for t in core.split() if t not in _DROP_TOKENS)
+        phrase = _INDEX.get(core)
     if phrase is None:
         suggestions = difflib.get_close_matches(core, list(_INDEX), n=3, cutoff=0.6)
         raise UsageError(
