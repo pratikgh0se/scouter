@@ -571,5 +571,53 @@
     "watch": "",
     "why": "",
     "wraps": false
+  },
+  {
+    "candidate_paths": [
+      "iop/grain/strength"
+    ],
+    "concept": "finishing",
+    "default": null,
+    "display_scale": 1.0,
+    "hi": 60.0,
+    "lo": 0.0,
+    "module": "grain",
+    "neutral": 0.0,
+    "note": "",
+    "param": "strength",
+    "pinned_path": null,
+    "reachable": true,
+    "status": "candidate",
+    "step": 5.0,
+    "ui": "grain \u203a strength",
+    "unit": "%",
+    "value_source": "xmp",
+    "watch": "smooth skies and skin, where grain shows first",
+    "why": "adds film-like grain; more strength is more visible grain",
+    "wraps": false
+  },
+  {
+    "candidate_paths": [
+      "iop/vignette/brightness"
+    ],
+    "concept": "finishing",
+    "default": null,
+    "display_scale": 1.0,
+    "hi": 0.4,
+    "lo": -0.8,
+    "module": "vignette",
+    "neutral": 0.0,
+    "note": "",
+    "param": "brightness",
+    "pinned_path": null,
+    "reachable": true,
+    "status": "candidate",
+    "step": 0.05,
+    "ui": "vignette \u203a brightness",
+    "unit": "ratio",
+    "value_source": "xmp",
+    "watch": "the frame edges: a strong vignette reads as a tunnel",
+    "why": "darkens (negative) or lightens (positive) the corners around the centre",
+    "wraps": false
   }
 ]

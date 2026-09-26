@@ -114,6 +114,16 @@ PHRASES: tuple[Phrase, ...] = (
                             "less colour grade"),
            (_adj(CB, "shadows_chroma", -1), _adj(CB, "midtones_chroma", -1),
             _adj(CB, "highlights_chroma", -1))),
+    Phrase("more_grain", ("add grain", "more grain", "grainier", "film grain"),
+           (_adj("grain", "strength", 1),)),
+    Phrase("less_grain", ("less grain", "remove grain", "smoother grain"),
+           (_adj("grain", "strength", -1),)),
+    Phrase("darker_corners", ("darker corners", "add a vignette", "add vignette",
+                              "stronger vignette", "vignette"),
+           (_adj("vignette", "brightness", -1),)),
+    Phrase("lighter_corners", ("lighter corners", "brighter corners", "weaker vignette",
+                               "less vignette"),
+           (_adj("vignette", "brightness", 1),)),
 )
 
 _INDEX: dict[str, Phrase] = {syn: p for p in PHRASES for syn in p.synonyms}

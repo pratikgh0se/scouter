@@ -24,7 +24,7 @@ from scouter.types import VocabResult
 STATUSES = ("live", "absolute_only", "candidate", "unreachable")
 CONCEPT_IDS = (
     "exposure", "tone_mapper", "white_balance", "color_balance", "chroma_saturation",
-    "grading", "black_level", "color_zones", "presets",
+    "grading", "black_level", "color_zones", "presets", "finishing",
 )
 
 
@@ -163,6 +163,19 @@ PARAMS: tuple[ParamSpec, ...] = (
               "none", None, False, "color_zones", "", "", (), False,
               "zones are curve nodes, not sliders: no dt.gui.action sets a zone value; "
               "use color balance rgb's per-zone sliders (4 ways) instead"),
+    # Row 437 family 1 (finishing). Internal units are the module's own params
+    # (grain strength is stored 0-100; vignette brightness -1..1). Candidate
+    # until the Task 32 host probe pins the path and the XMP slot.
+    ParamSpec("grain", "strength", "grain › strength", "%", 1.0, 0.0, 60.0, 5.0,
+              "xmp", 0.0, False, "finishing",
+              "adds film-like grain; more strength is more visible grain",
+              "smooth skies and skin, where grain shows first",
+              ("iop/grain/strength",)),
+    ParamSpec("vignette", "brightness", "vignette › brightness", "ratio", 1.0, -0.8, 0.4, 0.05,
+              "xmp", 0.0, False, "finishing",
+              "darkens (negative) or lightens (positive) the corners around the centre",
+              "the frame edges: a strong vignette reads as a tunnel",
+              ("iop/vignette/brightness",)),
 )
 
 _BY_KEY = {(s.module, s.param): s for s in PARAMS}
