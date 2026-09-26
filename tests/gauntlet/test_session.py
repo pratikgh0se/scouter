@@ -9,13 +9,14 @@ from tests.gauntlet.corpus import Corpus
 
 
 class FakeDt:
-    def __init__(self, foreign=(), owned=None, ready=(True,), health="alive"):
+    def __init__(self, foreign=(), owned=None, ready=(True,), health="alive", terminate_ok=True):
         self._foreign = list(foreign)
         self._owned = owned
         self._ready = list(ready)
         self._health = health
         self.launches = 0
         self.terminated = []
+        self.terminate_ok = terminate_ok
 
     def foreign(self):
         return self._foreign
@@ -34,6 +35,8 @@ class FakeDt:
 
     def terminate(self, *, responsive=None):
         self.terminated.append(responsive)
+        if not self.terminate_ok:
+            return {"ok": False, "how": "gone_or_reused", "pid": 777}
         self._owned = None
         return {"ok": True}
 
@@ -91,11 +94,15 @@ def test_launch_retries_once_then_blocks(corpus, tmp_path):
         _session(corpus, tmp_path, FakeDt(ready=(False, False))).open()
 
 
-def test_session_env_is_isolated(corpus, tmp_path):
+def test_session_env_is_isolated(corpus, tmp_path, monkeypatch):
+    monkeypatch.setenv("SCOUTER_DARKTABLE_LIBRARY_DB", "/elsewhere/library.db")
+    monkeypatch.setenv("SCOUTER_CONFIG", "/elsewhere/config.json")
     s = _session(corpus, tmp_path).open()
     env = s.staged.env
-    for k in ("SCOUTER_CONFIG", "SCOUTER_CACHE", "OBSIDIAN_VAULT_PATH"):
+    for k in ("SCOUTER_CONFIG", "SCOUTER_CACHE", "OBSIDIAN_VAULT_PATH",
+              "SCOUTER_DARKTABLE_LIBRARY_DB"):
         assert env[k].startswith(str(tmp_path / "s1"))
+    assert env["SCOUTER_DARKTABLE_LIBRARY_DB"] == str(s.staged.library)
     assert s.staged.frames["hero"].read_bytes() == b"raw"
 
 
@@ -120,3 +127,75 @@ def test_launch_error_is_a_failed_attempt(corpus, tmp_path):
     with pytest.raises(sess.SessionBlocked, match="LaunchError: could not read the start time"):
         _session(corpus, tmp_path, dt).open()
     assert dt.launches == 2
+
+
+def test_refreshing_a_role_twice_never_reuses_a_contaminated_dir(corpus, tmp_path):
+    s = _session(corpus, tmp_path).open()
+    first = s.refresh_frame("dark")
+    (first.parent / (first.name + ".xmp")).write_text("contaminated history")
+    second = s.refresh_frame("dark")
+    assert first.parent != second.parent
+    assert list(second.parent.glob("*.xmp")) == []
+    assert second.read_bytes() == b"raw" and s.staged.frames["dark"] == second
+
+
+def test_open_failure_after_launch_quits_our_darktable(corpus, tmp_path):
+    dt = FakeDt()
+
+    def boom(env, cwd):
+        raise RuntimeError("mcp server did not start")
+
+    s = sess.ScouterSession(corpus, tmp_path / "s1", "olympus", dt=dt, mcp_factory=boom)
+    with pytest.raises(RuntimeError, match="mcp server did not start"):
+        s.open()
+    assert dt.launches == 1 and dt.terminated == [False]
+    s2 = sess.ScouterSession(corpus, tmp_path / "s2", "olympus", dt=FakeDt(),
+                             mcp_factory=lambda env, cwd: FakeMcp(),
+                             floors_fn=lambda frame: ({}, False))
+    with pytest.raises(sess.SessionBlocked, match="harness_bug"):
+        s2.open()
+    assert s2.dt.terminated == [False] and s2.mcp is None
+
+
+def test_ensure_frame_sets_current_only_on_success(corpus, tmp_path):
+    s = _session(corpus, tmp_path).open()
+    assert s.ensure_frame("dark") == s.staged.frames["dark"]
+    assert s.current_frame == s.staged.frames["dark"]
+
+    bad = FakeMcp({"darkroom_open": {"ok": False, "outcome": "error",
+                                     "error": {"code": "not_found"}, "data": {}}})
+    s = _session(corpus, tmp_path, mcp=bad).open()
+    hero = s.current_frame
+    with pytest.raises(sess.SessionBlocked, match="frame dark"):
+        s.ensure_frame("dark")
+    assert s.current_frame == hero
+
+    slow = FakeMcp({"darkroom_open": TimeoutError("slow")})
+    s = _session(corpus, tmp_path, dt=FakeDt(health="alive"), mcp=slow).open()
+    with pytest.raises(sess.SessionBlocked, match="timeout"):
+        s.ensure_frame("dark")
+    assert s.current_frame == hero
+
+    dt = FakeDt(health="unresponsive")
+    s = _session(corpus, tmp_path, dt=dt, mcp=slow).open()
+    assert s.ensure_frame("dark") == s.staged.frames["dark"]
+    assert dt.launches == 2 and s.current_frame == s.staged.frames["dark"]
+
+
+def test_never_launches_a_second_darktable_when_quit_fails(corpus, tmp_path):
+    dt = FakeDt(owned=777, terminate_ok=False)
+    with pytest.raises(sess.SessionBlocked, match="did not quit"):
+        _session(corpus, tmp_path, dt).open()
+    assert dt.launches == 0
+
+    dt = FakeDt(ready=(False, True), terminate_ok=False)
+    with pytest.raises(sess.SessionBlocked, match="did not quit"):
+        _session(corpus, tmp_path, dt).open()
+    assert dt.launches == 1
+
+    dt = FakeDt()
+    s = _session(corpus, tmp_path, dt).open()
+    dt.terminate_ok = False
+    with pytest.raises(sess.SessionBlocked, match="relaunch: darktable did not quit"):
+        s.relaunch()
+    assert dt.launches == 1

@@ -49,9 +49,13 @@ class Staged:
 
 def isolated_env(root: Path, *, job: str | None = None) -> dict[str, str]:
     env = dict(os.environ)
-    for k in ("SCOUTER_CONFIG", "SCOUTER_CACHE", "SCOUTER_JOB", "OBSIDIAN_VAULT_PATH"):
+    for k in ("SCOUTER_CONFIG", "SCOUTER_CACHE", "SCOUTER_JOB", "OBSIDIAN_VAULT_PATH",
+              "SCOUTER_DARKTABLE_LIBRARY_DB"):
         env.pop(k, None)
     env["PYTHONPATH"] = str(REPO)
+    # Pin the library: without it history/backup fall back to a running darktable's
+    # --library, then ~/.config/darktable/library.db (the user's real library).
+    env["SCOUTER_DARKTABLE_LIBRARY_DB"] = str(root / "library" / "library.db")
     env["SCOUTER_CONFIG"] = str(root / "config" / "config.json")
     env["SCOUTER_CACHE"] = str(root / "cache")
     env["OBSIDIAN_VAULT_PATH"] = str(root / "vault")
@@ -188,17 +192,29 @@ class ScouterSession:
             raise ForeignDarktable(f"darktable pids {foreign} were not launched by the "
                                    "gauntlet; quit them first (the runner never signals them)")
         if self.dt.owned() is not None:  # left over from a killed run: ours, so quit it
-            self.dt.terminate(responsive=False)
+            self._quit("leftover darktable from a killed run")
         chart = self.run_root / "chart" / "chart-v1.pfm"
         self.staged = stage(self.corpus, self.body, self.root, chart=chart)
         self._launch(self.staged.frames["hero"])
-        self.mcp = self.mcp_factory(self.staged.env, self.root)
-        if self.floors_fn is not None:
-            self.floors, deterministic = self.floors_fn(self.staged.frames["hero"])
-            if not deterministic:
-                raise SessionBlocked("harness_bug: the untouched frame renders differently "
-                                     "twice (noise floor > 2x minimum, spec 5.2)")
+        try:
+            self.mcp = self.mcp_factory(self.staged.env, self.root)
+            if self.floors_fn is not None:
+                self.floors, deterministic = self.floors_fn(self.staged.frames["hero"])
+                if not deterministic:
+                    raise SessionBlocked("harness_bug: the untouched frame renders differently "
+                                         "twice (noise floor > 2x minimum, spec 5.2)")
+        except BaseException:  # never leave our darktable or MCP child running
+            self.abort()
+            raise
         return self
+
+    def _quit(self, why: str) -> None:
+        """Quit the owned darktable; refuse to go on (and so to launch a second
+        one) unless the quit ladder reports ok."""
+        res = self.dt.terminate(responsive=False)
+        if not (res or {}).get("ok"):
+            raise SessionBlocked(f"{why}: darktable did not quit ({res}); "
+                                 "refusing to launch another")
 
     def relative(self, path: Path) -> str:
         return str(Path(path).relative_to(self.run_root))
@@ -217,11 +233,11 @@ class ScouterSession:
                 self.current_frame = frame
                 return
             failures.append("not gui_ready after 30 s")
-            self.dt.terminate(responsive=False)
+            self._quit("launch: not gui_ready after 30 s")
         raise SessionBlocked("launch: darktable failed twice: " + "; ".join(failures))
 
     def relaunch(self, frame: Path | None = None) -> None:
-        self.dt.terminate(responsive=False)
+        self._quit("relaunch")
         self._launch(frame or self.current_frame or self.staged.frames["hero"])  # type: ignore[union-attr]
 
     def refresh_frame(self, role: str) -> Path:
@@ -229,7 +245,9 @@ class ScouterSession:
         assert self.staged is not None
         src = self.corpus.roles(self.body)[role] if role != "chart" else \
             self.run_root / "chart" / "chart-v1.pfm"
-        n = sum(1 for k in self.baselines if role in k) + 1
+        n = 1
+        while (self.root / "frames" / f"{role}-fresh{n}").exists():
+            n += 1  # never reuse a dir: its raw and .xmp sidecar may be contaminated
         dst = copy_readonly(src, self.root / "frames" / f"{role}-fresh{n}" / src.name)
         self.baselines.pop(str(self.staged.frames[role]), None)
         self.staged.frames[role] = dst
@@ -282,7 +300,11 @@ class ScouterSession:
         path = self.staged.frames[role]
         if self.current_frame != path:
             rec = self.call("darkroom_open", {"image": str(path)}, 30.0)
-            if rec.error == "timeout" and rec.health == "unresponsive":
-                self.relaunch(path)
-            self.current_frame = path
+            if rec.error is None and (rec.envelope or {}).get("ok"):
+                self.current_frame = path
+            elif rec.error == "timeout" and rec.health == "unresponsive":
+                self.relaunch(path)  # sets current_frame only once gui_ready
+            else:
+                raise SessionBlocked(f"darkroom_open did not open frame {role} ({path}): "
+                                     f"error={rec.error!r} health={rec.health!r}")
         return path
