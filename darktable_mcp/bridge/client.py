@@ -59,6 +59,13 @@ DEFAULT_TIMEOUTS = {
     # return) plus the sidecar-write wait -- the same shape as history.commit,
     # not a plain single-leg action.
     "darkroom.apply_style": 30.0,
+    # Row 418/422 diagnostics. The probe presses each lua candidate (nan
+    # answers fail fast), waits up to 1.5s for a dispatched callback, and with
+    # switch_views=true does a darkroom -> lighttable -> darkroom round trip
+    # whose darkroom leg the plugin budgets 20s for.
+    "darktable_mcp.diag": 15.0,
+    "darktable_mcp.probe_main_thread": 90.0,
+    "darktable_mcp.view_transport": 10.0,
 }
 
 

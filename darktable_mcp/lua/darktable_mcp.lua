@@ -906,6 +906,10 @@ end
 -- `dt.gui.action` -- the same marshaling every other verb here already
 -- relies on carries the closure onto the main thread and runs it there.
 --
+-- SUPERSEDED (2026-09-26, source-verified): the proxy cannot work on
+-- darktable 5.4.1 at all -- see "Source-verified main-thread facts" below
+-- switch_view_via_proxy. The notes that follow are kept as history.
+--
 -- HOST-VERIFIED WRONG (row 422, controller host test, 2026-09-26): the
 -- registration below used to pass the fixed plugin id "darktable_mcp" as
 -- `dt.register_event`'s first argument and the descriptive
@@ -1005,10 +1009,21 @@ local function try_main_thread_action(path, fn, budget_ms)
   main_thread_job_done = false
   main_thread_job_ok = false
   main_thread_job_result = nil
-  local fired = pcall(dt.gui.action, path, 0, "", "activate", 1.0)
+  local fired, ret = pcall(dt.gui.action, path, 0, "", "activate", 1.0)
   if not fired then
     main_thread_job = nil
     return false, false, nil
+  end
+  -- Row 422 follow-up (source-verified against darktable 5.4.1's
+  -- src/gui/accelerators.c, dt_action_process): an action whose owner is
+  -- the "lua" category -- every `dt.register_event(..., "shortcut", ...)`
+  -- registration -- is REFUSED when it is triggered from Lua ("lua action
+  -- '%s' triggered from lua") and dt.gui.action returns nan without ever
+  -- queueing the handler. So a nan here is darktable's definitive "no", not
+  -- a slow handler: stop now instead of burning the whole wait budget.
+  if is_nan(ret) then
+    main_thread_job = nil
+    return false, false, "nan"
   end
   local waited = 0
   while not main_thread_job_done do
@@ -1088,8 +1103,103 @@ end
 -- getter form (`current_view_name`'s bare `dt.gui.current_view()`) is left
 -- as a direct call: it is a read, host-proven never to crash, and is not
 -- the call the row 418 crash stack points at.
-local function switch_view(view)
+local function switch_view_via_proxy(view)
   return run_on_main_thread(function() return dt.gui.current_view(view) end)
+end
+
+-- ---- Source-verified main-thread facts (row 418/422 follow-up) -------------
+--
+-- Read straight from darktable 5.4.1's source (release-5.4.1 tag on GitHub,
+-- 2026-09-26), replacing the guesses the proxy above was built on:
+--
+--   * EVERY piece of Lua in darktable runs on the Lua thread pool, never on
+--     the GTK main thread. src/lua/call.c: dt.control.dispatch -> dispatch_cb
+--     -> dt_lua_async_call -> run_async_thread -> g_thread_pool_push; event
+--     handlers (shortcut, view-changed, ...) go through
+--     dt_lua_async_call_alien and end up on the SAME pool. That pool's
+--     threads are GLib's "pool-N" -- the "pool-1" thread in row 418's crash.
+--     So the shortcut proxy could never have delivered a closure to the main
+--     thread even if it fired: its handler (src/lua/events.c,
+--     shortcut_callback -> dt_lua_async_call_alien) is queued back onto the
+--     Lua pool.
+--   * It also never fires when pressed from Lua: dt_action_process
+--     (src/gui/accelerators.c) returns DT_ACTION_NOT_VALID -- nan to Lua --
+--     for any action whose owner is the "lua" category, logging "lua action
+--     '%s' triggered from lua". The action path itself is "lua/<key>" where
+--     <key> is register_event's FOURTH argument (register_shortcut_event
+--     passes argument 6 of the keyed-event call to dt_action_register), but
+--     the path is moot: it is refused either way.
+--   * dt.gui.current_view(v) is NOT gtk-wrapped (src/lua/gui.c registers
+--     _current_view_cb without dt_lua_gtk_wrap). It calls
+--     dt_ctl_switch_mode_to_by_view, which uses g_main_context_invoke(NULL,
+--     ...): when the default main context happens to be un-owned at that
+--     instant, GLib runs the switch DIRECTLY on the calling pool thread --
+--     exactly row 418's stack (_dt_ctl_switch_mode_to_by_view on pool-1).
+--   * dt.gui.action, dt.gui.selection, dt.gui.mimic and the darkroom's
+--     display_image ARE gtk-wrapped (dt_lua_gtk_wrap -> gtk_wrap in call.c):
+--     from a non-GUI thread they drop the Lua lock, post the call to the
+--     main context with g_main_context_invoke_full, and block until the GTK
+--     main thread has run it.
+--   * darktable registers plain command actions for view switching
+--     (src/gui/gtk.c: section "switch views" under "global", one command per
+--     view, the l/d keyboard shortcuts). Their callback is
+--     dt_ctl_switch_mode_to(<view>) -- run, via dt.gui.action's gtk wrap, on
+--     the main thread, the same way a keypress runs it. Two quirks from
+--     dt_ctl_switch_mode_to / _process_action: pressing the CURRENT view's
+--     command toggles back to the lighttable (so never press it when already
+--     there), and a command action always returns nan to Lua even when its
+--     callback ran (its return value is never set) -- so the switch is
+--     verified by polling the view, never by the return value.
+--   * dt.gui.mimic is NOT a way out: a mimic action runs its Lua callback
+--     inside _process_action after taking dt_lua_lock(), and the Lua lock is
+--     not recursive (lua.c: a boolean guarded by a condvar). Pressed from
+--     Lua through the gtk wrap, whose callback already holds that lock, the
+--     GTK main thread would wait on itself forever. Never add it here.
+local SWITCH_VIEW_ACTION_PATHS = {
+  lighttable = "global/switch views/lighttable",
+  darkroom = "global/switch views/darkroom",
+}
+
+-- Which transport switch_view uses when a caller does not name one.
+-- "proxy" keeps the row 418 behaviour (refuses on 5.4.1, see above);
+-- "action" presses the global switch-views command through dt.gui.action.
+-- Changed at runtime with the darktable_mcp.view_transport method, so the
+-- default can be flipped after the host probe without a plugin release.
+local VIEW_TRANSPORTS = {proxy = true, action = true}
+local view_switch_transport = "proxy"
+
+local function view_id_of(view)
+  if type(view) == "string" then return view end
+  if type(view) ~= "table" and type(view) ~= "userdata" then return nil end
+  local ok, id = pcall(function() return view.id or view.name end)
+  if ok and id ~= nil then return tostring(id) end
+  return nil
+end
+
+-- Switch to `view` by pressing darktable's own "global/switch views/<id>"
+-- command. Returns (ok, path_or_reason). Does NOT wait for the switch to
+-- land (callers already yield-poll with wait_for_view).
+local function switch_view_via_action(view)
+  local target = view_id_of(view)
+  local path = target and SWITCH_VIEW_ACTION_PATHS[target]
+  if not path then
+    return false, "no switch-views action for view " .. tostring(target)
+  end
+  -- dt_ctl_switch_mode_to toggles to the lighttable when asked for the view
+  -- it is already in; pressing darkroom inside the darkroom would LEAVE it.
+  if current_view_name() == target then return true, "already in " .. target end
+  if not (dt.gui and dt.gui.action) then
+    return false, "dt.gui.action is missing"
+  end
+  local ok, err = pcall(dt.gui.action, path, 0, "", "activate", 1.0)
+  if not ok then return false, "action " .. path .. ": " .. tostring(err) end
+  return true, path
+end
+
+local function switch_view(view, transport)
+  transport = transport or view_switch_transport
+  if transport == "action" then return switch_view_via_action(view) end
+  return switch_view_via_proxy(view)
 end
 
 -- Both ids must be present, coercible numbers, AND equal. A naive
@@ -1345,7 +1455,7 @@ end
 -- first two returns (`switched, detail = switch_to_darkroom(...)`), and Lua
 -- silently drops extra returns for a caller that does not ask for them, so
 -- this is additive -- no existing call site's behaviour changes.
-local function switch_to_darkroom(image)
+local function switch_to_darkroom(image, transport)
   local view = dt.gui and dt.gui.views and dt.gui.views.darkroom
   if not view then return false, "dt.gui.views.darkroom missing", 0 end
 
@@ -1379,7 +1489,7 @@ local function switch_to_darkroom(image)
     if not (dt.gui.views and dt.gui.views.lighttable) then
       return false, "dt.gui.views.lighttable missing", 0
     end
-    local ok_bounce, err_bounce = switch_view(dt.gui.views.lighttable)
+    local ok_bounce, err_bounce = switch_view(dt.gui.views.lighttable, transport)
     if not ok_bounce then
       return false, "bounce to lighttable failed: " .. tostring(err_bounce), 0
     end
@@ -1389,7 +1499,7 @@ local function switch_to_darkroom(image)
     end
   end
 
-  local ok, err = switch_view(view)
+  local ok, err = switch_view(view, transport)
   if not ok then return false, "view switch failed: " .. tostring(err), 0 end
   local landed, waited = wait_for_view("darkroom", VIEW_ENTER_DARKROOM_BUDGET_MS)
   if not landed then
@@ -1412,9 +1522,9 @@ end
 -- the commit bounce, whose return leg may have nothing to re-load (no image
 -- was resolvable) but must still get the view back. Third return: see
 -- `switch_to_darkroom`'s own note.
-local function return_to_darkroom(image)
-  if image then return switch_to_darkroom(image) end
-  local ok, err = switch_view(dt.gui.views.darkroom)
+local function return_to_darkroom(image, transport)
+  if image then return switch_to_darkroom(image, transport) end
+  local ok, err = switch_view(dt.gui.views.darkroom, transport)
   if not ok then return false, "view switch failed: " .. tostring(err), 0 end
   local landed, waited = wait_for_view("darkroom")
   if not landed then
@@ -1573,7 +1683,20 @@ methods["module.reset"] = module_verb("reset")
 -- The ladder below stays reachable only via an EXPLICIT
 -- strategy="sidecar_action" request, for a future darktable build where one
 -- of these spellings might actually be wired up.
+--
+-- Source-verified 2026-09-26 (darktable 5.4.1): all three original spellings
+-- were WRONG paths. A utility module's action id is its plugin_name
+-- (src/libs/lib.c: module->actions = {DT_ACTION_TYPE_LIB, plugin_name, ...}),
+-- and the "write sidecar files" button lives in the "history stack" module,
+-- whose plugin_name is copy_history (src/libs/copy_history.c,
+-- dt_action_button_new(self, N_("write sidecar files"), ...)). That module is
+-- lighttable-only (views() = DT_VIEW_LIGHTTABLE), so the correct path still
+-- returns nan from the darkroom ("not valid for current view"). It writes
+-- the act-on images' XMP from library.db (control_jobs.c,
+-- _control_write_sidecar_files_job_run), i.e. whatever history the DATABASE
+-- holds -- useful from the lighttable, after the darkroom has flushed.
 local SIDECAR_ACTION_PATHS = {
+  "lib/copy_history/write sidecar files",
   "lib/selected image[s]/write sidecar files",
   "lib/metadata/write sidecar files",
   "lib/image/write sidecar files",
@@ -1599,7 +1722,7 @@ end
 -- returned table carries no `between_error` key at all, exactly as before
 -- this task. Only when a `between` callback is given can the result carry
 -- `between_error` plus the timing fields.
-local function commit_view_bounce(between)
+local function commit_view_bounce(between, transport)
   local between_error = nil
   local starting_view = current_view_name()
   if starting_view ~= "darkroom" then
@@ -1620,7 +1743,7 @@ local function commit_view_bounce(between)
   -- view straight afterwards (that returns the stale "darkroom"): yield until
   -- the lighttable really is current. Leaving the darkroom is also what makes
   -- darktable flush the pipe to the sidecar, so this wait is the commit.
-  local ok1, err1 = switch_view(dt.gui.views.lighttable)
+  local ok1, err1 = switch_view(dt.gui.views.lighttable, transport)
   local left, left_waited = false, 0
   if ok1 then left, left_waited = wait_for_view("lighttable") end
   if not left then
@@ -1646,13 +1769,13 @@ local function commit_view_bounce(between)
 
   -- Leg 2. return_to_darkroom yield-polls the view itself, so ok2 is a real
   -- answer about where the session ended up, not just "the call did not raise".
-  local ok2, detail2, returned_waited = return_to_darkroom(image)
+  local ok2, detail2, returned_waited = return_to_darkroom(image, transport)
   if not ok2 then
     -- One retry: a single flaky switch back should not strand the session in
     -- the lighttable when the commit itself already landed (the pipe unloaded
     -- on the way out). Same dwell before trying again.
     if dt.control and dt.control.sleep then dt.control.sleep(VIEW_BOUNCE_DWELL_MS) end
-    ok2, detail2, returned_waited = return_to_darkroom(image)
+    ok2, detail2, returned_waited = return_to_darkroom(image, transport)
   end
   local final_view = current_view_name()
 
@@ -1781,16 +1904,129 @@ local function wait_for_sidecar(path, before, budget_ms)
   end
 end
 
+-- ---- Commit WITHOUT a view switch (row 422 alternative) -------------------
+--
+-- Source-verified against darktable 5.4.1, the pieces a no-bounce commit can
+-- be built from -- none of them switches views:
+--
+--   * DB flush from the darkroom: the darkroom's own "synchronize selection"
+--     command (views/darkroom/synchronize selection, ctrl+x;
+--     src/views/darkroom.c _darkroom_do_synchronize_selection_callback)
+--     calls dt_dev_write_history(dev) -- the in-memory history goes to
+--     library.db -- and then copies the newest history item onto every
+--     OTHER selected image. With the selection narrowed to exactly the
+--     loaded image, the copy loop has nothing to do. It dereferences the
+--     first DB history row unguarded, so it must never run on an image
+--     whose history is empty: gated on image.is_altered below.
+--   * XMP from the DB: any Lua metadata write releases the image with
+--     DT_IMAGE_CACHE_SAFE, which calls dt_image_synch_xmp(id)
+--     (src/common/image_cache.c) -- the sidecar is rewritten from library.db
+--     (subject to the user's own "write sidecar files" preference, never
+--     touched here). Re-assigning image.rating to its current value is the
+--     least invasive such write, and the image.rate verb has driven that
+--     setter from the worker on this host many times.
+--   * From the lighttable the DB is already current (leaving the darkroom
+--     wrote it), and the history stack module's "write sidecar files"
+--     button (SIDECAR_ACTION_PATHS[1]) writes the XMP directly.
+--   * Also worth knowing (src/develop/develop.c, _dev_auto_save): while in
+--     the darkroom, darktable itself writes history to the DB AND the XMP on
+--     a history change whenever autosave_interval (default 10s) has passed
+--     since the last autosave. So the sidecar is often already current
+--     without any commit at all; wait_for_sidecar below cannot tell who
+--     wrote it, only that it changed.
+--
+-- Returns a result table shaped like history.commit's, plus `steps`: one
+-- {step, ok, detail} record per rung actually attempted, in order.
+local SYNC_SELECTION_ACTION_PATH = "views/darkroom/synchronize selection"
+
+local function selection_is_exactly(image)
+  if not (dt.gui and dt.gui.selection) then return false, "dt.gui.selection missing" end
+  local ok, sel = pcall(dt.gui.selection)
+  if not ok or type(sel) ~= "table" then return false, "selection unreadable" end
+  if #sel ~= 1 then return false, "selection has " .. #sel .. " images, not 1" end
+  if not ids_match(sel[1].id, image.id) then
+    return false, "selection holds image " .. tostring(sel[1].id)
+  end
+  return true, nil
+end
+
+local function commit_no_bounce(image, before, sidecar)
+  local steps = {}
+  local function step(name, ok, detail)
+    table.insert(steps, {step = name, ok = ok, detail = detail})
+    return ok
+  end
+  local view = current_view_name()
+  if not image then
+    step("resolve_image", false, "no image: pass image_id, or load one in the darkroom")
+    return {ok = false, steps = steps, view = view, detail = "no image to commit"}
+  end
+  if not (dt.gui and dt.gui.selection) then
+    step("select", false, "dt.gui.selection missing")
+    return {ok = false, steps = steps, view = view, detail = "dt.gui.selection missing"}
+  end
+  pcall(dt.gui.selection, {image})
+  local single, why = selection_is_exactly(image)
+  if not step("select", single, why or ("selection = {" .. tostring(image.id) .. "}")) then
+    -- Never run "synchronize selection" (or "write sidecar files") with
+    -- anything else selected: the first pastes history onto every other
+    -- selected image, the second writes all of them.
+    return {ok = false, steps = steps, view = view, detail = "could not narrow the selection: " .. why}
+  end
+
+  if view == "lighttable" then
+    local ok_call, _, nan = pcall(gui_action, SIDECAR_ACTION_PATHS[1], 0, "button", "activate", 1)
+    step("write_sidecar_files_action", ok_call and not nan,
+         ok_call and (nan and "nan (module hidden/insensitive, or wrong view)" or SIDECAR_ACTION_PATHS[1])
+         or "action raised")
+  elseif view == "darkroom" then
+    local ok_alt, altered = pcall(function() return image.is_altered end)
+    if ok_alt and altered then
+      local ok_call = pcall(gui_action, SYNC_SELECTION_ACTION_PATH, 0, "", "activate", 1)
+      -- A command action always returns nan (see the switch-views notes), so
+      -- only a raise counts as failure here; the sidecar wait is the proof.
+      step("synchronize_selection_db_flush", ok_call,
+           ok_call and SYNC_SELECTION_ACTION_PATH or "action raised")
+    else
+      step("synchronize_selection_db_flush", false,
+           "skipped: image.is_altered is false in library.db (the action would dereference an "
+           .. "empty history); relying on darktable's own autosave for the DB")
+    end
+    local ok_touch, touch_err = pcall(function()
+      local r = image.rating
+      image.rating = r
+    end)
+    step("rating_touch_xmp_from_db", ok_touch, ok_touch and "image.rating re-assigned"
+         or tostring(touch_err))
+  else
+    step("view", false, "not in lighttable or darkroom (view is " .. view .. ")")
+    return {ok = false, steps = steps, view = view, detail = "unsupported view " .. view}
+  end
+
+  local written, waited = nil, 0
+  if sidecar then
+    written, waited = wait_for_sidecar(sidecar, before)
+    step("sidecar_changed", written, tostring(waited) .. "ms")
+  end
+  return {ok = written == true, steps = steps, view = current_view_name(),
+          written = written, waited = waited,
+          detail = written == false and ("the sidecar did not change within " .. waited .. "ms")
+                   or nil}
+end
+
 -- The only strategies history.commit understands. Anything else is a
 -- caller mistake, not a silent fallback to "auto".
-local HISTORY_COMMIT_STRATEGIES = {auto = true, view_bounce = true, sidecar_action = true}
+local HISTORY_COMMIT_STRATEGIES = {auto = true, view_bounce = true, sidecar_action = true,
+                                   view_bounce_action = true, no_bounce = true}
+local HISTORY_COMMIT_STRATEGY_LIST =
+  '"auto", "view_bounce", "view_bounce_action", "no_bounce", "sidecar_action"'
 
 methods["history.commit"] = function(p)
   p = p or {}
   local strategy = p.strategy or "auto"
   if not HISTORY_COMMIT_STRATEGIES[strategy] then
     error("history.commit: unknown strategy " .. tostring(strategy)
-      .. ' (valid: "auto", "view_bounce", "sidecar_action")')
+      .. " (valid: " .. HISTORY_COMMIT_STRATEGY_LIST .. ")")
   end
   -- cpu_ms: CPU time (os.clock()), not wall-clock -- matches
   -- docs/measurements.md, which records both and notes CPU time understates
@@ -1807,7 +2043,35 @@ methods["history.commit"] = function(p)
             detail = "every sidecar-write action returned nan on this build",
             view_after = current_view_name(), cpu_ms = (os.clock() - started) * 1000}
   end
-  -- strategy == "auto" or "view_bounce".
+  if strategy == "no_bounce" then
+    local target = nil
+    if p.image_id ~= nil then
+      local ok_img, found = pcall(function() return dt.database[tonumber(p.image_id)] end)
+      if ok_img then target = found end
+    end
+    if not target then target = darkroom_image() end
+    local nb_sidecar = image_sidecar_path(target)
+    local nb_before = nb_sidecar and sidecar_signature(nb_sidecar) or nil
+    local r = commit_no_bounce(target, nb_before, nb_sidecar)
+    return {
+      strategy_used = "no_bounce",
+      ok = r.ok,
+      detail = r.detail,
+      view_after = r.view,
+      cpu_ms = (os.clock() - started) * 1000,
+      sidecar = nb_sidecar,
+      sidecar_written = r.written,
+      sidecar_wait_ms = r.waited or 0,
+      attempts_used = 1,
+      steps = r.steps,
+    }
+  end
+  -- view_bounce_action: the same bounce, but both legs press darktable's own
+  -- "global/switch views/<view>" commands (gtk-wrapped, so they run on the
+  -- GTK main thread) instead of the row 418 proxy.
+  local bounce_transport = nil
+  if strategy == "view_bounce_action" then bounce_transport = "action" end
+  -- strategy == "auto", "view_bounce" or "view_bounce_action".
   --
   -- The bounce alone is NOT a commit: it flushes the darkroom pipe, and
   -- darktable turns that flush into a sidecar write only when the history
@@ -1846,7 +2110,7 @@ methods["history.commit"] = function(p)
   local attempt_count = 0
   for attempt = 1, attempts do
     attempt_count = attempt
-    ok_call, result = pcall(commit_view_bounce)
+    ok_call, result = pcall(commit_view_bounce, nil, bounce_transport)
     if not ok_call then break end
     if not (result.ok and sidecar) then break end
     local changed, waited = wait_for_sidecar(sidecar, before)
@@ -1869,7 +2133,7 @@ methods["history.commit"] = function(p)
   end
 
   return {
-    strategy_used = "view_bounce",
+    strategy_used = strategy == "view_bounce_action" and "view_bounce_action" or "view_bounce",
     -- `ok` means "this image's history is now on disk". When the caller said it
     -- does not expect a change, a bounce that wrote nothing is still a success:
     -- sidecar_written = false reports the fact, and the Python readback resolves
@@ -1886,6 +2150,217 @@ methods["history.commit"] = function(p)
     attempts_used = attempt_count,
     expect_change = expect_change,
   }
+end
+
+-- ---- Main-thread probe (row 418/422) ---------------------------------------
+--
+-- darktable_mcp.probe_main_thread tries every route this plugin knows for
+-- getting code or a view switch onto darktable's GTK main thread and reports,
+-- per route, what it observed. Lua cannot read its own OS thread id, so each
+-- row reports OBSERVABLES (did the callback run, did a current_view() read
+-- work inside it, did a harmless GUI touch succeed, did a switch land) plus
+-- `thread`, the thread the route runs on according to darktable 5.4.1's
+-- source (see the "Source-verified main-thread facts" block above), and
+-- `expect`, what that source analysis predicts. A row whose observation
+-- contradicts its `expect` is the interesting one.
+--
+-- Params: switch_views (bool, default false) -- only then does the probe
+-- actually switch views (route d2: darkroom -> lighttable -> darkroom via
+-- the global switch-views commands). Nothing else here switches views, and
+-- route c (dt.control.dispatch, the row 418 crash thread) deliberately never
+-- touches the view setter.
+local PROBE_CALLBACK_BUDGET_MS = 1500
+
+local MAIN_THREAD_PROBE_LUA_PATHS = {}
+do
+  local seen = {}
+  local function add(path)
+    if not seen[path] then seen[path] = true; table.insert(MAIN_THREAD_PROBE_LUA_PATHS, path) end
+  end
+  for _, path in ipairs(MAIN_THREAD_PROXY_CANDIDATES) do add(path) end
+  -- dt_action_register(&actions_lua, <key>) with <key> = register_event's 4th
+  -- argument (the tooltip), which this plugin sets equal to the event name.
+  add("lua/" .. MAIN_THREAD_PROXY_NAME)
+  -- Section-style spelling a mimic/script-manager action would get.
+  add("lua/darktable_mcp.lua/" .. MAIN_THREAD_PROXY_NAME)
+end
+
+local function gui_touch()
+  -- dt.gui.selection() is gtk-wrapped: from a pool thread it round-trips
+  -- through the GTK main thread and returns the selection -- a harmless,
+  -- read-only proof the main loop is serving gtk-wrapped calls.
+  if not (dt.gui and dt.gui.selection) then return false, "dt.gui.selection missing" end
+  local ok, sel = pcall(dt.gui.selection)
+  if not ok then return false, tostring(sel) end
+  return type(sel) == "table", "selection round trip: " .. tostring(type(sel) == "table" and #sel or sel)
+end
+
+local function view_read()
+  local v = current_view_name()
+  return v ~= "unknown", v
+end
+
+methods["darktable_mcp.probe_main_thread"] = function(p)
+  p = p or {}
+  local rows = {}
+  local function row(r) table.insert(rows, r) end
+
+  -- (a) lua shortcut action paths.
+  for _, path in ipairs(MAIN_THREAD_PROBE_LUA_PATHS) do
+    local seen = {}
+    local fired, ok, result = false, false, nil
+    if main_thread_proxy_registered and dt.gui and dt.gui.action then
+      fired, ok, result = try_main_thread_action(path, function()
+        seen.view_ok, seen.view = view_read()
+        seen.touch_ok, seen.touch = gui_touch()
+        return true
+      end, PROBE_CALLBACK_BUDGET_MS)
+    end
+    row({
+      route = "a_lua_shortcut", candidate = path,
+      ran = fired == true,
+      action_return = result == "nan" and "nan" or nil,
+      view_read_ok = seen.view_ok == true, view = seen.view,
+      gui_touch_ok = seen.touch_ok == true,
+      detail = (not main_thread_proxy_registered) and "shortcut not registered"
+        or (result == "nan" and "dt.gui.action returned nan: darktable refused it")
+        or (fired and "handler ran" or "handler never ran within budget"),
+      thread = "lua pool (events.c shortcut_callback -> dt_lua_async_call_alien)",
+      expect = "never runs: dt_action_process refuses lua-owned actions triggered from lua (nan)",
+    })
+  end
+
+  -- (b) view-changed event.
+  row({
+    route = "b_view_changed_event", candidate = "dt.register_event(..., \"view-changed\", ...)",
+    ran = false, skipped = true,
+    detail = "skipped: needs a view switch to trigger, and its handler is queued with "
+      .. "dt_lua_async_call_alien like every other event",
+    thread = "lua pool", expect = "runs, but off the main thread -- no help",
+  })
+
+  -- (c) dt.control.dispatch. Never switches views: this IS the crash thread.
+  do
+    local seen = {ran = false}
+    local ok_dispatch = false
+    if dt.control and dt.control.dispatch then
+      ok_dispatch = pcall(dt.control.dispatch, function()
+        seen.view_ok, seen.view = view_read()
+        seen.touch_ok, seen.touch = gui_touch()
+        seen.ran = true
+      end)
+    end
+    local waited = 0
+    while ok_dispatch and not seen.ran and waited < PROBE_CALLBACK_BUDGET_MS
+        and dt.control and dt.control.sleep do
+      dt.control.sleep(VIEW_SETTLE_POLL_MS)
+      waited = waited + VIEW_SETTLE_POLL_MS
+    end
+    row({
+      route = "c_control_dispatch", candidate = "dt.control.dispatch(fn)",
+      ran = seen.ran, view_read_ok = seen.view_ok == true, view = seen.view,
+      gui_touch_ok = seen.touch_ok == true, waited_ms = waited,
+      detail = ok_dispatch and (seen.ran and "callback ran" or "callback did not run within budget")
+        or "dt.control.dispatch missing or raised",
+      thread = "lua pool (call.c dispatch_cb -> dt_lua_async_call -> g_thread_pool_push): "
+        .. "the row 418 crash thread (pool-1); the view setter is never called here",
+      expect = "runs, reads work, gtk-wrapped touches work; NOT the main thread",
+    })
+  end
+
+  -- (d) APIs that get onto the GTK main loop.
+  do
+    local t_ok, t_detail = gui_touch()
+    row({
+      route = "d1_gtk_wrap_roundtrip", candidate = "dt.gui.selection() (gtk-wrapped getter)",
+      ran = t_ok, gui_touch_ok = t_ok, detail = t_detail,
+      thread = "GTK main thread (call.c gtk_wrap -> g_main_context_invoke_full)",
+      expect = "works: every gtk-wrapped call (dt.gui.action, selection) already relies on it",
+    })
+  end
+  if p.switch_views then
+    local start_view = current_view_name()
+    local legs = {}
+    local all_ok = start_view == "darkroom"
+    if all_ok then
+      for _, target in ipairs({"lighttable", "darkroom"}) do
+        local pressed, how = switch_view_via_action(target)
+        local landed, waited = false, 0
+        if pressed then
+          landed, waited = wait_for_view(target, target == "darkroom"
+            and VIEW_ENTER_DARKROOM_BUDGET_MS or VIEW_SETTLE_BUDGET_MS)
+        end
+        table.insert(legs, target .. "=" .. (landed and ("landed " .. waited .. "ms")
+          or ("NOT landed (" .. tostring(how) .. ")")))
+        if not landed then all_ok = false; break end
+      end
+    end
+    row({
+      route = "d2_switch_views_action",
+      candidate = SWITCH_VIEW_ACTION_PATHS.lighttable .. " + " .. SWITCH_VIEW_ACTION_PATHS.darkroom,
+      ran = all_ok, view = current_view_name(),
+      detail = start_view ~= "darkroom" and ("skipped: start in the darkroom (view is " .. start_view .. ")")
+        or table.concat(legs, ", "),
+      thread = "GTK main thread (gtk-wrapped dt.gui.action -> command callback dt_ctl_switch_mode_to)",
+      expect = "both legs land with no crash: the recommended view-switch transport",
+    })
+  else
+    row({
+      route = "d2_switch_views_action",
+      candidate = SWITCH_VIEW_ACTION_PATHS.lighttable .. " + " .. SWITCH_VIEW_ACTION_PATHS.darkroom,
+      ran = false, skipped = true, detail = "skipped: pass switch_views=true to switch views",
+      thread = "GTK main thread", expect = "lands with no crash",
+    })
+  end
+  row({
+    route = "d3_gui_mimic", candidate = "dt.gui.mimic(...) + dt.gui.action",
+    ran = false, skipped = true,
+    detail = "excluded: its callback takes the non-recursive Lua lock inside a gtk-wrapped "
+      .. "call that already holds it -- deadlocks the GTK main thread",
+    thread = "GTK main thread", expect = "deadlock (never run)",
+  })
+  row({
+    route = "d4_main_loop_schedulers", candidate = "dt.control.timer / other schedulers",
+    ran = false, skipped = true,
+    detail = "dt.control.timer is " .. type(dt.control and dt.control.timer)
+      .. "; the 5.4 Lua API has no main-loop scheduler (dt.gui.create_job is a progress bar)",
+    thread = "n/a", expect = "absent",
+  })
+  row({
+    route = "d5_display_image_getter", candidate = "dt.gui.views.darkroom.display_image, no-arg getter",
+    ran = false, skipped = true,
+    detail = "excluded: host-proven deadlock (task 12); gtk-wrapped and would also flush "
+      .. "history to the DB (dt_dev_write_history) if it returned",
+    thread = "GTK main thread", expect = "deadlock (never run)",
+  })
+
+  local api = nil
+  pcall(function() api = dt.configuration and dt.configuration.api_version_string end)
+  local recommended = nil
+  for _, r in ipairs(rows) do
+    if r.route == "d2_switch_views_action" and r.ran then recommended = "action" end
+  end
+  return {
+    rows = rows,
+    api_version = api,
+    view = current_view_name(),
+    view_switch_transport = view_switch_transport,
+    recommended_view_transport = recommended,
+  }
+end
+
+-- Read or set the transport switch_view uses by default ("proxy" or
+-- "action"). Lets the host probe's verdict be applied to darkroom.open and
+-- every other view switch without reinstalling the plugin.
+methods["darktable_mcp.view_transport"] = function(p)
+  p = p or {}
+  if p.set ~= nil then
+    if not VIEW_TRANSPORTS[p.set] then
+      error('darktable_mcp.view_transport: set must be "proxy" or "action", got ' .. tostring(p.set))
+    end
+    view_switch_transport = p.set
+  end
+  return {transport = view_switch_transport}
 end
 
 methods["snapshot.take"] = function()
@@ -2534,6 +3009,12 @@ return {
   -- Row 418 main-thread marshaling.
   run_on_main_thread = run_on_main_thread,
   switch_view = switch_view,
+  switch_view_via_action = switch_view_via_action,
+  switch_view_action_paths = SWITCH_VIEW_ACTION_PATHS,
+  view_switch_transport = function() return view_switch_transport end,
+  commit_no_bounce = commit_no_bounce,
+  sync_selection_action_path = SYNC_SELECTION_ACTION_PATH,
+  main_thread_probe_lua_paths = MAIN_THREAD_PROBE_LUA_PATHS,
   main_thread_proxy_candidates = MAIN_THREAD_PROXY_CANDIDATES,
   main_thread_proxy_name = MAIN_THREAD_PROXY_NAME,
   main_thread_proxy_registered = main_thread_proxy_registered,

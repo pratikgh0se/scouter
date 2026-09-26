@@ -215,6 +215,23 @@ def diag() -> dict:
     return call("darktable_mcp.diag")
 
 
+def probe_main_thread(switch_views: bool = False) -> dict:
+    """`darktable_mcp.probe_main_thread` (row 418/422): one row per route onto
+    darktable's GTK main thread, each with what was observed and what the
+    darktable 5.4.1 source predicts. `switch_views=True` additionally does a
+    darkroom -> lighttable -> darkroom round trip through the global
+    switch-views commands -- the only row that moves the view."""
+    return call("darktable_mcp.probe_main_thread", {"switch_views": bool(switch_views)})
+
+
+def view_transport(set_to: str | None = None) -> str:
+    """Read (or with `set_to`, change) the plugin's default view-switch
+    transport: "proxy" (row 418 shortcut proxy) or "action" (darktable's own
+    global switch-views commands)."""
+    params = {"set": set_to} if set_to else {}
+    return str(call("darktable_mcp.view_transport", params).get("transport", "unknown"))
+
+
 def require_darkroom() -> str:
     """Pre-flight: raise `wrong_view` before spending an action on a dead call.
 

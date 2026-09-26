@@ -206,9 +206,28 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "history_read",
-        "description": "Read an image's history from its XMP sidecar. Returns "
+        "description": "Read an image's history from its XMP sidecar (default), or "
+        "read-only from darktable's library.db (source=db), or the sidecar with a "
+        "library.db fallback when there is none (source=auto). Returns "
         "confirmed=false when the sidecar is missing or mid-write.",
-        "inputSchema": _schema({"image": IMAGE}, ["image"]),
+        "inputSchema": _schema(
+            {
+                "image": IMAGE,
+                "source": {
+                    "type": "string",
+                    "enum": ["xmp", "db", "auto"],
+                    "default": "xmp",
+                    "description": "where to read the history from; library.db lags the "
+                    "darkroom's in-memory history exactly like the XMP does",
+                },
+                "library": {
+                    "type": "string",
+                    "description": "library.db path for source=db/auto; default: the "
+                    "running darktable's --library, then the usual locations",
+                },
+            },
+            ["image"],
+        ),
     },
     {
         "name": "history_commit",
@@ -227,10 +246,18 @@ TOOL_SPECS: list[dict] = [
                 },
                 "strategy": {
                     "type": "string",
-                    "enum": ["auto", "sidecar_action", "view_bounce"],
+                    "enum": [
+                        "auto",
+                        "sidecar_action",
+                        "view_bounce",
+                        "view_bounce_action",
+                        "no_bounce",
+                    ],
                     "default": "auto",
                     "description": "commit trigger; auto picks the cheapest "
-                    "that works on this build",
+                    "that works on this build. view_bounce_action bounces through "
+                    "darktable's own switch-views commands; no_bounce flushes "
+                    "history without leaving the view",
                 },
                 "attempts": {
                     "type": "integer",

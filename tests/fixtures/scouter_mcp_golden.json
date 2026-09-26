@@ -692,11 +692,13 @@
         },
         "strategy": {
           "default": "auto",
-          "description": "commit trigger; auto picks the cheapest that works on this build",
+          "description": "commit trigger; auto picks the cheapest that works on this build. view_bounce_action bounces through darktable's own switch-views commands; no_bounce flushes history without leaving the view",
           "enum": [
             "auto",
             "sidecar_action",
-            "view_bounce"
+            "view_bounce",
+            "view_bounce_action",
+            "no_bounce"
           ],
           "type": "string"
         },
@@ -713,7 +715,7 @@
     "name": "history_commit"
   },
   {
-    "description": "Read an image's history from its XMP sidecar. Returns confirmed=false when the sidecar is missing or mid-write.",
+    "description": "Read an image's history from its XMP sidecar (default), or read-only from darktable's library.db (source=db), or the sidecar with a library.db fallback when there is none (source=auto). Returns confirmed=false when the sidecar is missing or mid-write.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -723,6 +725,20 @@
             "string",
             "integer"
           ]
+        },
+        "library": {
+          "description": "library.db path for source=db/auto; default: the running darktable's --library, then the usual locations",
+          "type": "string"
+        },
+        "source": {
+          "default": "xmp",
+          "description": "where to read the history from; library.db lags the darkroom's in-memory history exactly like the XMP does",
+          "enum": [
+            "xmp",
+            "db",
+            "auto"
+          ],
+          "type": "string"
         }
       },
       "required": [
