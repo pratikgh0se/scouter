@@ -1,0 +1,310 @@
+{
+  "brighter_highlights": {
+    "bodies": {
+      "olympus": {
+        "case": "cov-phrase-brighter_highlights-olympus-bare",
+        "dparam": 0.019999980926513672,
+        "dstat": 0.255646,
+        "floor": 0.5,
+        "sensitivity": 12.78232
+      },
+      "sony_a7": {
+        "case": "cov-phrase-brighter_highlights-sony_a7-bare",
+        "dparam": 0.019999980926513672,
+        "dstat": 0.248797,
+        "floor": 0.5,
+        "sensitivity": 12.439881
+      }
+    },
+    "module": "colorbalancergb",
+    "param": "highlights_luminance",
+    "region": "highlights",
+    "stat": "L"
+  },
+  "brighter_midtones": {
+    "bodies": {
+      "olympus": {
+        "case": "cov-phrase-brighter_midtones-olympus-bare",
+        "dparam": 0.02000001072883606,
+        "dstat": 0.446792,
+        "floor": 0.5,
+        "sensitivity": 22.339581
+      },
+      "sony_a7": {
+        "case": "cov-phrase-brighter_midtones-sony_a7-bare",
+        "dparam": 0.02000001072883606,
+        "dstat": 0.902332,
+        "floor": 0.5,
+        "sensitivity": 45.116555
+      }
+    },
+    "module": "colorbalancergb",
+    "param": "midtones_luminance",
+    "region": "frame",
+    "stat": "L"
+  },
+  "cool_shadows": {
+    "bodies": {
+      "olympus": {
+        "case": "cov-phrase-cool_shadows-olympus-bare",
+        "dparam": 0.019999999552965164,
+        "dstat": -0.066628,
+        "floor": 0.5,
+        "sensitivity": -3.331377
+      },
+      "sony_a7": {
+        "case": "cov-phrase-cool_shadows-sony_a7-bare",
+        "dparam": 0.019999999552965164,
+        "dstat": -0.418601,
+        "floor": 0.5,
+        "sensitivity": -20.930026
+      }
+    },
+    "module": "colorbalancergb",
+    "param": "shadows_chroma",
+    "region": "shadows",
+    "stat": "b"
+  },
+  "darker_midtones": {
+    "bodies": {
+      "olympus": {
+        "case": "cov-phrase-darker_midtones-olympus-bare",
+        "dparam": -0.019999995827674866,
+        "dstat": -0.554707,
+        "floor": 0.5,
+        "sensitivity": 27.735368
+      },
+      "sony_a7": {
+        "case": "cov-phrase-darker_midtones-sony_a7-bare",
+        "dparam": -0.019999995827674866,
+        "dstat": -0.917042,
+        "floor": 0.5,
+        "sensitivity": 45.85211
+      }
+    },
+    "module": "colorbalancergb",
+    "param": "midtones_luminance",
+    "region": "frame",
+    "stat": "L"
+  },
+  "deepen_shadows": {
+    "bodies": {
+      "olympus": {
+        "case": "cov-phrase-deepen_shadows-olympus-bare",
+        "dparam": -0.019999980926513672,
+        "dstat": -0.020017,
+        "floor": 0.5,
+        "sensitivity": 1.000863
+      },
+      "sony_a7": {
+        "case": "cov-phrase-deepen_shadows-sony_a7-bare",
+        "dparam": -0.019999980926513672,
+        "dstat": -0.121185,
+        "floor": 0.5,
+        "sensitivity": 6.059246
+      }
+    },
+    "module": "colorbalancergb",
+    "param": "shadows_luminance",
+    "region": "shadows",
+    "stat": "L"
+  },
+  "less_chroma": {
+    "bodies": {
+      "olympus": {
+        "case": "cov-phrase-less_chroma-olympus-bare",
+        "dparam": -0.050000011920928955,
+        "dstat": -0.308436,
+        "floor": 0.5,
+        "sensitivity": 6.168714
+      },
+      "sony_a7": {
+        "case": "cov-phrase-less_chroma-sony_a7-bare",
+        "dparam": -0.050000011920928955,
+        "dstat": -0.404223,
+        "floor": 0.5,
+        "sensitivity": 8.084467
+      }
+    },
+    "module": "colorbalancergb",
+    "param": "global_chroma",
+    "region": "frame",
+    "stat": "C"
+  },
+  "less_saturation": {
+    "bodies": {
+      "olympus": {
+        "case": "cov-phrase-less_saturation-olympus-bare",
+        "dparam": -0.050000011920928955,
+        "dstat": -0.245601,
+        "floor": 0.5,
+        "sensitivity": 4.912026
+      },
+      "sony_a7": {
+        "case": "cov-phrase-less_saturation-sony_a7-bare",
+        "dparam": -0.050000011920928955,
+        "dstat": -0.354708,
+        "floor": 0.5,
+        "sensitivity": 7.094162
+      }
+    },
+    "module": "colorbalancergb",
+    "param": "global_saturation",
+    "region": "frame",
+    "stat": "C"
+  },
+  "less_vibrance": {
+    "bodies": {
+      "olympus": {
+        "case": "cov-phrase-less_vibrance-olympus-bare",
+        "dparam": -0.050000011920928955,
+        "dstat": -0.044192,
+        "floor": 0.5,
+        "sensitivity": 0.883844
+      },
+      "sony_a7": {
+        "case": "cov-phrase-less_vibrance-sony_a7-bare",
+        "dparam": -0.050000011920928955,
+        "dstat": -0.056154,
+        "floor": 0.5,
+        "sensitivity": 1.123088
+      }
+    },
+    "module": "colorbalancergb",
+    "param": "global_vibrance",
+    "region": "frame",
+    "stat": "C"
+  },
+  "lift_shadows": {
+    "bodies": {
+      "olympus": {
+        "case": "cov-phrase-lift_shadows-olympus-bare",
+        "dparam": 0.019999980926513672,
+        "dstat": 0.023717,
+        "floor": 0.5,
+        "sensitivity": 1.185874
+      },
+      "sony_a7": {
+        "case": "cov-phrase-lift_shadows-sony_a7-bare",
+        "dparam": 0.019999980926513672,
+        "dstat": 0.126777,
+        "floor": 0.5,
+        "sensitivity": 6.338857
+      }
+    },
+    "module": "colorbalancergb",
+    "param": "shadows_luminance",
+    "region": "shadows",
+    "stat": "L"
+  },
+  "more_chroma": {
+    "bodies": {
+      "olympus": {
+        "case": "cov-phrase-more_chroma-olympus-bare",
+        "dparam": 0.050000011920928955,
+        "dstat": 0.304572,
+        "floor": 0.5,
+        "sensitivity": 6.091438
+      },
+      "sony_a7": {
+        "case": "cov-phrase-more_chroma-sony_a7-bare",
+        "dparam": 0.050000011920928955,
+        "dstat": 0.406872,
+        "floor": 0.5,
+        "sensitivity": 8.137435
+      }
+    },
+    "module": "colorbalancergb",
+    "param": "global_chroma",
+    "region": "frame",
+    "stat": "C"
+  },
+  "more_saturation": {
+    "bodies": {
+      "olympus": {
+        "case": "cov-phrase-more_saturation-olympus-bare",
+        "dparam": 0.04999995231628418,
+        "dstat": 0.241472,
+        "floor": 0.5,
+        "sensitivity": 4.829449
+      },
+      "sony_a7": {
+        "case": "cov-phrase-more_saturation-sony_a7-bare",
+        "dparam": 0.04999995231628418,
+        "dstat": 0.35614,
+        "floor": 0.5,
+        "sensitivity": 7.122807
+      }
+    },
+    "module": "colorbalancergb",
+    "param": "global_saturation",
+    "region": "frame",
+    "stat": "C"
+  },
+  "more_vibrance": {
+    "bodies": {
+      "olympus": {
+        "case": "cov-phrase-more_vibrance-olympus-bare",
+        "dparam": 0.050000011920928955,
+        "dstat": 0.043427,
+        "floor": 0.5,
+        "sensitivity": 0.868536
+      },
+      "sony_a7": {
+        "case": "cov-phrase-more_vibrance-sony_a7-bare",
+        "dparam": 0.050000011920928955,
+        "dstat": 0.055574,
+        "floor": 0.5,
+        "sensitivity": 1.111483
+      }
+    },
+    "module": "colorbalancergb",
+    "param": "global_vibrance",
+    "region": "frame",
+    "stat": "C"
+  },
+  "tame_highlights": {
+    "bodies": {
+      "olympus": {
+        "case": "cov-phrase-tame_highlights-olympus-bare",
+        "dparam": -0.02000001072883606,
+        "dstat": -0.26347,
+        "floor": 0.5,
+        "sensitivity": 13.1735
+      },
+      "sony_a7": {
+        "case": "cov-phrase-tame_highlights-sony_a7-bare",
+        "dparam": -0.02000001072883606,
+        "dstat": -0.257395,
+        "floor": 0.5,
+        "sensitivity": 12.869753
+      }
+    },
+    "module": "colorbalancergb",
+    "param": "highlights_luminance",
+    "region": "highlights",
+    "stat": "L"
+  },
+  "teal_orange": {
+    "bodies": {
+      "olympus": {
+        "case": "cov-phrase-teal_orange-olympus-bare",
+        "dparam": 0.019999999552965164,
+        "dstat": -0.032228,
+        "floor": 0.5,
+        "sensitivity": -1.611423
+      },
+      "sony_a7": {
+        "case": "cov-phrase-teal_orange-sony_a7-bare",
+        "dparam": 0.019999999552965164,
+        "dstat": -0.39333,
+        "floor": 0.5,
+        "sensitivity": -19.666496
+      }
+    },
+    "module": "colorbalancergb",
+    "param": "shadows_chroma",
+    "region": "shadows",
+    "stat": "b"
+  }
+}
