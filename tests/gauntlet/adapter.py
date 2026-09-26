@@ -40,6 +40,13 @@ CRASH_DIR = Path.home() / "Library" / "Logs" / "DiagnosticReports"
 SOURCED_GATE_MIN = 0.90
 INFERRED_GATE = ("confidence", ("inferred",), 0.95)
 PROCESS_DIR = "_process"
+#: (final fix I7) the harness's own time inside a case, added to its hard cap
+#: by the engine (Runner.case_cap_s): isolation resets / a contaminated-frame
+#: relaunch (base), plus a share per render a stats case does (before/after
+#: raster + before/after preview). Harness slowness must not read as a hang.
+HARNESS_BASE_S = 90.0
+HARNESS_PER_RENDER_S = 45.0
+RENDERS_PER_STATS_CASE = 4
 LIVE_LAYERS = {"coverage", "scenarios", "scenarios_agent", "bulk", "looks", "robustness",
                "parity", "guide"}
 
@@ -202,6 +209,18 @@ class RoutedSession:
         self.current.open()
         return self.current
 
+    def open_body(self, body: str):
+        """(final fix I7): open the session for `body` now (eager open). On a
+        failure nothing is left half-open and the process cache is restored;
+        the error reaches the runner (a typed session_open result, or a
+        RefuseRun for a foreign darktable)."""
+        try:
+            return self._session(body)
+        except BaseException:
+            self.current = None
+            self._back_to_process_cache()
+            raise
+
     def _roots(self) -> tuple[Path, Path]:
         return self.adapter.runs_root, self.run.root
 
@@ -288,6 +307,9 @@ class ScouterAdapter:
         self._look_gates: tuple | None = None
         self._install: dict[str, object] = {}
         self._originals_now: dict[str | None, dict] = {}
+        #: RoutedSession's ScouterSession factory (None = the real one); a seam
+        #: for tests, which never launch darktable.
+        self.session_factory = None
 
     # -- data --------------------------------------------------------------
 
@@ -385,7 +407,38 @@ class ScouterAdapter:
 
             if not (run.root / "chart" / "chart-v1.pfm").exists():
                 write_chart(run.root)
-        return RoutedSession(self, layer, run)
+        routed = RoutedSession(self, layer, run, session_factory=self.session_factory)
+        # (final fix I7): open the product session HERE, under the runner's
+        # session-open cap, not lazily inside the first case's hard cap.
+        body = self._next_body(layer, run)
+        if body is not None:
+            routed.open_body(body)
+        return routed
+
+    @staticmethod
+    def _next_body(layer: str, run) -> str | None:
+        """The routed body of the layer's first case without a result (the
+        case the runner runs next), else of its first case; None when the run
+        has no cases for it (the session then opens lazily)."""
+        try:
+            cases = [c for c in run.read_cases() if c.layer == layer]
+        except (OSError, ValueError):
+            return None
+        if not cases:
+            return None
+        done = run.done_ids()
+        nxt = next((c for c in cases if c.id not in done), cases[0])
+        return routed_body(nxt)
+
+    def harness_allowance_s(self, case: Case) -> float:
+        """(final fix I7): engine hook -- see HARNESS_BASE_S."""
+        if case.layer not in LIVE_LAYERS:
+            return 0.0
+        from tests.gauntlet.execute import STAT_METRICS
+
+        renders = RENDERS_PER_STATS_CASE if any(
+            c.metric in STAT_METRICS for c in case.expect.checks) else 0
+        return HARNESS_BASE_S + renders * HARNESS_PER_RENDER_S
 
     def foreign_pids(self) -> list[int]:
         from scouter.core import dtprocess

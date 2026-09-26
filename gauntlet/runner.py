@@ -157,6 +157,16 @@ class Runner:
         self.progress.finish(summary.status)
         return summary
 
+    def case_cap_s(self, case: Case) -> float:
+        """(final fix I7): the product's budget cap (Case.budget_cap_s) plus
+        the adapter's optional harness allowance -- time the harness itself
+        spends inside a case (isolation resets, relaunches, renders) must not
+        turn into a product hang. Adapter method `harness_allowance_s(case)`,
+        default 0."""
+        fn = getattr(self.adapter, "harness_allowance_s", None)
+        extra = float(fn(case)) if fn is not None else 0.0
+        return case.budget_cap_s() + max(0.0, extra)
+
     def _preflight(self, layer: str) -> str | None:
         """The adapter's optional run-level check before a layer (final fix I2)."""
         pre = getattr(self.adapter, "preflight", None)
@@ -243,7 +253,7 @@ class Runner:
                 t0 = self.clock()
                 try:
                     obs = _call_with_cap(lambda s=session, c=case: s.run_case(c),
-                                         case.budget_cap_s())
+                                         self.case_cap_s(case))
                 except Park as p:
                     self.progress.park(layer, case.id, p.reason)
                     if wait_on_park and p.until and p.until - self.wall() < PARK_MAX_WAIT_S:

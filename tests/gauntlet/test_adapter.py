@@ -406,3 +406,60 @@ def test_mcp_death_reaches_the_observation_and_the_session_reopens(pinned_env, f
     monkeypatch.setattr(execute, "run_tool_case", lambda s, c: Observation())
     routed.run_case(case)
     assert routed.current is not first  # the dead session was replaced
+
+
+# -- final fix I7: eager open + harness allowance ------------------------------
+
+def test_harness_allowance_is_a_base_plus_a_share_per_render(tmp_path):
+    from gauntlet.case import Check
+
+    a = ScouterAdapter(tmp_path)
+    plain = _case()
+    assert a.harness_allowance_s(plain) == adapter_mod.HARNESS_BASE_S
+    stats = Case(id="c-s", layer="coverage", tier="P1", mode="tool", steps=[],
+                 expect=Expect("edit", [Check("M2", stat="L_mean", sign=1)]), body="olympus")
+    assert a.harness_allowance_s(stats) == \
+        adapter_mod.HARNESS_BASE_S + adapter_mod.RENDERS_PER_STATS_CASE * \
+        adapter_mod.HARNESS_PER_RENDER_S
+    assert a.harness_allowance_s(Case(**{**vars(plain), "layer": "offline"})) == 0.0
+
+
+def _write_run(pinned_env, cases):
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+    run.write_cases(cases)
+    return run
+
+
+def test_open_session_opens_the_first_body_eagerly(pinned_env, fake_corpus, monkeypatch):
+    """The product session opens inside open_session (the runner's 180 s open
+    cap), not lazily inside the first case's cap."""
+    monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals", lambda: {})
+    a = ScouterAdapter(pinned_env / "runs")
+    a._corpus = fake_corpus
+    run = _write_run(pinned_env, [_case("coverage", "sony_a7"), _case("coverage", "olympus")])
+    run.write_result("coverage-x-sony_a7", {"id": "coverage-x-sony_a7"})  # done: resume
+    dts = []
+
+    def factory(corpus, root, body, run_root):
+        d = FakeDt()
+        dts.append(d)
+        return sess.ScouterSession(corpus, root, body, dt=d, run_root=run_root,
+                                   mcp_factory=lambda env, cwd: FakeMcp())
+    a.session_factory = factory
+    routed = a.open_session("coverage", run)
+    assert routed.current is not None and routed.current.body == "olympus"
+    assert dts[0].launches == 1
+
+
+def test_eager_open_failure_raises_to_the_runner_and_leaves_no_session(pinned_env, fake_corpus,
+                                                                       monkeypatch):
+    monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals", lambda: {})
+    a = ScouterAdapter(pinned_env / "runs")
+    a._corpus = fake_corpus
+    run = _write_run(pinned_env, [_case("coverage")])
+    a.session_factory = lambda corpus, root, body, run_root: sess.ScouterSession(
+        corpus, root, body, dt=FakeDt(ready=(False, False)), run_root=run_root,
+        mcp_factory=lambda env, cwd: FakeMcp())
+    with pytest.raises(sess.SessionBlocked):
+        a.open_session("coverage", run)
+    assert dtprocess.owner_path().parent == pinned_env / "runs" / adapter_mod.PROCESS_DIR / "cache"

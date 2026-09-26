@@ -295,3 +295,29 @@ def test_progress_page_shows_hangs_and_blocked(tmp_path):
     prog = {"layers": {"alpha": {"done": 2, "total": 4, "hang": 1, "blocked": 2}}}
     page = html_page.render(prog)
     assert "Hangs<b>1</b>" in page and "Blocked<b>2</b>" in page
+
+
+# -- final fix I7: harness work gets its own allowance on top of the case cap --
+
+def test_adapter_harness_allowance_extends_the_case_cap(tmp_path):
+    import gauntlet.case as case_mod
+
+    a, run = _setup(tmp_path, behaviours={"alpha-0": "sleep"})
+    run_cases = run.read_cases()
+    for c in run_cases:
+        c.meta["sleep_s"] = 0.4
+    run.write_cases(run_cases)
+    seen = []
+
+    def allowance(case):
+        seen.append(case.id)
+        return 2.0
+    a.harness_allowance_s = allowance
+    orig = case_mod.Case.budget_cap_s
+    case_mod.Case.budget_cap_s = lambda self: 0.2
+    try:
+        Runner(a, run).run_layers(layers=["alpha"])
+    finally:
+        case_mod.Case.budget_cap_s = orig
+    assert run.read_result("alpha-0")["verdict"]["outcome"] == "verified"
+    assert seen[0] == "alpha-0" and a.aborts == 0

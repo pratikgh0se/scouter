@@ -95,7 +95,9 @@ class Adapter(Protocol):
     release bar; the report lists them under S8 "blockers".
     `preflight(run, layer) -> str | None` (final fix I2): called before each
     layer that has cases to run; a returned reason (or a raised RefuseRun)
-    stops the run with status `blocked: <reason>` and writes no case result."""
+    stops the run with status `blocked: <reason>` and writes no case result.
+    `harness_allowance_s(case) -> float` (final fix I7): seconds added to the
+    case's hard cap for the harness's own work inside a case (default 0)."""
 
     name: str
 
