@@ -300,8 +300,10 @@ class Runner:
         }
         self.run.write_result(case.id, doc)
         prev_verdict = prev["verdict"] if prev else None
+        prev_blocked = ((prev or {}).get("observation") or {}).get("blocked")
         self.progress.record(case.layer, case.id, case.tier, verdict.to_dict(), obs.wall_s,
-                             prev_verdict=prev_verdict)
+                             prev_verdict=prev_verdict, blocked=obs.blocked,
+                             prev_blocked=prev_blocked)
 
 
 def failed_verdict(note: str) -> Verdict:

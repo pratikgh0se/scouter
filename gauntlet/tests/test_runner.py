@@ -259,3 +259,39 @@ def test_session_crash_reports_survive_a_crash_file(tmp_path):
     obs = run.read_result("alpha-0")["observation"]
     assert obs["crash_reports"][0] == "mcp_server_death: exit 1"
     assert "toy-0.ips" in obs["crash_reports"]
+
+
+# -- final fix I6: the progress page counts hangs the way the report does ------
+
+def test_is_hang_is_one_helper():
+    from gauntlet.evaluate import is_hang
+
+    assert is_hang("failed_hang", None)
+    assert is_hang("blocked", "hard_cap") and is_hang("blocked", "hang: claude turn")
+    assert not is_hang("blocked", "session: launch failed") and not is_hang("verified", None)
+
+
+def test_progress_counts_hard_cap_as_a_hang_and_undoes_it_on_rerun(tmp_path):
+    import gauntlet.case as case_mod
+
+    a, run = _setup(tmp_path, behaviours={"alpha-0": "sleep"})
+    orig = case_mod.Case.budget_cap_s
+    case_mod.Case.budget_cap_s = lambda self: 0.2
+    try:
+        Runner(a, run).run_layers(layers=["alpha"])
+    finally:
+        case_mod.Case.budget_cap_s = orig
+    lay = json.loads(run.progress_json.read_text())["layers"]["alpha"]
+    assert lay["hang"] == 1 and lay["blocked"] == 1
+    a.behaviours.clear()
+    Runner(a, run).run_layers(layers=["alpha"], only_failed=True)
+    lay = json.loads(run.progress_json.read_text())["layers"]["alpha"]
+    assert lay["hang"] == 0 and lay["blocked"] == 0 and lay["done"] == 4
+
+
+def test_progress_page_shows_hangs_and_blocked(tmp_path):
+    from gauntlet import html as html_page
+
+    prog = {"layers": {"alpha": {"done": 2, "total": 4, "hang": 1, "blocked": 2}}}
+    page = html_page.render(prog)
+    assert "Hangs<b>1</b>" in page and "Blocked<b>2</b>" in page

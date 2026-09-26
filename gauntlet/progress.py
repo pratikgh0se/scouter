@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 
 from gauntlet.case import dumps
+from gauntlet.evaluate import is_hang
 from gauntlet.store import RunDir, atomic_write_text
 
 SCHEMA = "gauntlet-progress/1"
@@ -45,9 +46,12 @@ class Progress:
         self._layer_done0 = self.doc["layers"][name]["done"]
         self.save()
 
-    def _apply(self, lay: dict, tier: str, verdict: dict, sign: int) -> None:
+    def _apply(self, lay: dict, tier: str, verdict: dict, sign: int,
+               blocked: str | None = None) -> None:
         """Add (sign=+1) or remove (sign=-1) one verdict's contribution to a
-        layer's counters (fix round 1, I3: reruns must not double-count)."""
+        layer's counters (fix round 1, I3: reruns must not double-count).
+        (final fix I6): hangs by the shared `is_hang(outcome, blocked)`, and
+        `blocked` counts every blocked observation (as the report does)."""
         lay[verdict["score"]] += sign
         lay["points"] += sign * {"pass": 1.0, "partial": 0.5, "fail": 0.0}[verdict["score"]]
         outcome = verdict["outcome"]
@@ -55,15 +59,16 @@ class Progress:
             lay["silent"] += sign
         if outcome == "crash":
             lay["crash"] += sign
-        if outcome == "failed_hang":
+        if is_hang(outcome, blocked):
             lay["hang"] += sign
-        if outcome == "blocked":
+        if blocked or outcome == "blocked":
             lay["blocked"] += sign
         if tier == "P0" and verdict["score"] == "pass":
             lay["p0_pass"] += sign
 
     def record(self, name: str, case_id: str, tier: str, verdict: dict, wall_s: float,
-              prev_verdict: dict | None = None) -> None:
+              prev_verdict: dict | None = None, *, blocked: str | None = None,
+              prev_blocked: str | None = None) -> None:
         """`prev_verdict` (fix round 1, I3): when this case already had a
         result (an `only_failed` or explicit-id rerun), the runner passes the
         verdict it is replacing so its old contribution is undone first --
@@ -71,10 +76,10 @@ class Progress:
         lay = self.doc["layers"][name]
         self.unpark(case_id, name)
         if prev_verdict is not None:
-            self._apply(lay, tier, prev_verdict, -1)
+            self._apply(lay, tier, prev_verdict, -1, prev_blocked)
         else:
             lay["done"] += 1
-        self._apply(lay, tier, verdict, 1)
+        self._apply(lay, tier, verdict, 1, blocked)
         outcome = verdict["outcome"]
         lay["rate_pct"] = round(100.0 * lay["points"] / lay["done"], 1) if lay["done"] else 0.0
         elapsed = self.clock() - self._layer_t0

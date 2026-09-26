@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from gauntlet.adapter import Adapter
 from gauntlet.case import Case, dumps
-from gauntlet.evaluate import POINTS, canonical_outcome
+from gauntlet.evaluate import POINTS, canonical_outcome, is_hang
 from gauntlet.store import RunDir, atomic_write_text
 
 SERVED = ("verified", "over_budget")
@@ -59,8 +59,7 @@ def _is_hang(r: dict) -> bool:
     """(fix round 1, I1): failed_hang only ever comes from blocked == 'hang_twice';
     the runner's own hard_cap timeout, and an adapter's 'hang: ...' blocked
     reason, are hangs too and must not read as 0."""
-    blocked = _blocked(r) or ""
-    return _outcome(r) == "failed_hang" or blocked == "hard_cap" or blocked.startswith("hang")
+    return is_hang(_outcome(r), _blocked(r))  # (final fix I6): one shared helper
 
 
 def layer_table(results: list[dict], adapter: Adapter) -> list[dict]:

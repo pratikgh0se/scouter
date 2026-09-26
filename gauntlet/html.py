@@ -35,10 +35,12 @@ def render(progress: dict, report: dict | None = None, title: str = "Gauntlet") 
             f"<td>{lay.get('done', 0)}/{lay.get('total', 0)}</td>"
             f"<td>{_bar(lay.get('done', 0), lay.get('total', 0), lay.get('pass', 0), lay.get('partial', 0), lay.get('fail', 0))}</td>"
             f"<td>{lay.get('rate_pct', '-')}</td><td>{lay.get('p0_pass', 0)}/{lay.get('p0_total', 0)}</td>"
-            f"<td>{lay.get('silent', 0)}</td><td>{lay.get('crash', 0)}</td><td>{lay.get('hang', 0)}</td>"
+            f"<td>{lay.get('silent', 0)}</td><td>{lay.get('crash', 0)}</td><td>{lay.get('hang', 0)}</td><td>{lay.get('blocked', 0)}</td>"
             f"<td>{_fmt_eta(lay.get('eta_s'))}</td></tr>")
     silent = sum(v.get("silent", 0) for v in layers.values())
     crash = sum(v.get("crash", 0) for v in layers.values())
+    hangs = sum(v.get("hang", 0) for v in layers.values())
+    blocked = sum(v.get("blocked", 0) for v in layers.values())
     p0p = sum(v.get("p0_pass", 0) for v in layers.values())
     p0t = sum(v.get("p0_total", 0) for v in layers.values())
     signoff = ""
@@ -77,9 +79,9 @@ code{{font-size:12px}}.repro{{color:var(--muted)}}ol{{padding-left:20px}}
 <h1>{e(title)}</h1>
 <p class="meta">Run {e(str(progress.get('stamp', '')))} · commit {e(str(progress.get('commit', '')))} · status {e(str(progress.get('status', '')))} · updated {e(str(progress.get('updated', '')))} · ETA {_fmt_eta(progress.get('eta_s'))}</p>
 {signoff}
-<div class="tiles"><div class="tile">Silent failures<b>{silent}</b></div><div class="tile">Crashes<b>{crash}</b></div><div class="tile">P0 pass<b>{p0p}/{p0t}</b></div><div class="tile">Current<b style="font-size:13px">{e(str(progress.get('current_case') or '-'))}</b></div></div>
+<div class="tiles"><div class="tile">Silent failures<b>{silent}</b></div><div class="tile">Crashes<b>{crash}</b></div><div class="tile">Hangs<b>{hangs}</b></div><div class="tile">Blocked<b>{blocked}</b></div><div class="tile">P0 pass<b>{p0p}/{p0t}</b></div><div class="tile">Current<b style="font-size:13px">{e(str(progress.get('current_case') or '-'))}</b></div></div>
 {parked_html}
-<div class="wrap"><table><thead><tr><th>Layer</th><th>Status</th><th>Done</th><th>Progress</th><th>Rate %</th><th>P0</th><th>Silent</th><th>Crash</th><th>Hang</th><th>ETA</th></tr></thead>
+<div class="wrap"><table><thead><tr><th>Layer</th><th>Status</th><th>Done</th><th>Progress</th><th>Rate %</th><th>P0</th><th>Silent</th><th>Crash</th><th>Hang</th><th>Blocked</th><th>ETA</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table></div>
 {fails}
 </main></body></html>

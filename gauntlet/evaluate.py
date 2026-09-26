@@ -59,6 +59,15 @@ class Verdict:
         return asdict(self)
 
 
+def is_hang(outcome: str | None, blocked: str | None) -> bool:
+    """(final fix I6): the ONE definition of a hang, shared by the report and
+    the progress page: a failed_hang verdict, the runner's own hard_cap, or an
+    adapter's "hang..." blocked reason."""
+    b = blocked or ""
+    return canonical_outcome(outcome or "") == "failed_hang" or b == "hard_cap" \
+        or b.startswith("hang")
+
+
 def canonical_outcome(label: str) -> str:
     return ALIASES.get(label, label)
 
