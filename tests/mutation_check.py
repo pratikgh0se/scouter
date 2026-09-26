@@ -47,6 +47,7 @@ as "new/changed" at once.
 """
 import argparse
 import ast
+import os
 import re
 import shutil
 import subprocess
@@ -64,9 +65,25 @@ NO_TESTS_COLLECTED_RC = 5
 
 
 def sh(argv, cwd=None, timeout=300, input_text=None):
+    # Round 12 (B5 debugging): the revert- and weaken-mutation phases rewrite
+    # the SAME on-disk path several times in quick succession (revert -> run
+    # -> restore; then each weaken candidate in turn) - and two different
+    # mutations can produce a file of the IDENTICAL byte size (e.g.
+    # `assertEqual`->`assertNotEqual` on line N vs the same flip on line M).
+    # Python/pytest's bytecode cache keys a cached `.pyc` on (mtime, size);
+    # with an identical size and a write fast enough to land on the same
+    # mtime tick, the second run can silently reuse the FIRST mutation's
+    # already-compiled (and already-exercised) bytecode instead of the file
+    # that is actually on disk right now - a real, observed flake (the same
+    # fixture passed or failed depending on timing alone). Every subprocess
+    # this gate spawns must therefore never write - and never trust a
+    # pre-existing - `.pyc`: force `PYTHONDONTWRITEBYTECODE=1` regardless of
+    # the caller's own environment.
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     try:
         p = subprocess.run(argv, cwd=str(cwd) if cwd else None, capture_output=True,
-                            text=True, timeout=timeout, input=input_text)
+                            text=True, timeout=timeout, input=input_text, env=env)
     except subprocess.TimeoutExpired:
         return 124, "timed out"
     except OSError as exc:
@@ -698,6 +715,43 @@ def apply_weakening(text, func_ranges):
     return None, None
 
 
+def _assertion_occurrences(body):
+    """[(start, end, replacement_text, what), ...], in source order, for
+    every recognized assertion pattern occurrence in `body` - B5: lets a
+    caller try the 1st, 2nd, ... occurrence in turn, not just the first."""
+    occ = []
+    for m in ASSERT_EQ_RE.finditer(body):
+        occ.append((m.start(), m.end(), "assertNotEqual(", "assertEqual -> assertNotEqual"))
+    for m in ASSERT_TRUE_RE.finditer(body):
+        occ.append((m.start(), m.end(), "assertFalse(", "assertTrue -> assertFalse"))
+    for m in BARE_ASSERT_EQ_RE.finditer(body):
+        occ.append((m.start(), m.end(), m.group(0).replace(" == ", " != ", 1), "assert a == b -> assert a != b"))
+    occ.sort(key=lambda o: o[0])
+    return occ
+
+
+def apply_weakening_at(text, region_start_line, region_end_line, index):
+    """B5: flip the `index`-th (0-based, source order) recognized assertion
+    occurrence within the line range [region_start_line, region_end_line] of
+    `text` (1-based, inclusive - same convention as `func_ranges` elsewhere).
+    Returns (new_text, what) or (None, None) if there is no such occurrence -
+    the caller tries index 0, 1, 2, ... until this returns None, meaning
+    every assertion in that range has been tried."""
+    lines = text.splitlines(keepends=True)
+    offsets = [0]
+    for l in lines:
+        offsets.append(offsets[-1] + len(l))
+    body_start = offsets[region_start_line - 1]
+    body_end = offsets[min(region_end_line, len(lines))]
+    body = text[body_start:body_end]
+    occ = _assertion_occurrences(body)
+    if index >= len(occ):
+        return None, None
+    start, end, new_span, what = occ[index]
+    new_body = body[:start] + new_span + body[end:]
+    return text[:body_start] + new_body + text[body_end:], what
+
+
 HELPER_CALL_RE = re.compile(r"\bself\.(\w+)\(|(?<![.\w])([a-zA-Z_]\w*)\(")
 
 
@@ -736,14 +790,15 @@ def _all_top_level_functions(source):
     return out
 
 
-def _asserts_via_helper(source, body, own_class, all_funcs):
-    """B4: a test body with no `assert` of its own still counts as asserting
-    when it calls a helper - `self.<name>(...)` (a method on the SAME class,
-    or its base class within this file, when the base's own name ends in
-    `Fixture`/`Base` - a common test-base-class convention) or a bare
-    `<name>(...)` (a module-level function in this file) - whose OWN body
-    contains `assert`. Returns the helper name, or None (a genuinely
-    assert-free chain still flags)."""
+def _find_helper_with_assert(source, body, own_class, all_funcs):
+    """B4/B5: a test body with no `assert` of its own still counts as
+    asserting when it calls a helper - `self.<name>(...)` (a method on the
+    SAME class, or its base class within this file, when the base's own
+    name ends in `Fixture`/`Base` - a common test-base-class convention) or
+    a bare `<name>(...)` (a module-level function in this file) - whose OWN
+    body contains `assert`. Returns `(name, lineno, end_lineno)` for the
+    first such helper found, or None (a genuinely assert-free chain still
+    flags)."""
     for m in HELPER_CALL_RE.finditer(body):
         name = m.group(1) or m.group(2)
         if not name or name.startswith("assert"):
@@ -758,8 +813,14 @@ def _asserts_via_helper(source, body, own_class, all_funcs):
                 lines = source.splitlines()
                 helper_body = "\n".join(lines[s2 - 1:e2])
                 if "assert" in helper_body:
-                    return name
+                    return name, s2, e2
     return None
+
+
+def _asserts_via_helper(source, body, own_class, all_funcs):
+    """B4 wrapper: just the helper name, or None."""
+    hit = _find_helper_with_assert(source, body, own_class, all_funcs)
+    return hit[0] if hit else None
 
 
 def static_flags(source, lineno, end_lineno, own_class=None, all_funcs=None):
@@ -803,7 +864,11 @@ def _cell(state, why=None):
     at all - a RUNNER problem, BAD in both columns, never a pass or a fail),
     "reverted_symbol_napt"/"symbol_kept_ok"/"symbol_kept_bad" (round 10 B1:
     the collection error is a name the range itself added to a reverted
-    module - see `analyze_symbol_import_error`). Every state but plain
+    module - see `analyze_symbol_import_error`), "helper_ok"/"helper_bad"
+    (round 12 B5: the changed function asserts only via a same-file helper -
+    the mutation tried each of the HELPER's own assertions in turn, same
+    idea as the file-level fallback but scoped to the helper actually being
+    exercised, so it is tried FIRST). Every state but plain
     True/False, fallback_bad, marker_mismatch, error_runner and
     symbol_kept_bad is n/a, not a fail, and not counted against the gate -
     the weaken column carries the requirement instead."""
@@ -823,6 +888,10 @@ def _cell(state, why=None):
         return f"FAIL (good) [{why}]" if why else "FAIL (good) [weaken: file-level fallback]"
     if state == "fallback_bad":
         return f"did not fail (BAD) [{why}]" if why else "did not fail (BAD) [weaken: file-level fallback]"
+    if state == "helper_ok":
+        return f"FAIL (good) [{why}]"
+    if state == "helper_bad":
+        return f"did not fail (BAD) [{why}]"
     if state == "error":
         return "ERROR (not discriminating)"
     if state == "error_runner":
@@ -837,6 +906,24 @@ def _cell(state, why=None):
 
 
 def check_range(repo, base, head):
+    """Round 12 (worktree hygiene): every scratch worktree this gate ever
+    creates - (collect), (b) revert, (c) weaken - is already removed in its
+    own `finally`, but a hard process kill (SIGKILL) or a bare git failure
+    inside `remove_worktree` (which swallows its own exit code - see `sh`)
+    can still leave a stale `.git/worktrees/*` entry behind (346 of 388
+    scratch entries were found prunable in a single scouter checkout, the
+    HTC audit's own evidence). `git worktree prune` is therefore run
+    UNCONDITIONALLY when this function returns, raises, or is interrupted
+    (Ctrl-C/KeyboardInterrupt) - it is a pure cleanup pass over metadata for
+    worktrees whose directory is already gone, never a mutation of a live
+    one, so running it even when nothing leaked is always safe."""
+    try:
+        return _check_range_impl(repo, base, head)
+    finally:
+        sh(["git", "worktree", "prune"], cwd=Path(repo).resolve())
+
+
+def _check_range_impl(repo, base, head):
     repo = Path(repo).resolve()
     python = gate_python(repo)
     changed = changed_files(repo, base, head)
@@ -1048,6 +1135,62 @@ def check_range(repo, base, head):
                 original = target.read_text(encoding="utf-8")
                 func_ranges = [(s, e) for _, _, s, e in funcs]
                 mutated, what = apply_weakening(original, func_ranges)
+
+                if mutated is None:
+                    # B5 (round 12, HTC integration audit): the changed
+                    # function(s) may assert only via a same-file helper (the
+                    # exact B4 shape) - try EACH of the helper's own
+                    # assertions in turn before ever falling back to
+                    # file-level (which would mutate something the range
+                    # never even exercises). Only a function with NO helper
+                    # at all falls through to the file-level fallback below.
+                    all_funcs = _all_top_level_functions(original)
+                    lines = original.splitlines()
+                    helper_hit = None
+                    for cls, name, s, e in funcs:
+                        body = "\n".join(lines[s - 1:e])
+                        if "assert" in body:
+                            continue
+                        hit = _find_helper_with_assert(original, body, cls, all_funcs)
+                        if hit:
+                            helper_hit = hit
+                            break
+                    if helper_hit is not None:
+                        h_name, h_start, h_end = helper_hit
+                        ids = sorted({node_id(f, cls, name) for cls, name, _, _ in funcs})
+                        idx = 0
+                        resolved = None
+                        while True:
+                            candidate, cand_what = apply_weakening_at(original, h_start, h_end, idx)
+                            if candidate is None:
+                                break
+                            target.write_text(candidate, encoding="utf-8")
+                            try:
+                                rc, out = run_pytest(wt, ids, python)
+                            finally:
+                                target.write_text(original, encoding="utf-8")
+                            if is_collection_error(out):
+                                resolved = ("error", out[-800:])
+                                break
+                            if rc == NO_TESTS_COLLECTED_RC:
+                                resolved = (None, "n/a - only host-only tests changed (filtered by -k 'not host')")
+                                break
+                            outcome = classify_pytest_outcome(rc, out)
+                            if outcome == "error_runner":
+                                resolved = ("error_runner", out[-400:])
+                                break
+                            if outcome == "failed":
+                                resolved = ("helper_ok", f"weaken: helper {h_name} assertion {idx + 1} ({cand_what})")
+                                break
+                            idx += 1
+                        if resolved is None:
+                            resolved = ("helper_bad",
+                                        f"weaken: helper {h_name} - none of its {idx} assertion(s) discriminate")
+                        weaken_by_func[f] = resolved
+                        if resolved[0] in ("helper_bad", "error", "error_runner"):
+                            ok = False
+                        continue
+
                 fallback = False
                 if mutated is None and not any_assert_in_ranges(original, func_ranges):
                     # Round 6: the changed function(s) contain no assertion at
