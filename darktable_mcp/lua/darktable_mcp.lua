@@ -1921,6 +1921,57 @@ local function sidecar_history_signature(path)
   return table.concat(parts, "\n")
 end
 
+-- Row 434 (gauntlet night1-20260926, 15 cases, e.g.
+-- cov-phrase-faded_blacks-olympus-touch: sidecar history_end 112 -> 92, the
+-- params of a case three moves earlier, reported ok): the rating touch
+-- rewrote the XMP from a library.db that was many edits BEHIND the darkroom,
+-- so the history did change -- backwards. "The history differs" is not proof
+-- that THIS write landed. With the module the write touched (`expect_module`),
+-- a rewrite counts as the commit only when
+--   1. history_end did not go back,
+--   2. the newest active item (darktable:num = history_end - 1) is that
+--      module's operation, and
+--   3. that item is not byte-identical to the one the sidecar held at the
+--      same num before (a new item, or new params merged into the top one).
+-- Returns ok, why (why is nil when ok). Arguments are
+-- sidecar_history_signature() strings, so no extra file read.
+-- Enforcer: tests/lua/test_dispatcher.lua "row 434" blocks; Python mirror
+-- scouter.core.history._history_advanced_as_expected (tests/test_history_expected.py),
+-- intent examples in tests/intent/history_commit_expected.json.
+local function history_items(sig)
+  if type(sig) ~= "string" then return nil, {} end
+  local hend = tonumber(sig:match('darktable:history_end="(%d+)"'))
+  local items = {}
+  local block = sig:match("<darktable:history>(.-)</darktable:history>") or ""
+  for li in block:gmatch("<rdf:li%s.-/>") do
+    local num = tonumber(li:match('darktable:num="(%d+)"'))
+    if num then items[num] = li end
+  end
+  return hend, items
+end
+
+local function history_advanced_as_expected(before_sig, after_sig, expect_module)
+  local after_end, after_items = history_items(after_sig)
+  if after_end == nil then return false, "the rewritten sidecar has no readable history_end" end
+  local before_end, before_items = history_items(before_sig)
+  if before_end ~= nil and after_end < before_end then
+    return false, "history_end went back from " .. before_end .. " to " .. after_end
+      .. ": the sidecar was rewritten from an older library.db state, not from this edit"
+  end
+  local newest = after_items[after_end - 1]
+  if newest == nil then
+    return false, "the rewritten sidecar has no history item " .. (after_end - 1)
+  end
+  local op = newest:match('darktable:operation="([^"]*)"')
+  if op ~= expect_module then
+    return false, "the newest history item is " .. tostring(op) .. ", not " .. expect_module
+  end
+  if before_items[after_end - 1] == newest then
+    return false, "the newest " .. expect_module .. " history item is unchanged"
+  end
+  return true, nil
+end
+
 -- ---- Commit WITHOUT a view switch (row 422 alternative) -------------------
 --
 -- Source-verified against darktable 5.4.1, the pieces a no-bounce commit can
@@ -1967,7 +2018,7 @@ local function selection_is_exactly(image)
   return true, nil
 end
 
-local function commit_no_bounce(image, before, sidecar, history_before)
+local function commit_no_bounce(image, before, sidecar, history_before, expect_module)
   local steps = {}
   local function step(name, ok, detail)
     table.insert(steps, {step = name, ok = ok, detail = detail})
@@ -2022,6 +2073,7 @@ local function commit_no_bounce(image, before, sidecar, history_before)
 
   local written, waited = nil, 0
   local detail = nil
+  local stale = nil
   if sidecar then
     written, waited = wait_for_sidecar(sidecar, before)
     step("sidecar_changed", written, tostring(waited) .. "ms")
@@ -2042,11 +2094,24 @@ local function commit_no_bounce(image, before, sidecar, history_before)
         detail = "the sidecar was rewritten after " .. waited .. "ms but its history is "
           .. "unchanged: the synchronize-selection flush did not carry the darkroom's "
           .. "edit into library.db, so the rating touch re-wrote the old history"
+      elseif type(expect_module) == "string" and expect_module ~= "" then
+        -- Row 434: changed is not enough; it must have changed as this write
+        -- expects (see history_advanced_as_expected).
+        local as_expected, why = history_advanced_as_expected(history_before, history_after,
+                                                              expect_module)
+        step("history_as_expected", as_expected, as_expected
+             and ("newest item is " .. expect_module) or why)
+        if not as_expected then
+          written = false
+          stale = true
+          detail = "the sidecar was rewritten after " .. waited .. "ms but not with this "
+            .. "edit (" .. why .. "); the darkroom's history is still only in memory"
+        end
       end
     end
   end
   return {ok = written == true, steps = steps, view = current_view_name(),
-          written = written, waited = waited, detail = detail}
+          written = written, waited = waited, detail = detail, stale = stale}
 end
 
 -- The only strategies history.commit understands. Anything else is a
@@ -2083,7 +2148,7 @@ local function run_no_bounce(p, started)
   local nb_sidecar = image_sidecar_path(target)
   local nb_before = nb_sidecar and sidecar_signature(nb_sidecar) or nil
   local nb_history = nb_sidecar and sidecar_history_signature(nb_sidecar) or nil
-  local r = commit_no_bounce(target, nb_before, nb_sidecar, nb_history)
+  local r = commit_no_bounce(target, nb_before, nb_sidecar, nb_history, p.expect_module)
   return {
     strategy_used = "no_bounce",
     ok = r.ok,
@@ -2096,6 +2161,9 @@ local function run_no_bounce(p, started)
     attempts_used = 1,
     steps = r.steps,
     expect_change = p.expect_change ~= false,
+    -- Row 434: the sidecar WAS rewritten, but with a history that is not
+    -- this write's (an older library.db state). Never an honest no-op.
+    stale_rewrite = r.stale or nil,
   }
 end
 
@@ -2145,7 +2213,10 @@ methods["history.commit"] = function(p)
   if strategy == "auto" then
     local nb = run_no_bounce(p, started)
     if nb.sidecar_written == true then return nb end
-    if not expect_change and nb.sidecar_written == false and no_bounce_selected(nb) then
+    -- Row 434: a stale rewrite is not "nothing changed" -- the sidecar now
+    -- carries an older history, and only the bounce writes the real one.
+    if not expect_change and nb.sidecar_written == false and not nb.stale_rewrite
+       and no_bounce_selected(nb) then
       nb.ok = true
       return nb
     end
@@ -3162,6 +3233,7 @@ return {
   switch_view_action_paths = SWITCH_VIEW_ACTION_PATHS,
   view_switch_transport = function() return view_switch_transport end,
   commit_no_bounce = commit_no_bounce,
+  history_advanced_as_expected = history_advanced_as_expected,
   sync_selection_action_path = SYNC_SELECTION_ACTION_PATH,
   wait_for_darkroom_image = wait_for_darkroom_image,
   view_settle = {

@@ -2866,6 +2866,127 @@ do
   os.remove(tmp)
 end
 
+-- Row 434 (gauntlet night1-20260926, 15 "stale history reported ok" cases;
+-- intent examples in tests/intent/history_commit_expected.json). The rating
+-- touch rewrote the XMP from a library.db many edits BEHIND the darkroom:
+-- cov-phrase-faded_blacks-olympus-touch went history_end 112 -> 92 with the
+-- params of a case three moves earlier, a new history hash, and no_bounce
+-- took "the history differs" as the commit. With expect_module a rewrite
+-- counts only when the history advanced as that write expects.
+local function xmp_with_history(history_end, newest_op, newest_params, stamp)
+  local out = {'<x:xmpmeta>\n  <rdf:Description\n',
+    '   darktable:change_timestamp="' .. (stamp or "1") .. '"\n',
+    '   darktable:history_end="' .. history_end .. '"\n',
+    '   darktable:history_current_hash="h' .. history_end .. (newest_params or "") .. '">\n',
+    '   <darktable:history>\n    <rdf:Seq>\n'}
+  for n = 0, history_end - 1 do
+    local op, params = "op" .. n, "p" .. n
+    if n == history_end - 1 then op, params = newest_op, newest_params end
+    out[#out + 1] = '     <rdf:li\n      darktable:num="' .. n .. '"\n      darktable:operation="'
+      .. op .. '"\n      darktable:params="' .. params .. '"/>\n'
+  end
+  out[#out + 1] = '    </rdf:Seq>\n   </darktable:history>\n  </rdf:Description>\n</x:xmpmeta>\n'
+  return table.concat(out)
+end
+
+do
+  local check = plugin.history_advanced_as_expected
+  local before = xmp_with_history(112, "exposure", "black_m0.0002")
+  -- The night-1 evidence: back to an older DB state, even with the same module on top.
+  local ok, why = check(before, xmp_with_history(92, "exposure", "black_0.0098"), "exposure")
+  assertEq(ok, false, "a history_end that went back is not this write")
+  assertTrue(type(why) == "string" and why:find("went back from 112 to 92", 1, true) ~= nil,
+    "and says so: " .. tostring(why))
+  -- The write just made: one new item, the module that was moved.
+  assertEq(check(before, xmp_with_history(113, "exposure", "black_m0.0027"), "exposure"), true,
+    "a new newest item for the expected module is the commit")
+  -- darktable merged the edit into the top item: same end, new params.
+  assertEq(check(before, xmp_with_history(112, "exposure", "black_m0.0027"), "exposure"), true,
+    "new params merged into the top item is the commit")
+  -- New hash, but the newest item is some other module.
+  local ok3, why3 = check(before, xmp_with_history(113, "sigmoid", "c1.5"), "exposure")
+  assertEq(ok3, false, "a newest item of another module is not this write")
+  assertTrue(why3:find("sigmoid", 1, true) ~= nil, "and names it: " .. why3)
+  -- Same end, same newest item (only an older item differs).
+  local same = xmp_with_history(112, "exposure", "black_m0.0002"):gsub('params="p3"', 'params="pX"')
+  assertEq(check(before, same, "exposure"), false, "an unchanged newest item is not this write")
+end
+
+do
+  local tmp = os.tmpname()
+  local function put(text) local h = io.open(tmp, "w"); h:write(text); h:close() end
+  -- What the rating touch writes: whatever library.db holds.
+  local db_xmp = xmp_with_history(92, "exposure", "black_0.0098", "db")
+  local touches = 0
+  put(xmp_with_history(112, "exposure", "black_m0.0002", "s"))
+  local backing = {id = 107, filename = "DB_107.ORF", path = "/photos", rating = 2,
+                   sidecar = tmp, is_altered = true}
+  local img = setmetatable({}, {
+    __index = backing,
+    __newindex = function(_, k, v)
+      backing[k] = v
+      if k == "rating" then
+        touches = touches + 1
+        put(db_xmp:gsub('change_timestamp="db"', 'change_timestamp="db' .. string.rep("0", touches) .. '"'))
+      end
+    end,
+  })
+  images_by_id[107] = img
+  stub_dt.gui.action_images = {img}
+  view_state.current = "darkroom"
+  action_returns["views/darkroom/synchronize selection"] = "nan"
+
+  -- A stale rewrite with a new hash is NOT committed.
+  local nb = plugin.methods["history.commit"]({strategy = "no_bounce", image_id = 107,
+                                               expect_module = "exposure"})
+  assertEq(touches, 1, "the rating touch rewrote the sidecar")
+  assertEq(nb.sidecar_written, false, "stale history with a new hash is not a commit: "
+    .. tostring(nb.detail))
+  assertEq(nb.ok, false, "no_bounce does not claim it")
+  assertEq(nb.stale_rewrite, true, "and flags the rewrite as stale")
+  assertTrue(nb.detail:find("went back from 112 to 92", 1, true) ~= nil, "detail: " .. nb.detail)
+
+  -- auto, even with expect_change=false (the no-op pre-check path): a stale
+  -- rewrite is never an honest no-op, so auto falls back to the bounce, which
+  -- writes the darkroom's in-memory history.
+  put(xmp_with_history(112, "exposure", "black_m0.0002", "s2"))
+  local original_action = stub_dt.gui.action
+  stub_dt.gui.action = function(path, ...)
+    local r = original_action(path, ...)
+    if path == "global/switch views/lighttable" then
+      put(xmp_with_history(113, "exposure", "black_m0.0027", "bounce"))
+    end
+    return r
+  end
+  local c = plugin.methods["history.commit"]({strategy = "auto", image_id = 107, attempts = 1,
+                                              expect_change = false, expect_module = "exposure"})
+  stub_dt.gui.action = original_action
+  assertEq(c.strategy_used, "view_bounce_action", "auto falls back past a stale rewrite")
+  assertEq(c.ok, true, "and the bounce commits: " .. tostring(c.detail))
+  assertTrue(type(c.fallback_from) == "table" and c.fallback_from.strategy == "no_bounce",
+    "the stale no_bounce attempt is reported")
+
+  -- The flush DID reach library.db: the rewrite carries the expected newest
+  -- item, so no_bounce commits without a bounce.
+  put(xmp_with_history(113, "exposure", "black_m0.0027", "s3"))
+  db_xmp = xmp_with_history(114, "exposure", "black_m0.0052", "db")
+  local switches = view_state.action_switches or 0
+  local ok_nb = plugin.methods["history.commit"]({strategy = "auto", image_id = 107,
+                                                  expect_module = "exposure"})
+  assertEq(ok_nb.strategy_used, "no_bounce", "the expected rewrite is no_bounce's commit")
+  assertEq(ok_nb.ok, true, "ok: " .. tostring(ok_nb.detail))
+  assertEq(ok_nb.sidecar_written, true, "sidecar_written")
+  assertEq(ok_nb.stale_rewrite, nil, "not stale")
+  assertEq(view_state.action_switches or 0, switches, "and no view switch")
+
+  action_returns["views/darkroom/synchronize selection"] = nil
+  images_by_id[107] = nil
+  stub_dt.gui.selection_now = nil
+  stub_dt.gui.action_images = {}
+  view_state.current = "darkroom"
+  os.remove(tmp)
+end
+
 -- no_bounce in the darkroom: narrow the selection, flush history to the DB
 -- with "synchronize selection", rewrite the XMP from the DB with a rating
 -- touch, and confirm on disk -- never switching views.

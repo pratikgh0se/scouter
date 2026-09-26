@@ -25,9 +25,9 @@ FIXTURE = Path(__file__).resolve().parent / "fixtures" / "P6281348.ORF.xmp"
 FIXTURE_EXPOSURE_VALUE = 1.5500002
 
 
-def _write_sidecar(sidecar: Path, original_text: str) -> None:
+def _write_sidecar(sidecar: Path, original_text: str, module: str | None = None) -> None:
     time.sleep(0.01)  # guarantee the mtime tick
-    sidecar.write_text(with_new_history_hash(original_text))
+    sidecar.write_text(with_new_history_hash(original_text, module))
     future = time.time() + 2
     os.utime(sidecar, (future, future))
 
@@ -66,7 +66,7 @@ def _commit_handler(sidecar: Path, original_text: str, *, outcome: str = "auto")
         ok = True
         if outcome == "auto":
             if expect_change:
-                _write_sidecar(sidecar, original_text)
+                _write_sidecar(sidecar, original_text, params.get("expect_module"))
                 written = True
         elif outcome == "never_write":
             ok = not expect_change
@@ -75,7 +75,7 @@ def _commit_handler(sidecar: Path, original_text: str, *, outcome: str = "auto")
                 sidecar.unlink(missing_ok=True)
                 ok = not expect_change
             else:
-                _write_sidecar(sidecar, original_text)
+                _write_sidecar(sidecar, original_text, params.get("expect_module"))
                 written = True
         else:
             raise AssertionError(f"unknown _commit_handler outcome: {outcome!r}")

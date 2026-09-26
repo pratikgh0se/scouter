@@ -271,10 +271,10 @@ class WriteVerbSingleEventTest(unittest.TestCase):
 
         text = self.sidecar.read_text()
 
-        def fake_commit(_params: dict) -> dict:
+        def fake_commit(params: dict) -> dict:
             time.sleep(0.01)  # guarantee the mtime tick
             # a real rewrite, like darktable's own
-            self.sidecar.write_text(with_new_history_hash(text))
+            self.sidecar.write_text(with_new_history_hash(text, params.get("expect_module")))
             return {
                 "strategy_used": "sidecar_action",
                 "ok": True,

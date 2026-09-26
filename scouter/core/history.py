@@ -503,6 +503,69 @@ def _history_fingerprint(sidecar: Path) -> str | None:
     return "\n".join(parts) if parts else text
 
 
+_LI_RX = re.compile(r"<rdf:li\s.*?/>", re.S)
+_NUM_RX = re.compile(r'darktable:num="(\d+)"')
+_OP_RX = re.compile(r'darktable:operation="([^"]*)"')
+_END_RX = re.compile(r'darktable:history_end="(\d+)"')
+_HISTORY_BLOCK_RX = re.compile(r"<darktable:history>(.*?)</darktable:history>", re.S)
+
+
+def _history_items(fingerprint: str | None) -> tuple[int | None, dict[int, str]]:
+    if fingerprint is None:
+        return None, {}
+    m = _END_RX.search(fingerprint)
+    block = _HISTORY_BLOCK_RX.search(fingerprint)
+    items: dict[int, str] = {}
+    for li in _LI_RX.findall(block.group(1) if block else ""):
+        num = _NUM_RX.search(li)
+        if num:
+            items[int(num.group(1))] = li
+    return (int(m.group(1)) if m else None), items
+
+
+def _history_advanced_as_expected(
+    before: str | None, after: str | None, expect_module: str
+) -> tuple[bool, str | None]:
+    """Did the sidecar history move the way THIS write expects? `(ok, why)`.
+
+    Row 434 (gauntlet night1-20260926, 15 cases; e.g.
+    cov-phrase-faded_blacks-olympus-touch, history_end 112 -> 92 with the
+    params of a case three moves earlier, reported ok): no_bounce's rating
+    touch rewrote the XMP from a library.db many edits behind the darkroom.
+    The history DID change -- backwards -- so "changed" (row 430) accepted
+    it. A rewrite is this write's commit only when history_end did not go
+    back, the newest active item (num = history_end - 1) is `expect_module`,
+    and that item is not identical to what the sidecar held at that num.
+
+    Mirrors the Lua plugin's `history_advanced_as_expected`; this copy is
+    the Python side's own look at the sidecar after the bridge answered.
+    Enforcer: tests/test_history_expected.py (with the intent examples in
+    tests/intent/history_commit_expected.json) and the "row 434" blocks in
+    tests/lua/test_dispatcher.lua. The value-level oracle is the write
+    verbs' read-back of the param (row 433, fix/htc-applied-verify).
+    """
+    after_end, after_items = _history_items(after)
+    if after_end is None:
+        return False, "the rewritten sidecar has no readable history_end"
+    before_end, before_items = _history_items(before)
+    if before_end is not None and after_end < before_end:
+        return False, (
+            f"history_end went back from {before_end} to {after_end}: the sidecar was "
+            "rewritten from an older library.db state, not from this edit"
+        )
+    newest = after_items.get(after_end - 1)
+    if newest is None:
+        return False, f"the rewritten sidecar has no history item {after_end - 1}"
+    op = _OP_RX.search(newest)
+    if (op.group(1) if op else None) != expect_module:
+        return False, (
+            f"the newest history item is {op.group(1) if op else None}, not {expect_module}"
+        )
+    if before_items.get(after_end - 1) == newest:
+        return False, f"the newest {expect_module} history item is unchanged"
+    return True, None
+
+
 @metrics.instrumented("history.commit")
 def commit(
     image: str | int | None = None,
@@ -513,7 +576,38 @@ def commit(
     expect_change: bool | None = None,
     job: str | None = None,
 ) -> CommitResult:
+    """The public `history.commit` verb: `commit_expecting` with no write to
+    expect (a hand edit, or a batch), so any history change counts.
+    See `commit_expecting` for the full contract."""
+    return commit_expecting(
+        image, timeout_s=timeout_s, strategy=strategy, attempts=attempts,
+        expect_change=expect_change, job=job,
+    )
+
+
+def commit_expecting(
+    image: str | int | None = None,
+    *,
+    timeout_s: float = 5.0,
+    strategy: str = "auto",
+    attempts: int = DEFAULT_COMMIT_ATTEMPTS,
+    expect_change: bool | None = None,
+    job: str | None = None,
+    expect_module: str | None = None,
+) -> CommitResult:
     """Make darktable write this image's history to its sidecar, then verify.
+
+    Uninstrumented: write verbs (`darkroom._commit`) call it so one verb call
+    still emits exactly one metrics event.
+
+    `expect_module` (row 434): the darktable operation the write being
+    committed touched. With it, a sidecar rewrite counts as the commit only
+    when its history advanced as that write expects
+    (`_history_advanced_as_expected`), both in the plugin (so auto falls
+    back to the view bounce past a stale no_bounce rewrite) and in the poll
+    below. Without it, any history change counts, as before. A false "not
+    as expected" costs a CommitTimeout, which every darkroom writer already
+    resolves by reading the value back (`_commit_with_readback`).
 
     `attempts`/`expect_change` (task 12): a caller who already knows this
     write may be a no-op -- `darkroom.set_param`'s pre-check, when the
@@ -566,10 +660,13 @@ def commit(
     before_ns, before_size = _sidecar_signature(sidecar)
     before_history = _history_fingerprint(sidecar) if sidecar.exists() else None
     metadata_only_rewrites = 0
+    stale_rewrite: str | None = None
 
     if strategy not in COMMIT_STRATEGIES:
         raise UsageError(f"unknown strategy {strategy!r} (valid: {', '.join(COMMIT_STRATEGIES)})")
     params = {"strategy": strategy, "attempts": attempts, "expect_change": expect_change}
+    if expect_module:
+        params["expect_module"] = expect_module
     if strategy in ("no_bounce", "auto"):
         # no_bounce acts on a named image (selection + DB flush + XMP write)
         # rather than whatever the darkroom has loaded, so it is told which.
@@ -668,6 +765,16 @@ def commit(
             nonlocal metadata_only_rewrites
             metadata_only_rewrites += 1
             return None
+        if expect_module:
+            as_expected, why = _history_advanced_as_expected(
+                before_history, _history_fingerprint(sidecar), expect_module
+            )
+            if not as_expected:
+                # Row 434: rewritten, but not with this edit -- keep polling
+                # (the fallback bounce may still land) and never report it.
+                nonlocal stale_rewrite
+                stale_rewrite = why
+                return None
         warnings: list[str] = []
         if view_after != "darkroom":
             warnings.append(
@@ -719,6 +826,7 @@ def commit(
                 if metadata_only_rewrites
                 else None
             ),
+            "sidecar_rewritten_not_this_edit": stale_rewrite,
         },
     )
 

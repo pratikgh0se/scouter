@@ -176,7 +176,7 @@ class SetMoveBeforeTest(_MovesFixture):
         from scouter.errors import CommitTimeout
         from scouter.types import CommitResult
 
-        def timeout_on_change(job, image, *, strategy="auto", attempts=None, expect_change=True):
+        def timeout_on_change(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
             if expect_change:
                 raise CommitTimeout("sidecar never advanced")
             return CommitResult(committed=True, changed=False, warnings=[])

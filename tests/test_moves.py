@@ -43,7 +43,7 @@ class _MovesFixture(unittest.TestCase):
         dtbridge.set_bridge(self.bridge)
         self.commits: list[tuple] = []
 
-        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True):
+        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
             self.commits.append((attempts, expect_change))
             return CommitResult(committed=True, changed=expect_change, warnings=[])
 
@@ -142,7 +142,7 @@ class AdjustTest(_MovesFixture):
         "seq N ... never readable"."""
         from scouter.errors import CommitTimeout
 
-        def timeout_on_change(job, image, *, strategy="auto", attempts=None, expect_change=True):
+        def timeout_on_change(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
             if expect_change:
                 raise CommitTimeout("sidecar never advanced")
             return CommitResult(committed=True, changed=False, warnings=[])
@@ -165,7 +165,7 @@ class AdjustTest(_MovesFixture):
         from scouter.errors import BridgeTimeout
 
         def bridge_dies_on_change(job, image, *, strategy="auto", attempts=None,
-                                  expect_change=True):
+                                  expect_change=True, expect_module=None):
             if expect_change:
                 raise BridgeTimeout("bridge went away mid-commit")
             return CommitResult(committed=True, changed=False, warnings=[])

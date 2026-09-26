@@ -78,7 +78,7 @@ class _DarkroomFixture(unittest.TestCase):
         # (fix round 2, should-fix 8).
         self.commit_calls: list[tuple] = []
 
-        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True):
+        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
             self.commit_calls.append((job, image, strategy, attempts, expect_change))
             return CommitResult(committed=True, changed=expect_change, warnings=[])
 
@@ -867,7 +867,7 @@ class DarkroomCommitSeamTest(unittest.TestCase):
             # Simulate darktable writing the sidecar on commit: bump its
             # mtime forward so history.commit's poll loop sees it advance.
             sidecar = Path(str(self.raw) + ".xmp")
-            sidecar.write_text(with_new_history_hash(sidecar.read_text()))
+            sidecar.write_text(with_new_history_hash(sidecar.read_text(), p.get("expect_module")))
             future = time.time() + 2
             os.utime(sidecar, (future, future))
             return {

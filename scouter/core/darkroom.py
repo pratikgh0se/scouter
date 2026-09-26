@@ -133,6 +133,7 @@ def _commit_with_readback(
     confirm: Callable[[], bool],
     what: str,
     strategy: str = "auto",
+    expect_module: str | None = None,
 ) -> tuple[bool, list[str]]:
     """`_commit`, with a commit timeout resolved by reading the XMP back.
 
@@ -152,7 +153,7 @@ def _commit_with_readback(
     resolving its own image.
     """
     try:
-        result = _commit(job, image_id, strategy=strategy)
+        result = _commit(job, image_id, strategy=strategy, expect_module=expect_module)
     except CommitTimeout:
         if not confirm():
             raise
@@ -180,6 +181,7 @@ def _commit(
     strategy: str = "auto",
     attempts: int | None = None,
     expect_change: bool = True,
+    expect_module: str | None = None,
 ) -> CommitResult:
     """Every write's post-action commit, routed through one seam (ruling 21).
 
@@ -194,10 +196,16 @@ def _commit(
     `attempts`/`expect_change` (task 12): forwarded straight to
     `history.commit`, whose docstring covers the no-op-pre-check use case.
     `attempts=None` lets `history.commit` supply its own default.
+
+    `expect_module` (row 434): the module this write touched, so the commit
+    only counts a sidecar whose newest history item is that module's new
+    state (see `history._history_advanced_as_expected`).
     """
     from scouter.core import history
 
-    commit_fn = getattr(history.commit, "__wrapped__", history.commit)
+    # Row 434: `commit_expecting` is `history.commit`'s uninstrumented body
+    # plus `expect_module`, so the one-event-per-verb rule above still holds.
+    commit_fn = history.commit_expecting
     kwargs: dict = {
         "timeout_s": 5.0,
         "strategy": strategy,
@@ -206,6 +214,8 @@ def _commit(
     }
     if attempts is not None:
         kwargs["attempts"] = attempts
+    if expect_module:
+        kwargs["expect_module"] = expect_module
     return commit_fn(image_id, **kwargs)
 
 
@@ -612,6 +622,7 @@ def set_param(
                     strategy="auto",
                     expect_change=expect_change,
                     attempts=attempts,
+                    expect_module=module,
                 )
             except CommitTimeout as e:
                 commit_error = e
@@ -816,6 +827,7 @@ def nudge(
             xmp_path=resolved.xmp_path,
             confirm=_confirm_nudge,
             what=f"{module}.{param}",
+            expect_module=module,
         )
         applied = _read_value(resolved.path, module, param, instance)
     return SetResult(
@@ -903,6 +915,7 @@ def _do_module_action(
         xmp_path=resolved.xmp_path,
         confirm=_confirm_module,
         what=f"{module} ({action_name})",
+        expect_module=module,
     )
     after_state = _module_state(resolved.path, module, instance)
     journal.complete(
@@ -1062,6 +1075,7 @@ def _undo_temperature_via_sliders(
         xmp_path=str(xmp.sidecar_path(entry.path)),
         confirm=_confirm,
         what="temperature (undo coefficients)",
+        expect_module="temperature",
     )
     after_params = _after_params()
     failed = [name for name in sent if not _close(after_params.get(name), before_params.get(name))]
@@ -1164,6 +1178,7 @@ def _undo_temperature_via_kelvin(
         xmp_path=str(xmp.sidecar_path(entry.path)),
         confirm=_confirm,
         what="temperature (undo via Kelvin inversion)",
+        expect_module="temperature",
     )
     # Fix round 2, minor (d): ONE read here for both the verification ratio
     # and `restored_to`, instead of three separate `_temperature_extra`
@@ -1421,6 +1436,7 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
                 xmp_path=str(xmp.sidecar_path(entry.path)),
                 confirm=lambda: _module_enabled(entry.path, entry.module, entry.instance) is False,
                 what=f"{entry.module} (disable)",
+                expect_module=entry.module,
             )
             verified = _module_enabled(entry.path, entry.module, entry.instance) is False
             if not verified:
@@ -1489,6 +1505,7 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
                 _read_value(entry.path, entry.module, entry.param, entry.instance), float(previous)
             ),
             what=f"{entry.module}.{entry.param} (undo)",
+            expect_module=entry.module,
         )
         # Blocker 5: verify from the XMP after the commit. `restored_to` is
         # what was actually read back, not the value that was requested.
