@@ -1,0 +1,190 @@
+{
+  "schema": "scouter-gauntlet-measurement-and-robustness/1",
+  "written": "2026-09-26",
+  "sources_note": "Every external claim carries its source inline in the vault note; this file is the structured extract for the harness to consume.",
+  "existing_infra": {
+    "ppm_stats": "scouter/core/ppm.py: stdlib-only P6 PPM parser, 256-bin per-channel histograms (Counter over the high byte of 16-bit samples), luminance histogram (Rec.709 weights on channel counts, labelled an estimate), percentiles, clipped_high_pct/clipped_low_pct (byte>=253 / <=2), wb_ratio_rg/bg (R/G, B/G channel means), sharpness (mean abs horizontal green-channel gradient, monotone within a frame only), downscale (nearest-neighbour stride decimation).",
+    "xmp_snapshot": "run_editor_benchmark.py:snapshot_xmp / compact_snapshot decode the darktable XMP sidecar's history stack into per-module params (SNAPSHOT_OPS: exposure, sigmoid, temperature, colorbalancergb, colorzones, lens, sharpen, denoiseprofile) for before/after diffing.",
+    "outcome_categories": "verified, correct_refusal, over_budget, partial, honest_refusal, reported_ok_unverified, blocked, failed (run_editor_benchmark.py OUTCOMES); scoring is pass/partial/fail per task from assertion groups (scoring.pass / scoring.partial / scoring.refusal).",
+    "observed_hang": "20260926t092247z-olympus.md: all 27 tasks scored blocked because the first history_commit after darktable launch returned error:commit_timeout in every one of 4 sessions -- this is the exact hang class item H1 below, caught live by the existing harness, not hypothetical."
+  },
+  "metrics": [
+    {
+      "id": "M1",
+      "what": "Sidecar/XMP history diff",
+      "how": "Snapshot the XMP before and after the call (snapshot_xmp), diff module param values per SNAPSHOT_OPS, assert delta/direction/restored against the task's expected value with a tolerance.",
+      "inputs": ["XMP sidecar text", "decoded module params"],
+      "tolerance_guidance": "Exact equality for boolean/enable flags; small absolute tolerance (e.g. +/-0.02 stops on exposure, +/-50K on temperature) for float params, since darktable's own UI step granularity sets the floor -- pick the tolerance from the module's UI step, not an arbitrary epsilon."
+    },
+    {
+      "id": "M2",
+      "what": "Luminance / exposure statistics on exported preview",
+      "how": "darktable-cli export to PPM at a fixed long edge (512px matches existing clip_scan usage), run ppm.stats: luminance_mean, luminance_p01/p50/p99, per-channel clipped_high_pct/clipped_low_pct.",
+      "inputs": ["exported PPM raster"],
+      "tolerance_guidance": "Convert 8-bit luma to EV or L* before comparing across exposure changes (EV delta = log2(new_mean/old_mean); L* = 116*(Y/Yn)^{1/3}-16 for Y>0.008856): a +1 stop instruction should show roughly +1 EV in mean luminance, not a fixed byte-count tolerance, because response is nonlinear near clipping."
+    },
+    {
+      "id": "M3",
+      "what": "Histogram percentile / clipping-fraction targets",
+      "how": "Compare clipped_high_pct/clipped_low_pct and luminance_p01/p99 before vs after against the sentence's intent (e.g. 'pull highlights back' should reduce clipped_high_pct, not raise it).",
+      "inputs": ["ppm.stats output pre/post"],
+      "tolerance_guidance": "Direction-only assertion (delta sign) is more robust than an absolute target for 'a touch'/'a lot' style instructions; reserve absolute percent thresholds for chart-based calibration tasks (see M6)."
+    },
+    {
+      "id": "M4",
+      "what": "RGB means and colour cast via grey-world",
+      "how": "Grey-world assumption: average scene reflectance is neutral, so channel means R:G:B should be near 1:1:1 after a correct white-balance edit; ppm.stats already reports wb_ratio_rg/wb_ratio_bg for this.",
+      "inputs": ["per-channel means from ppm.stats"],
+      "tolerance_guidance": "Grey-world is a heuristic, not ground truth, for any scene with a dominant colour (foliage, skin-heavy portrait) -- use it only on the neutral test chart (M8) for absolute cast checks; on real photos use it only for direction (warmer/cooler moved the ratio the expected way)."
+    },
+    {
+      "id": "M5",
+      "what": "Chroma/saturation in a perceptual space; hue angle of skin/sky/foliage regions",
+      "how": "Convert RGB (as read from PPM) to CIELAB or a simple HSL/HSV approximation with stdlib math (no numpy needed: matrix-multiply RGB->XYZ->Lab per pixel or per sampled block); compute chroma C*=sqrt(a*^2+b*^2) and hue angle atan2(b*,a*); sample fixed regions (top third = sky, centre = subject/skin, edges = foliage where the test frame has it) rather than whole-image means, since whole-image hue is meaningless.",
+      "inputs": ["PPM raster region crops"],
+      "tolerance_guidance": "Hue angle tolerance ~+/-5 deg for 'shift greens toward yellow' style tasks; chroma delta as a percentage of the pre-edit chroma, since absolute chroma varies hugely by scene."
+    },
+    {
+      "id": "M6",
+      "what": "Contrast as L* spread",
+      "how": "Compute L* histogram from the PPM (via the RGB->Lab conversion in M5) and take a spread statistic: IQR (p75-p25) or std-dev of L*.",
+      "inputs": ["L* histogram"],
+      "tolerance_guidance": "'Add contrast' should increase L* spread and steepen the midtone slope; assert delta sign plus a minimum magnitude (e.g. >=2 L* units) to reject no-op passes."
+    },
+    {
+      "id": "M7",
+      "what": "Noise estimate",
+      "how": "High-frequency energy in a flat region: variance of pixel values in a patch expected to be smooth (sky, shadow), or a simple wavelet/Laplacian high-pass proxy computed with the same stdlib gradient technique as ppm.sharpness but on a flat crop instead of the whole frame.",
+      "inputs": ["flat-region crop of PPM raster"],
+      "tolerance_guidance": "Denoise tasks should show a measurable decrease (e.g. >=15%) in this patch variance without a corresponding drop in the sharpness metric elsewhere in the frame (to catch over-smoothing false positives)."
+    },
+    {
+      "id": "M8",
+      "what": "Sharpness via Laplacian-variance-style proxy",
+      "how": "ppm.py:sharpness already implements a horizontal-gradient proxy (mean abs green-channel diff, sampled every 4th row); a true discrete Laplacian (2D second-derivative kernel) is a small stdlib addition (3x3 convolution over the green channel, no numpy) and is closer to the classic 'variance of Laplacian' focus-measure used in autofocus/blur-detection literature.",
+      "inputs": ["PPM raster"],
+      "tolerance_guidance": "Only compare within the same frame/crop (explicitly documented as scene-relative, not cross-scene, in ppm.py's own docstring); sharpen tasks should raise it, denoise tasks should not crash it to near zero."
+    },
+    {
+      "id": "M9",
+      "what": "Colour cast via ΔE2000 on a grey ramp / colour checker rendered synthetically",
+      "how": "Generate a synthetic 'RAW-equivalent' test chart (see M10) with a neutral grey ramp (5-9 patches, L* stepped 10-90, a*=b*=0) and/or a MacBeth-style colour-checker layout with known Lab targets; after an edit, sample each patch's mean Lab from the exported PPM and compute CIEDE2000 against the known target using the Sharma/Wu/Dalal 2005 reference formula (Rochester ECE implementation notes, http://www.ece.rochester.edu/~gsharma/ciede2000/, and https://hajim.rochester.edu/ece/sites/gsharma/papers/CIEDE2000CRNAFeb05.pdf, both 2005, still the standard reference as of 2026). Implement in pure Python: XYZ->Lab is closed-form; CIEDE2000 is ~40 lines of arithmetic, no dependency needed.",
+      "inputs": ["synthetic chart PPM render", "known Lab targets per patch"],
+      "tolerance_guidance": "darktable's own integration test suite (darktable-org/darktable-tests, README, accessed 2026-09) passes a rendered frame against a reference PNG when max ΔE < 2.3 and mean ΔE < 2.3/3 across the whole image -- use the same threshold family for a per-patch chart check: pass at ΔE00<2.3, flag at 2.3-5 as a look drift, fail above 5."
+    },
+    {
+      "id": "M10",
+      "what": "Building a synthetic test chart for stable look assertions",
+      "how": "Two options: (a) a neutral test frame -- shoot or keep on file one real RAW of a grey card / X-Rite ColorChecker under controlled light, imported into the bench library once, so 'target Lab per patch' is measured, not assumed; (b) a fully synthetic PPM/TIFF chart generated in Python (flat colour blocks at known sRGB values, converted to camera-native via a known matrix) fed through darktable-cli with a neutral (all-defaults) history stack to get a stable baseline render. Prefer (a) for realism (matches what the camera's demosaic/CFA actually does) and (b) only for pure-pipeline unit tests that don't touch a real sensor.",
+      "inputs": ["ColorChecker RAW frame (recommended) or synthetic RGB chart"],
+      "tolerance_guidance": "Re-render the untouched chart on every darktable/scouter version bump and diff against the last known-good render (ΔE00 per patch) before trusting any look assertion that version -- this catches darktable itself changing its default pipeline output, which would otherwise look like a scouter regression."
+    }
+  ],
+  "properties": [
+    {
+      "id": "P1",
+      "statement": "Idempotence of repeat: applying the same absolute-magnitude edit twice in a row leaves the sidecar params unchanged after the second call (module already at that value); applying the same relative edit twice roughly doubles the delta (within tolerance), it does not no-op.",
+      "applies_to": "darkroom_set (absolute) vs darkroom_adjust/darkroom_say (relative)"
+    },
+    {
+      "id": "P2",
+      "statement": "Commutativity where expected: independent-axis edits (e.g. white balance temperature then exposure) produce the same final XMP params regardless of call order; edits on the same axis or with known pipeline-order dependence (e.g. lens correction before/after crop) are NOT expected to commute -- assert non-commutativity explicitly there so a false 'pass' isn't hiding a real pipeline-order bug.",
+      "applies_to": "any two darkroom_set/darkroom_say calls on independent modules"
+    },
+    {
+      "id": "P3",
+      "statement": "Undo inverts: darkroom_undo_last after a set/adjust restores the pre-call XMP param value (or removes the just-added history entry) within the same tolerance as the original assertion.",
+      "applies_to": "darkroom_undo_last -- flagged in the vault's 2026-09-24 editor-benchmark note as currently NOT holding over MCP (each call gets its own job, so the undo journal is empty and it still reports ok:true with outcome dry_run); this property is the regression test to re-run once that's fixed."
+    },
+    {
+      "id": "P4",
+      "statement": "Monotonic response to magnitude words: for the same module/param, the measured delta for 'a touch' < 'a bit' < 'a lot' < 'a full stop' (or the module's equivalent phrase ladder), strictly increasing in magnitude even if not linear.",
+      "applies_to": "darkroom_say phrase resolution (the $hist/$ref-style resolvers already used for plan v2 magnitude pinning per editor_tasks.json plan_versions note)"
+    },
+    {
+      "id": "P5",
+      "statement": "Metamorphic: brighten(x) then darken(same amount) returns to within tolerance of the original export's luminance stats (M2); this validates the round-trip without needing to know the 'correct' absolute value, only the relation.",
+      "applies_to": "exposure, contrast, saturation follow-up-instruction pairs"
+    },
+    {
+      "id": "P6",
+      "statement": "Metamorphic: a crop/rotate/lens-correction-only edit should not move the grey-world channel ratios (M4) or the luminance histogram (M2) on a neutral chart -- geometric ops should be colour-neutral.",
+      "applies_to": "lens correction, crop/rotate modules"
+    },
+    {
+      "id": "P7",
+      "statement": "Golden-image regression: the untouched neutral chart (M10) re-rendered through darktable-cli with the checked-in default history must match the last committed reference PPM/stats within ΔE00<2.3 (same threshold family as darktable's own integration suite) -- a mismatch means darktable itself changed, not scouter, and should block the release until re-baselined.",
+      "applies_to": "chart baseline render, run once per darktable version"
+    }
+  ],
+  "robustness": [
+    {"id": "R1", "condition": "app closed", "expected_behaviour": "typed refusal identifying darktable is not running; no silent launch unless the tool explicitly owns launching", "how_to_simulate": "pkill darktable before the call"},
+    {"id": "R2", "condition": "app crashed mid-call", "expected_behaviour": "bridge call times out or gets a broken-pipe error; scouter reports blocked/failed with the crash noted, checks ~/Library/Logs/DiagnosticReports for a matching darktable crash report (acceptance_driver.py already has crash_count() for this) and surfaces the count in the report", "how_to_simulate": "kill -9 the darktable process mid darkroom_set"},
+    {"id": "R3", "condition": "app hung (no answer)", "expected_behaviour": "bounded timeout (DEFAULT_CALL_TIMEOUT_S=60s pattern already in run_editor_benchmark.py) then typed bridge_timeout, never an indefinite wait; the harness's own 2026-09-26 run hit exactly this (commit_timeout on first history_commit in all 4 sessions) and correctly scored it blocked rather than hanging the test run itself", "how_to_simulate": "open a modal dialog in darktable (e.g. an unsaved-changes prompt) before issuing the call"},
+    {"id": "R4", "condition": "app restarted with stale state", "expected_behaviour": "session/job identifiers from before the restart are rejected as stale, not silently reused against a new darktable process", "how_to_simulate": "capture a session id, quit and relaunch darktable, replay a call with the old id"},
+    {"id": "R5", "condition": "sidecar missing", "expected_behaviour": "typed error distinguishing 'no edits yet' (fine) from 'expected sidecar absent' (error) depending on call semantics", "how_to_simulate": "delete the .xmp before a history_read"},
+    {"id": "R6", "condition": "sidecar read-only", "expected_behaviour": "refuse the write with a permissions-typed reason, do not silently drop the edit", "how_to_simulate": "chmod 444 the .xmp before a darkroom_set"},
+    {"id": "R7", "condition": "sidecar stale (older than the library DB's record)", "expected_behaviour": "detect via mtime/hash mismatch and refuse or re-sync rather than trusting stale params", "how_to_simulate": "touch an old cached copy of the .xmp back into place after darktable wrote a newer one"},
+    {"id": "R8", "condition": "sidecar mid-write (torn read)", "expected_behaviour": "retry-on-parse-failure with a bounded backoff rather than crashing on invalid XML", "how_to_simulate": "read the .xmp in a tight loop while darktable is writing a large history stack"},
+    {"id": "R9", "condition": "library locked (another darktable instance holds library.db)", "expected_behaviour": "typed refusal naming the lock, no silent second instance", "how_to_simulate": "launch a second darktable pointed at the same --library path"},
+    {"id": "R10", "condition": "unicode and spaces in paths", "expected_behaviour": "round-trips correctly through subprocess argv, XMP paths, and job JSON without mangling", "how_to_simulate": "stage a frame under a folder named e.g. 'Café shoot été/'"},
+    {"id": "R11", "condition": "very long paths", "expected_behaviour": "graceful typed error, not a silent truncation, once past OS path limits (macOS ~1024 bytes per component historically, filesystem-dependent)", "how_to_simulate": "stage a frame many directories deep with long names"},
+    {"id": "R12", "condition": "missing file", "expected_behaviour": "typed not-found refusal before attempting to launch darktable on it", "how_to_simulate": "pass a path that does not exist"},
+    {"id": "R13", "condition": "unsupported file", "expected_behaviour": "typed refusal naming the extension/format, not a generic crash", "how_to_simulate": "pass a .txt or an unsupported RAW variant"},
+    {"id": "R14", "condition": "huge job (200+ frames)", "expected_behaviour": "queue with progress/partial-completion reporting rather than one giant blocking call; a timeout on one frame must not lose results for the rest", "how_to_simulate": "stage 200+ frames and run library.import / a batch preset_apply_job"},
+    {"id": "R15", "condition": "duplicate filenames across folders", "expected_behaviour": "disambiguate by full path internally even if the sentence names only a filename; refuse or ask when a bare filename is genuinely ambiguous across the job", "how_to_simulate": "stage the same basename in two job folders"},
+    {"id": "R16", "condition": "two clients at once", "expected_behaviour": "second client's calls queue or get a typed busy/lock refusal, never interleave writes to the same sidecar/session", "how_to_simulate": "run two MCP client processes against the same scouter-mcp server / same darktable session concurrently"},
+    {"id": "R17", "condition": "call timeouts", "expected_behaviour": "every call has a bounded wait (DEFAULT_CALL_TIMEOUT_S pattern) and a typed timeout outcome, never an indefinite hang propagated to the caller", "how_to_simulate": "already exercised live; see hang_causes below"},
+    {"id": "R18", "condition": "disk nearly full", "expected_behaviour": "export/backup/library-import calls fail with a typed disk-space reason before or during write, not a silent truncated file", "how_to_simulate": "fill the scratch volume to near-capacity with a dummy file before an export_run"},
+    {"id": "R19", "condition": "permissions denied", "expected_behaviour": "typed permissions refusal on the specific path, distinguishing read vs write denial", "how_to_simulate": "chmod 000 a target export directory"},
+    {"id": "R20", "condition": "clock skew", "expected_behaviour": "any timestamp-derived logic (run stamps, backup rotation, staleness checks in R7) tolerates a skewed system clock without silently misordering files", "how_to_simulate": "set system clock backward/forward around a run (or fake it via a wrapped clock in tests) and check run/staleness comparisons don't invert"},
+    {"id": "R21", "condition": "darktable version mismatch", "expected_behaviour": "scouter detects and reports the running darktable version vs the version it was validated against (5.4.x); refuses or warns rather than assuming param semantics are unchanged, since module defaults/behaviour can shift between versions", "how_to_simulate": "point SCOUTER at a different darktable binary/version if available, or stub the version string returned by the bridge"},
+    {"id": "R22", "condition": "plugin not loaded (an IOP module unavailable)", "expected_behaviour": "typed refusal naming the missing module rather than a generic failure when darkroom_enable/darkroom_set targets it", "how_to_simulate": "disable a module in darktable's preferences before the call"},
+    {"id": "R23", "condition": "luarc broken", "expected_behaviour": "scouter's own bridge calls (which may depend on darktable's Lua script-manager being healthy) fail with a typed lua-bridge error distinguishing it from a pixelpipe/app hang", "how_to_simulate": "corrupt ~/.config/darktable/luarc or inject a syntax error before launch"},
+    {"id": "R24", "condition": "wrong camera profile", "expected_behaviour": "typed refusal or a flagged low-confidence result when the ICC/camera profile applied doesn't match the frame's actual camera, rather than silently rendering with a mismatched profile", "how_to_simulate": "force an incompatible camera profile onto a frame from a different body"}
+  ],
+  "hang_causes": [
+    {
+      "cause": "Lua/bridge calls executed off the GTK main thread touching GUI state without the darktable gui_lock, or vice versa (GUI callbacks writing state that pixelpipe worker threads read unsynchronized)",
+      "evidence": "darktable-org/darktable GitHub, 2026: issue #22064 'IOP mask display toggles shared without locking', issue #22133 'toneequal: scrolled() takes gui_lock then history_mutex, deadlocking the darkroom' (AB-BA lock-order inversion), PR #21912 'dev-doc: document sharing gui_data between GUI and pipe threads' (introduces GUI_Threading.md), PR #22365 'Fixing unsafe read&write of g->data'. All accessed 2026-09-26.",
+      "mitigation": "Never call darktable.gui.action or any widget-touching Lua from a background thread; serialize all scouter bridge calls through darktable's own idle/GTK callback mechanism; treat any call that touches GUI + pixelpipe state together as a known deadlock risk and prefer the non-GUI Lua API / darktable-cli path where one exists."
+    },
+    {
+      "cause": "Modal dialogs blocking the GTK main loop (any Lua/bridge call issued while a dialog is open never gets processed)",
+      "evidence": "General GTK single-threaded-main-loop behaviour plus the same darktable threading issues above; also matches the harness's own observed pattern where the first history_commit after launch hung in every 2026-09-26 session (see existing_infra.observed_hang) -- consistent with an unacknowledged dialog or first-commit UI state not yet settled.",
+      "mitigation": "Health-check (ping) before every state-changing call; if a dialog-class hang is suspected, send Escape/dismiss via the same bridge before retrying; add a settle delay after launch before the first history_commit (the harness already waits ~2-2.4s for 'ready' per the results markdown, but that is launch-readiness, not first-commit-readiness -- these may need separate settle windows)."
+    },
+    {
+      "cause": "Pixelpipe (image processing pipeline) blocking the thread issuing the Lua call while a full-res recompute is in flight",
+      "evidence": "darktable-org/darktable issue #22133 above describes exactly a pixelpipe/history_mutex interaction that can freeze the darkroom with no redraw or input possible; general darktable architecture (pixelpipe runs on worker threads, GUI thread must not block waiting on it under a shared lock).",
+      "mitigation": "Poll with a bounded timeout rather than a blocking wait; on timeout, treat the call as failed-but-retryable-after-relaunch, not as a fatal crash; avoid firing multiple state-changing calls in quick succession without waiting for pixeline settle."
+    },
+    {
+      "cause": "macOS-specific GTK quirks (window/attention-request spam, view bouncing) adding a source of nondeterministic timing on macOS specifically",
+      "evidence": "darktable-org/darktable PR #21949 'gui: keep background jobs on GTK thread and avoid Windows attention spam' shows platform-specific GTK behaviour differences are an active area of fixes in 2026 (Windows-flagged in that PR title, but it demonstrates the general pattern of platform GTK quirks affecting responsiveness); darktable-tests PR #43 'Integration tests can now run on macOS' (darktable-org/darktable-tests, accessed 2026-09-26) shows macOS support for the test harness itself was only recently added, implying macOS timing/behaviour was not the original baseline.",
+      "mitigation": "Fewer view bounces: avoid rapid darkroom<->lighttable switches in a single session; run one darktable process per job with a dedicated --library and --configdir so no shared state carries hang-inducing history between jobs; add a watchdog that SIGKILLs and relaunches darktable after N seconds of no bridge response (the harness's results markdown already shows 'quit SIGKILL' as the fallback path when quit hangs)."
+    }
+  ],
+  "install_rehearsal": {
+    "steps": [
+      "Create isolated HOME/XDG dirs for the rehearsal, e.g. a scratch root under ~/Pictures/ScouterScratch/install-rehearsal/<stamp>/ with its own home/, config/, cache/ subfolders -- never point at the real $HOME.",
+      "Set HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME (and darktable's own --configdir flag) to the scratch subfolders for every subprocess in the rehearsal, mirroring acceptance_driver.py's pattern of overriding SCOUTER_CONFIG/SCOUTER_CACHE/OBSIDIAN_VAULT_PATH per env in acc_env()/base_env().",
+      "Launch darktable once against the throwaway --configdir to let it generate a fresh darktablerc, library.db and luarc under the scratch config dir -- confirms first-run config generation works, not just steady-state operation.",
+      "Run `scouter setup` against SCOUTER_CONFIG pointed at the scratch config path; verify it writes a valid config.json (schema/version field present) without touching ~/.config/darktable or the real scouter config.",
+      "Run `scouter setup --check` and assert it reports healthy against the throwaway darktable configdir, catching any assumption the code makes about a pre-existing real install.",
+      "Verify MCP registration in Claude Code: check the MCP server entry (claude mcp list / the project's .mcp.json or user-level MCP config) points at `python -m scouter.mcp.server` with the rehearsal's env vars scoped correctly, so a fresh machine's Claude Code would pick up the right binary path and env without inheriting the developer machine's real config.",
+      "Tear down: delete the scratch root; confirm nothing was written outside it by diffing `find ~/.config/darktable ~/Library/Application\\ Support -newer <rehearsal-start-timestamp>` before/after.",
+      "Repeat once with a pre-existing but empty real-looking config (simulating 'user ran setup once before, now re-runs it') to check setup is idempotent, not just clean-slate safe."
+    ]
+  },
+  "report_sections": [
+    {"id": "S1", "title": "Headline", "content": "One line: N tasks, pass/partial/fail counts and percentage, crash count, run duration, git commit/branch -- the run_editor_benchmark.py markdown header (see results/20260926t092247z-olympus.md line 6) is already close to this shape."},
+    {"id": "S2", "title": "Per-category pass rates", "content": "Table: category x {pass, partial, fail, score%} -- already produced by summarise()/markdown() in run_editor_benchmark.py; keep it in the release report unchanged."},
+    {"id": "S3", "title": "Every failure with a repro command", "content": "For each non-pass task: id, sentence, plan calls, outcome label, and a single copy-pasteable repro (e.g. the exact --live --task-id invocation or the MCP call sequence with arguments) so a human can reproduce without reading code."},
+    {"id": "S4", "title": "Contact sheet of looks", "content": "A single image grid (thumbnail per task: before crop | after crop, or before/after full frame downscaled) so a human can eyeball whether 'passing' edits actually look right -- deterministic metrics can pass on a technically-correct-but-ugly edit, so this is the human sanity check the numbers can't replace."},
+    {"id": "S5", "title": "Timing percentiles", "content": "p50/p90/p99 wall time per call type (darkroom_set, darkroom_say, history_commit, export_run, etc.) and per whole-task budget, flagging over_budget outcomes distinctly from fail."},
+    {"id": "S6", "title": "Crash count", "content": "Count of new entries under ~/Library/Logs/DiagnosticReports matching darktable since the run started (acceptance_driver.py:crash_count already implements this) plus any bridge_timeout/blocked session count as a near-crash signal."},
+    {"id": "S7", "title": "Honest refusals as the roadmap", "content": "The full list of honest_refusal and correct_refusal outcomes with their sentences (e.g. U1/U2 'mask and lift her face', 'remove the person' from the Olympus results) presented not as failures but as the literal backlog of capabilities to build next -- this reframing is what lets a human sign off in 10 minutes: refusals are expected and roadmap-worthy, only reported_ok_unverified and failed are true release blockers."},
+    {"id": "S8", "title": "Sign-off checklist", "content": "A single yes/no block at the top: zero reported_ok_unverified outcomes, zero unexplained blocked sessions, crash count 0, contact sheet reviewed, all fail-category repro commands present -- gate release on this block, everything else is supporting detail."}
+  ]
+}

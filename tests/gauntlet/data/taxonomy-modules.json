@@ -1,0 +1,4005 @@
+{
+ "meta": {
+  "title": "darktable editing universe taxonomy",
+  "generated": "2026-09-26",
+  "darktable_host": "5.4.1 (Scouter host, /Applications/darktable.app)",
+  "latest_release": "5.6.1 (2026-08-27)",
+  "id_convention": "id = darktable iop op name (as in XMP darktable:operation) where one exists; mask_* and neural_restore are non-iop",
+  "typical ranges": "practitioner working ranges, not hard slider limits; derived from manual + tutorials, medium confidence",
+  "vault_note": "Knowledge/Research - darktable editing universe 2026-09-26.md"
+ },
+ "modules": [
+  {
+   "id": "rawprepare",
+   "ui_name": "raw black/white point",
+   "purpose_group": "raw_technical",
+   "plain_words": "Sets the sensor's black and white levels so the raw data starts from true zero. Almost never touched unless a camera is mis-profiled.",
+   "params": [
+    {
+     "name": "black level (per channel)",
+     "typical_min": 0,
+     "typical_max": 4096,
+     "unit": "raw ADU",
+     "phrases": [
+      "black level is off",
+      "lifted blacks from raw"
+     ]
+    },
+    {
+     "name": "white point",
+     "typical_min": 4000,
+     "typical_max": 16383,
+     "unit": "raw ADU",
+     "phrases": [
+      "highlights clip too early"
+     ]
+    }
+   ],
+   "phrases": [
+    "fix the raw black level",
+    "blacks look lifted and grey"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/raw-black-white-point/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "demosaic",
+   "ui_name": "demosaic",
+   "purpose_group": "raw_technical",
+   "plain_words": "Turns the single-colour sensor mosaic into full RGB pixels; 5.4 adds capture sharpening here to undo sensor/AA blur.",
+   "params": [
+    {
+     "name": "algorithm",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum RCD|AMaZE|LMMSE|PPG|VNG4|dual (Bayer); Markesteijn 1/3-pass|FDC (X-Trans)",
+     "phrases": [
+      "use AMaZE for fine detail",
+      "LMMSE for noisy high ISO"
+     ]
+    },
+    {
+     "name": "dual demosaic threshold",
+     "typical_min": 0.0,
+     "typical_max": 0.3,
+     "unit": "ratio",
+     "phrases": [
+      "smooth flat areas, keep detail on edges"
+     ]
+    },
+    {
+     "name": "capture sharpening radius",
+     "typical_min": 0.3,
+     "typical_max": 1.5,
+     "unit": "px",
+     "phrases": [
+      "recover sensor softness",
+      "capture sharpen"
+     ]
+    },
+    {
+     "name": "capture sharpening iterations",
+     "typical_min": 4,
+     "typical_max": 20,
+     "unit": "count",
+     "phrases": [
+      "more capture sharpening"
+     ]
+    }
+   ],
+   "phrases": [
+    "recover fine detail",
+    "it looks mushy at 100%",
+    "capture sharpening",
+    "zipper or maze artifacts"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/demosaic/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "hotpixels",
+   "ui_name": "hot pixels",
+   "purpose_group": "raw_technical",
+   "plain_words": "Finds and removes stuck or hot sensor pixels, common in long exposures.",
+   "params": [
+    {
+     "name": "threshold",
+     "typical_min": 0.01,
+     "typical_max": 0.1,
+     "unit": "ratio",
+     "phrases": [
+      "catch more hot pixels"
+     ]
+    },
+    {
+     "name": "strength",
+     "typical_min": 0.1,
+     "typical_max": 1.0,
+     "unit": "ratio",
+     "phrases": []
+    },
+    {
+     "name": "detect by 3 neighbors",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "bool",
+     "phrases": [
+      "aggressive hot pixel removal"
+     ]
+    }
+   ],
+   "phrases": [
+    "remove hot pixels",
+    "get rid of the red/green dots in the long exposure",
+    "stuck pixels"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/hot-pixels/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "highlights",
+   "ui_name": "highlight reconstruction",
+   "purpose_group": "raw_technical",
+   "plain_words": "Rebuilds colour and detail in areas where one or more sensor channels clipped; default inpaint opposed.",
+   "params": [
+    {
+     "name": "method",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum inpaint opposed|segmentation based|guided laplacians|clip highlights|reconstruct in LCh",
+     "phrases": [
+      "rebuild the blown sky",
+      "fix magenta highlights"
+     ]
+    },
+    {
+     "name": "clipping threshold",
+     "typical_min": 0.9,
+     "typical_max": 1.1,
+     "unit": "ratio",
+     "phrases": [
+      "mask doesn't match the overexposure warning"
+     ]
+    },
+    {
+     "name": "combine (segmentation)",
+     "typical_min": 0,
+     "typical_max": 8,
+     "unit": "px",
+     "phrases": []
+    },
+    {
+     "name": "diameter of reconstruction (guided laplacians)",
+     "typical_min": 64,
+     "typical_max": 1024,
+     "unit": "px",
+     "phrases": []
+    },
+    {
+     "name": "iterations (guided laplacians)",
+     "typical_min": 1,
+     "typical_max": 256,
+     "unit": "count",
+     "phrases": [
+      "still magenta in the highlights"
+     ]
+    }
+   ],
+   "phrases": [
+    "recover blown highlights",
+    "the sun is magenta",
+    "fix the clipped sky",
+    "bring back the highlights"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/highlight-reconstruction/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "cacorrect",
+   "ui_name": "raw chromatic aberrations",
+   "purpose_group": "raw_technical",
+   "plain_words": "Removes lateral colour fringes at raw level (Bayer only), before demosaic.",
+   "params": [
+    {
+     "name": "iterations",
+     "typical_min": 1,
+     "typical_max": 3,
+     "unit": "count",
+     "phrases": []
+    },
+    {
+     "name": "avoid colorshift",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "bool",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "remove colour fringing at raw level"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/raw-chromatic-aberrations/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "cacorrectrgb",
+   "ui_name": "chromatic aberrations",
+   "purpose_group": "detail",
+   "plain_words": "Removes purple/green fringes along high-contrast edges after demosaic; works on any sensor.",
+   "params": [
+    {
+     "name": "guide channel",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum red|green|blue",
+     "phrases": []
+    },
+    {
+     "name": "radius",
+     "typical_min": 1,
+     "typical_max": 10,
+     "unit": "px",
+     "phrases": [
+      "wider fringes"
+     ]
+    },
+    {
+     "name": "strength",
+     "typical_min": 0.5,
+     "typical_max": 1.5,
+     "unit": "ratio",
+     "phrases": [
+      "stronger defringe"
+     ]
+    },
+    {
+     "name": "correction mode",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum standard|darken only|brighten only",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "remove purple fringing",
+    "fix the chromatic aberration",
+    "get rid of the colour fringes on the branches"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/chromatic-aberrations/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "rawdenoise",
+   "ui_name": "raw denoise",
+   "purpose_group": "detail",
+   "plain_words": "Wavelet noise reduction on raw data before demosaic; rarely used vs denoise (profiled).",
+   "params": [
+    {
+     "name": "noise threshold",
+     "typical_min": 0.001,
+     "typical_max": 0.1,
+     "unit": "ratio",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "denoise at raw level"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/raw-denoise/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "flip",
+   "ui_name": "orientation",
+   "purpose_group": "geometry",
+   "plain_words": "Rotates by 90-degree steps or flips; applied from EXIF automatically.",
+   "params": [
+    {
+     "name": "orientation",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum no rotation|flip H|flip V|rotate 90 CW|rotate 90 CCW|rotate 180",
+     "phrases": [
+      "rotate it",
+      "flip it horizontally",
+      "mirror it"
+     ]
+    }
+   ],
+   "phrases": [
+    "rotate 90",
+    "flip horizontally",
+    "it's sideways"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/orientation/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "temperature",
+   "ui_name": "white balance",
+   "purpose_group": "colour",
+   "plain_words": "Raw-level channel multipliers. In the modern scene-referred workflow it stays at 'camera reference' and colour calibration does the real white balance.",
+   "params": [
+    {
+     "name": "setting",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum as shot|camera reference|user modified|as shot to reference|preset",
+     "phrases": []
+    },
+    {
+     "name": "temperature",
+     "typical_min": 2500,
+     "typical_max": 10000,
+     "unit": "K",
+     "phrases": [
+      "warm it up",
+      "cool it down"
+     ]
+    },
+    {
+     "name": "tint",
+     "typical_min": 0.8,
+     "typical_max": 1.2,
+     "unit": "ratio",
+     "phrases": [
+      "too green",
+      "too magenta"
+     ]
+    }
+   ],
+   "phrases": [
+    "warm it up",
+    "cool it down",
+    "fix the white balance",
+    "too blue",
+    "too orange"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/white-balance/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "exposure",
+   "ui_name": "exposure",
+   "purpose_group": "tone",
+   "plain_words": "Sets overall brightness (the mid-grey point) in stops; also the dodge/burn workhorse when masked.",
+   "params": [
+    {
+     "name": "exposure",
+     "typical_min": -2.0,
+     "typical_max": 3.0,
+     "unit": "EV",
+     "phrases": [
+      "brighten it",
+      "darken it",
+      "it's underexposed",
+      "a stop brighter",
+      "lift the whole image"
+     ]
+    },
+    {
+     "name": "black level correction",
+     "typical_min": -0.01,
+     "typical_max": 0.01,
+     "unit": "ratio",
+     "phrases": [
+      "don't use to crush blacks (manual says use the tone mapper)"
+     ]
+    },
+    {
+     "name": "compensate camera exposure",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "bool",
+     "phrases": []
+    },
+    {
+     "name": "area exposure mapping target",
+     "typical_min": 18,
+     "typical_max": 50,
+     "unit": "% lightness",
+     "phrases": [
+      "match the brightness across the set"
+     ]
+    }
+   ],
+   "phrases": [
+    "brighten",
+    "darken",
+    "too dark",
+    "too bright",
+    "lift it a stop",
+    "dodge this",
+    "burn that down",
+    "match exposure to the hero"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/exposure/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "sigmoid",
+   "ui_name": "sigmoid",
+   "purpose_group": "tone",
+   "plain_words": "Scene-to-display tone mapper with an S-curve; fewer knobs than filmic; default tone mapper for new installs since 5.2.",
+   "params": [
+    {
+     "name": "contrast",
+     "typical_min": 1.0,
+     "typical_max": 2.5,
+     "unit": "ratio",
+     "phrases": [
+      "more contrast",
+      "punchier",
+      "flatter"
+     ]
+    },
+    {
+     "name": "skew",
+     "typical_min": -0.5,
+     "typical_max": 0.5,
+     "unit": "ratio",
+     "phrases": [
+      "deeper shadows",
+      "open the shadows",
+      "compress highlights"
+     ]
+    },
+    {
+     "name": "color processing",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum per channel|rgb ratio",
+     "phrases": []
+    },
+    {
+     "name": "preserve hue",
+     "typical_min": 0,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": [
+      "let sunsets go yellow",
+      "keep hues true"
+     ]
+    },
+    {
+     "name": "target black",
+     "typical_min": 0.0,
+     "typical_max": 0.5,
+     "unit": "% display",
+     "phrases": [
+      "faded blacks",
+      "matte look"
+     ]
+    },
+    {
+     "name": "target white",
+     "typical_min": 90,
+     "typical_max": 100,
+     "unit": "% display",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "add contrast",
+    "make it punchier",
+    "flatten it",
+    "compress the highlights",
+    "faded film look"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/sigmoid/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "agx",
+   "ui_name": "AgX",
+   "purpose_group": "tone",
+   "plain_words": "Blender-derived tone mapper added in 5.4: exposure range, pivot, contrast, toe/shoulder power, plus look slope/lift/brightness/saturation and primaries for film-like highlight desaturation.",
+   "params": [
+    {
+     "name": "white relative exposure",
+     "typical_min": 2.0,
+     "typical_max": 8.0,
+     "unit": "EV",
+     "phrases": [
+      "protect the highlights",
+      "set white point"
+     ]
+    },
+    {
+     "name": "black relative exposure",
+     "typical_min": -12.0,
+     "typical_max": -5.0,
+     "unit": "EV",
+     "phrases": [
+      "deeper blacks",
+      "set black point"
+     ]
+    },
+    {
+     "name": "contrast",
+     "typical_min": 1.5,
+     "typical_max": 3.5,
+     "unit": "ratio",
+     "phrases": [
+      "more contrast",
+      "softer contrast"
+     ]
+    },
+    {
+     "name": "toe power",
+     "typical_min": 1.0,
+     "typical_max": 2.0,
+     "unit": "ratio",
+     "phrases": [
+      "crush the blacks",
+      "keep shadow contrast"
+     ]
+    },
+    {
+     "name": "shoulder power",
+     "typical_min": 1.0,
+     "typical_max": 2.0,
+     "unit": "ratio",
+     "phrases": [
+      "softer highlight rolloff"
+     ]
+    },
+    {
+     "name": "look saturation",
+     "typical_min": 0.7,
+     "typical_max": 1.4,
+     "unit": "ratio",
+     "phrases": [
+      "more colour",
+      "desaturate"
+     ]
+    },
+    {
+     "name": "look lift",
+     "typical_min": -0.05,
+     "typical_max": 0.05,
+     "unit": "ratio",
+     "phrases": [
+      "fade the blacks"
+     ]
+    }
+   ],
+   "phrases": [
+    "film-like highlights",
+    "auto tune levels",
+    "filmic-style rolloff",
+    "punchy preset",
+    "smooth preset"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/agx/",
+   "seen": "2026-09-26",
+   "notes": "Presets: blender-like|base, scene-referred default, smooth, punchy, unmodified."
+  },
+  {
+   "id": "filmicrgb",
+   "ui_name": "filmic rgb",
+   "purpose_group": "tone",
+   "plain_words": "Original scene-referred tone mapper (Aurelien Pierre): white/black relative exposure, contrast, latitude, highlight reconstruction; still default in older configs.",
+   "params": [
+    {
+     "name": "white relative exposure",
+     "typical_min": 2.0,
+     "typical_max": 8.0,
+     "unit": "EV",
+     "phrases": [
+      "save the highlights"
+     ]
+    },
+    {
+     "name": "black relative exposure",
+     "typical_min": -12.0,
+     "typical_max": -6.0,
+     "unit": "EV",
+     "phrases": [
+      "crush the blacks",
+      "lift the blacks"
+     ]
+    },
+    {
+     "name": "contrast",
+     "typical_min": 1.0,
+     "typical_max": 2.0,
+     "unit": "ratio",
+     "phrases": [
+      "more contrast"
+     ]
+    },
+    {
+     "name": "latitude",
+     "typical_min": 0,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "shadows/highlights balance",
+     "typical_min": -50,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": [
+      "open the shadows"
+     ]
+    },
+    {
+     "name": "reconstruct threshold",
+     "typical_min": -3.0,
+     "typical_max": 0.0,
+     "unit": "EV",
+     "phrases": [
+      "fix clipped highlights"
+     ]
+    }
+   ],
+   "phrases": [
+    "set white and black points",
+    "filmic look",
+    "too much contrast",
+    "compress dynamic range"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/filmic-rgb/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "basecurve",
+   "ui_name": "base curve",
+   "purpose_group": "tone",
+   "plain_words": "Display-referred camera-JPEG-like curve; legacy / display-referred workflow and camera styles; exposure fusion for pseudo-HDR.",
+   "params": [
+    {
+     "name": "preset",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum camera-like presets",
+     "phrases": [
+      "look like the camera JPEG"
+     ]
+    },
+    {
+     "name": "fusion",
+     "typical_min": 0,
+     "typical_max": 3,
+     "unit": "frames",
+     "phrases": [
+      "HDR look from one frame"
+     ]
+    }
+   ],
+   "phrases": [
+    "look like the camera JPEG",
+    "out of camera look"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/base-curve/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "toneequal",
+   "ui_name": "tone equalizer",
+   "purpose_group": "tone",
+   "plain_words": "Dodges and burns by brightness zone using a smoothed luminance mask, like a graphic equalizer for light: pull the sky down, lift faces in shadow, without halos.",
+   "params": [
+    {
+     "name": "zone gain -8..0 EV bands",
+     "typical_min": -2.0,
+     "typical_max": 2.0,
+     "unit": "EV per band",
+     "phrases": [
+      "open the shadows",
+      "lift the shadows",
+      "pull down the highlights",
+      "tame the sky"
+     ]
+    },
+    {
+     "name": "preserve details",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum no|guided filter|averaged guided filter|eigf|averaged eigf",
+     "phrases": [
+      "avoid halos"
+     ]
+    },
+    {
+     "name": "smoothing diameter",
+     "typical_min": 1,
+     "typical_max": 20,
+     "unit": "% long side",
+     "phrases": []
+    },
+    {
+     "name": "edges refinement/feathering",
+     "typical_min": 1,
+     "typical_max": 100,
+     "unit": "ratio",
+     "phrases": [
+      "halo around the horizon"
+     ]
+    },
+    {
+     "name": "mask exposure compensation",
+     "typical_min": -4,
+     "typical_max": 4,
+     "unit": "EV",
+     "phrases": []
+    },
+    {
+     "name": "mask contrast compensation",
+     "typical_min": -2,
+     "typical_max": 2,
+     "unit": "EV",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "open the shadows",
+    "bring down the highlights",
+    "recover the sky",
+    "even out the light",
+    "compress the dynamic range",
+    "dodge and burn"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/tone-equalizer/",
+   "seen": "2026-09-26",
+   "notes": "Presets: compress shadows/highlights (gf/eigf) soft/medium/strong, relight. Set mask with the wand buttons first."
+  },
+  {
+   "id": "rgbcurve",
+   "ui_name": "rgb curve",
+   "purpose_group": "tone",
+   "plain_words": "Curve on RGB (linked or per channel) for creative contrast shaping and colour casts; works in scene-referred space.",
+   "params": [
+    {
+     "name": "curve node (shadows)",
+     "typical_min": -0.05,
+     "typical_max": 0.05,
+     "unit": "output offset",
+     "phrases": [
+      "crush the blacks",
+      "matte blacks"
+     ]
+    },
+    {
+     "name": "curve node (highlights)",
+     "typical_min": -0.05,
+     "typical_max": 0.05,
+     "unit": "output offset",
+     "phrases": [
+      "roll off highlights"
+     ]
+    },
+    {
+     "name": "preserve colors",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum none|luminance|max RGB|average RGB|sum RGB|norm|basic power",
+     "phrases": []
+    },
+    {
+     "name": "mode",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum RGB linked|independent channels",
+     "phrases": [
+      "cross-process look",
+      "teal shadows via blue curve"
+     ]
+    }
+   ],
+   "phrases": [
+    "S-curve",
+    "add an S-curve",
+    "crush the blacks",
+    "fade the blacks",
+    "matte look",
+    "cross-processed"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/rgb-curve/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "rgblevels",
+   "ui_name": "rgb levels",
+   "purpose_group": "tone",
+   "plain_words": "Black/grey/white level pickers on RGB, linked or per channel.",
+   "params": [
+    {
+     "name": "black",
+     "typical_min": 0,
+     "typical_max": 5,
+     "unit": "%",
+     "phrases": [
+      "set the black point",
+      "crush blacks"
+     ]
+    },
+    {
+     "name": "grey",
+     "typical_min": 40,
+     "typical_max": 60,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "white",
+     "typical_min": 90,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": [
+      "set the white point"
+     ]
+    }
+   ],
+   "phrases": [
+    "set levels",
+    "auto levels",
+    "stretch the histogram"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/rgb-levels/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "tonecurve",
+   "ui_name": "tone curve",
+   "purpose_group": "tone",
+   "plain_words": "Legacy Lab/RGB curve module; display-referred habit, still used for per-channel Lab curves.",
+   "params": [
+    {
+     "name": "curve",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "nodes",
+     "phrases": [
+      "S-curve"
+     ]
+    },
+    {
+     "name": "preserve colors",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "classic tone curve"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/tone-curve/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "shadhi",
+   "ui_name": "shadows and highlights",
+   "purpose_group": "tone",
+   "plain_words": "Legacy display-referred local lift/compress; prone to halos, superseded by tone equalizer.",
+   "params": [
+    {
+     "name": "shadows",
+     "typical_min": 0,
+     "typical_max": 60,
+     "unit": "",
+     "phrases": [
+      "lift shadows"
+     ]
+    },
+    {
+     "name": "highlights",
+     "typical_min": -60,
+     "typical_max": 0,
+     "unit": "",
+     "phrases": [
+      "recover highlights"
+     ]
+    },
+    {
+     "name": "radius",
+     "typical_min": 50,
+     "typical_max": 200,
+     "unit": "px",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "quick shadow lift"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/shadows-and-highlights/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "graduatednd",
+   "ui_name": "graduated density",
+   "purpose_group": "tone",
+   "plain_words": "Simulated graduated ND filter: darkens part of the frame with a linear gradient, optionally tinted.",
+   "params": [
+    {
+     "name": "density",
+     "typical_min": 0.5,
+     "typical_max": 3.0,
+     "unit": "EV",
+     "phrases": [
+      "darken the sky"
+     ]
+    },
+    {
+     "name": "hardness",
+     "typical_min": 0,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "rotation",
+     "typical_min": -180,
+     "typical_max": 180,
+     "unit": "deg",
+     "phrases": []
+    },
+    {
+     "name": "hue",
+     "typical_min": 0,
+     "typical_max": 360,
+     "unit": "deg",
+     "phrases": []
+    },
+    {
+     "name": "saturation",
+     "typical_min": 0,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": [
+      "blue the sky"
+     ]
+    }
+   ],
+   "phrases": [
+    "darken the sky",
+    "grad filter",
+    "ND grad"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/graduated-density/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "channelmixerrgb",
+   "ui_name": "color calibration",
+   "purpose_group": "colour",
+   "plain_words": "The modern white balance (chromatic adaptation) plus channel mixer, colourfulness/brightness per channel, and grey tab for B&W; can calibrate from a colour checker.",
+   "params": [
+    {
+     "name": "adaptation",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum CAT16|linear Bradford|non-linear Bradford|XYZ|none",
+     "phrases": []
+    },
+    {
+     "name": "illuminant",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum as shot in camera|daylight|blackbody|custom|A|D50|D65|F...|detect from surfaces|detect from edges",
+     "phrases": [
+      "neutralise the cast",
+      "it's too yellow indoors"
+     ]
+    },
+    {
+     "name": "temperature (CCT)",
+     "typical_min": 2500,
+     "typical_max": 8000,
+     "unit": "K",
+     "phrases": [
+      "warmer",
+      "cooler"
+     ]
+    },
+    {
+     "name": "hue/chroma of illuminant",
+     "typical_min": 0,
+     "typical_max": 360,
+     "unit": "deg / %",
+     "phrases": [
+      "remove the green cast"
+     ]
+    },
+    {
+     "name": "gray tab R/G/B mix",
+     "typical_min": -1.0,
+     "typical_max": 2.0,
+     "unit": "ratio",
+     "phrases": [
+      "red filter B&W",
+      "darker skies in B&W"
+     ]
+    },
+    {
+     "name": "colorfulness R/G/B",
+     "typical_min": -50,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": [
+      "mute the greens"
+     ]
+    }
+   ],
+   "phrases": [
+    "fix the white balance",
+    "neutralise the colour cast",
+    "it's too orange indoors",
+    "make it black and white",
+    "red filter",
+    "match the colour checker",
+    "mixed light"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/color-calibration/",
+   "seen": "2026-09-26",
+   "notes": "Mixed light: one instance per illuminant with drawn/parametric masks; second instance reuses the first mask inverted via raster mask."
+  },
+  {
+   "id": "colorbalancergb",
+   "ui_name": "color balance rgb",
+   "purpose_group": "colour",
+   "plain_words": "The main colour grading tool: global vibrance/chroma/saturation/brilliance, per-zone (shadows/mid/highlights) saturation and brilliance, 4-ways lift/power/gain/offset hue+chroma wheels.",
+   "params": [
+    {
+     "name": "global vibrance",
+     "typical_min": 0,
+     "typical_max": 30,
+     "unit": "%",
+     "phrases": [
+      "add some pop",
+      "more vibrant"
+     ]
+    },
+    {
+     "name": "global chroma",
+     "typical_min": 0,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": [
+      "more colour",
+      "richer colours"
+     ]
+    },
+    {
+     "name": "saturation shadows/mid/highlights",
+     "typical_min": -30,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": [
+      "saturate the shadows",
+      "desaturate the highlights"
+     ]
+    },
+    {
+     "name": "brilliance shadows/mid/highlights",
+     "typical_min": -20,
+     "typical_max": 20,
+     "unit": "%",
+     "phrases": [
+      "brighter colours",
+      "deeper colours"
+     ]
+    },
+    {
+     "name": "contrast",
+     "typical_min": -30,
+     "typical_max": 30,
+     "unit": "%",
+     "phrases": [
+      "more midtone contrast"
+     ]
+    },
+    {
+     "name": "4-ways shadows lift hue/chroma",
+     "typical_min": 0,
+     "typical_max": 360,
+     "unit": "deg / 0-15 %",
+     "phrases": [
+      "teal shadows",
+      "cool shadows"
+     ]
+    },
+    {
+     "name": "4-ways highlights gain hue/chroma",
+     "typical_min": 0,
+     "typical_max": 360,
+     "unit": "deg / 0-15 %",
+     "phrases": [
+      "warm highlights",
+      "orange highlights"
+     ]
+    },
+    {
+     "name": "global offset luminance",
+     "typical_min": -2,
+     "typical_max": 2,
+     "unit": "%",
+     "phrases": [
+      "lift the blacks",
+      "faded"
+     ]
+    }
+   ],
+   "phrases": [
+    "add some pop",
+    "make the colours richer",
+    "teal and orange",
+    "warm highlights, cool shadows",
+    "muted colours",
+    "desaturate",
+    "colour grade it",
+    "make it moody",
+    "cinematic"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/color-balance-rgb/",
+   "seen": "2026-09-26",
+   "notes": "Presets: basic colorfulness (natural/vibrant/standard), add basic colorfulness. Pierre's rule of thumb: chroma globally, saturation in shadows/mids, brilliance in highlights."
+  },
+  {
+   "id": "colorequal",
+   "ui_name": "color equalizer",
+   "purpose_group": "colour",
+   "plain_words": "Hue-selective hue/saturation/brightness curves (HSL-style) in darktable UCS; the modern replacement for color zones.",
+   "params": [
+    {
+     "name": "hue shift per hue node",
+     "typical_min": -30,
+     "typical_max": 30,
+     "unit": "deg",
+     "phrases": [
+      "make the greens more yellow",
+      "shift the sky toward cyan"
+     ]
+    },
+    {
+     "name": "saturation per hue node",
+     "typical_min": -50,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": [
+      "mute the greens",
+      "make the blues pop",
+      "desaturate the oranges"
+     ]
+    },
+    {
+     "name": "brightness per hue node",
+     "typical_min": -30,
+     "typical_max": 30,
+     "unit": "%",
+     "phrases": [
+      "darken the blue sky",
+      "brighten the skin"
+     ]
+    },
+    {
+     "name": "hue analysis radius / contrast",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "options",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "HSL adjustment",
+    "darken the blue sky",
+    "mute the greens",
+    "fix the skin tones",
+    "make the foliage less neon"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/color-equalizer/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "colorzones",
+   "ui_name": "color zones",
+   "purpose_group": "colour",
+   "plain_words": "Older hue/chroma/lightness curves in LCh; still widely used for selective colour and selective desaturation.",
+   "params": [
+    {
+     "name": "lightness by hue",
+     "typical_min": -30,
+     "typical_max": 30,
+     "unit": "%",
+     "phrases": [
+      "darken the sky"
+     ]
+    },
+    {
+     "name": "chroma by hue",
+     "typical_min": -100,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": [
+      "desaturate everything but red"
+     ]
+    },
+    {
+     "name": "hue by hue",
+     "typical_min": -30,
+     "typical_max": 30,
+     "unit": "deg",
+     "phrases": [
+      "shift the greens"
+     ]
+    }
+   ],
+   "phrases": [
+    "selective colour",
+    "keep only the red",
+    "desaturate one colour"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/color-zones/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "primaries",
+   "ui_name": "rgb primaries",
+   "purpose_group": "colour",
+   "plain_words": "Rotates hue and purity of the R, G, B primaries (a friendly channel mixer); before tone mapping for colorimetry, after it for tints.",
+   "params": [
+    {
+     "name": "red/green/blue hue",
+     "typical_min": -20,
+     "typical_max": 20,
+     "unit": "deg",
+     "phrases": [
+      "warmer reds",
+      "cyan-er blues"
+     ]
+    },
+    {
+     "name": "red/green/blue purity",
+     "typical_min": -30,
+     "typical_max": 30,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "tint hue/purity",
+     "typical_min": 0,
+     "typical_max": 360,
+     "unit": "deg / 0-20 %",
+     "phrases": [
+      "tint the greys"
+     ]
+    }
+   ],
+   "phrases": [
+    "shift the primaries",
+    "make it look like film colours"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/rgb-primaries/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "vibrance",
+   "ui_name": "vibrance (deprecated) / color balance rgb vibrance",
+   "purpose_group": "colour",
+   "plain_words": "Boost muted colours more than already-saturated ones. Standalone vibrance module is deprecated; use color balance rgb global vibrance or velvia.",
+   "params": [
+    {
+     "name": "vibrance",
+     "typical_min": 0,
+     "typical_max": 30,
+     "unit": "%",
+     "phrases": [
+      "add vibrance"
+     ]
+    }
+   ],
+   "phrases": [
+    "add vibrance",
+    "more vibrant without oversaturating skin"
+   ],
+   "on_host_5_4_1": "deprecated",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/vibrance/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "velvia",
+   "ui_name": "velvia",
+   "purpose_group": "colour",
+   "plain_words": "Saturation boost that protects already saturated pixels; display-referred.",
+   "params": [
+    {
+     "name": "strength",
+     "typical_min": 10,
+     "typical_max": 40,
+     "unit": "%",
+     "phrases": [
+      "punchy landscape colour"
+     ]
+    },
+    {
+     "name": "mid-tones bias",
+     "typical_min": 0,
+     "typical_max": 1,
+     "unit": "ratio",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "velvia look",
+    "punch up the colours"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/velvia/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "colisa_replacement",
+   "ui_name": "saturation (via color balance rgb)",
+   "purpose_group": "colour",
+   "plain_words": "'Saturation' requests map to color balance rgb saturation/chroma; old contrast-brightness-saturation module was removed in 5.2.",
+   "params": [
+    {
+     "name": "saturation",
+     "typical_min": -100,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": [
+      "more saturated",
+      "less saturated",
+      "desaturate",
+      "black and white-ish"
+     ]
+    }
+   ],
+   "phrases": [
+    "more saturation",
+    "less saturation"
+   ],
+   "on_host_5_4_1": "alias",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/color-balance-rgb/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "lut3d",
+   "ui_name": "LUT 3D",
+   "purpose_group": "look",
+   "plain_words": "Applies a 3D LUT (.cube, .3dl, .png haldclut, .gmz) for film looks or client grades; clips to [0,1]; LUT file lives in the LUT root folder, not the XMP.",
+   "params": [
+    {
+     "name": "LUT file",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "path",
+     "phrases": [
+      "apply my LUT",
+      "use the Kodak Portra LUT"
+     ]
+    },
+    {
+     "name": "application color space",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum sRGB|REC.709|lin sRGB/REC.709|lin prophoto RGB",
+     "phrases": []
+    },
+    {
+     "name": "interpolation",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum tetrahedral|trilinear|pyramid",
+     "phrases": []
+    },
+    {
+     "name": "opacity (blend)",
+     "typical_min": 20,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": [
+      "half-strength LUT"
+     ]
+    }
+   ],
+   "phrases": [
+    "apply a LUT",
+    "film simulation",
+    "use this .cube",
+    "make it look like Portra"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/lut-3d/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "colorchecker",
+   "ui_name": "color look up table",
+   "purpose_group": "look",
+   "plain_words": "Maps colour-checker patches to targets; used for camera-matching and styles (5.0 added an expanded checker preset).",
+   "params": [
+    {
+     "name": "patch source/target",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "Lab per patch",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "match another camera",
+    "camera profile look"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/color-look-up-table/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "splittoning",
+   "ui_name": "split-toning",
+   "purpose_group": "look",
+   "plain_words": "Tints shadows and highlights with two hues; display-referred; color balance rgb 4-ways is the scene-referred equivalent.",
+   "params": [
+    {
+     "name": "shadows hue",
+     "typical_min": 180,
+     "typical_max": 240,
+     "unit": "deg",
+     "phrases": [
+      "blue shadows",
+      "teal shadows"
+     ]
+    },
+    {
+     "name": "highlights hue",
+     "typical_min": 20,
+     "typical_max": 60,
+     "unit": "deg",
+     "phrases": [
+      "warm highlights",
+      "gold highlights"
+     ]
+    },
+    {
+     "name": "balance",
+     "typical_min": 0,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "compress",
+     "typical_min": 0,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "saturation",
+     "typical_min": 10,
+     "typical_max": 60,
+     "unit": "%",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "split tone",
+    "teal and orange",
+    "sepia highlights, blue shadows"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/split-toning/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "colorize",
+   "ui_name": "colorize",
+   "purpose_group": "look",
+   "plain_words": "Overlays a single solid colour tint; for toned monochrome.",
+   "params": [
+    {
+     "name": "hue",
+     "typical_min": 0,
+     "typical_max": 360,
+     "unit": "deg",
+     "phrases": [
+      "sepia"
+     ]
+    },
+    {
+     "name": "saturation",
+     "typical_min": 0,
+     "typical_max": 60,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "lightness",
+     "typical_min": 40,
+     "typical_max": 60,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "source mix",
+     "typical_min": 0,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "sepia tone",
+    "tint it blue",
+    "cyanotype"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/colorize/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "colorharmonizer",
+   "ui_name": "color harmonizer",
+   "purpose_group": "colour",
+   "plain_words": "(5.6+) Pulls off-palette hues toward a harmony rule (complementary, triad, etc.) in UCS space; NOT on Scouter's 5.4.1 host.",
+   "params": [
+    {
+     "name": "harmony rule",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum monochromatic|analogous|complementary|split complementary|triad|tetrad|square|custom",
+     "phrases": [
+      "make the colours harmonise"
+     ]
+    },
+    {
+     "name": "anchor hue",
+     "typical_min": 0,
+     "typical_max": 360,
+     "unit": "deg",
+     "phrases": []
+    },
+    {
+     "name": "strength",
+     "typical_min": 0,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "harmonise the colours",
+    "complementary palette"
+   ],
+   "on_host_5_4_1": "no (5.6+)",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/color-harmonizer/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "satcurve",
+   "ui_name": "saturation curve",
+   "purpose_group": "colour",
+   "plain_words": "(dev manual, post-5.6) Saturation and brilliance remapped as curves of input saturation; NOT on 5.4.1 host.",
+   "params": [
+    {
+     "name": "saturation curve",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "nodes",
+     "phrases": [
+      "protect vivid colours, boost dull ones"
+     ]
+    }
+   ],
+   "phrases": [
+    "saturate only the dull colours"
+   ],
+   "on_host_5_4_1": "no (dev)",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/satcurve-rgb/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "denoiseprofile",
+   "ui_name": "denoise (profiled)",
+   "purpose_group": "detail",
+   "plain_words": "Noise reduction tuned to each camera/ISO profile; non-local means or wavelets; defaults usually enough.",
+   "params": [
+    {
+     "name": "mode",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum wavelets auto|non-local means auto|wavelets|non-local means",
+     "phrases": []
+    },
+    {
+     "name": "strength",
+     "typical_min": 0.5,
+     "typical_max": 2.0,
+     "unit": "ratio",
+     "phrases": [
+      "clean up the noise",
+      "denoise harder",
+      "too smeary"
+     ]
+    },
+    {
+     "name": "preserve shadows",
+     "typical_min": 0.8,
+     "typical_max": 1.5,
+     "unit": "ratio",
+     "phrases": [
+      "shadows too blotchy"
+     ]
+    },
+    {
+     "name": "bias correction",
+     "typical_min": -0.5,
+     "typical_max": 0.5,
+     "unit": "ratio",
+     "phrases": [
+      "green/magenta blotches"
+     ]
+    },
+    {
+     "name": "patch size (NLM)",
+     "typical_min": 1,
+     "typical_max": 4,
+     "unit": "px",
+     "phrases": []
+    },
+    {
+     "name": "blend: chroma only",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "blend mode",
+     "phrases": [
+      "just remove colour noise"
+     ]
+    }
+   ],
+   "phrases": [
+    "clean up the noise",
+    "reduce the grain",
+    "remove colour noise",
+    "too noisy",
+    "it's plasticky"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/denoise-profiled/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "nlmeans",
+   "ui_name": "astrophoto denoise",
+   "purpose_group": "detail",
+   "plain_words": "Non-local means denoise with separate luma/chroma sliders; used for night skies and heavy noise.",
+   "params": [
+    {
+     "name": "patch size",
+     "typical_min": 1,
+     "typical_max": 4,
+     "unit": "px",
+     "phrases": []
+    },
+    {
+     "name": "strength",
+     "typical_min": 20,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": [
+      "smooth the sky noise"
+     ]
+    },
+    {
+     "name": "luma",
+     "typical_min": 0,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "chroma",
+     "typical_min": 50,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": [
+      "remove colour speckle"
+     ]
+    }
+   ],
+   "phrases": [
+    "denoise the night sky",
+    "clean up the astro noise"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/astrophoto-denoise/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "sharpen",
+   "ui_name": "sharpen",
+   "purpose_group": "detail",
+   "plain_words": "Classic unsharp mask; legacy, meant to undo AA-filter softness; many turn it off in favour of diffuse or sharpen.",
+   "params": [
+    {
+     "name": "radius",
+     "typical_min": 0.5,
+     "typical_max": 3.0,
+     "unit": "px",
+     "phrases": []
+    },
+    {
+     "name": "amount",
+     "typical_min": 0.3,
+     "typical_max": 1.5,
+     "unit": "ratio",
+     "phrases": [
+      "sharpen it",
+      "crisper"
+     ]
+    },
+    {
+     "name": "threshold",
+     "typical_min": 0.3,
+     "typical_max": 1.0,
+     "unit": "ratio",
+     "phrases": [
+      "don't sharpen the noise"
+     ]
+    }
+   ],
+   "phrases": [
+    "sharpen it",
+    "make it crisper",
+    "it's soft"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/sharpen/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "diffuse",
+   "ui_name": "diffuse or sharpen",
+   "purpose_group": "detail",
+   "plain_words": "Physics-based diffusion engine; its presets do lens deblur, sharpening, dehaze, local contrast, bloom, denoise, inpaint highlights, watercolour.",
+   "params": [
+    {
+     "name": "preset",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum sharpen demosaicing (AA/no AA)|lens deblur soft/medium/hard|dehaze|local contrast|fast sharpness|fast local contrast|bloom|denoise fine/medium/coarse|inpaint highlights|surface blur|simulate watercolor|simulate line drawing",
+     "phrases": [
+      "lens deblur",
+      "dehaze",
+      "add clarity"
+     ]
+    },
+    {
+     "name": "iterations",
+     "typical_min": 1,
+     "typical_max": 32,
+     "unit": "count",
+     "phrases": [
+      "stronger effect"
+     ]
+    },
+    {
+     "name": "central radius",
+     "typical_min": 0,
+     "typical_max": 8,
+     "unit": "px",
+     "phrases": []
+    },
+    {
+     "name": "radius span",
+     "typical_min": 1,
+     "typical_max": 64,
+     "unit": "px",
+     "phrases": []
+    },
+    {
+     "name": "1st-4th order speed",
+     "typical_min": -100,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": [
+      "sharpen (negative) vs blur (positive)"
+     ]
+    },
+    {
+     "name": "edge sensitivity",
+     "typical_min": 0,
+     "typical_max": 5,
+     "unit": "ratio",
+     "phrases": [
+      "avoid halos"
+     ]
+    },
+    {
+     "name": "luminance masking threshold",
+     "typical_min": 0,
+     "typical_max": 10,
+     "unit": "%",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "sharpen",
+    "deblur",
+    "clarity",
+    "dehaze",
+    "add bite",
+    "Orton glow",
+    "halation (with RGB blend)"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/diffuse/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "bilat",
+   "ui_name": "local contrast",
+   "purpose_group": "detail",
+   "plain_words": "Quick detail/clarity boost (local laplacian); just enabling it or picking a preset is often enough.",
+   "params": [
+    {
+     "name": "detail",
+     "typical_min": 100,
+     "typical_max": 250,
+     "unit": "%",
+     "phrases": [
+      "add some pop",
+      "more clarity",
+      "more texture"
+     ]
+    },
+    {
+     "name": "highlights",
+     "typical_min": 30,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "shadows",
+     "typical_min": 30,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "mid-tone range",
+     "typical_min": 0.3,
+     "typical_max": 0.7,
+     "unit": "ratio",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "add clarity",
+    "add some pop",
+    "more texture",
+    "make the clouds pop",
+    "more detail"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/local-contrast/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "atrous",
+   "ui_name": "contrast equalizer",
+   "purpose_group": "detail",
+   "plain_words": "Wavelet contrast/denoise by feature size: fine texture vs large structure; 'clarity' preset is a popular clarity/structure move.",
+   "params": [
+    {
+     "name": "preset",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum clarity|deblur|denoise|bloom|coarse/fine structure",
+     "phrases": [
+      "clarity"
+     ]
+    },
+    {
+     "name": "mix",
+     "typical_min": 10,
+     "typical_max": 40,
+     "unit": "%",
+     "phrases": [
+      "gentle clarity"
+     ]
+    },
+    {
+     "name": "contrast per scale",
+     "typical_min": -50,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "clarity",
+    "fine texture",
+    "soften skin texture (negative)"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/contrast-equalizer/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "hazeremoval",
+   "ui_name": "haze removal",
+   "purpose_group": "detail",
+   "plain_words": "One-slider dehaze using a dark-channel prior; negative strength adds haze.",
+   "params": [
+    {
+     "name": "strength",
+     "typical_min": -0.3,
+     "typical_max": 0.6,
+     "unit": "ratio",
+     "phrases": [
+      "cut through the haze",
+      "remove the fog",
+      "add haze"
+     ]
+    },
+    {
+     "name": "distance",
+     "typical_min": 0.1,
+     "typical_max": 1.0,
+     "unit": "ratio",
+     "phrases": [
+      "dehaze only the far hills"
+     ]
+    }
+   ],
+   "phrases": [
+    "dehaze",
+    "remove the haze",
+    "cut through the fog",
+    "add atmosphere"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/haze-removal/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "contrasttexture",
+   "ui_name": "contrast & texture",
+   "purpose_group": "detail",
+   "plain_words": "(dev manual, post-5.6) Scene-referred local contrast via eigf; NOT on 5.4.1 host.",
+   "params": [
+    {
+     "name": "local contrast",
+     "typical_min": -50,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": [
+      "more texture",
+      "smooth skin (negative)"
+     ]
+    },
+    {
+     "name": "detail level",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "scale",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "texture slider"
+   ],
+   "on_host_5_4_1": "no (dev)",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/contrast-texture/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "highpass",
+   "ui_name": "highpass",
+   "purpose_group": "detail",
+   "plain_words": "High-pass layer, blended (overlay/soft light) for sharpening.",
+   "params": [
+    {
+     "name": "sharpness",
+     "typical_min": 20,
+     "typical_max": 60,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "contrast boost",
+     "typical_min": 0,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "high-pass sharpen"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/highpass/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "lowpass",
+   "ui_name": "lowpass",
+   "purpose_group": "detail",
+   "plain_words": "Low-pass blur; with blend modes used for soft glow, local contrast inversion, or shadow recovery tricks.",
+   "params": [
+    {
+     "name": "radius",
+     "typical_min": 5,
+     "typical_max": 50,
+     "unit": "px",
+     "phrases": []
+    },
+    {
+     "name": "contrast",
+     "typical_min": -1,
+     "typical_max": 1,
+     "unit": "ratio",
+     "phrases": []
+    },
+    {
+     "name": "saturation",
+     "typical_min": 0,
+     "typical_max": 1,
+     "unit": "ratio",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "soft glow"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/lowpass/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "bilateral",
+   "ui_name": "surface blur",
+   "purpose_group": "detail",
+   "plain_words": "Edge-preserving bilateral blur; chroma blend reduces moire or skin redness.",
+   "params": [
+    {
+     "name": "radius",
+     "typical_min": 1,
+     "typical_max": 50,
+     "unit": "px",
+     "phrases": []
+    },
+    {
+     "name": "red/green/blue",
+     "typical_min": 1,
+     "typical_max": 50,
+     "unit": "ratio",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "remove moire",
+    "even out skin redness"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/surface-blur/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "lens",
+   "ui_name": "lens correction",
+   "purpose_group": "geometry",
+   "plain_words": "Auto-detects lens (Lensfun or embedded metadata) and fixes distortion, vignetting and TCA; enable before exposure since it changes brightness.",
+   "params": [
+    {
+     "name": "correction method",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum embedded metadata|Lensfun database",
+     "phrases": []
+    },
+    {
+     "name": "corrections",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum all|distortion|vignetting|TCA",
+     "phrases": [
+      "fix the vignetting",
+      "fix the distortion",
+      "fix barrel distortion"
+     ]
+    },
+    {
+     "name": "distortion fine-tune",
+     "typical_min": -0.5,
+     "typical_max": 0.5,
+     "unit": "ratio",
+     "phrases": []
+    },
+    {
+     "name": "vignetting fine-tune",
+     "typical_min": 0,
+     "typical_max": 2,
+     "unit": "ratio",
+     "phrases": [
+      "corners still dark"
+     ]
+    }
+   ],
+   "phrases": [
+    "fix the lens distortion",
+    "fix the vignetting",
+    "remove barrel distortion",
+    "lens profile"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/lens-correction/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "ashift",
+   "ui_name": "rotate and perspective",
+   "purpose_group": "geometry",
+   "plain_words": "Straightens horizons and fixes converging verticals (keystone), with auto structure detection; right-drag along the horizon to level.",
+   "params": [
+    {
+     "name": "rotation",
+     "typical_min": -10,
+     "typical_max": 10,
+     "unit": "deg",
+     "phrases": [
+      "straighten the horizon",
+      "it's tilted",
+      "level it"
+     ]
+    },
+    {
+     "name": "lens shift vertical",
+     "typical_min": -1,
+     "typical_max": 1,
+     "unit": "ratio",
+     "phrases": [
+      "fix converging verticals",
+      "buildings leaning back"
+     ]
+    },
+    {
+     "name": "lens shift horizontal",
+     "typical_min": -1,
+     "typical_max": 1,
+     "unit": "ratio",
+     "phrases": []
+    },
+    {
+     "name": "shear",
+     "typical_min": -0.5,
+     "typical_max": 0.5,
+     "unit": "ratio",
+     "phrases": []
+    },
+    {
+     "name": "automatic cropping",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum off|largest area|original format",
+     "phrases": []
+    },
+    {
+     "name": "structure fit",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum vertical|horizontal|both",
+     "phrases": [
+      "auto straighten"
+     ]
+    }
+   ],
+   "phrases": [
+    "straighten the horizon",
+    "level it",
+    "fix the leaning buildings",
+    "keystone",
+    "perspective correction"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/rotate-perspective/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "crop",
+   "ui_name": "crop",
+   "purpose_group": "geometry",
+   "plain_words": "Crops to a region with aspect ratio presets and composition guides.",
+   "params": [
+    {
+     "name": "aspect",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum freehand|original|square|3:2|4:3|5:4|16:9|4:5|45:35 etc.",
+     "phrases": [
+      "crop to square",
+      "make it 4:5 for Instagram"
+     ]
+    },
+    {
+     "name": "margins left/right/top/bottom",
+     "typical_min": 0,
+     "typical_max": 40,
+     "unit": "%",
+     "phrases": [
+      "tighter crop",
+      "crop in"
+     ]
+    }
+   ],
+   "phrases": [
+    "crop it",
+    "tighter crop",
+    "crop to square",
+    "4x5 for Instagram",
+    "cut out the distraction at the edge"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/crop/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "liquify",
+   "ui_name": "liquify",
+   "purpose_group": "geometry",
+   "plain_words": "Push/pull/warp pixels with points, lines, curves; bulge/pinch.",
+   "params": [
+    {
+     "name": "strength",
+     "typical_min": 10,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "radius",
+     "typical_min": 20,
+     "typical_max": 300,
+     "unit": "px",
+     "phrases": []
+    },
+    {
+     "name": "warp type",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum linear|grow|shrink",
+     "phrases": [
+      "slim",
+      "enlarge the eyes"
+     ]
+    }
+   ],
+   "phrases": [
+    "push this in",
+    "slim the waist",
+    "straighten a warped line locally"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/liquify/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "retouch",
+   "ui_name": "retouch",
+   "purpose_group": "geometry",
+   "plain_words": "Clone, heal, fill, blur with drawn shapes; wavelet decomposition gives frequency-separation skin retouching. Source is manual (no content-aware).",
+   "params": [
+    {
+     "name": "algorithm",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum clone|heal|fill|blur",
+     "phrases": [
+      "remove the dust spot",
+      "heal the blemish"
+     ]
+    },
+    {
+     "name": "wavelet scales",
+     "typical_min": 0,
+     "typical_max": 8,
+     "unit": "scale count",
+     "phrases": [
+      "frequency separation"
+     ]
+    },
+    {
+     "name": "blur radius",
+     "typical_min": 1,
+     "typical_max": 20,
+     "unit": "px",
+     "phrases": [
+      "smooth the skin"
+     ]
+    },
+    {
+     "name": "fill color/brightness",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "color",
+     "phrases": []
+    },
+    {
+     "name": "shape opacity",
+     "typical_min": 50,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "remove the dust spots",
+    "clean up the blemishes",
+    "remove the pimple",
+    "smooth the skin",
+    "frequency separation",
+    "remove the power line (small)"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/retouch/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "spots",
+   "ui_name": "spot removal",
+   "purpose_group": "geometry",
+   "plain_words": "Legacy clone-only spot tool; deprecated in favour of retouch.",
+   "params": [
+    {
+     "name": "shape size",
+     "typical_min": 5,
+     "typical_max": 100,
+     "unit": "px",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "remove a spot"
+   ],
+   "on_host_5_4_1": "deprecated",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/spot-removal/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "vignette",
+   "ui_name": "vignetting",
+   "purpose_group": "finish",
+   "plain_words": "Creative vignette (darken/brighten edges, desaturate) with shape and centre controls; add dither to avoid banding.",
+   "params": [
+    {
+     "name": "brightness",
+     "typical_min": -1.0,
+     "typical_max": 0.2,
+     "unit": "ratio",
+     "phrases": [
+      "add a vignette",
+      "darken the corners",
+      "subtle vignette"
+     ]
+    },
+    {
+     "name": "saturation",
+     "typical_min": -0.5,
+     "typical_max": 0.0,
+     "unit": "ratio",
+     "phrases": []
+    },
+    {
+     "name": "scale",
+     "typical_min": 40,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "fall-off strength",
+     "typical_min": 30,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "shape",
+     "typical_min": 0.8,
+     "typical_max": 2.0,
+     "unit": "ratio",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "add a vignette",
+    "darken the edges",
+    "draw the eye in",
+    "remove the vignette (use lens correction)"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/vignetting/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "grain",
+   "ui_name": "grain",
+   "purpose_group": "finish",
+   "plain_words": "Adds film-like grain (luminance only) scaled by simulated ISO coarseness.",
+   "params": [
+    {
+     "name": "coarseness",
+     "typical_min": 400,
+     "typical_max": 3200,
+     "unit": "ISO",
+     "phrases": [
+      "finer grain",
+      "chunkier grain"
+     ]
+    },
+    {
+     "name": "strength",
+     "typical_min": 5,
+     "typical_max": 40,
+     "unit": "%",
+     "phrases": [
+      "add some grain",
+      "film grain"
+     ]
+    },
+    {
+     "name": "midtones bias",
+     "typical_min": 0,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "add grain",
+    "make it look like film",
+    "Tri-X grain"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/grain/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "borders",
+   "ui_name": "framing",
+   "purpose_group": "finish",
+   "plain_words": "Adds a coloured border/frame with aspect ratio and position; a frame line too.",
+   "params": [
+    {
+     "name": "border size",
+     "typical_min": 1,
+     "typical_max": 15,
+     "unit": "% of image",
+     "phrases": [
+      "add a white border"
+     ]
+    },
+    {
+     "name": "aspect",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum",
+     "phrases": [
+      "square frame for Instagram"
+     ]
+    },
+    {
+     "name": "border color",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "rgb",
+     "phrases": []
+    },
+    {
+     "name": "frame line size",
+     "typical_min": 0,
+     "typical_max": 2,
+     "unit": "%",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "add a border",
+    "white frame",
+    "Instagram square with white bars"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/framing/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "watermark",
+   "ui_name": "watermark",
+   "purpose_group": "finish",
+   "plain_words": "Overlays an SVG/PNG watermark with variable text (e.g. $(EXIF.DATE), copyright).",
+   "params": [
+    {
+     "name": "opacity",
+     "typical_min": 20,
+     "typical_max": 80,
+     "unit": "%",
+     "phrases": [
+      "subtle watermark"
+     ]
+    },
+    {
+     "name": "scale",
+     "typical_min": 5,
+     "typical_max": 30,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "alignment",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "3x3 grid",
+     "phrases": [
+      "bottom right"
+     ]
+    },
+    {
+     "name": "text",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "string with variables",
+     "phrases": [
+      "add my copyright"
+     ]
+    }
+   ],
+   "phrases": [
+    "add my watermark",
+    "copyright in the corner",
+    "sign it"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/watermark/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "blurs",
+   "ui_name": "blurs",
+   "purpose_group": "finish",
+   "plain_words": "Lens (bokeh), motion or gaussian blur; used masked to fake shallow depth or motion.",
+   "params": [
+    {
+     "name": "blur type",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum lens|motion|gaussian",
+     "phrases": [
+      "fake bokeh",
+      "motion blur"
+     ]
+    },
+    {
+     "name": "radius",
+     "typical_min": 4,
+     "typical_max": 64,
+     "unit": "px",
+     "phrases": [
+      "blur the background"
+     ]
+    },
+    {
+     "name": "blades / concavity / rotation",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "lens shape",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "blur the background",
+    "fake bokeh",
+    "add motion blur"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/blurs/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "bloom",
+   "ui_name": "bloom",
+   "purpose_group": "finish",
+   "plain_words": "Glow around highlights (Lab, display-referred); diffuse-or-sharpen bloom preset is the scene-referred alternative.",
+   "params": [
+    {
+     "name": "size",
+     "typical_min": 10,
+     "typical_max": 40,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "threshold",
+     "typical_min": 80,
+     "typical_max": 95,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "strength",
+     "typical_min": 10,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": [
+      "dreamy glow"
+     ]
+    }
+   ],
+   "phrases": [
+    "dreamy glow",
+    "Orton effect",
+    "halation-ish"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/bloom/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "soften",
+   "ui_name": "soften",
+   "purpose_group": "finish",
+   "plain_words": "Orton-style soft glow by blending a blurred, brightened copy.",
+   "params": [
+    {
+     "name": "size",
+     "typical_min": 20,
+     "typical_max": 80,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "saturation",
+     "typical_min": 50,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "brightness",
+     "typical_min": 0,
+     "typical_max": 1,
+     "unit": "EV",
+     "phrases": []
+    },
+    {
+     "name": "mix",
+     "typical_min": 20,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": [
+      "soft dreamy look"
+     ]
+    }
+   ],
+   "phrases": [
+    "soft focus",
+    "Orton glow"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/soften/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "monochrome",
+   "ui_name": "monochrome",
+   "purpose_group": "monochrome",
+   "plain_words": "Quick Lab B&W with a movable colour filter; the color calibration gray tab is the preferred modern method.",
+   "params": [
+    {
+     "name": "filter position",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "a,b point",
+     "phrases": [
+      "red filter",
+      "green filter"
+     ]
+    },
+    {
+     "name": "filter size",
+     "typical_min": 20,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "highlights",
+     "typical_min": 0,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "make it black and white",
+    "B&W",
+    "monochrome"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/monochrome/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "negadoctor",
+   "ui_name": "negadoctor",
+   "purpose_group": "look",
+   "plain_words": "Inverts and corrects scanned colour/B&W film negatives (Aurelien Pierre).",
+   "params": [
+    {
+     "name": "film stock",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum color|black and white",
+     "phrases": []
+    },
+    {
+     "name": "D min",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "color picker",
+     "phrases": []
+    },
+    {
+     "name": "paper black / grade",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "ratio",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "invert my film scan",
+    "convert the negative"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/negadoctor/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "colorreconstruct",
+   "ui_name": "color reconstruction",
+   "purpose_group": "raw_technical",
+   "plain_words": "Refills colour into clipped white areas from neighbours; mostly superseded by highlight reconstruction/filmic.",
+   "params": [
+    {
+     "name": "lightness threshold",
+     "typical_min": 90,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "spatial extent",
+     "typical_min": 100,
+     "typical_max": 800,
+     "unit": "px",
+     "phrases": []
+    },
+    {
+     "name": "range extent",
+     "typical_min": 10,
+     "typical_max": 40,
+     "unit": "%",
+     "phrases": []
+    },
+    {
+     "name": "precedence",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum none|saturated colors|hue",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "colour back into blown areas"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/color-reconstruction/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "dither",
+   "ui_name": "dither or posterize",
+   "purpose_group": "finish",
+   "plain_words": "Adds tiny noise to prevent banding in smooth gradients (skies, vignettes) on 8-bit export.",
+   "params": [
+    {
+     "name": "method",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum Floyd-Steinberg 8-bit RGB|random|posterize",
+     "phrases": [
+      "fix banding in the sky"
+     ]
+    }
+   ],
+   "phrases": [
+    "fix banding",
+    "stop the posterisation"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/dither-or-posterize/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "censorize",
+   "ui_name": "censorize",
+   "purpose_group": "finish",
+   "plain_words": "Pixelates/blurs a masked area (faces, plates).",
+   "params": [
+    {
+     "name": "radius",
+     "typical_min": 5,
+     "typical_max": 50,
+     "unit": "px",
+     "phrases": []
+    },
+    {
+     "name": "pixelate",
+     "typical_min": 5,
+     "typical_max": 50,
+     "unit": "px",
+     "phrases": [
+      "pixelate the licence plate"
+     ]
+    },
+    {
+     "name": "noise",
+     "typical_min": 0,
+     "typical_max": 1,
+     "unit": "ratio",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "blur the face",
+    "pixelate the plate"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/censorize/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "enlargecanvas",
+   "ui_name": "enlarge canvas",
+   "purpose_group": "geometry",
+   "plain_words": "Adds canvas around the image (e.g. for a frame or text).",
+   "params": [
+    {
+     "name": "percent left/right/top/bottom",
+     "typical_min": 0,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": [
+      "more canvas"
+     ]
+    },
+    {
+     "name": "color",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "extend the canvas"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/enlarge-canvas/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "mask_drawn",
+   "ui_name": "drawn masks",
+   "purpose_group": "masks",
+   "plain_words": "Hand-drawn circles, ellipses, paths, brushes, gradients attached to any module; combine with set operations.",
+   "params": [
+    {
+     "name": "shape",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum circle|ellipse|path|brush|gradient",
+     "phrases": [
+      "only the face",
+      "just the sky"
+     ]
+    },
+    {
+     "name": "feather/border",
+     "typical_min": 5,
+     "typical_max": 50,
+     "unit": "% of size",
+     "phrases": [
+      "softer edge"
+     ]
+    },
+    {
+     "name": "opacity",
+     "typical_min": 20,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "just on the face",
+    "only this area",
+    "paint in",
+    "gradient on the sky"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/darkroom/masking-and-blending/masks/drawn/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "mask_parametric",
+   "ui_name": "parametric masks",
+   "purpose_group": "masks",
+   "plain_words": "Select pixels by channel ranges (L, chroma, hue, g, R/G/B, Jz etc.) on input and output; the luminosity-mask equivalent.",
+   "params": [
+    {
+     "name": "channel range (e.g. hue, L)",
+     "typical_min": 0,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": [
+      "only the blues",
+      "only the highlights"
+     ]
+    },
+    {
+     "name": "feathering radius",
+     "typical_min": 1,
+     "typical_max": 20,
+     "unit": "px",
+     "phrases": []
+    },
+    {
+     "name": "mask blur",
+     "typical_min": 1,
+     "typical_max": 30,
+     "unit": "px",
+     "phrases": []
+    },
+    {
+     "name": "details threshold",
+     "typical_min": -50,
+     "typical_max": 50,
+     "unit": "%",
+     "phrases": [
+      "edges only"
+     ]
+    }
+   ],
+   "phrases": [
+    "only the highlights",
+    "only the blues",
+    "luminosity mask",
+    "exclude skin"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/darkroom/masking-and-blending/masks/parametric/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "mask_raster",
+   "ui_name": "raster masks",
+   "purpose_group": "masks",
+   "plain_words": "Reuse the final mask of an earlier module in a later one (and 5.2 adds external PFM raster masks with refine controls).",
+   "params": [
+    {
+     "name": "source mask",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "module instance",
+     "phrases": [
+      "same mask as before"
+     ]
+    },
+    {
+     "name": "invert",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "bool",
+     "phrases": [
+      "the opposite area"
+     ]
+    }
+   ],
+   "phrases": [
+    "reuse that mask",
+    "apply to everything except the subject"
+   ],
+   "on_host_5_4_1": "yes",
+   "source": "https://docs.darktable.org/usermanual/development/en/darkroom/masking-and-blending/masks/raster/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "mask_ai_object",
+   "ui_name": "AI object mask (5.6+)",
+   "purpose_group": "masks",
+   "plain_words": "Click-to-segment subject mask (SAM2.1/SegNext), vectorised into editable paths; optional, disabled by default, needs AI build and models. NOT on 5.4.1 host.",
+   "params": [
+    {
+     "name": "prompt points",
+     "typical_min": 1,
+     "typical_max": 10,
+     "unit": "clicks",
+     "phrases": [
+      "select the subject",
+      "mask the person"
+     ]
+    }
+   ],
+   "phrases": [
+    "select the subject",
+    "mask the sky",
+    "select the person"
+   ],
+   "on_host_5_4_1": "no (5.6+)",
+   "source": "https://docs.darktable.org/usermanual/development/en/darkroom/masking-and-blending/masks/ai-masking/",
+   "seen": "2026-09-26"
+  },
+  {
+   "id": "neural_restore",
+   "ui_name": "neural restore (5.6+)",
+   "purpose_group": "detail",
+   "plain_words": "AI raw denoise, denoise and upscale (NIND UNet, RawNIND, RealPLKSR) with strength slider; optional AI build only. NOT on 5.4.1 host.",
+   "params": [
+    {
+     "name": "task",
+     "typical_min": null,
+     "typical_max": null,
+     "unit": "enum raw denoise|denoise|upscale",
+     "phrases": [
+      "AI denoise",
+      "upscale 2x"
+     ]
+    },
+    {
+     "name": "strength",
+     "typical_min": 0,
+     "typical_max": 100,
+     "unit": "%",
+     "phrases": []
+    }
+   ],
+   "phrases": [
+    "AI denoise",
+    "upscale it",
+    "super resolution"
+   ],
+   "on_host_5_4_1": "no (5.6+)",
+   "source": "https://github.com/darktable-org/darktable/releases/tag/release-5.6.0",
+   "seen": "2026-09-26"
+  }
+ ],
+ "workflows": [
+  {
+   "genre": "portrait",
+   "steps": [
+    {
+     "op": "check raw overexposure (shift+O)",
+     "module": "highlights",
+     "condition": "if clipped raw channels then enable highlight reconstruction (inpaint opposed; guided laplacians for speculars)"
+    },
+    {
+     "op": "enable lens profile before exposure",
+     "module": "lens"
+    },
+    {
+     "op": "set exposure on the face (skin roughly +0.5..+1 EV over mid-grey for Caucasian skin; judge by eye)",
+     "module": "exposure"
+    },
+    {
+     "op": "white balance on a neutral or skin via picker",
+     "module": "channelmixerrgb",
+     "condition": "if mixed window+tungsten then second masked instance"
+    },
+    {
+     "op": "tone map, moderate contrast",
+     "module": "sigmoid"
+    },
+    {
+     "op": "lift faces in shadow, tame bright background",
+     "module": "toneequal"
+    },
+    {
+     "op": "crop and straighten",
+     "module": "crop"
+    },
+    {
+     "op": "remove blemishes, stray hairs; wavelet scale for skin",
+     "module": "retouch"
+    },
+    {
+     "op": "soften skin texture gently (negative contrast on fine scales, masked to skin)",
+     "module": "atrous",
+     "condition": "if close-up beauty"
+    },
+    {
+     "op": "skin hue/sat tidy (oranges/reds)",
+     "module": "colorequal",
+     "condition": "if skin too red/ruddy"
+    },
+    {
+     "op": "grade: warm highlights, low global saturation boost",
+     "module": "colorbalancergb"
+    },
+    {
+     "op": "sharpen eyes only (masked)",
+     "module": "diffuse"
+    },
+    {
+     "op": "subtle vignette",
+     "module": "vignette"
+    }
+   ]
+  },
+  {
+   "genre": "landscape",
+   "steps": [
+    {
+     "op": "check raw overexposure (shift+O)",
+     "module": "highlights",
+     "condition": "if clipped raw channels then enable highlight reconstruction (inpaint opposed; guided laplacians for speculars)"
+    },
+    {
+     "op": "enable lens profile before exposure",
+     "module": "lens"
+    },
+    {
+     "op": "set mid-grey exposure",
+     "module": "exposure"
+    },
+    {
+     "op": "set white/black relative exposure via pickers",
+     "module": "agx"
+    },
+    {
+     "op": "pull the sky down, open foreground shadows",
+     "module": "toneequal"
+    },
+    {
+     "op": "darken sky further with gradient",
+     "module": "graduatednd",
+     "condition": "if sky still bright vs foreground"
+    },
+    {
+     "op": "dehaze distant hills",
+     "module": "hazeremoval",
+     "condition": "if atmospheric haze"
+    },
+    {
+     "op": "straighten horizon",
+     "module": "ashift"
+    },
+    {
+     "op": "local contrast / clarity",
+     "module": "bilat"
+    },
+    {
+     "op": "HSL: mute neon greens, deepen blue sky",
+     "module": "colorequal"
+    },
+    {
+     "op": "chroma + saturation per zone",
+     "module": "colorbalancergb"
+    },
+    {
+     "op": "sharpen (lens deblur soft)",
+     "module": "diffuse"
+    },
+    {
+     "op": "crop",
+     "module": "crop"
+    }
+   ]
+  },
+  {
+   "genre": "night_astro",
+   "steps": [
+    {
+     "op": "remove hot pixels",
+     "module": "hotpixels",
+     "condition": "if long exposure"
+    },
+    {
+     "op": "lens correction incl. vignetting",
+     "module": "lens"
+    },
+    {
+     "op": "raise exposure (often +1..+3 EV)",
+     "module": "exposure"
+    },
+    {
+     "op": "white balance sky to neutral/blue-ish (4000-4500K)",
+     "module": "channelmixerrgb"
+    },
+    {
+     "op": "denoise sky (NLM / astrophoto denoise), heavier chroma",
+     "module": "denoiseprofile",
+     "condition": "if ISO>=3200 use astrophoto denoise or stronger strength"
+    },
+    {
+     "op": "tone map, low contrast to keep stars",
+     "module": "sigmoid"
+    },
+    {
+     "op": "dark sky background down, Milky Way core up (parametric mask on luminance)",
+     "module": "toneequal"
+    },
+    {
+     "op": "local contrast on the core only (masked)",
+     "module": "bilat"
+    },
+    {
+     "op": "reduce light-pollution cast near horizon (gradient-masked calibration)",
+     "module": "channelmixerrgb",
+     "condition": "if orange skyglow"
+    },
+    {
+     "op": "foreground separately masked exposure",
+     "module": "exposure",
+     "condition": "if foreground is a separate blended frame then do stacking/blending outside darktable"
+    }
+   ]
+  },
+  {
+   "genre": "backlit",
+   "steps": [
+    {
+     "op": "check raw overexposure (shift+O)",
+     "module": "highlights",
+     "condition": "if clipped raw channels then enable highlight reconstruction (inpaint opposed; guided laplacians for speculars)"
+    },
+    {
+     "op": "enable lens profile before exposure",
+     "module": "lens"
+    },
+    {
+     "op": "expose for the subject, accept sky going bright",
+     "module": "exposure"
+    },
+    {
+     "op": "raise white relative exposure to hold sky",
+     "module": "sigmoid"
+    },
+    {
+     "op": "lift the subject, compress the bright background",
+     "module": "toneequal"
+    },
+    {
+     "op": "reduce veiling glare / flare haze",
+     "module": "hazeremoval",
+     "condition": "if flare wash"
+    },
+    {
+     "op": "warm rim light / golden highlights",
+     "module": "colorbalancergb"
+    },
+    {
+     "op": "dodge the face with masked exposure instance",
+     "module": "exposure"
+    },
+    {
+     "op": "if sun blown to magenta, reconstruct",
+     "module": "highlights",
+     "condition": "if magenta/cyan sun disk"
+    }
+   ]
+  },
+  {
+   "genre": "indoor_mixed_light",
+   "steps": [
+    {
+     "op": "check raw overexposure (shift+O)",
+     "module": "highlights",
+     "condition": "if clipped raw channels then enable highlight reconstruction (inpaint opposed; guided laplacians for speculars)"
+    },
+    {
+     "op": "enable lens profile before exposure",
+     "module": "lens"
+    },
+    {
+     "op": "white balance main light (tungsten) with picker on a neutral",
+     "module": "channelmixerrgb"
+    },
+    {
+     "op": "second instance for window/daylight area, masked (drawn + parametric), or reuse inverted raster mask",
+     "module": "channelmixerrgb",
+     "condition": "if two illuminants clash"
+    },
+    {
+     "op": "exposure and tone map",
+     "module": "sigmoid"
+    },
+    {
+     "op": "balance window vs interior brightness",
+     "module": "toneequal"
+    },
+    {
+     "op": "denoise (indoor ISO)",
+     "module": "denoiseprofile"
+    },
+    {
+     "op": "tidy colour casts on walls (desat yellow/orange)",
+     "module": "colorequal"
+    }
+   ]
+  },
+  {
+   "genre": "product",
+   "steps": [
+    {
+     "op": "check raw overexposure (shift+O)",
+     "module": "highlights",
+     "condition": "if clipped raw channels then enable highlight reconstruction (inpaint opposed; guided laplacians for speculars)"
+    },
+    {
+     "op": "enable lens profile before exposure",
+     "module": "lens"
+    },
+    {
+     "op": "neutralise white background with picker (or colour checker)",
+     "module": "channelmixerrgb"
+    },
+    {
+     "op": "set exposure so background reaches just-white",
+     "module": "exposure"
+    },
+    {
+     "op": "tone map with high white relative exposure",
+     "module": "sigmoid"
+    },
+    {
+     "op": "correct perspective and square up",
+     "module": "ashift"
+    },
+    {
+     "op": "clean dust / scratches",
+     "module": "retouch"
+    },
+    {
+     "op": "crisp detail",
+     "module": "diffuse"
+    },
+    {
+     "op": "brand colour accuracy check / fix hue",
+     "module": "colorequal",
+     "condition": "if brand colour off"
+    },
+    {
+     "op": "export sRGB + TIFF master",
+     "module": "export"
+    }
+   ]
+  },
+  {
+   "genre": "street_bw",
+   "steps": [
+    {
+     "op": "check raw overexposure (shift+O)",
+     "module": "highlights",
+     "condition": "if clipped raw channels then enable highlight reconstruction (inpaint opposed; guided laplacians for speculars)"
+    },
+    {
+     "op": "enable lens profile before exposure",
+     "module": "lens"
+    },
+    {
+     "op": "exposure",
+     "module": "exposure"
+    },
+    {
+     "op": "convert with gray tab (film presets, or red/orange filter mix)",
+     "module": "channelmixerrgb"
+    },
+    {
+     "op": "contrast: tone map + S curve",
+     "module": "sigmoid"
+    },
+    {
+     "op": "dodge & burn faces / backgrounds",
+     "module": "toneequal"
+    },
+    {
+     "op": "local contrast for grit",
+     "module": "bilat"
+    },
+    {
+     "op": "grain (ISO 800-1600 coarseness)",
+     "module": "grain"
+    },
+    {
+     "op": "vignette",
+     "module": "vignette"
+    },
+    {
+     "op": "optional tone (sepia/selenium via split toning or colorize)",
+     "module": "splittoning"
+    }
+   ]
+  },
+  {
+   "genre": "sports_wildlife",
+   "steps": [
+    {
+     "op": "check raw overexposure (shift+O)",
+     "module": "highlights",
+     "condition": "if clipped raw channels then enable highlight reconstruction (inpaint opposed; guided laplacians for speculars)"
+    },
+    {
+     "op": "enable lens profile before exposure",
+     "module": "lens"
+    },
+    {
+     "op": "exposure on subject",
+     "module": "exposure"
+    },
+    {
+     "op": "denoise high ISO (profiled NLM, raise strength)",
+     "module": "denoiseprofile",
+     "condition": "if ISO>=3200"
+    },
+    {
+     "op": "tone map",
+     "module": "sigmoid"
+    },
+    {
+     "op": "crop tight (subject large in frame)",
+     "module": "crop"
+    },
+    {
+     "op": "sharpen subject only, not the bokeh (masked)",
+     "module": "diffuse"
+    },
+    {
+     "op": "clarity on feathers/fur masked",
+     "module": "bilat"
+    },
+    {
+     "op": "darken distracting bright background",
+     "module": "toneequal"
+    },
+    {
+     "op": "copy to burst, adjust exposure outliers",
+     "module": "exposure"
+    }
+   ]
+  },
+  {
+   "genre": "architecture",
+   "steps": [
+    {
+     "op": "check raw overexposure (shift+O)",
+     "module": "highlights",
+     "condition": "if clipped raw channels then enable highlight reconstruction (inpaint opposed; guided laplacians for speculars)"
+    },
+    {
+     "op": "enable lens profile before exposure",
+     "module": "lens"
+    },
+    {
+     "op": "fix converging verticals (auto structure then fit vertical)",
+     "module": "ashift"
+    },
+    {
+     "op": "exposure",
+     "module": "exposure"
+    },
+    {
+     "op": "tone map, hold windows/sky",
+     "module": "agx"
+    },
+    {
+     "op": "balance interior/exterior",
+     "module": "toneequal"
+    },
+    {
+     "op": "chromatic aberration clean",
+     "module": "cacorrectrgb",
+     "condition": "if fringes on window frames"
+    },
+    {
+     "op": "neutral whites (mixed light handling)",
+     "module": "channelmixerrgb"
+    },
+    {
+     "op": "crisp sharpening",
+     "module": "diffuse"
+    },
+    {
+     "op": "crop to remove perspective-fix edges",
+     "module": "crop"
+    }
+   ]
+  },
+  {
+   "genre": "food",
+   "steps": [
+    {
+     "op": "check raw overexposure (shift+O)",
+     "module": "highlights",
+     "condition": "if clipped raw channels then enable highlight reconstruction (inpaint opposed; guided laplacians for speculars)"
+    },
+    {
+     "op": "enable lens profile before exposure",
+     "module": "lens"
+    },
+    {
+     "op": "white balance so plates are neutral / slightly warm",
+     "module": "channelmixerrgb"
+    },
+    {
+     "op": "exposure bright and airy",
+     "module": "exposure"
+    },
+    {
+     "op": "tone map softer contrast",
+     "module": "sigmoid"
+    },
+    {
+     "op": "warm and saturate reds/oranges, calm blues",
+     "module": "colorequal"
+    },
+    {
+     "op": "texture on the food (masked local contrast)",
+     "module": "bilat"
+    },
+    {
+     "op": "clean crumbs/spots",
+     "module": "retouch"
+    },
+    {
+     "op": "subtle vignette",
+     "module": "vignette"
+    }
+   ]
+  },
+  {
+   "genre": "real_estate",
+   "steps": [
+    {
+     "op": "check raw overexposure (shift+O)",
+     "module": "highlights",
+     "condition": "if clipped raw channels then enable highlight reconstruction (inpaint opposed; guided laplacians for speculars)"
+    },
+    {
+     "op": "enable lens profile before exposure",
+     "module": "lens"
+    },
+    {
+     "op": "verticals straight (mandatory)",
+     "module": "ashift"
+    },
+    {
+     "op": "exposure bright",
+     "module": "exposure"
+    },
+    {
+     "op": "tone map, protect windows (window pull)",
+     "module": "sigmoid"
+    },
+    {
+     "op": "bring windows down / open rooms",
+     "module": "toneequal",
+     "condition": "if single exposure; if bracketed, HDR merge in lighttable 'create HDR' (DNG) first"
+    },
+    {
+     "op": "neutralise mixed light, walls white",
+     "module": "channelmixerrgb"
+    },
+    {
+     "op": "lens distortion off lines",
+     "module": "lens"
+    },
+    {
+     "op": "mild local contrast",
+     "module": "bilat"
+    },
+    {
+     "op": "sync to the whole shoot via selective paste; per-room exposure tweaks",
+     "module": "history"
+    }
+   ]
+  },
+  {
+   "genre": "events",
+   "steps": [
+    {
+     "op": "check raw overexposure (shift+O)",
+     "module": "highlights",
+     "condition": "if clipped raw channels then enable highlight reconstruction (inpaint opposed; guided laplacians for speculars)"
+    },
+    {
+     "op": "enable lens profile before exposure",
+     "module": "lens"
+    },
+    {
+     "op": "exposure (flash / venue light)",
+     "module": "exposure"
+    },
+    {
+     "op": "white balance per lighting setup (one per venue zone)",
+     "module": "channelmixerrgb"
+    },
+    {
+     "op": "tone map",
+     "module": "sigmoid"
+    },
+    {
+     "op": "denoise high ISO",
+     "module": "denoiseprofile"
+    },
+    {
+     "op": "lift faces",
+     "module": "toneequal"
+    },
+    {
+     "op": "crop / straighten",
+     "module": "crop"
+    },
+    {
+     "op": "hero edit then paste to set, match exposure via area exposure mapping",
+     "module": "exposure"
+    },
+    {
+     "op": "export client proofs with watermark",
+     "module": "export"
+    }
+   ]
+  }
+ ],
+ "bulk": [
+  {
+   "name": "import_and_cull",
+   "steps": [
+    "import (add to library / copy & import)",
+    "culling mode X (fixed) or ctrl+X (dynamic) side-by-side with synced zoom",
+    "rate 0-5 via number keys, R to reject, F1-F5 colour labels",
+    "filter collection by rating/label",
+    "group bursts, pick best of group"
+   ],
+   "source": "https://docs.darktable.org/usermanual/development/en/lighttable/digital-asset-management/star-color/",
+   "seen": "2026-09-26"
+  },
+  {
+   "name": "hero_then_propagate",
+   "steps": [
+    "primary grade on each image first (exposure, color calibration / checker profile) so all are neutral",
+    "edit a reference (hero) image",
+    "selective copy the secondary grade (tone mapper, color balance rgb, looks)",
+    "selective paste in APPEND mode so per-image primary grade survives",
+    "fine-tune per image: area exposure mapping to a control sample, tone-mapper white picker, color calibration area mapping",
+    "if background changed, add a later-instance secondary tweak rather than altering the shared grade"
+   ],
+   "source": "https://docs.darktable.org/usermanual/development/en/guides-tutorials/batch-editing/",
+   "seen": "2026-09-26"
+  },
+  {
+   "name": "copy_paste_history",
+   "steps": [
+    "ctrl+C / ctrl+V copies full stack in append mode",
+    "ctrl+shift+C / ctrl+shift+V selective copy/paste dialog",
+    "full copy excludes orientation, lens correction, raw black/white point, rotate pixels, scale pixels, white balance and deprecated modules unless selectively pasted",
+    "overwrite mode irrevocably replaces the target history",
+    "compress history / discard history are not undoable"
+   ],
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/utility-modules/lighttable/history-stack/",
+   "seen": "2026-09-26"
+  },
+  {
+   "name": "styles",
+   "steps": [
+    "create style from history stack (choose modules, optionally 'reset' a module)",
+    "name with '|' for hierarchy e.g. 'client|warm portrait'",
+    "apply by double-click or shortcut, append or overwrite, optionally onto a duplicate",
+    "chain several styles by applying in append mode in order",
+    "export/import .dtstyle XML to share",
+    "camera styles group (5.0+) approximates camera JPEG looks for 500+ bodies; auto-apply via Lua script official/camera style"
+   ],
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/utility-modules/shared/styles/",
+   "seen": "2026-09-26"
+  },
+  {
+   "name": "module_presets",
+   "steps": [
+    "save module settings as preset from the hamburger menu",
+    "auto-apply presets by camera/lens/ISO/format filters (e.g. lens correction, denoise per ISO)",
+    "presets hierarchical via '|' since 5.2",
+    "auto presets only apply on first darkroom open or after history discard"
+   ],
+   "source": "https://docs.darktable.org/usermanual/development/en/darkroom/processing-modules/presets/",
+   "seen": "2026-09-26"
+  },
+  {
+   "name": "batch_export_profiles",
+   "steps": [
+    "export module presets: web (JPEG, long edge 2048, sRGB, quality 85-92), print (TIFF 16-bit, AdobeRGB/ProPhoto, full size), client proof (JPEG 1600px + watermark style)",
+    "filename templates with variables like $(FILE_NAME)_$(SEQUENCE)",
+    "style applied at export time (append) e.g. watermark or sharpen-for-web",
+    "5.2+: multi-preset export in one go",
+    "darktable-cli for headless export with an XMP/style"
+   ],
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/utility-modules/shared/export/",
+   "seen": "2026-09-26"
+  },
+  {
+   "name": "sidecar_handling",
+   "steps": [
+    "XMP sidecar per image (name.ext.xmp) written on every history change by default",
+    "duplicates get _01, _02 sidecars",
+    "look for updated XMP on startup (preference) to pick up external edits",
+    "load sidecar file / write sidecar files in history stack module",
+    "exported files embed history; can be loaded back as a sidecar"
+   ],
+   "source": "https://docs.darktable.org/usermanual/development/en/overview/sidecar-files/sidecar/",
+   "seen": "2026-09-26"
+  },
+  {
+   "name": "outlier_handling",
+   "steps": [
+    "sort edited set by exposure/time, view in culling or filmstrip",
+    "outliers (different light) get area exposure mapping + color calibration area mapping to the memorised control sample",
+    "if still off, extra later instance of the grading module rather than editing the shared one",
+    "flag with colour label for review"
+   ],
+   "source": "https://docs.darktable.org/usermanual/development/en/guides-tutorials/batch-editing/",
+   "seen": "2026-09-26"
+  },
+  {
+   "name": "time_lapse_deflicker",
+   "steps": [
+    "exposure module automatic mode (percentile + target level) pasted to all frames to deflicker"
+   ],
+   "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/exposure/",
+   "seen": "2026-09-26"
+  }
+ ],
+ "look_components": [
+  {
+   "name": "tone curve shape (contrast, toe, shoulder)",
+   "module": "sigmoid|agx|rgbcurve",
+   "params": {
+    "contrast": "1.3-2.2",
+    "skew/toe power": "shadow density",
+    "rgbcurve": "S-curve with lifted black node for matte"
+   }
+  },
+  {
+   "name": "faded / matte blacks",
+   "module": "agx|sigmoid|colorbalancergb",
+   "params": {
+    "agx look lift": "+0.01..+0.05",
+    "sigmoid target black": "0.2-0.5%",
+    "colorbalancergb global offset luminance": "+0.5..+2%"
+   }
+  },
+  {
+   "name": "primary palette shift (film primaries)",
+   "module": "primaries|agx primaries",
+   "params": {
+    "red hue": "+/-5..15 deg",
+    "blue hue toward cyan": "-5..-15 deg",
+    "purity": "-10..+20%"
+   }
+  },
+  {
+   "name": "split toning / colour grade",
+   "module": "colorbalancergb (4 ways)",
+   "params": {
+    "shadows lift hue": "190-220 deg (teal) chroma 3-10%",
+    "highlights gain hue": "40-70 deg (warm) chroma 3-10%",
+    "power (midtones)": "small hue/chroma"
+   }
+  },
+  {
+   "name": "saturation per zone",
+   "module": "colorbalancergb",
+   "params": {
+    "saturation shadows": "+10..+30%",
+    "saturation highlights": "-10..-30%",
+    "global chroma": "+10..+30%",
+    "brilliance highlights": "+5..+15%"
+   }
+  },
+  {
+   "name": "hue-specific palette (greens to olive, skin to peach)",
+   "module": "colorequal",
+   "params": {
+    "green hue": "toward yellow +10..+20 deg",
+    "green sat": "-20..-40%",
+    "orange brightness": "+5..+15%"
+   }
+  },
+  {
+   "name": "colour harmony enforcement (5.6+)",
+   "module": "colorharmonizer",
+   "params": {
+    "rule": "complementary/analogous",
+    "strength": "20-60%"
+   }
+  },
+  {
+   "name": "grain",
+   "module": "grain",
+   "params": {
+    "coarseness": "800-3200 ISO",
+    "strength": "10-35%"
+   }
+  },
+  {
+   "name": "vignette",
+   "module": "vignette",
+   "params": {
+    "brightness": "-0.2..-0.6",
+    "saturation": "-0.1..-0.3",
+    "scale": "60-90%"
+   }
+  },
+  {
+   "name": "halation",
+   "module": "diffuse (masked to highlights, red channel blend) | bloom | spektrafilm (dev)",
+   "params": {
+    "diffuse 1st/4th order speed": "positive (blur)",
+    "blend": "RGB red channel, parametric mask on highlights",
+    "radius span": "8-32 px"
+   }
+  },
+  {
+   "name": "glow / Orton",
+   "module": "soften|diffuse bloom preset",
+   "params": {
+    "mix": "20-40%"
+   }
+  },
+  {
+   "name": "LUT-based look",
+   "module": "lut3d",
+   "params": {
+    "file": ".cube/.3dl/.png haldclut/.gmz in LUT root folder",
+    "application color space": "match LUT (usually sRGB/REC.709)",
+    "opacity": "30-100% via blend",
+    "placement": "after tone mapper on a neutral image"
+   }
+  },
+  {
+   "name": "camera colour science / film sim without LUT",
+   "module": "style (agx + channelmixerrgb + input profile) | darktable camera styles | colorchecker",
+   "params": {
+    "jssfr dtsolve Fujifilm styles": "need 5.4 (AgX)",
+    "camera styles": "5.0+, 500+ bodies"
+   }
+  },
+  {
+   "name": "monochrome film emulation",
+   "module": "channelmixerrgb gray tab + grain + rgbcurve",
+   "params": {
+    "gray preset": "film presets (e.g. Ilford/Kodak b&w film)",
+    "red filter": "R>1, B<0 for dark skies"
+   }
+  },
+  {
+   "name": "physical film emulation (dev, post-5.6)",
+   "module": "spektrafilm",
+   "params": {
+    "film stock": "choose stock",
+    "print exposure": "auto",
+    "replaces tone mapper": "yes, do not stack with sigmoid/agx/filmic"
+   }
+  },
+  {
+   "name": "toning (sepia/selenium/cyanotype)",
+   "module": "splittoning|colorize|colorbalancergb",
+   "params": {
+    "highlights hue": "30-50 deg",
+    "chroma": "5-20%"
+   }
+  }
+ ],
+ "cannot_do": [
+  {
+   "intent": "generative fill / add or invent content",
+   "why": "darktable has no generative model; retouch only clones/heals from a user-chosen source",
+   "right_response": "Refuse generative content; offer retouch clone/heal for small removals, or recommend a raster editor (GIMP, Photoshop) for the rest."
+  },
+  {
+   "intent": "content-aware removal of large objects (people, cars, poles across the frame)",
+   "why": "retouch has no content-aware/resynthesizer mode (open feature request #15006); needs a manual source region, poor on large areas",
+   "right_response": "Say it only works for small, simple backgrounds; offer clone/heal on small spots; suggest an external editor for big removals."
+  },
+  {
+   "intent": "sky replacement",
+   "why": "no layer compositing of another image into masked areas (composite module overlays a whole image, no sky-aware masking on 5.4.1)",
+   "right_response": "Refuse replacement; offer to improve the existing sky (tone equalizer, graduated density, colour equalizer blue, haze removal)."
+  },
+  {
+   "intent": "AI subject / sky / person masks on 5.4.1",
+   "why": "AI object mask exists only in 5.6+ with an optional AI build, disabled by default; not on the Scouter host",
+   "right_response": "Use drawn + parametric masks; explain AI masking needs darktable 5.6 with AI enabled."
+  },
+  {
+   "intent": "AI denoise / upscaling / super-resolution on 5.4.1",
+   "why": "neural restore arrived in 5.6 optional AI build",
+   "right_response": "Use denoise (profiled)/astrophoto denoise; say upscaling isn't available on this version."
+  },
+  {
+   "intent": "face/body reshaping automatically, face-aware portrait sliders",
+   "why": "no face detection; liquify is manual point/line warps",
+   "right_response": "Offer manual liquify with explicit points or decline."
+  },
+  {
+   "intent": "automatic HDR merge of brackets / panorama stitching / focus stacking",
+   "why": "darktable only has a basic 'create HDR' DNG merge in lighttable (same-framing raws); no panorama or focus stacking",
+   "right_response": "Offer create-HDR for aligned brackets; recommend Hugin (pano) or external stacking tools; then edit the result."
+  },
+  {
+   "intent": "text/graphic design, adding shapes or typography beyond a watermark",
+   "why": "only watermark (SVG/PNG with variables) and framing",
+   "right_response": "Offer watermark/frame; otherwise a design tool."
+  },
+  {
+   "intent": "change the time of day, relight a scene, move the sun",
+   "why": "no generative relighting; only tonal/colour adjustments",
+   "right_response": "Offer warm grade + tone equalizer to suggest golden hour; say true relighting is impossible."
+  },
+  {
+   "intent": "remove motion blur / fix missed focus substantially",
+   "why": "diffuse or sharpen lens deblur recovers mild softness only",
+   "right_response": "Try lens deblur preset, set expectations that missed focus can't be recovered."
+  },
+  {
+   "intent": "recover fully clipped highlights with real detail",
+   "why": "reconstruction disguises clipped areas plausibly, cannot recover absent data",
+   "right_response": "Apply highlight reconstruction and explain the limit."
+  },
+  {
+   "intent": "remove reflections / glare from glasses automatically",
+   "why": "no semantic tool",
+   "right_response": "Manual retouch clone/heal only; decline if large."
+  },
+  {
+   "intent": "video editing",
+   "why": "stills-only",
+   "right_response": "Decline."
+  },
+  {
+   "intent": "swap faces / change expressions / open closed eyes",
+   "why": "no generative or face tools; also sensitive manipulation",
+   "right_response": "Decline; suggest choosing another frame from the burst."
+  }
+ ]
+}
