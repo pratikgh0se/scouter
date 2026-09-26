@@ -1,6 +1,8 @@
 import json
 
 from gauntlet import report
+from gauntlet.adapter import LayerSpec
+from gauntlet.case import Case, Expect, Step
 from gauntlet.generate import write_generation
 from gauntlet.runner import Runner
 from gauntlet.store import RunDir
@@ -68,3 +70,113 @@ def test_timing_percentiles_and_contact_sheet(tmp_path):
     assert (t["p50"], t["p90"], t["p99"]) == (2.0, 4.0, 4.0)
     sheet = report.contact_sheet(rs)
     assert 'src="p/b.jpg"' in sheet and "x - verified" in sheet
+
+
+# ---------------------------------------------------------------- fix round 1
+
+
+class _StubRun:
+    """A minimal stand-in for RunDir: `build()` only reads `.stamp` off it."""
+
+    stamp = "s"
+
+
+class _StubAdapter:
+    name = "stub"
+
+    def __init__(self, layers, crash_reports=None):
+        self._layers = layers
+        self._crash_reports = crash_reports or []
+
+    def layers(self):
+        return self._layers
+
+    def signoff_lines(self):
+        return []
+
+    def crash_reports_since(self, t):
+        return self._crash_reports
+
+
+def _case(cid, tier="P1"):
+    return Case(id=cid, layer="l", tier=tier, mode="tool",
+                steps=[Step("set", {}, budget_s=1.0, write=True)], expect=Expect("edit"))
+
+
+def _result(cid, tier="P1", *, score="fail", outcome="failed", blocked=None,
+            hang_evidence=None, crash_reports=None, started_at=0.0, checks=None):
+    obs = {"calls": [], "blocked": blocked, "hang_evidence": hang_evidence or [],
+           "crash_reports": crash_reports or []}
+    return {"id": cid, "layer": "l", "tier": tier, "mode": "tool", "source": {}, "meta": {},
+            "repro": f"repro {cid}", "started_at": started_at,
+            "verdict": {"score": score, "outcome": outcome, "checks": checks or []},
+            "observation": obs}
+
+
+def test_hard_cap_result_counts_as_a_hang_and_blocks_the_bar():
+    case = _case("a-0")
+    result = _result("a-0", outcome="blocked", blocked="hard_cap",
+                     hang_evidence=["case exceeded its hard cap of 30s"])
+    adapter = _StubAdapter([LayerSpec("l", 1, 1, True)])
+    rep = report.build(_StubRun(), adapter, [case], [result])
+    assert rep["S8_signoff"]["hangs"] == 1
+    assert not rep["S8_signoff"]["release_bar_met"]
+    assert rep["S6_crashes_hangs"]["hangs"] == [
+        {"id": "a-0", "blocked": "hard_cap",
+         "evidence": ["case exceeded its hard cap of 30s"]}]
+    fixes = {f["id"]: f for f in rep["S3_non_pass"]}
+    assert fixes["a-0"]["hang"] is True
+
+
+def test_run_level_crash_not_attributed_to_any_case_blocks_the_bar():
+    case = _case("a-0")
+    result = _result("a-0", score="pass", outcome="verified")
+    adapter = _StubAdapter([LayerSpec("l", 1, 1, True)], crash_reports=["session-close.ips"])
+    rep = report.build(_StubRun(), adapter, [case], [result])
+    assert rep["S8_signoff"]["crashes"] == 1
+    assert "session-close.ips" in rep["S6_crashes_hangs"]["crash_reports"]
+    assert not rep["S8_signoff"]["release_bar_met"]
+    # meta["crash_reports_run"] overrides asking the adapter.
+    rep2 = report.build(_StubRun(), adapter, [case], [result],
+                        meta={"crash_reports_run": ["preset.ips"]})
+    assert rep2["S6_crashes_hangs"]["crash_reports"] == ["preset.ips"]
+
+
+def test_orphan_result_does_not_mask_a_missing_case():
+    cases = [_case("a-0"), _case("a-1")]
+    orphan = _result("a-2", score="pass", outcome="verified")  # stale, no longer generated
+    adapter = _StubAdapter([LayerSpec("l", 1, 2, True)])
+    rep = report.build(_StubRun(), adapter, cases, [orphan])
+    assert rep["S8_signoff"]["cases_missing"] == 2
+    assert rep["S8_signoff"]["missing_ids"] == ["a-0", "a-1"]
+    assert rep["S8_signoff"]["orphan_result_ids"] == ["a-2"]
+    assert not rep["S8_signoff"]["release_bar_met"]
+
+
+def test_zero_p0_run_does_not_meet_the_bar():
+    case = _case("a-0", tier="P1")
+    result = _result("a-0", tier="P1", score="pass", outcome="verified")
+    adapter = _StubAdapter([LayerSpec("l", 1, 1, True)])
+    rep = report.build(_StubRun(), adapter, [case], [result])
+    assert rep["S8_signoff"]["p0"] == "0/0"
+    assert not rep["S8_signoff"]["release_bar_met"]
+
+
+def test_declared_check_gate_with_no_tagged_checks_fails():
+    spec = LayerSpec("l", 1, 1, True, check_gates=(("confidence", ("documented",), 0.9),))
+    case = _case("a-0", tier="P0")
+    result = _result("a-0", tier="P0", score="pass", outcome="verified", checks=[])
+    adapter = _StubAdapter([spec])
+    rep = report.build(_StubRun(), adapter, [case], [result])
+    gate = rep["S2_layers"][0]["check_gates"][0]
+    assert gate["n"] == 0 and gate["ok"] is False
+    assert not rep["S8_signoff"]["release_bar_met"]
+
+
+def test_p0_needs_review_blocks_the_bar():
+    case = _case("a-0", tier="P0")
+    result = _result("a-0", tier="P0", score="partial", outcome="needs_review")
+    adapter = _StubAdapter([LayerSpec("l", 1, 1, True)])
+    rep = report.build(_StubRun(), adapter, [case], [result])
+    assert rep["S8_signoff"]["p0"] == "0/1"
+    assert not rep["S8_signoff"]["release_bar_met"]

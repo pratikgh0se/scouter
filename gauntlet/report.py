@@ -31,6 +31,38 @@ def _outcome(r: dict) -> str:
     return canonical_outcome(r["verdict"]["outcome"])
 
 
+#: Kinds a `blocked` observation can fall into, in the fixed order S8 reports them.
+BLOCKED_KINDS = ("hard_cap", "hang", "session_open", "session", "harness_error", "other")
+
+
+def _blocked(r: dict) -> str | None:
+    return (r.get("observation") or {}).get("blocked")
+
+
+def _blocked_kind(blocked: str | None) -> str | None:
+    if not blocked:
+        return None
+    if blocked == "hard_cap":
+        return "hard_cap"
+    if blocked.startswith("hang"):
+        return "hang"
+    if blocked.startswith("session_open"):
+        return "session_open"
+    if blocked.startswith("session"):
+        return "session"
+    if blocked.startswith("harness_error"):
+        return "harness_error"
+    return "other"
+
+
+def _is_hang(r: dict) -> bool:
+    """(fix round 1, I1): failed_hang only ever comes from blocked == 'hang_twice';
+    the runner's own hard_cap timeout, and an adapter's 'hang: ...' blocked
+    reason, are hangs too and must not read as 0."""
+    blocked = _blocked(r) or ""
+    return _outcome(r) == "failed_hang" or blocked == "hard_cap" or blocked.startswith("hang")
+
+
 def layer_table(results: list[dict], adapter: Adapter) -> list[dict]:
     rows = []
     for spec in sorted(adapter.layers(), key=lambda s: s.order):
@@ -44,8 +76,10 @@ def layer_table(results: list[dict], adapter: Adapter) -> list[dict]:
         for key, values, minimum in spec.check_gates:
             tagged = [c for r in rs for c, t in _tagged_checks(r) if t.get(key) in values]
             rate = (sum(1 for c in tagged if c["ok"]) / len(tagged)) if tagged else None
+            #: (fix round 1, I5): a declared gate nobody tagged (n=0) is not
+            #: vacuously ok -- it blocks the bar and is shown "n=0".
             gates.append({"tag": key, "values": list(values), "min": minimum, "rate": rate,
-                          "n": len(tagged), "ok": rate is None or rate >= minimum})
+                          "n": len(tagged), "ok": rate is not None and rate >= minimum})
         rows.append({
             "layer": spec.name, "cases": n, "points": pts,
             "rate": round(pts / n, 4) if n else None,
@@ -118,32 +152,77 @@ def fix_list(results: list[dict]) -> list[dict]:
                      "outcome": out, "score": r["verdict"]["score"],
                      "silent_failure": r["verdict"].get("silent_failure"),
                      "notes": r["verdict"].get("notes", [])[:3], "repro": r["repro"],
+                     #: (fix round 1, I1): hang membership by outcome-or-blocked, not
+                     #: outcome alone -- see `_is_hang`.
+                     "hang": _is_hang(r),
                      "triage": None, "triage_classes": list(TRIAGE_CLASSES)})
-    rank = {"silent_failure": 0, "crash": 1, "failed_hang": 2}
-    rows.sort(key=lambda x: (rank.get(x["outcome"], 3), x["tier"], x["layer"], x["id"]))
+
+    def rank(x: dict) -> int:
+        if x["outcome"] == "silent_failure":
+            return 0
+        if x["outcome"] == "crash":
+            return 1
+        if x["hang"]:
+            return 2
+        return 3
+
+    rows.sort(key=lambda x: (rank(x), x["tier"], x["layer"], x["id"]))
     return rows
 
 
 def build(run: RunDir, adapter: Adapter, cases: list[Case], results: list[dict],
           meta: dict | None = None) -> dict:
     meta = meta or {}
-    layers = layer_table(results, adapter)
-    silent = [r["id"] for r in results if _outcome(r) == "silent_failure"]
-    crashes = [x for r in results for x in r["observation"].get("crash_reports", [])]
-    hangs = [r["id"] for r in results if _outcome(r) == "failed_hang"]
-    p0 = [r for r in results if r["tier"] == "P0"]
+    #: (fix round 1, I3): missing/valid by id, not by count -- a stale orphan
+    #: result (an id no longer in cases.jsonl) must not mask a case that never
+    #: ran, and every stat below is computed only over results that still
+    #: name a real case.
+    case_ids = {c.id for c in cases}
+    result_ids = {r["id"] for r in results}
+    valid = [r for r in results if r["id"] in case_ids]
+    missing_ids = sorted(case_ids - result_ids)
+    orphan_ids = sorted(result_ids - case_ids)
+
+    layers = layer_table(valid, adapter)
+    silent = [r["id"] for r in valid if _outcome(r) == "silent_failure"]
+    #: (fix round 1, I2): per-case crash reports (attributed to the case
+    #: whose window they fell in) union'd with run-level reports -- a crash on
+    #: session open/close or the final close belongs to no case and was
+    #: previously dropped. `meta["crash_reports_run"]` lets the caller supply
+    #: the run-level list directly; otherwise ask the adapter for everything
+    #: since the earliest case in this report started.
+    crashes_percase = [x for r in valid for x in (r.get("observation") or {})
+                       .get("crash_reports", [])]
+    started = [r["started_at"] for r in valid if r.get("started_at") is not None]
+    earliest = min(started) if started else 0.0
+    crashes_run = (meta["crash_reports_run"] if "crash_reports_run" in meta
+                   else adapter.crash_reports_since(earliest))
+    crashes = list(dict.fromkeys([*crashes_percase, *crashes_run]))
+    #: (fix round 1, I1): a hang is failed_hang OR blocked == hard_cap OR a
+    #: "hang..." blocked reason -- see `_is_hang`.
+    hangs = [{"id": r["id"], "blocked": _blocked(r),
+             "evidence": (r.get("observation") or {}).get("hang_evidence", [])}
+            for r in valid if _is_hang(r)]
+    blocked_counts = dict.fromkeys(BLOCKED_KINDS, 0)
+    for r in valid:
+        kind = _blocked_kind(_blocked(r))
+        if kind:
+            blocked_counts[kind] += 1
+    p0 = [r for r in valid if r["tier"] == "P0"]
     p0_total = sum(c.tier == "P0" for c in cases)
     p0_pass = sum(r["verdict"]["score"] == "pass" for r in p0)
     served = sum(_outcome(r) in SERVED for r in p0)
     refused = sum(_outcome(r) == "correct_refusal" for r in p0)
-    missing = len(cases) - len(results)
+    missing = len(missing_ids)
     gates_ok = all(row["p1_ok"] and all(g["ok"] for g in row["check_gates"]) for row in layers)
     signoff = {
-        "crashes": len(crashes), "silent_failures": len(silent),
+        "crashes": len(crashes), "silent_failures": len(silent), "hangs": len(hangs),
+        #: (fix round 1, I4): zero P0 cases must not read as a met bar.
         "p0": f"{p0_pass}/{p0_total}", "p0_all_pass": p0_total > 0 and p0_pass == p0_total,
-        "p1_gates_ok": gates_ok, "cases_missing": missing,
-        "release_bar_met": not crashes and not silent and p0_pass == p0_total and gates_ok
-        and missing == 0,
+        "p1_gates_ok": gates_ok, "cases_missing": missing, "missing_ids": missing_ids,
+        "orphan_result_ids": orphan_ids, "blocked": blocked_counts,
+        "release_bar_met": not crashes and not silent and not hangs and p0_total > 0
+        and p0_pass == p0_total and gates_ok and missing == 0,
         "contact_sheet_reviewed": "[ ] (Pratik ticks by hand)",
         "lines": adapter.signoff_lines(),
     }
@@ -151,16 +230,16 @@ def build(run: RunDir, adapter: Adapter, cases: list[Case], results: list[dict],
         "schema": "gauntlet-report/1", "stamp": run.stamp, "adapter": adapter.name,
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "meta": meta,
         "S8_signoff": signoff,
-        "S1_headline": {"cases": len(cases), "ran": len(results),
-                        "pass": sum(r["verdict"]["score"] == "pass" for r in results),
-                        "partial": sum(r["verdict"]["score"] == "partial" for r in results),
-                        "fail": sum(r["verdict"]["score"] == "fail" for r in results),
+        "S1_headline": {"cases": len(cases), "ran": len(valid),
+                        "pass": sum(r["verdict"]["score"] == "pass" for r in valid),
+                        "partial": sum(r["verdict"]["score"] == "partial" for r in valid),
+                        "fail": sum(r["verdict"]["score"] == "fail" for r in valid),
                         "p0_served": served, "p0_refused": refused, "p0_total": p0_total},
         "S2_layers": layers,
-        "S3_non_pass": fix_list(results),
-        "S5_timing": timing(results),
+        "S3_non_pass": fix_list(valid),
+        "S5_timing": timing(valid),
         "S6_crashes_hangs": {"crash_reports": crashes, "hangs": hangs},
-        "S7_roadmap": roadmap(results),
+        "S7_roadmap": roadmap(valid),
     }
 
 
@@ -170,8 +249,13 @@ def markdown(rep: dict) -> str:
          "## S8 Sign-off", "",
          f"- Release bar met: **{'YES' if s8['release_bar_met'] else 'NO'}**",
          f"- Crashes: {s8['crashes']}", f"- Silent failures: {s8['silent_failures']}",
+         f"- Hangs: {s8['hangs']}",
+         "- Blocked: " + ", ".join(f"{k}={v}" for k, v in s8["blocked"].items()),
          f"- P0: {s8['p0']}", f"- P1 gates: {'ok' if s8['p1_gates_ok'] else 'NOT met'}",
          f"- Cases missing (not run): {s8['cases_missing']}",
+         *[f"  - `{i}`" for i in s8["missing_ids"]],
+         f"- Orphan result files (stale, not in cases.jsonl): {len(s8['orphan_result_ids'])}",
+         *[f"  - `{i}`" for i in s8["orphan_result_ids"]],
          f"- Contact sheet reviewed: {s8['contact_sheet_reviewed']}",
          *[f"- {x}" for x in s8["lines"]], "",
          "## S1 Headline", "",
@@ -188,6 +272,12 @@ def markdown(rep: dict) -> str:
         gate = "ok" if r["p1_ok"] and all(g["ok"] for g in r["check_gates"]) else "**NOT met**"
         L.append(f"| {r['layer']} | {r['cases']} | {rate} | {r['pass']} | {r['partial']} | "
                  f"{r['fail']} | {r['p0_pass']}/{r['p0_total']} | {p1} | {gate} |")
+        for g in r["check_gates"]:
+            if g["ok"]:
+                continue
+            got = "n=0" if g["n"] == 0 else f"{100 * g['rate']:.1f}%"
+            L.append(f"  - gate NOT met: {r['layer']} {g['tag']}={g['values']} "
+                     f"min={100 * g['min']:.0f}% got {got} (n={g['n']})")
     L += ["", "## S3 Every non-pass", "", "| Case | Tier | Outcome | Why | Repro |",
           "|---|---|---|---|---|"]
     for f in rep["S3_non_pass"]:
@@ -202,7 +292,9 @@ def markdown(rep: dict) -> str:
           "## S6 Crashes and hangs", "",
           f"- Crash reports: {len(rep['S6_crashes_hangs']['crash_reports'])}",
           *[f"  - `{x}`" for x in rep["S6_crashes_hangs"]["crash_reports"]],
-          f"- Hangs: {len(rep['S6_crashes_hangs']['hangs'])}", "",
+          f"- Hangs: {len(rep['S6_crashes_hangs']['hangs'])}",
+          *[f"  - `{h['id']}` ({h['blocked']}): {'; '.join(str(e) for e in h['evidence'])}"
+            for h in rep["S6_crashes_hangs"]["hangs"]], "",
           "## S7 Honest refusals as the roadmap", "",
           "| Key | Score | Requests | P0 | Agent | Look gaps |", "|---|---|---|---|---|---|"]
     for r in rep["S7_roadmap"]:
