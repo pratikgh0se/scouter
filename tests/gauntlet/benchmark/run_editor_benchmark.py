@@ -49,7 +49,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 TASKS_PATH = Path(__file__).with_name("editor_tasks.json")
 RESULTS_DIR = Path(__file__).with_name("results")
 DARKTABLE = Path("/Applications/darktable.app/Contents/MacOS/darktable")

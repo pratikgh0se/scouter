@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.benchmark import run_editor_benchmark as rb
+from tests.gauntlet.benchmark import run_editor_benchmark as rb
 
 # -- the task file -----------------------------------------------------------
 
