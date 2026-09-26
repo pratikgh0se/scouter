@@ -20,10 +20,12 @@
     "filmicrgb.black_relative_exposure": "filmic rgb › scene › black relative exposure up +0.25 EV (-13.75 EV → -13.5 EV): sets which scene brightness maps to pure black; watch blocked shadows.",
     "filmicrgb.contrast": "filmic rgb › look › contrast up +0.1 (0.6 → 0.7): steepens or flattens the middle of the tone curve; watch shadow and highlight detail at the two ends.",
     "filmicrgb.white_relative_exposure": "filmic rgb › scene › white relative exposure up +0.25 EV (2.25 EV → 2.5 EV): sets which scene brightness maps to pure white; watch clipped highlights.",
+    "grain.strength": "grain › strength up +5% (5% → 10%): adds film-like grain; more strength is more visible grain; watch smooth skies and skin, where grain shows first.",
     "sigmoid.contrast": "sigmoid › contrast up +0.1 (0.6 → 0.7): steepens or flattens the middle of the tone curve; watch shadow and highlight detail at the two ends.",
     "sigmoid.skew": "sigmoid › skew up +0.1 (-0.9 → -0.8): shifts where the tone curve spends its contrast, toward shadows or highlights; watch whether the midtones still sit where you want them.",
     "temperature.temperature": "white balance › temperature up +300 K (2300 K → 2600 K): tells darktable the light was bluer or redder, so the picture turns warmer or cooler; watch neutral greys and skin.",
-    "temperature.tint": "white balance › tint up +0.05 (0.55 → 0.6): trades green against magenta in the light; watch skin and foliage."
+    "temperature.tint": "white balance › tint up +0.05 (0.55 → 0.6): trades green against magenta in the light; watch skin and foliage.",
+    "vignette.brightness": "vignette › brightness up +0.05 (-0.75 → -0.7): darkens (negative) or lightens (positive) the corners around the centre; watch the frame edges: a strong vignette reads as a tunnel."
   },
   "concepts": {
     "black_level": "[Black level] Black level correction moves the point that renders as pure black. Deeper blacks add density; lifting them gives a faded, matte look. It is a strong control: a few thousandths are visible.",
@@ -31,6 +33,7 @@
     "color_balance": "[Color balance rgb] Color balance rgb is darktable's colour-grading module. Master sliders act on the whole image; the 4-ways tab grades shadows (lift), midtones (power) and highlights (gain) separately, each with luminance, hue and chroma.",
     "color_zones": "[Color zones] Color zones adjusts hue, chroma and lightness by the colour a pixel already has (for example, only the blues). Scouter can reach only its global mix; the zone curves need darktable's own editor.",
     "exposure": "[Scene-referred exposure] Exposure scales all the light in the scene by the same factor, measured in EV (one EV doubles or halves it). In darktable's scene-referred workflow you set it first, so the subject sits at a sensible brightness, and let the tone mapper handle the extremes.",
+    "finishing": "[Finishing touches] Grain and vignette are the last things applied, after tone and colour are set. Grain adds visible texture that reads as film; a little goes a long way on smooth skies and skin. Vignette darkens or lightens the corners around the centre, drawing the eye inward or opening the frame back up.",
     "grading": "[Colour grading] A grade gives a look by tinting shadows and highlights differently, classically cool shadows and warm highlights. Hue picks the tint, chroma picks how much; keep chroma low and judge on a neutral grey or skin.",
     "presets": "[Styles as presets] A darktable style is a saved list of module settings. Applying one appends those settings to an image's history, so it acts like a filter you can stack; it never replaces what is there, and each application is visible in the history panel.",
     "tone_mapper": "[Tone mapping] Sigmoid (or filmic rgb) squeezes the scene's wide range of light into what a screen can show. Its contrast slider sets how steep that curve is in the middle: more contrast separates midtones but pushes shadows and highlights toward the ends.",

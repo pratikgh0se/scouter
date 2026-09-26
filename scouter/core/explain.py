@@ -57,6 +57,11 @@ CONCEPTS: dict[str, tuple[str, str]] = {
                 "A darktable style is a saved list of module settings. Applying one appends those "
                 "settings to an image's history, so it acts like a filter you can stack; it never "
                 "replaces what is there, and each application is visible in the history panel."),
+    "finishing": ("Finishing touches",
+                  "Grain and vignette are the last things applied, after tone and colour are set. "
+                  "Grain adds visible texture that reads as film; a little goes a long way on "
+                  "smooth skies and skin. Vignette darkens or lightens the corners around the "
+                  "centre, drawing the eye inward or opening the frame back up."),
 }
 
 
