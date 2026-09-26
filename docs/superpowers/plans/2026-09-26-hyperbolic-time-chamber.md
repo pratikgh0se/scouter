@@ -147,7 +147,7 @@ Vocabulary Tasks 32-34 are written before Task 35 in the order the brief asked f
 
 ## Conventions for every task
 
-- Python: `.venv/bin/python`. Engine tests: `.venv/bin/python -m pytest gauntlet/tests -q`. Adapter tests: `.venv/bin/python -m pytest tests/gauntlet -q`. Product tests: `.venv/bin/python -m pytest tests -q -k "not host"` (the full unit suite; host tests stay opt-in).
+- Python: `.venv/bin/python`. Engine tests: `.venv/bin/python -m pytest gauntlet/tests -q`. Adapter tests: `.venv/bin/python -m pytest tests/gauntlet -q`. Product tests: `.venv/bin/python -m pytest tests -q` (the full unit suite; real host tests carry the `host` pytest marker and self-skip via `addopts = -m "not host"` in pyproject.toml plus the `SCOUTER_HOST_TESTS` env gate in tests/conftest.py, so plain `pytest -q` never launches darktable and no longer silently drops the ~15 plain unit tests whose names merely contain "host" -- `-k "not host"` was a substring filter, not a marker filter, and used to skip those too; host tests stay opt-in via `-m host` + `SCOUTER_HOST_TESTS=1`).
 - Lint before each commit: `.venv/bin/ruff check gauntlet tests/gauntlet scouter` must pass.
 - Commit message format: `<area>: <what> (Task N, row 433)` then a blank line, then `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. The commit steps below show the `-m` flags.
 

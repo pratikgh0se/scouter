@@ -94,3 +94,22 @@ ignore = ["N818"]
 [tool.mypy]
 python_version = "3.10"
 strict = true
+
+[tool.pytest.ini_options]
+markers = [
+    "host: launches a real darktable and needs SCOUTER_HOST_TESTS=1 (see tests/conftest.py). Deselected by default via addopts below; run explicitly with `-m host` (still requires the env var and darktable installed, or it self-skips).",
+]
+# Zenkai fix: the old convention was `pytest -k "not host"`, a substring match
+# that also caught ~15 plain unit tests whose NAMES merely contain "host"
+# (PinningHelpersTest, PluginInstallSafetyTest, HostClassTreeReleaseTest,
+# HostSupportScopeTest, Phase3HostSlotsTest, the "hostile"-named tests, the
+# task-10 vocab test, ...) even though none of them launch darktable. Those
+# tests were never running under the documented command. The real host tests
+# were already self-skipping via SCOUTER_HOST_TESTS (tests/conftest.py,
+# tests/test_host_phase3.py) regardless of `-k`, so the env gate was always
+# the thing keeping darktable from launching -- the `-k` filter only hid
+# unrelated tests. Marking the real host classes with `host` and deselecting
+# that marker here means plain `pytest -q` collects and runs the full unit
+# suite (host tests included in the collection, but marker-skipped -- SKIPPED,
+# not silently absent) without needing `-k` at all.
+addopts = "-m 'not host'"

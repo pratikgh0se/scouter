@@ -18,6 +18,8 @@ import time
 import unittest
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 DARKTABLE = Path("/Applications/darktable.app/Contents/MacOS/darktable")
 DARKTABLE_CLI = Path("/Applications/darktable.app/Contents/MacOS/darktable-cli")
@@ -85,6 +87,7 @@ def _quit_darktable(proc: subprocess.Popen[bytes]) -> None:
 
 
 @unittest.skipUnless(not _MISSING, SKIP_REASON)
+@pytest.mark.host
 class CommitTriggerMeasurement(unittest.TestCase):
     maxDiff = None
 

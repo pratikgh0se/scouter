@@ -70,6 +70,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 from tests import host_support
 
 # INSTALLED_PLUGIN/PLUGIN_SRC are re-exported (brief's own import line, task 9)
@@ -106,6 +108,7 @@ SKIP_REASON = (
 
 
 @unittest.skipUnless(not _MISSING, SKIP_REASON)
+@pytest.mark.host
 class PinDtstyleFormatTest(unittest.TestCase):
     """One test method: install -> launch -> probe -> capture -> quit -> restore."""
 
@@ -423,6 +426,7 @@ COMMITTED_TABLE = Path(__file__).resolve().parent / "fixtures" / "wb-em10iii.jso
 
 
 @unittest.skipUnless(not _MISSING, SKIP_REASON)
+@pytest.mark.host
 class WhiteBalanceCalibrationHostTest(unittest.TestCase):
     """Task 11 step 7: measure the real per-camera Kelvin table, same
     install/launch/quit/restore discipline as `PinDtstyleFormatTest`, run
@@ -615,6 +619,7 @@ class WhiteBalanceCalibrationHostTest(unittest.TestCase):
 
 
 @unittest.skipUnless(not _MISSING, SKIP_REASON)
+@pytest.mark.host
 class PinWbCoefficientSlidersHostTest(unittest.TestCase):
     """Task 11 step 3, in its own darktable launch (see
     `WhiteBalanceCalibrationHostTest`'s docstring for why): probes each
@@ -901,6 +906,7 @@ def _jpeg_longest_edge(path: Path) -> int:
 
 
 @unittest.skipUnless(not _MISSING, SKIP_REASON)
+@pytest.mark.host
 class Phase2EndToEndTest(unittest.TestCase):
     """E1-E9 plus the metrics check, in ONE darktable session, in order.
 
