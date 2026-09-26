@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from gauntlet.adapter import CallRecord
+from scouter.core.dtprocess import LaunchError
 from tests.gauntlet.corpus import Corpus, copy_readonly
 
 REPO = Path(__file__).resolve().parents[2]
@@ -204,14 +205,20 @@ class ScouterSession:
 
     def _launch(self, frame: Path) -> None:
         assert self.staged is not None
-        for attempt in (1, 2):
-            self.dt.launch(frame, self.staged.library, self.root / "darktable.log")
+        failures: list[str] = []
+        for _attempt in (1, 2):
+            try:
+                self.dt.launch(frame, self.staged.library, self.root / "darktable.log")
+            except LaunchError as e:  # dtprocess already stopped the unowned process
+                failures.append(f"LaunchError: {e}")
+                continue
             ready = self.dt.ready(LAUNCH_READY_S)
             if ready.get("ready"):
                 self.current_frame = frame
                 return
+            failures.append("not gui_ready after 30 s")
             self.dt.terminate(responsive=False)
-        raise SessionBlocked("launch: darktable not gui_ready after 30 s, twice")
+        raise SessionBlocked("launch: darktable failed twice: " + "; ".join(failures))
 
     def relaunch(self, frame: Path | None = None) -> None:
         self.dt.terminate(responsive=False)

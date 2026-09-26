@@ -3,6 +3,7 @@
 
 import pytest
 
+from scouter.core.dtprocess import LaunchError
 from tests.gauntlet import session as sess
 from tests.gauntlet.corpus import Corpus
 
@@ -53,13 +54,6 @@ class FakeMcp:
         pass
 
 
-@pytest.fixture(autouse=True)
-def _no_real_wb_tables(tmp_path, monkeypatch):
-    """Safety: stage() copies WB tables from HTC_WB_TABLES (default: the real
-    ~/.config/scouter/wb); point it at an empty tmp dir so tests never read it."""
-    monkeypatch.setenv("HTC_WB_TABLES", str(tmp_path / "no-wb-tables"))
-
-
 @pytest.fixture
 def corpus(tmp_path):
     trial = tmp_path / "trial"
@@ -80,6 +74,7 @@ def test_refuses_a_darktable_it_did_not_launch(corpus, tmp_path):
     s = _session(corpus, tmp_path, FakeDt(foreign=[4242]))
     with pytest.raises(sess.ForeignDarktable):
         s.open()
+    assert s.dt.terminated == [] and s.dt.launches == 0  # never signals a foreign darktable
 
 
 def test_quits_its_own_leftover_darktable_from_a_killed_run(corpus, tmp_path):
@@ -102,3 +97,26 @@ def test_session_env_is_isolated(corpus, tmp_path):
     for k in ("SCOUTER_CONFIG", "SCOUTER_CACHE", "OBSIDIAN_VAULT_PATH"):
         assert env[k].startswith(str(tmp_path / "s1"))
     assert s.staged.frames["hero"].read_bytes() == b"raw"
+
+
+class LaunchFailDt(FakeDt):
+    """launch() raises dtprocess.LaunchError for the first `fails` attempts."""
+
+    def __init__(self, fails, **kw):
+        super().__init__(**kw)
+        self.fails = fails
+
+    def launch(self, frame, library, log):
+        self.launches += 1
+        if self.launches <= self.fails:
+            raise LaunchError(f"could not read the start time of darktable pid {self.launches}")
+
+
+def test_launch_error_is_a_failed_attempt(corpus, tmp_path):
+    dt = LaunchFailDt(1)
+    _session(corpus, tmp_path, dt).open()
+    assert dt.launches == 2
+    dt = LaunchFailDt(2)
+    with pytest.raises(sess.SessionBlocked, match="LaunchError: could not read the start time"):
+        _session(corpus, tmp_path, dt).open()
+    assert dt.launches == 2
