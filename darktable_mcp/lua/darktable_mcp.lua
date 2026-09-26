@@ -838,19 +838,70 @@ local VIEW_ENTER_DARKROOM_BUDGET_MS = 20000
 -- 500ms and the XMP advanced, so this dwell is deliberate, not a guess.
 local VIEW_BOUNCE_DWELL_MS = 300
 
+-- ---- Commit budget (row 431) ----------------------------------------------
+--
+-- Bench 20260926t083159z: `history.commit` on a freshly opened, unedited
+-- frame never answered -- the server's bridge gave up at its own 60s, the
+-- MCP client at 30s, while the caller had asked for timeout_s=10. Since row
+-- 430 a commit with nothing to write always reaches auto's fallback bounce,
+-- and nothing in this handler knew the caller's budget: no_bounce (1.5s
+-- sidecar wait) + up to 3 bounces, each a 5s leave, a 20s return (retried
+-- once) and a 1.5s sidecar wait -- a worst case near 150s on a cold darkroom,
+-- all of it keeping the single worker busy after the caller had gone.
+--
+-- So history.commit takes `budget_ms` and every wait inside it is clamped to
+-- what is left. Time is counted two ways and the smaller remainder wins:
+-- the yields this plugin itself spent (yield_sleep, ms-exact, but blind to
+-- time blocked inside gtk-wrapped calls) and os.time() (whole seconds, but
+-- sees everything). The Python side enforces the same timeout on the bridge
+-- file itself, so this is about freeing the worker, not the caller's clock.
+local slept_ms_total = 0
+local commit_budget = nil
+
+local function yield_sleep(ms)
+  dt.control.sleep(ms)
+  slept_ms_total = slept_ms_total + ms
+end
+
+-- Open a commit budget of `limit_ms` (nil closes it).
+local function set_commit_budget(limit_ms)
+  if limit_ms == nil then commit_budget = nil; return end
+  commit_budget = {limit_ms = math.max(0, limit_ms), slept0 = slept_ms_total,
+                   wall0 = os.time()}
+end
+
+-- Milliseconds left in the active commit budget (math.huge outside one).
+local function budget_remaining_ms()
+  if not commit_budget then return math.huge end
+  local by_yield = commit_budget.limit_ms - (slept_ms_total - commit_budget.slept0)
+  local by_wall = commit_budget.limit_ms - (os.time() - commit_budget.wall0) * 1000
+  return math.min(by_yield, by_wall)
+end
+
+-- `budget_ms` clamped to the active commit budget (never below 0).
+local function clamp_to_budget(budget_ms)
+  local left = budget_remaining_ms()
+  if left < budget_ms then return math.max(0, left) end
+  return budget_ms
+end
+
+-- A bounce needs about a second on the host (row 429: 0.75-1.07s) before its
+-- sidecar wait even starts; with less left than this, one is not started.
+local COMMIT_MIN_BOUNCE_MS = 1000
+
 -- Yield-poll until the current view is `target`. Returns (landed, waited_ms).
 --
 -- dt.control.sleep is the yield: it hands the main loop back to darktable so
 -- the switch it has queued can actually run. Without it this function would
 -- spin on a value that can never change.
 local function wait_for_view(target, budget_ms)
-  budget_ms = budget_ms or VIEW_SETTLE_BUDGET_MS
+  budget_ms = clamp_to_budget(budget_ms or VIEW_SETTLE_BUDGET_MS)
   local waited = 0
   while true do
     if current_view_name() == target then return true, waited end
     if waited >= budget_ms then return false, waited end
     if not (dt.control and dt.control.sleep) then return false, waited end
-    dt.control.sleep(VIEW_SETTLE_POLL_MS)
+    yield_sleep(VIEW_SETTLE_POLL_MS)
     waited = waited + VIEW_SETTLE_POLL_MS
   end
 end
@@ -1203,14 +1254,14 @@ end
 -- call can see the PREVIOUS image -- the same lesson task 12 learned for
 -- `dt.gui.current_view` and fixed with `wait_for_view`.
 local function wait_for_darkroom_image(image, budget_ms)
-  budget_ms = budget_ms or WAIT_FOR_IMAGE_BUDGET_MS
+  budget_ms = clamp_to_budget(budget_ms or WAIT_FOR_IMAGE_BUDGET_MS)
   local waited = 0
   while true do
     local loaded = loaded_darkroom_image()
     if loaded ~= nil and ids_match(loaded.id, image.id) then return true, waited end
     if waited >= budget_ms then return false, waited end
     if not (dt.control and dt.control.sleep) then return false, waited end
-    dt.control.sleep(VIEW_SETTLE_POLL_MS)
+    yield_sleep(VIEW_SETTLE_POLL_MS)
     waited = waited + VIEW_SETTLE_POLL_MS
   end
 end
@@ -1559,7 +1610,7 @@ local function commit_view_bounce(between, transport)
   end
   -- Dwell in the lighttable so the sidecar write finishes before the pipe is
   -- reloaded underneath it.
-  if dt.control and dt.control.sleep then dt.control.sleep(VIEW_BOUNCE_DWELL_MS) end
+  if dt.control and dt.control.sleep then yield_sleep(VIEW_BOUNCE_DWELL_MS) end
 
   if between then
     local ok_between, between_err = pcall(between)
@@ -1578,7 +1629,7 @@ local function commit_view_bounce(between, transport)
     -- One retry: a single flaky switch back should not strand the session in
     -- the lighttable when the commit itself already landed (the pipe unloaded
     -- on the way out). Same dwell before trying again.
-    if dt.control and dt.control.sleep then dt.control.sleep(VIEW_BOUNCE_DWELL_MS) end
+    if dt.control and dt.control.sleep then yield_sleep(VIEW_BOUNCE_DWELL_MS) end
     ok2, detail2, returned_waited = return_to_darkroom(image, transport)
   end
   local final_view = current_view_name()
@@ -1697,13 +1748,13 @@ end
 -- Yield-poll until `path`'s signature differs from `before` (nil `before`
 -- means "did not exist"). Returns (changed, waited_ms).
 local function wait_for_sidecar(path, before, budget_ms)
-  budget_ms = budget_ms or SIDECAR_WRITE_BUDGET_MS
+  budget_ms = clamp_to_budget(budget_ms or SIDECAR_WRITE_BUDGET_MS)
   local waited = 0
   while true do
     if sidecar_signature(path) ~= before then return true, waited end
     if waited >= budget_ms then return false, waited end
     if not (dt.control and dt.control.sleep) then return false, waited end
-    dt.control.sleep(SIDECAR_WRITE_POLL_MS)
+    yield_sleep(SIDECAR_WRITE_POLL_MS)
     waited = waited + SIDECAR_WRITE_POLL_MS
   end
 end
@@ -1963,6 +2014,15 @@ methods["history.commit"] = function(p)
     -- The fallback bounce needs the darkroom; outside it, no_bounce's own
     -- answer is the honest one.
     if current_view_name() ~= "darkroom" then return nb end
+    -- Row 431: no budget left for a bounce -- answer now with no_bounce's
+    -- result rather than start one the caller will not wait for.
+    if budget_remaining_ms() < COMMIT_MIN_BOUNCE_MS then
+      nb.budget_exhausted = true
+      nb.detail = (nb.detail and (nb.detail .. "; ") or "")
+        .. "no fallback bounce: the " .. tostring(commit_budget and commit_budget.limit_ms)
+        .. "ms commit budget was spent"
+      return nb
+    end
     fallback_from = {strategy = "no_bounce", detail = nb.detail, steps = nb.steps,
                      sidecar_wait_ms = nb.sidecar_wait_ms}
   end
@@ -2008,7 +2068,13 @@ methods["history.commit"] = function(p)
   local ok_call, result = true, nil
   local written, write_ms = nil, 0
   local attempt_count = 0
+  local budget_exhausted = false
   for attempt = 1, attempts do
+    -- Row 431: never start a bounce the commit budget cannot pay for.
+    if budget_remaining_ms() < COMMIT_MIN_BOUNCE_MS then
+      budget_exhausted = true
+      break
+    end
     attempt_count = attempt
     ok_call, result = pcall(commit_view_bounce, nil, bounce_transport)
     if not ok_call then break end
@@ -2018,10 +2084,27 @@ methods["history.commit"] = function(p)
     write_ms = write_ms + waited
     if changed then break end
     if attempt < attempts and dt.control and dt.control.sleep then
-      dt.control.sleep(VIEW_BOUNCE_DWELL_MS)
+      yield_sleep(VIEW_BOUNCE_DWELL_MS)
     end
   end
   if not ok_call then error(result) end
+  if result == nil then
+    -- Row 431: the budget ran out before the first bounce could start.
+    return {
+      strategy_used = used_transport == "action" and "view_bounce_action" or "view_bounce",
+      ok = false,
+      detail = "no bounce started: the " .. tostring(commit_budget and commit_budget.limit_ms)
+        .. "ms commit budget was spent",
+      view_after = current_view_name(),
+      cpu_ms = (os.clock() - started) * 1000,
+      sidecar = sidecar,
+      sidecar_wait_ms = 0,
+      attempts_used = 0,
+      expect_change = expect_change,
+      budget_exhausted = true,
+      fallback_from = fallback_from,
+    }
+  end
 
   local detail = result.error
   if detail == nil and written == false then
@@ -2051,7 +2134,24 @@ methods["history.commit"] = function(p)
     expect_change = expect_change,
     -- auto only: what no_bounce reported before this bounce ran.
     fallback_from = fallback_from,
+    budget_exhausted = budget_exhausted or nil,
   }
+end
+
+-- `budget_ms` (row 431, optional): the most wall time this commit may spend.
+-- The Python caller passes a little under its own timeout_s, so the worker is
+-- free again by the time the caller stops waiting. Without it every wait
+-- keeps its own fixed budget, exactly as before.
+do
+  local unbudgeted_commit = methods["history.commit"]
+  methods["history.commit"] = function(p)
+    p = p or {}
+    set_commit_budget(tonumber(p.budget_ms))
+    local ok, res = pcall(unbudgeted_commit, p)
+    set_commit_budget(nil)
+    if not ok then error(res, 0) end
+    return res
+  end
 end
 
 -- ---- Main-thread probe (row 418/422/429) -----------------------------------

@@ -362,7 +362,9 @@ class HistoryChangedTest(unittest.TestCase):
             self.sidecar, self.original_text, outcome="never_write"
         )
         with self.assertRaises(CommitTimeout):
-            history.commit(image=str(self.raw), job="job-test", timeout_s=0.2)
+            history.commit(
+                image=str(self.raw), job="job-test", timeout_s=0.2, expect_change=True
+            )
 
     def test_wrong_prediction_escalates_to_a_real_commit_not_a_false_noop(self) -> None:
         """Fix round 1, blocker 2, end-to-end: the mid path's `expect_change=

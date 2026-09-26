@@ -281,9 +281,11 @@ TOOL_SPECS: list[dict] = [
                 },
                 "expect_change": {
                     "type": "boolean",
-                    "default": True,
-                    "description": "False forces attempts=1 and reports a confirmed "
-                    "no-op as ok/changed=false instead of raising commit_timeout",
+                    "description": "omit to expect a change only when Scouter has an "
+                    "uncommitted write for this image (otherwise the answer is a prompt "
+                    "noop=true); true forces the full view bounce; false forces "
+                    "attempts=1 and reports a confirmed no-op as ok/changed=false "
+                    "instead of raising commit_timeout",
                 },
             },
             [],
