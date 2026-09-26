@@ -30,6 +30,10 @@ OWNER_FILE = "darktable.owner.json"
 _children: dict[int, subprocess.Popen] = {}
 
 
+class LaunchError(RuntimeError):
+    """darktable started but could not be recorded as owned (it was stopped)."""
+
+
 @dataclass(frozen=True)
 class Launched:
     pid: int
@@ -76,8 +80,12 @@ def _alive(pid: int) -> bool:
 
 
 def running_pids() -> list[int]:
-    """Every running darktable GUI process (not darktable-cli)."""
-    out = subprocess.run(["pgrep", "-f", "MacOS/darktable( |$)"], capture_output=True, text=True)
+    """Every running darktable GUI process (not darktable-cli).
+
+    Raises `subprocess.TimeoutExpired` / `OSError` when pgrep cannot answer:
+    callers must treat that as "unknown", never as "none running"."""
+    out = subprocess.run(["pgrep", "-f", "MacOS/darktable( |$)"], capture_output=True, text=True,
+                         timeout=5)
     return [int(x) for x in out.stdout.split() if x.strip().isdigit()]
 
 
@@ -127,7 +135,19 @@ def launch(frame: str | Path | None, library: str | Path, configdir: str | Path 
         if start:
             break
         time.sleep(0.1)
-    rec = Launched(proc.pid, start or "", exe, str(library),
+    if not start:
+        # Without a start time owned_pid() can never match, so this darktable
+        # could never be quit. It is ours (we hold its Popen): stop it now.
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        else:
+            _children.pop(proc.pid, None)
+        raise LaunchError(f"could not read the start time of darktable pid {proc.pid}; "
+                          "stopped it rather than leave an unowned process")
+    rec = Launched(proc.pid, start, exe, str(library),
                    str(configdir) if configdir else None, str(frame) if frame else None)
     owner_path().parent.mkdir(parents=True, exist_ok=True)
     owner_path().write_text(json.dumps(asdict(rec)) + "\n", encoding="utf-8")
@@ -170,9 +190,17 @@ def terminate(pid: int | None = None, *, responsive: bool | None = None,
     # osascript addresses darktable by application name, not pid, so with a
     # foreign darktable also running it could quit the user's session. Skip
     # it then and go straight to signals, which only ever reach `target`.
-    if responsive is not False and foreign_pids():
-        steps.append("osascript_skipped_foreign")
-        responsive = False
+    # A pgrep that cannot answer is "unknown" and fails closed.
+    if responsive is not False:
+        try:
+            foreign = foreign_pids()
+        except (OSError, subprocess.TimeoutExpired):
+            steps.append("osascript_skipped_unknown")
+            responsive = False
+        else:
+            if foreign:
+                steps.append("osascript_skipped_foreign")
+                responsive = False
     if responsive is not False:
         try:
             subprocess.run(["osascript", "-e", 'tell application "darktable" to quit'],
@@ -185,6 +213,11 @@ def terminate(pid: int | None = None, *, responsive: bool | None = None,
                 return {"ok": True, "how": "osascript", "pid": target}
             sleep(0.5)
     for sig, wait_s in ((signal.SIGTERM, 10.0), (signal.SIGKILL, 5.0)):
+        # Re-check ownership before every signal: after the waits above the
+        # pid may have exited and been reused by another process.
+        if owned_pid() != target:
+            return {"ok": not alive(target), "how": "gone_or_reused", "pid": target,
+                    "steps": steps}
         try:
             kill(target, sig)
         except ProcessLookupError:
