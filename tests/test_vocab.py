@@ -57,6 +57,11 @@ class VocabShapeTest(unittest.TestCase):
                 if unpinned and s.reachable and not is_toggle:
                     self.assertTrue(s.candidate_paths, "an unpinned reachable row needs candidates")
                 self.assertEqual(s.display_scale, 100.0 if s.unit == "%" else 1.0)
+        # The toggle carve-outs above excuse exactly the rows Task 33 added as
+        # 0/1 flips, and each is a real bool row with a one-notch flip.
+        toggles = {(s.module, s.param): (s.unit, s.lo, s.hi, s.step)
+                   for s in vocab.PARAMS if s.param == "__enabled"}
+        self.assertEqual(toggles, {("lens", "__enabled"): ("bool", 0.0, 1.0, 1.0)})
 
     def test_statuses_after_the_task_10_host_run(self) -> None:
         # Task 10 (2026-09-24 host run) pinned all 15 candidate paths and
