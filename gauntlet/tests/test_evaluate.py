@@ -233,6 +233,60 @@ def test_boundary_set_accepts_a_typed_refusal_but_not_a_silent_clamp():
     assert reported.outcome == "verified"
 
 
+def test_boundary_metric_landed_as_requested_needs_no_clamp_report():
+    """Scouter's soft range is narrower than darktable's hard range: a
+    `set` just outside the soft bound can land exactly where it was asked,
+    honestly, with no clamp at all -- that must not read as a silent
+    failure just because `data.clamped` is naturally false (row 2026-09-26,
+    item 2: cov-colorbalancergb.contrast-olympus-set_hi_plus)."""
+    chk = Check("boundary", target={"key": "exposure.exposure", "unit": "EV", "request": 4.3})
+    case = _edit_case([chk], SIDECAR)
+    v = evaluate(case, _obs(_ok(), _snap("a", **{"exposure.exposure": 4.0}),
+                            _snap("b", **{"exposure.exposure": 4.3})), POLICY)
+    assert v.outcome == "verified"
+
+
+def test_boundary_metric_clamped_and_reported_passes():
+    chk = Check("boundary", target={"key": "exposure.exposure", "unit": "EV", "request": 4.3,
+                                    "bound": 4.0})
+    case = _edit_case([chk], SIDECAR)
+    v = evaluate(case, _obs(_ok({"clamped": True}), _snap("a", **{"exposure.exposure": 3.5}),
+                            _snap("b", **{"exposure.exposure": 4.0})), POLICY)
+    assert v.outcome == "verified"
+
+
+def test_boundary_metric_clamped_but_unreported_is_a_silent_failure():
+    """The real product bug this must still catch (row 2026-09-26, item 2):
+    sigmoid.skew asked for 1.1, landed at the 1.0 bound, and the envelope
+    never said so."""
+    skew_sidecar = {"changed": True, "key": "sigmoid.skew", "units": {"sigmoid.skew": "ratio"}}
+    chk = Check("boundary", target={"key": "sigmoid.skew", "unit": "ratio", "request": 1.1,
+                                    "bound": 1.0}, tags={"silent_if_fail": True, "why": "clamp"})
+    case = _edit_case([chk], skew_sidecar)
+    v = evaluate(case, _obs(_ok(), _snap("a", **{"sigmoid.skew": 0.9}),
+                            _snap("b", **{"sigmoid.skew": 1.0})), POLICY)
+    assert v.outcome == "silent_failure" and "clamp" in v.silent_failure
+
+
+def test_boundary_metric_delta_form_reads_the_before_snapshot():
+    """A phrase's explicit `by N` (item 2's `deeper_blacks by 0.2`): the
+    generator does not know the frame's starting value, so `delta`+`lo`/`hi`
+    resolve the request against the case's own before-snapshot."""
+    black_sidecar = {"changed": True, "key": "exposure.black", "units": {"exposure.black": "ratio"}}
+    chk = Check("boundary", target={"key": "exposure.black", "unit": "ratio", "delta": 0.2,
+                                    "lo": -0.1, "hi": 0.1},
+               tags={"silent_if_fail": True, "why": "clamp"})
+    case = _edit_case([chk], black_sidecar)
+    # honestly clamped at the bound and reported
+    v = evaluate(case, _obs(_ok({"clamped": True}), _snap("a", **{"exposure.black": 0.0}),
+                            _snap("b", **{"exposure.black": 0.1})), POLICY)
+    assert v.outcome == "verified"
+    # landed short of the bound with no clamp reported: a real silent failure
+    bad = evaluate(case, _obs(_ok(), _snap("a", **{"exposure.black": 0.0}),
+                              _snap("b", **{"exposure.black": 0.05})), POLICY)
+    assert bad.outcome == "silent_failure"
+
+
 def test_extra_and_envelope_ops():
     obs = Observation(calls=[CallRecord("t", {}, _ok({"n": 3, "k": "warmer"}))],
                       extra={"offline_ok": True, "count": 5})
