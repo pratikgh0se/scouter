@@ -909,7 +909,11 @@ def darktable_running() -> list[str]:
 class DarktableHost:
     """Launch darktable on one frame, wait for the darkroom, always quit it."""
 
-    def __init__(self, library_db: Path, log_path: Path) -> None:
+    def __init__(self, library_db: Path, log_path: Path, settle_s: float = 0.0) -> None:
+        #: Idle wait after the darkroom answers and before the first tool call
+        #: (a B1 probe: does the first history_commit hang less when darktable
+        #: has finished its first pipeline run?). 0 = revision 1 behaviour.
+        self.settle_s = settle_s
         self.library_db = library_db
         self.log_path = log_path
         self.proc: subprocess.Popen | None = None
@@ -961,7 +965,10 @@ class DarktableHost:
             time.sleep(0.5)
         loaded = current.get("path")
         ok = loaded is not None and os.path.realpath(loaded) == os.path.realpath(frame)
+        if ok and self.settle_s:
+            time.sleep(self.settle_s)
         return {
+            "settle_s": self.settle_s,
             "ok": ok,
             "launch_to_darkroom_s": round(to_darkroom, 2),
             "ready_s": round(time.monotonic() - started, 2),
@@ -1676,6 +1683,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--merge-tasks", help="with --merge: only take these task ids from the re-runs")
     p.add_argument("--sessions", help="comma-separated session ids to run (default: all)")
+    p.add_argument(
+        "--launch-settle",
+        type=float,
+        default=0.0,
+        help="seconds to idle after darktable reaches the darkroom, before the first call",
+    )
     args = p.parse_args(argv)
 
     if args.merge:
@@ -1753,7 +1766,9 @@ def main(argv: list[str] | None = None) -> int:
             return out
 
         host = DarktableHost(
-            SCRATCH / "bench-library" / "library.db", run_dir / body / "darktable.log"
+            SCRATCH / "bench-library" / "library.db",
+            run_dir / body / "darktable.log",
+            settle_s=args.launch_settle,
         )
         runner = BenchRun(
             doc,
