@@ -523,17 +523,49 @@ def adjust(module: str, param: str, delta: float, *, instance: int = 0, commit: 
         )
     resolved = darkroom._current_image()
     darkroom._require_job_image(job, resolved.image_id)
-    # Before the pre-read bounce: a white balance in camera reference (late)
-    # mode is refused with nothing sent. If only the bounce reveals preset 4
-    # (no sidecar before it), `set_param`'s own guard still refuses the write.
+    # Route A: a Kelvin adjust on a preset-4 white balance moves color
+    # calibration's illuminant temperature instead (`darkroom.wb_route`).
+    # The route is decided on the sidecar as it stands; if the pre-read
+    # bounce runs, it is decided AGAIN on the sidecar the bounce wrote, so a
+    # preset 4 that only the bounce reveals still routes (or refuses) before
+    # any value is read. A relative move never reads the WB table's Kelvin
+    # and then lands it on the illuminant (`darkroom.NO_WB_REROUTE`).
+    asked = (module, param, instance)
+
+    def _route() -> dict | None:
+        m, p, i = asked
+        if (m, p) == ("temperature", "temperature"):
+            route = darkroom.wb_route(resolved.path, i)
+            if route["route"] == "color_calibration":
+                return route
+        return None
+
+    def _target(route: dict | None) -> tuple[str, str, int]:
+        return (*darkroom.COLORCAL_WB, 0) if route is not None else asked
+
+    routed = _route()
+    module, param, instance = _target(routed)
+    # Refused with nothing sent when the sidecar already shows preset 4 and
+    # the route is unavailable; re-checked after the bounce below.
     darkroom.refuse_wb_late(resolved.path, module, [param], instance,
                             what=f"darkroom adjust {module}.{param}")
     dtbridge.require_darkroom()
     warning, pre = _maybe_precommit(job, resolved, bounce=bounce, trust_sidecar=trust_sidecar,
                                     expect_module=module)
-    result = _adjust_core(module, param, delta, resolved=resolved, instance=instance,
-                          commit=commit, level=level, job=job, ms_precommit=pre["ms"])
+    if pre["bounced"]:
+        routed = _route()
+        module, param, instance = _target(routed)
+        darkroom.refuse_wb_late(resolved.path, module, [param], instance,
+                                what=f"darkroom adjust {module}.{param}")
+    token = darkroom.NO_WB_REROUTE.set(True)
+    try:
+        result = _adjust_core(module, param, delta, resolved=resolved, instance=instance,
+                              commit=commit, level=level, job=job, ms_precommit=pre["ms"])
+    finally:
+        darkroom.NO_WB_REROUTE.reset(token)
     result.plan[0]["precommit"] = {"bounced": pre["bounced"], "reason": pre["reason"]}
+    if routed is not None:
+        result.warnings.append(darkroom.wb_routed_note(routed))
     if warning:
         result.warnings.insert(0, warning)
     return result
@@ -549,6 +581,23 @@ def _refusal(mv_module: str, param: str, kind: str) -> dict | None:
         return {"module": mv_module, "param": param, "code": e.code, "status": vocab.status(s),
                 "message": e.message}
     return None
+
+
+def _route_wb(resolved: ResolvedImage, concrete: list[tuple[str, phrases.Move]]
+              ) -> tuple[list[tuple[str, phrases.Move]], dict | None]:
+    """Route A (decision rows 458/461): on a preset-4 white balance whose
+    color calibration route is usable, every Kelvin move of the phrase goes
+    to `channelmixerrgb.temperature` -- same notch, same sign, same unit.
+    Tint moves are left alone (the guard refuses them). Local reads only."""
+    if not any(m == "temperature" and mv.param == "temperature" for m, mv in concrete):
+        return concrete, None
+    route = darkroom.wb_route(resolved.path, 0)
+    if route["route"] != "color_calibration":
+        return concrete, None
+    module, param = darkroom.COLORCAL_WB
+    return [(module, phrases.Move(module, param, mv.kind, mv.notches, mv.value))
+            if (m, mv.param) == ("temperature", "temperature") else (m, mv)
+            for m, mv in concrete], route
 
 
 def _refuse_wb_late(phrase: str, key: str, resolved: ResolvedImage,
@@ -606,7 +655,8 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
     resolved = darkroom._current_image()
     darkroom._require_job_image(job, resolved.image_id)
     tone = route_tone(resolved.path)
-    concrete = [(tone if mv.module == phrases.TONE else mv.module, mv) for mv in res.moves]
+    base = [(tone if mv.module == phrases.TONE else mv.module, mv) for mv in res.moves]
+    concrete, wb_routed = _route_wb(resolved, base)
     # Local sidecar read only: refused with nothing sent, not even the
     # view check or the pre-read bounce.
     _refuse_wb_late(phrase, res.key, resolved, concrete)
@@ -618,9 +668,14 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
     warning, pre = _maybe_precommit(job, resolved, bounce=bounce, trust_sidecar=trust_sidecar)
     if pre["bounced"]:
         # The bounce can be what first writes the sidecar (or flushes a hand
-        # edit): re-check before the first move, so a later WB move can never
-        # refuse after an earlier move of the same phrase has landed.
+        # edit): re-route and re-check before the first move, so a later WB
+        # move can never refuse after an earlier move of the same phrase has
+        # landed, and a preset 4 it reveals still goes to color calibration.
+        concrete, wb_routed = _route_wb(resolved, base)
         _refuse_wb_late(phrase, res.key, resolved, concrete)
+        refused = [r for r in (_refusal(m, mv.param, mv.kind) for m, mv in concrete) if r]
+        if refused:
+            _raise_refused(phrase, res.key, refused, len(concrete))
     # Final review #1a ruling, all-or-nothing: a `set` move whose before
     # value is unreadable and whose row declares no neutral/default would
     # journal an entry `undo_last` can only refuse. Refuse the whole phrase
@@ -643,6 +698,7 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
     notes: list[explain.MoveNote] = []
     failures: list[dict] = []
     token = journal.GROUP.set(group)
+    no_reroute = darkroom.NO_WB_REROUTE.set(True)
     try:
         for module, mv in concrete:
             s = vocab.spec(module, mv.param)
@@ -676,6 +732,7 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
                                  "message": e.message, "detail": e.detail})
                 break
     finally:
+        darkroom.NO_WB_REROUTE.reset(no_reroute)
         journal.GROUP.reset(token)
     return SayResult(
         outcome="partial" if failures else "ok",
@@ -683,7 +740,7 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
         intensity=res.intensity, group=group, moves=landed, refused=failures,
         summary="; ".join(m.get("summary", "") for m in landed),
         explain=explain.lines(notes, level=level, job=job),
-        warnings=[w for w in [warning] if w],
+        warnings=[w for w in [warning, wb_routed and darkroom.wb_routed_note(wb_routed)] if w],
         plan=[pre],
     )
 

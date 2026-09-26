@@ -61,7 +61,9 @@ class VocabShapeTest(unittest.TestCase):
             by.setdefault(vocab.status(s), set()).add(f"{s.module}.{s.param}")
         self.assertEqual(by.get("absolute_only"), {"temperature.tint"})
         self.assertEqual(by.get("unreachable"), {"colorzones.curves"})
-        self.assertNotIn("candidate", by)
+        # Route A (decision rows 458/461) adds one row that waits for its
+        # own host probe (tests/test_host_colorcal.py): the only candidate.
+        self.assertEqual(by.get("candidate"), {"channelmixerrgb.temperature"})
         self.assertEqual(len(by["live"]), 22)
         for row in ("colorbalancergb.shadows_hue", "colorbalancergb.highlights_chroma",
                     "sigmoid.skew", "filmicrgb.contrast", "colorzones.strength"):

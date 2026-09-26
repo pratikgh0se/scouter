@@ -103,7 +103,8 @@ class _FakeDarktable(unittest.TestCase):
         self.pending.append((p["module"], "__reset__", 0.0))
         return {"nan": False, "view": "darkroom"}
 
-    def _commit(self, job, image, *, strategy="auto", attempts=None, expect_change=True):
+    def _commit(self, job, image, *, strategy="auto", attempts=None, expect_change=True,
+                expect_module=None):
         self.commits.append((attempts, expect_change))
         before = self.sidecar.read_text()
         text = before

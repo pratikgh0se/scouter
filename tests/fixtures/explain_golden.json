@@ -1,5 +1,6 @@
 {
   "brief": {
+    "channelmixerrgb.temperature": "color calibration › CAT › illuminant temperature up +300 K (2300 K → 2600 K): tells color calibration the light was bluer or redder, so the picture turns warmer or cooler, without touching the white balance module; watch neutral greys and skin.",
     "colorbalancergb.contrast": "color balance rgb › master › contrast up +5% (-45% → -40%): adds or removes contrast around middle grey, after the tone mapper; watch that it does not fight the sigmoid contrast.",
     "colorbalancergb.global_chroma": "color balance rgb › master › global chroma up +20% (-30% → -10%): changes colourfulness at constant brightness; watch bright saturated colours going neon.",
     "colorbalancergb.global_saturation": "color balance rgb › master › global saturation up +25% (-25% → 0%): changes colourfulness and darkens strong colours slightly, which reads natural; watch skin and skies for over-cooked colour.",

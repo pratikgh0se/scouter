@@ -144,3 +144,34 @@ def plan_request(req: dict, cmap: dict) -> RequestPlan:
     else:
         klass = "out"
     return RequestPlan(rid, klass, tuple(out), caps, unmapped=tuple(unmapped))
+
+
+def wb_route_a_expect(cmap: dict, case_key: str, preset: int | None, *,
+                      pinned: bool) -> dict | None:
+    """What a warmth case must verify on a frame in camera reference (late)
+    mode, from check_map.json's `wb_route_a` block (Scouter decision rows
+    458/461). `case_key` is a phrase key ("warmer") or a module.param key
+    ("temperature.temperature"); `pinned` is whether Scouter's
+    `channelmixerrgb.temperature` action path is pinned (see
+    `route_a_pinned`). None when the block does not apply (another preset,
+    another case)."""
+    r = cmap["wb_route_a"]
+    if preset != r["applies_when"]["equals"]:
+        return None
+    if case_key not in r["phrase_keys"] and case_key not in r["param_keys"]:
+        return None
+    if not pinned:
+        u = r["until_pinned"]
+        return {"expect": u["expect"], "codes": list(u["accept_codes"])}
+    return {"expect": "edit", "m1_key": r["m1_key"]["to"], "replaces": r["m1_key"]["from"],
+            "unit": r["m1_key"]["unit"], "allowed": list(r["derived_keys"]),
+            "unchanged": list(r["unchanged_keys"]),
+            "direction_verified": bool(r["direction_verified"])}
+
+
+def route_a_pinned(cmap: dict) -> bool:
+    """Is route A's action path pinned in Scouter's whitelist right now?"""
+    from scouter.core import dtbridge
+
+    module, param = cmap["wb_route_a"]["until_pinned"]["pin"]
+    return (module, param) in dtbridge.ACTION_PATHS

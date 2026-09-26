@@ -106,7 +106,7 @@ class SayUnderD65LateRevealedByTheBounceTest(_WbLateFixture):
         text = sidecar.read_text(encoding="utf-8").replace(_PRESET_2_HEX, _PRESET_4_HEX)
         sidecar.unlink()
 
-        def bounce(job, image, *, strategy="auto", attempts=None, expect_change=True):
+        def bounce(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
             self.commits.append((attempts, expect_change))
             sidecar.write_text(text, encoding="utf-8")
             return CommitResult(committed=True, changed=False, warnings=[])

@@ -1,0 +1,42 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for route A (warmth through colour calibration). Each example is a real input on the committed fixture tests/fixtures/P6281348.ORF.xmp (E-M10 III, darktable 5.4 sidecar) with the outcome a human calls right. Run by tests/intent/test_colorcal_warmth_intent.py. Enforced by review until mechanised by t_450535e2. The direction values (+1 warmer / -1 cooler on the illuminant K) are the brief's semantics and are UNVERIFIED on the render until tests/test_host_colorcal.py step 3 passes.",
+  "subject": "scouter/core/darkroom.py wb_route + moves.say/adjust + darkroom.set_param + wb.kelvin",
+  "examples": [
+    {
+      "id": "warmer-preset4-live",
+      "input": {"verb": "say", "phrase": "a touch warmer", "temperature_preset": 4, "colorcal_pinned": true, "illuminant": 2},
+      "expect": {"outcome": "ok", "sent_path": "iop/channelmixerrgb/temperature", "direction": 1, "wb_preset_after": 4},
+      "source": "Pratik 2026-09-27 01:25 Bangkok, 'warmth through colour calibration' (decision rows 458/461); night-1 recorded run cov-phrase-warmer-olympus-touch showed the WB route turning the frame cooler (rb 0.746 -> 0.516), the outcome a human calls wrong"
+    },
+    {
+      "id": "cooler-preset4-live",
+      "input": {"verb": "say", "phrase": "cooler", "temperature_preset": 4, "colorcal_pinned": true, "illuminant": 2},
+      "expect": {"outcome": "ok", "sent_path": "iop/channelmixerrgb/temperature", "direction": -1, "wb_preset_after": 4},
+      "source": "decision rows 458/461 (route A); night-1 cov-p5-warmer-cooler-olympus"
+    },
+    {
+      "id": "match-daylight-preset4-live",
+      "input": {"verb": "set", "module": "temperature", "param": "temperature", "value": 5500.0, "temperature_preset": 4, "colorcal_pinned": true, "illuminant": 2},
+      "expect": {"outcome": "ok", "sent_path": "iop/channelmixerrgb/temperature", "sent_value": 5500.0, "wb_preset_after": 4},
+      "source": "editor benchmark W4 'Match daylight.' (tests/gauntlet/benchmark/editor_tasks.json: an absolute 5500 K target); decision rows 458/461 route kelvin-set phrases"
+    },
+    {
+      "id": "warmer-preset2",
+      "input": {"verb": "say", "phrase": "warmer", "temperature_preset": 2, "colorcal_pinned": true, "illuminant": 2},
+      "expect": {"outcome": "ok", "sent_path": "iop/temperature/temperature", "direction": 1},
+      "source": "phase 3 spec §4.3 row temperature.temperature (live through the measured table); decision rows 458/461: preset != 4 keeps today's WB route"
+    },
+    {
+      "id": "warmer-preset4-candidate",
+      "input": {"verb": "say", "phrase": "warmer", "temperature_preset": 4, "colorcal_pinned": false, "illuminant": 2},
+      "expect": {"outcome": "refused", "code": "module_unavailable", "sent_path": null},
+      "source": "night-1 triage cluster 11 test: 'an XMP with preset 4 plus warmer -> typed refusal, and no write'; phase 3 spec §7/§10 pin rule (a candidate row is data, not a capability)"
+    },
+    {
+      "id": "warmer-preset4-as-shot-illuminant",
+      "input": {"verb": "say", "phrase": "warmer", "temperature_preset": 4, "colorcal_pinned": true, "illuminant": 10},
+      "expect": {"outcome": "refused", "code": "module_unavailable", "sent_path": null, "fix_mentions": "as shot in camera"},
+      "source": "decision rows 458/461 (route A brief: refuse when neither route is available)"
+    }
+  ]
+}
