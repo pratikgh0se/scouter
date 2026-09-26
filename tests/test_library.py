@@ -328,6 +328,43 @@ class FilmRollTest(LibraryTestCase):
         self.assertFalse(result.film_roll_registered)
         self.assertIn(BridgeTimeout.fix, result.warnings)
 
+    def test_import_succeeds_with_darktable_closed_and_the_ping_dead(self) -> None:
+        """Task 29 fix round 1 (I1): darktable CLOSED -- the import call AND the
+        watchdog's diag ping both time out and no darktable pid exists. That is
+        still a plain bridge_timeout, and the copy still succeeds."""
+        from scouter.core import dtprocess
+
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        self.bridge.raises["import_batch"] = BridgeTimeoutError("darktable not reachable")
+        self.bridge.raises["darktable_mcp.diag"] = BridgeTimeoutError("no answer")
+        with mock.patch.object(dtprocess, "running_pids", return_value=[]), \
+                mock.patch.object(dtprocess, "owned_pid", return_value=None):
+            result = library.import_card(str(source), "harbour-wedding", confirm=True)
+
+        self.assertEqual(result.outcome, "ok")
+        self.assertFalse(result.film_roll_registered)
+        self.assertIn(BridgeTimeout.fix, result.warnings)
+
+    def test_import_survives_a_wedged_darktable(self) -> None:
+        """Fix round 1 (I1, ruling a): a RUNNING but wedged darktable raises
+        DarktableUnresponsive, a BridgeTimeout subclass -- the import keeps
+        its tolerant path instead of failing after the irreversible copy."""
+        from scouter.core import dtprocess
+        from scouter.errors import DarktableUnresponsive
+
+        source = self.tmp / "card"
+        _make_card(source, 2)
+        self.bridge.raises["import_batch"] = BridgeTimeoutError("darktable not reachable")
+        self.bridge.raises["darktable_mcp.diag"] = BridgeTimeoutError("no answer")
+        with mock.patch.object(dtprocess, "running_pids", return_value=[4242]), \
+                mock.patch.object(dtprocess, "owned_pid", return_value=None):
+            result = library.import_card(str(source), "harbour-wedding", confirm=True)
+
+        self.assertEqual(result.outcome, "ok")
+        self.assertFalse(result.film_roll_registered)
+        self.assertIn(DarktableUnresponsive.fix, result.warnings)
+
     def test_import_qualifies_film_roll_registered_when_imported_is_zero(self) -> None:
         """Fix round 1, should-fix 7: a bridge call that returns cleanly but
         reports 0 images imported did not actually register anything."""

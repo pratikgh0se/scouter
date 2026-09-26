@@ -1,0 +1,1273 @@
+{
+  "schema": "scouter-editor-benchmark-result/1",
+  "run_id": "20260924t112939z",
+  "label": "phase2-main-rerunA",
+  "body": "olympus",
+  "camera": "OM Digital / Olympus E-M10 Mark III (.ORF)",
+  "git": {
+    "sha": "53ddb182c91f4b86ebbc4b464e10a5d34b5c82e2",
+    "branch": "bench/editor",
+    "dirty": true
+  },
+  "started": "2026-09-24T11:29:39.895588+00:00",
+  "finished": "2026-09-24T11:29:58.960137+00:00",
+  "environment": {
+    "mcp_server": "python -m scouter.mcp.server (README: command scouter-mcp), SCOUTER_JOB unset",
+    "tools": [
+      "darkroom_open",
+      "darkroom_set",
+      "darkroom_nudge",
+      "darkroom_enable",
+      "darkroom_reset",
+      "darkroom_undo_last",
+      "darkroom_status",
+      "darkroom_describe_history",
+      "history_read",
+      "history_commit",
+      "history_changed",
+      "scout_stats",
+      "scout_preview",
+      "scout_compare",
+      "style_extract",
+      "style_apply",
+      "outliers_list",
+      "style_apply_set",
+      "export_run",
+      "export_release",
+      "export_verify",
+      "library_import",
+      "library_verify",
+      "library_register",
+      "library_jobs",
+      "library_relocate",
+      "cull_propose",
+      "cull_apply",
+      "config_init",
+      "config_show",
+      "backup_run",
+      "backup_verify",
+      "metrics_summary",
+      "wb_kelvin",
+      "wb_calibrate"
+    ],
+    "paths": {
+      "body": "olympus",
+      "run_id": "20260924t112939z",
+      "frame:dark": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+      "framename:dark": "P5240151.ORF",
+      "framebase:dark": "P5240151.ORF",
+      "frame:bright": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P6281368.ORF",
+      "framename:bright": "P6281368.ORF",
+      "framebase:bright": "P6281368.ORF",
+      "frame:hero": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P6281348.ORF",
+      "framename:hero": "P6281348.ORF",
+      "framebase:hero": "P6281348.ORF",
+      "frame:calib": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/calib/P6281348.ORF",
+      "framename:calib": "P6281348.ORF",
+      "framebase:calib": "P6281348.ORF",
+      "card": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/card",
+      "job_slug": "bench-olympus-0924112939",
+      "preset": "scouter-bench-olympus-0924112939",
+      "out_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/exports",
+      "_wb_table_present": "1"
+    },
+    "run_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus"
+  },
+  "sessions": [
+    {
+      "id": "A",
+      "role": "dark",
+      "launch": {
+        "ok": true,
+        "launch_to_darkroom_s": 2.0,
+        "ready_s": 2.12,
+        "loaded": {
+          "image_id": 38,
+          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+          "source": "action_images",
+          "view": "darkroom"
+        },
+        "error": null
+      },
+      "setup": [
+        {
+          "tool": "history_commit",
+          "args": {
+            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+            "timeout_s": 10
+          },
+          "envelope": {
+            "data": {},
+            "error": {
+              "code": "commit_timeout",
+              "detail": {
+                "bridge_detail": "the view bounce completed 2 time(s) but /Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF.xmp did not change within 3000ms of waiting -- darktable writes a sidecar only when the history actually changes, so this is expected when the requested value is the one the image already had",
+                "image_id": 38,
+                "ms": 10025,
+                "ok": false,
+                "strategy_used": "view_bounce",
+                "view_after": "darkroom",
+                "xmp": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF.xmp"
+              },
+              "fix": "darktable did not write the XMP in time; leave and re-enter the darkroom, or raise the commit timeout",
+              "message": "darktable did not write /Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF.xmp within 10s using the view_bounce strategy",
+              "outcome": "error"
+            },
+            "job": "job-20260924-112942-30078",
+            "layer": "mcp",
+            "ms": 10145,
+            "ok": false,
+            "outcome": "error:commit_timeout",
+            "verb": "history.commit"
+          },
+          "wall_s": 10.155
+        }
+      ],
+      "tasks": [
+        "E1",
+        "T4",
+        "S2"
+      ],
+      "quit": {
+        "ok": true,
+        "how": "osascript"
+      }
+    }
+  ],
+  "cleanup": [],
+  "tasks": [
+    {
+      "id": "E1",
+      "category": "exposure",
+      "sentence": "This one came out dark. Bring it up a full stop.",
+      "frames": {
+        "dark": "P5240151.ORF"
+      },
+      "plan": [
+        {
+          "tool": "history_read",
+          "args": {
+            "image": "{frame:dark}"
+          }
+        },
+        {
+          "tool": "darkroom_set",
+          "args": {
+            "module": "exposure",
+            "param": "exposure",
+            "value": {
+              "$hist": {
+                "step": 0,
+                "op": "exposure",
+                "param": "exposure",
+                "add": 1.0,
+                "fallback": 1.7
+              }
+            }
+          }
+        }
+      ],
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 8,
+      "calls": [
+        {
+          "tool": "history_read",
+          "args": {
+            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF"
+          },
+          "envelope": {
+            "data": {
+              "confirmed": true,
+              "current_hash": "32d48a02bcaf4345f1ad0cd3c8708de2",
+              "entries": [
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 2,
+                  "multi_name": "",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 0,
+                  "operation": "rawprepare",
+                  "reason": "no layout for rawprepare v2"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 6,
+                  "multi_name": "",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 1,
+                  "operation": "demosaic",
+                  "reason": "no layout for demosaic v6"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 7,
+                  "multi_name": "",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 2,
+                  "operation": "colorin",
+                  "reason": "no layout for colorin v7"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 5,
+                  "multi_name": "",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 3,
+                  "operation": "colorout",
+                  "reason": "no layout for colorout v5"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 1,
+                  "multi_name": "",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 4,
+                  "operation": "gamma",
+                  "reason": "no layout for gamma v1"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": {
+                    "coeff_b": 2.21875,
+                    "coeff_g": 1.0,
+                    "coeff_g2": 0.0,
+                    "coeff_r": 1.640625,
+                    "preset": 4
+                  },
+                  "enabled": true,
+                  "modversion": 4,
+                  "multi_name": "",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 5,
+                  "operation": "temperature",
+                  "reason": null
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 4,
+                  "multi_name": "",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 6,
+                  "operation": "highlights",
+                  "reason": "no layout for highlights v4"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 3,
+                  "multi_name": "_builtin_scene-referred default",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 7,
+                  "operation": "channelmixerrgb",
+                  "reason": "no layout for channelmixerrgb v3"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": {
+                    "_tail": 1,
+                    "black": -0.000244140625,
+                    "compensate_exposure_bias": 1,
+                    "deflicker_percentile": 50.0,
+                    "deflicker_target_level": -4.0,
+                    "exposure": 0.699999988079071,
+                    "mode": 0
+                  },
+                  "enabled": true,
+                  "modversion": 7,
+                  "multi_name": "_builtin_scene-referred default",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 8,
+                  "operation": "exposure",
+                  "reason": null
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 2,
+                  "multi_name": "_builtin_auto",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 9,
+                  "operation": "flip",
+                  "reason": "no layout for flip v2"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": {
+                    "contrast": 1.5,
+                    "f1": 0.0,
+                    "f10": 0.0,
+                    "f11": 0.0,
+                    "f12": 0.0,
+                    "f13": 0.0,
+                    "f2": 100.0,
+                    "f3": 0.015200000256299973,
+                    "f4": 0.0,
+                    "f5": 100.0,
+                    "f6": 0.0,
+                    "f7": 0.0,
+                    "f8": 0.0,
+                    "f9": 0.0,
+                    "named": true
+                  },
+                  "enabled": true,
+                  "modversion": 3,
+                  "multi_name": "_builtin_scene-referred default",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 10,
+                  "operation": "sigmoid",
+                  "reason": null
+                }
+              ],
+              "history_end": 11,
+              "image_id": 38,
+              "iop_order_version": 4,
+              "outcome": "ok",
+              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+              "plan": [],
+              "reason": null,
+              "source": "xmp",
+              "warnings": [
+                "params returned as opaque hex (no verified layout): channelmixerrgb, colorin, colorout, demosaic, flip, gamma, highlights, rawprepare"
+              ],
+              "xmp_mtime": 1790249382.1029105,
+              "xmp_version": 5
+            },
+            "job": "job-20260924-112952-30078",
+            "layer": "mcp",
+            "ms": 516,
+            "ok": true,
+            "outcome": "ok",
+            "verb": "history.read"
+          },
+          "wall_s": 0.521
+        },
+        {
+          "tool": "darkroom_set",
+          "args": {
+            "module": "exposure",
+            "param": "exposure",
+            "value": 1.7
+          },
+          "envelope": {
+            "data": {
+              "applied": 1.6999999284744263,
+              "committed": true,
+              "image_id": 38,
+              "instance": 0,
+              "module": "exposure",
+              "noop": false,
+              "outcome": "ok",
+              "param": "exposure",
+              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+              "plan": [],
+              "previous": 0.699999988079071,
+              "reason": null,
+              "requested": 1.7,
+              "source": "xmp",
+              "warnings": []
+            },
+            "job": "job-20260924-112952-30078",
+            "layer": "mcp",
+            "ms": 1450,
+            "ok": true,
+            "outcome": "ok",
+            "verb": "darkroom.set"
+          },
+          "wall_s": 1.453,
+          "value_provenance": {
+            "value": {
+              "source": "history_read",
+              "read": 0.699999988079071
+            }
+          }
+        }
+      ],
+      "context_calls": [],
+      "assertions": {
+        "set_ok": {
+          "ok": true,
+          "measured": "ok",
+          "type": "step_ok"
+        },
+        "delta": {
+          "ok": true,
+          "measured": 1.0,
+          "expected": 1.0,
+          "type": "param_delta"
+        },
+        "near": {
+          "ok": true,
+          "measured": 1.0,
+          "expected": 1.0,
+          "type": "param_delta"
+        },
+        "refused": {
+          "ok": false,
+          "measured": null,
+          "expected": "any typed error",
+          "type": "step_error"
+        },
+        "untouched": {
+          "ok": false,
+          "measured": {
+            "dark": {
+              "before": 11,
+              "after": 12,
+              "changed": true
+            }
+          },
+          "type": "history_unchanged"
+        }
+      },
+      "score": "pass",
+      "outcome": "verified",
+      "wall_s": 1.974,
+      "snapshots": {
+        "before": {
+          "dark": {
+            "exists": true,
+            "history_end": 11,
+            "entries": 11,
+            "fingerprint": "b05a8a1ec4e74fa2",
+            "modules": {
+              "sigmoid": {
+                "num": 10,
+                "enabled": true,
+                "decoded": {
+                  "contrast": 1.5,
+                  "f1": 0.0,
+                  "f2": 100.0,
+                  "f3": 0.015200000256299973,
+                  "f4": 0.0,
+                  "f5": 100.0,
+                  "f6": 0.0,
+                  "f7": 0.0,
+                  "f8": 0.0,
+                  "f9": 0.0,
+                  "f10": 0.0,
+                  "f11": 0.0,
+                  "f12": 0.0,
+                  "f13": 0.0
+                }
+              },
+              "exposure": {
+                "num": 8,
+                "enabled": true,
+                "decoded": {
+                  "mode": 0,
+                  "black": -0.000244140625,
+                  "exposure": 0.699999988079071,
+                  "deflicker_percentile": 50.0,
+                  "deflicker_target_level": -4.0,
+                  "compensate_exposure_bias": 1,
+                  "_tail": 1
+                }
+              },
+              "temperature": {
+                "num": 5,
+                "enabled": true,
+                "decoded": {
+                  "coeff_r": 1.640625,
+                  "coeff_g": 1.0,
+                  "coeff_b": 2.21875,
+                  "coeff_g2": 0.0,
+                  "preset": 4
+                }
+              }
+            }
+          }
+        },
+        "after": {
+          "dark": {
+            "exists": true,
+            "history_end": 12,
+            "entries": 12,
+            "fingerprint": "f223ad3c24b8a674",
+            "modules": {
+              "exposure": {
+                "num": 11,
+                "enabled": true,
+                "decoded": {
+                  "mode": 0,
+                  "black": -0.000244140625,
+                  "exposure": 1.6999999284744263,
+                  "deflicker_percentile": 50.0,
+                  "deflicker_target_level": -4.0,
+                  "compensate_exposure_bias": 1,
+                  "_tail": 1
+                }
+              },
+              "sigmoid": {
+                "num": 10,
+                "enabled": true,
+                "decoded": {
+                  "contrast": 1.5,
+                  "f1": 0.0,
+                  "f2": 100.0,
+                  "f3": 0.015200000256299973,
+                  "f4": 0.0,
+                  "f5": 100.0,
+                  "f6": 0.0,
+                  "f7": 0.0,
+                  "f8": 0.0,
+                  "f9": 0.0,
+                  "f10": 0.0,
+                  "f11": 0.0,
+                  "f12": 0.0,
+                  "f13": 0.0
+                }
+              },
+              "temperature": {
+                "num": 5,
+                "enabled": true,
+                "decoded": {
+                  "coeff_r": 1.640625,
+                  "coeff_g": 1.0,
+                  "coeff_b": 2.21875,
+                  "coeff_g2": 0.0,
+                  "preset": 4
+                }
+              }
+            }
+          }
+        }
+      },
+      "settle": null
+    },
+    {
+      "id": "T4",
+      "category": "contrast_tone",
+      "sentence": "The shadows look milky. Crush the blacks a touch.",
+      "frames": {
+        "dark": "P5240151.ORF"
+      },
+      "plan": [
+        {
+          "tool": "history_read",
+          "args": {
+            "image": "{frame:dark}"
+          }
+        },
+        {
+          "tool": "darkroom_set",
+          "args": {
+            "module": "exposure",
+            "param": "black",
+            "value": {
+              "$hist": {
+                "step": 0,
+                "op": "exposure",
+                "param": "black",
+                "add": 0.01,
+                "fallback": 0.01
+              }
+            }
+          }
+        }
+      ],
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 8,
+      "calls": [
+        {
+          "tool": "history_read",
+          "args": {
+            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF"
+          },
+          "envelope": {
+            "data": {
+              "confirmed": true,
+              "current_hash": "9867b74ec43ed08204b7cfaaea9a8fea",
+              "entries": [
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 2,
+                  "multi_name": "",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 0,
+                  "operation": "rawprepare",
+                  "reason": "no layout for rawprepare v2"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 6,
+                  "multi_name": "",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 1,
+                  "operation": "demosaic",
+                  "reason": "no layout for demosaic v6"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 7,
+                  "multi_name": "",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 2,
+                  "operation": "colorin",
+                  "reason": "no layout for colorin v7"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 5,
+                  "multi_name": "",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 3,
+                  "operation": "colorout",
+                  "reason": "no layout for colorout v5"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 1,
+                  "multi_name": "",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 4,
+                  "operation": "gamma",
+                  "reason": "no layout for gamma v1"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": {
+                    "coeff_b": 2.21875,
+                    "coeff_g": 1.0,
+                    "coeff_g2": 0.0,
+                    "coeff_r": 1.640625,
+                    "preset": 4
+                  },
+                  "enabled": true,
+                  "modversion": 4,
+                  "multi_name": "",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 5,
+                  "operation": "temperature",
+                  "reason": null
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 4,
+                  "multi_name": "",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 6,
+                  "operation": "highlights",
+                  "reason": "no layout for highlights v4"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 3,
+                  "multi_name": "_builtin_scene-referred default",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 7,
+                  "operation": "channelmixerrgb",
+                  "reason": "no layout for channelmixerrgb v3"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": {
+                    "_tail": 1,
+                    "black": -0.000244140625,
+                    "compensate_exposure_bias": 1,
+                    "deflicker_percentile": 50.0,
+                    "deflicker_target_level": -4.0,
+                    "exposure": 0.699999988079071,
+                    "mode": 0
+                  },
+                  "enabled": true,
+                  "modversion": 7,
+                  "multi_name": "_builtin_scene-referred default",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 8,
+                  "operation": "exposure",
+                  "reason": null
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": null,
+                  "enabled": true,
+                  "modversion": 2,
+                  "multi_name": "_builtin_auto",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 9,
+                  "operation": "flip",
+                  "reason": "no layout for flip v2"
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": {
+                    "contrast": 1.5,
+                    "f1": 0.0,
+                    "f10": 0.0,
+                    "f11": 0.0,
+                    "f12": 0.0,
+                    "f13": 0.0,
+                    "f2": 100.0,
+                    "f3": 0.015200000256299973,
+                    "f4": 0.0,
+                    "f5": 100.0,
+                    "f6": 0.0,
+                    "f7": 0.0,
+                    "f8": 0.0,
+                    "f9": 0.0,
+                    "named": true
+                  },
+                  "enabled": true,
+                  "modversion": 3,
+                  "multi_name": "_builtin_scene-referred default",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 10,
+                  "operation": "sigmoid",
+                  "reason": null
+                },
+                {
+                  "active": true,
+                  "blendop_version": 14,
+                  "decoded": {
+                    "_tail": 1,
+                    "black": -0.000244140625,
+                    "compensate_exposure_bias": 1,
+                    "deflicker_percentile": 50.0,
+                    "deflicker_target_level": -4.0,
+                    "exposure": 1.6999999284744263,
+                    "mode": 0
+                  },
+                  "enabled": true,
+                  "modversion": 7,
+                  "multi_name": "",
+                  "multi_name_hand_edited": false,
+                  "multi_priority": 0,
+                  "num": 11,
+                  "operation": "exposure",
+                  "reason": null
+                }
+              ],
+              "history_end": 12,
+              "image_id": 38,
+              "iop_order_version": 4,
+              "outcome": "ok",
+              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+              "plan": [],
+              "reason": null,
+              "source": "xmp",
+              "warnings": [
+                "params returned as opaque hex (no verified layout): channelmixerrgb, colorin, colorout, demosaic, flip, gamma, highlights, rawprepare"
+              ],
+              "xmp_mtime": 1790249394.2513378,
+              "xmp_version": 5
+            },
+            "job": "job-20260924-112954-30078",
+            "layer": "mcp",
+            "ms": 121,
+            "ok": true,
+            "outcome": "ok",
+            "verb": "history.read"
+          },
+          "wall_s": 0.126
+        },
+        {
+          "tool": "darkroom_set",
+          "args": {
+            "module": "exposure",
+            "param": "black",
+            "value": 0.009756
+          },
+          "envelope": {
+            "data": {
+              "applied": 0.00980000477284193,
+              "committed": true,
+              "image_id": 38,
+              "instance": 0,
+              "module": "exposure",
+              "noop": false,
+              "outcome": "ok",
+              "param": "black",
+              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+              "plan": [],
+              "previous": -0.000244140625,
+              "reason": null,
+              "requested": 0.009756,
+              "source": "xmp",
+              "warnings": []
+            },
+            "job": "job-20260924-112954-30078",
+            "layer": "mcp",
+            "ms": 1072,
+            "ok": true,
+            "outcome": "ok",
+            "verb": "darkroom.set"
+          },
+          "wall_s": 1.075,
+          "value_provenance": {
+            "value": {
+              "source": "history_read",
+              "read": -0.000244140625
+            }
+          }
+        }
+      ],
+      "context_calls": [],
+      "assertions": {
+        "set_ok": {
+          "ok": true,
+          "measured": "ok",
+          "type": "step_ok"
+        },
+        "delta": {
+          "ok": true,
+          "measured": 0.010044,
+          "expected": 0.01,
+          "type": "param_delta"
+        },
+        "direction": {
+          "ok": true,
+          "measured": 0.010044,
+          "expected": "sign 1",
+          "type": "param_direction"
+        },
+        "refused": {
+          "ok": false,
+          "measured": null,
+          "expected": "any typed error",
+          "type": "step_error"
+        },
+        "untouched": {
+          "ok": false,
+          "measured": {
+            "dark": {
+              "before": 12,
+              "after": 12,
+              "changed": true
+            }
+          },
+          "type": "history_unchanged"
+        }
+      },
+      "score": "pass",
+      "outcome": "verified",
+      "wall_s": 1.201,
+      "snapshots": {
+        "before": {
+          "dark": {
+            "exists": true,
+            "history_end": 12,
+            "entries": 12,
+            "fingerprint": "f223ad3c24b8a674",
+            "modules": {
+              "exposure": {
+                "num": 11,
+                "enabled": true,
+                "decoded": {
+                  "mode": 0,
+                  "black": -0.000244140625,
+                  "exposure": 1.6999999284744263,
+                  "deflicker_percentile": 50.0,
+                  "deflicker_target_level": -4.0,
+                  "compensate_exposure_bias": 1,
+                  "_tail": 1
+                }
+              },
+              "sigmoid": {
+                "num": 10,
+                "enabled": true,
+                "decoded": {
+                  "contrast": 1.5,
+                  "f1": 0.0,
+                  "f2": 100.0,
+                  "f3": 0.015200000256299973,
+                  "f4": 0.0,
+                  "f5": 100.0,
+                  "f6": 0.0,
+                  "f7": 0.0,
+                  "f8": 0.0,
+                  "f9": 0.0,
+                  "f10": 0.0,
+                  "f11": 0.0,
+                  "f12": 0.0,
+                  "f13": 0.0
+                }
+              },
+              "temperature": {
+                "num": 5,
+                "enabled": true,
+                "decoded": {
+                  "coeff_r": 1.640625,
+                  "coeff_g": 1.0,
+                  "coeff_b": 2.21875,
+                  "coeff_g2": 0.0,
+                  "preset": 4
+                }
+              }
+            }
+          }
+        },
+        "after": {
+          "dark": {
+            "exists": true,
+            "history_end": 12,
+            "entries": 12,
+            "fingerprint": "50d3e323f5b80b18",
+            "modules": {
+              "exposure": {
+                "num": 11,
+                "enabled": true,
+                "decoded": {
+                  "mode": 0,
+                  "black": 0.00980000477284193,
+                  "exposure": 1.6999999284744263,
+                  "deflicker_percentile": 50.0,
+                  "deflicker_target_level": -4.0,
+                  "compensate_exposure_bias": 1,
+                  "_tail": 1
+                }
+              },
+              "sigmoid": {
+                "num": 10,
+                "enabled": true,
+                "decoded": {
+                  "contrast": 1.5,
+                  "f1": 0.0,
+                  "f2": 100.0,
+                  "f3": 0.015200000256299973,
+                  "f4": 0.0,
+                  "f5": 100.0,
+                  "f6": 0.0,
+                  "f7": 0.0,
+                  "f8": 0.0,
+                  "f9": 0.0,
+                  "f10": 0.0,
+                  "f11": 0.0,
+                  "f12": 0.0,
+                  "f13": 0.0
+                }
+              },
+              "temperature": {
+                "num": 5,
+                "enabled": true,
+                "decoded": {
+                  "coeff_r": 1.640625,
+                  "coeff_g": 1.0,
+                  "coeff_b": 2.21875,
+                  "coeff_g2": 0.0,
+                  "preset": 4
+                }
+              }
+            }
+          }
+        }
+      },
+      "settle": null
+    },
+    {
+      "id": "S2",
+      "category": "finishing",
+      "sentence": "It's ISO 6400 and it shows. Clean up the noise.",
+      "frames": {
+        "dark": "P5240151.ORF"
+      },
+      "plan": [
+        {
+          "tool": "darkroom_enable",
+          "args": {
+            "module": "denoiseprofile"
+          }
+        }
+      ],
+      "agent_note": null,
+      "agent_response": null,
+      "budget_s": 10,
+      "calls": [
+        {
+          "tool": "darkroom_enable",
+          "args": {
+            "module": "denoiseprofile"
+          },
+          "envelope": {
+            "data": {
+              "action": "enable",
+              "committed": true,
+              "enabled": true,
+              "image_id": 38,
+              "instance": 0,
+              "module": "denoiseprofile",
+              "outcome": "ok",
+              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+              "plan": [],
+              "reason": null,
+              "warnings": []
+            },
+            "job": "job-20260924-112955-30078",
+            "layer": "mcp",
+            "ms": 1199,
+            "ok": true,
+            "outcome": "ok",
+            "verb": "darkroom.enable"
+          },
+          "wall_s": 1.201
+        }
+      ],
+      "context_calls": [],
+      "assertions": {
+        "ok": {
+          "ok": true,
+          "measured": "ok",
+          "type": "step_ok"
+        },
+        "active": {
+          "ok": true,
+          "measured": {
+            "enabled": true,
+            "num": 12
+          },
+          "note": null,
+          "type": "module_active"
+        },
+        "refused": {
+          "ok": false,
+          "measured": null,
+          "expected": "any typed error",
+          "type": "step_error"
+        },
+        "untouched": {
+          "ok": false,
+          "measured": {
+            "dark": {
+              "before": 12,
+              "after": 13,
+              "changed": true
+            }
+          },
+          "type": "history_unchanged"
+        }
+      },
+      "score": "pass",
+      "outcome": "verified",
+      "wall_s": 1.201,
+      "snapshots": {
+        "before": {
+          "dark": {
+            "exists": true,
+            "history_end": 12,
+            "entries": 12,
+            "fingerprint": "50d3e323f5b80b18",
+            "modules": {
+              "exposure": {
+                "num": 11,
+                "enabled": true,
+                "decoded": {
+                  "mode": 0,
+                  "black": 0.00980000477284193,
+                  "exposure": 1.6999999284744263,
+                  "deflicker_percentile": 50.0,
+                  "deflicker_target_level": -4.0,
+                  "compensate_exposure_bias": 1,
+                  "_tail": 1
+                }
+              },
+              "sigmoid": {
+                "num": 10,
+                "enabled": true,
+                "decoded": {
+                  "contrast": 1.5,
+                  "f1": 0.0,
+                  "f2": 100.0,
+                  "f3": 0.015200000256299973,
+                  "f4": 0.0,
+                  "f5": 100.0,
+                  "f6": 0.0,
+                  "f7": 0.0,
+                  "f8": 0.0,
+                  "f9": 0.0,
+                  "f10": 0.0,
+                  "f11": 0.0,
+                  "f12": 0.0,
+                  "f13": 0.0
+                }
+              },
+              "temperature": {
+                "num": 5,
+                "enabled": true,
+                "decoded": {
+                  "coeff_r": 1.640625,
+                  "coeff_g": 1.0,
+                  "coeff_b": 2.21875,
+                  "coeff_g2": 0.0,
+                  "preset": 4
+                }
+              }
+            }
+          }
+        },
+        "after": {
+          "dark": {
+            "exists": true,
+            "history_end": 13,
+            "entries": 13,
+            "fingerprint": "346f5c6b2065642d",
+            "modules": {
+              "denoiseprofile": {
+                "num": 12,
+                "enabled": true,
+                "decoded": null
+              },
+              "exposure": {
+                "num": 11,
+                "enabled": true,
+                "decoded": {
+                  "mode": 0,
+                  "black": 0.00980000477284193,
+                  "exposure": 1.6999999284744263,
+                  "deflicker_percentile": 50.0,
+                  "deflicker_target_level": -4.0,
+                  "compensate_exposure_bias": 1,
+                  "_tail": 1
+                }
+              },
+              "sigmoid": {
+                "num": 10,
+                "enabled": true,
+                "decoded": {
+                  "contrast": 1.5,
+                  "f1": 0.0,
+                  "f2": 100.0,
+                  "f3": 0.015200000256299973,
+                  "f4": 0.0,
+                  "f5": 100.0,
+                  "f6": 0.0,
+                  "f7": 0.0,
+                  "f8": 0.0,
+                  "f9": 0.0,
+                  "f10": 0.0,
+                  "f11": 0.0,
+                  "f12": 0.0,
+                  "f13": 0.0
+                }
+              },
+              "temperature": {
+                "num": 5,
+                "enabled": true,
+                "decoded": {
+                  "coeff_r": 1.640625,
+                  "coeff_g": 1.0,
+                  "coeff_b": 2.21875,
+                  "coeff_g2": 0.0,
+                  "preset": 4
+                }
+              }
+            }
+          }
+        }
+      },
+      "settle": null
+    }
+  ],
+  "summary": {
+    "tasks": 3,
+    "counts": {
+      "pass": 3,
+      "partial": 0,
+      "fail": 0
+    },
+    "outcomes": {
+      "verified": 3
+    },
+    "by_category": {
+      "exposure": {
+        "pass": 1,
+        "partial": 0,
+        "fail": 0,
+        "tasks": 1,
+        "points": 1.0,
+        "score_pct": 100.0
+      },
+      "contrast_tone": {
+        "pass": 1,
+        "partial": 0,
+        "fail": 0,
+        "tasks": 1,
+        "points": 1.0,
+        "score_pct": 100.0
+      },
+      "finishing": {
+        "pass": 1,
+        "partial": 0,
+        "fail": 0,
+        "tasks": 1,
+        "points": 1.0,
+        "score_pct": 100.0
+      }
+    },
+    "median_task_s": 1.201,
+    "median_darkroom_set_s": 1.264,
+    "points": 3.0
+  }
+}

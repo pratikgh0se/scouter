@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 
 from scouter import __version__, paths, registry
@@ -163,6 +164,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="with --probe-main-thread: also do a darkroom -> lighttable -> darkroom "
         "round trip through darktable's switch-views commands (start in the darkroom)",
     )
+    doctor.add_argument(
+        "--ping",
+        dest="ping",
+        action="store_true",
+        help="print only the watchdog line; exit 0 when darktable answers, 1 when not",
+    )
+    doctor.add_argument(
+        "--heal",
+        dest="heal",
+        action="store_true",
+        help="quit and relaunch the darktable Scouter launched (never a user's), then wait "
+        "for gui_ready; exits 0 when healed",
+    )
     doctor.set_defaults(_verb=None, _args=[])
 
     setup_parser = groups.add_parser(
@@ -282,9 +296,68 @@ def _doctor() -> dict:
     # the BRIDGE. A config that has never been written is the correct state
     # for a fresh install, and `doctor` exiting non-zero for it would make
     # the first thing a new user runs look broken.
+    _doctor_watchdog(report)
     _doctor_config(report)
-    report["ok"] = report["bridge"] == "ok"
+    report["ok"] = report["bridge"] == "ok" and report.get("watchdog") != "unresponsive"
     return report
+
+
+def _doctor_watchdog(report: dict) -> None:
+    """Watchdog design 2.5: ping state, gui_ready, the darktable pid and who
+    launched it. Report lines only."""
+    from scouter.core import dtprocess
+
+    h = _watchdog_health()
+    report["watchdog"] = h["state"]
+    report["watchdog_line"] = f"watchdog: ping {h['state']} ({h.get('ping_ms')} ms)"
+    report["gui_ready"] = h.get("gui_ready")
+    report["gui_ready_line"] = f"gui_ready: {str(h.get('gui_ready')).lower()} " \
+        f"({h.get('gui_ready_source') or '-'})"
+    owned = dtprocess.owned_pid()
+    try:
+        running: list[int] | None = dtprocess.running_pids()
+    except (OSError, subprocess.SubprocessError):
+        # Fix round 1 (I2): pgrep could not answer -- "unknown", never
+        # "none running", and never a traceback that loses the config lines.
+        running = None
+    if owned:
+        pid, who = owned, "launched by scouter"
+    elif running is None:
+        pid, who = "unknown", "pid lookup failed"
+    elif running:
+        pid, who = running[0], "user"
+    else:
+        pid, who = None, "-"
+    report["darktable_pid_line"] = f"darktable pid: {pid or '-'} ({who})"
+
+    from scouter import config
+    from scouter.core import watchdog
+    from scouter.paths import current_job
+
+    try:
+        wd = config.load().watchdog
+    except ScouterError:
+        wd = config.WatchdogConfig()
+    used = watchdog.heals_used(current_job())
+    report["auto_heal_line"] = (f"auto_heal: {'on' if wd.auto_heal else 'off'}, heals this job: "
+                                f"{used}/{wd.max_heals_per_job}")
+
+
+def _watchdog_health() -> dict:
+    """`dtbridge.health()`, except that no answer with NO darktable process
+    reads `not_running`, not `unresponsive` (Task 29 review carry-over). A
+    pgrep that cannot answer leaves `unresponsive` as it was."""
+    from scouter.core import dtbridge, dtprocess
+
+    h = dtbridge.health()
+    if h["state"] == "unresponsive":
+        try:
+            running = dtprocess.running_pids()
+        except (OSError, subprocess.SubprocessError):
+            running = None
+        if running == []:
+            h = {**h, "state": "not_running"}
+    return h
 
 
 def _doctor_config(report: dict) -> None:
@@ -397,6 +470,21 @@ def main(argv: list[str] | None = None) -> int:
             return emit({"verb": "doctor", "ok": False, "error": e.to_dict()}, 1)
         print(render_probe_table(probe))
         return 0
+
+    if namespace.group == "doctor" and getattr(namespace, "ping", False):
+        h = _watchdog_health()
+        return emit({"verb": "doctor", "watchdog": h["state"], "ping_ms": h.get("ping_ms"),
+                     "ok": h["state"] not in ("unresponsive", "not_running")},
+                    0 if h["state"] not in ("unresponsive", "not_running") else 1)
+
+    if namespace.group == "doctor" and getattr(namespace, "heal", False):
+        from scouter.core import watchdog
+        from scouter.paths import current_job
+
+        res = watchdog.heal_darktable(current_job(), 60.0)
+        watchdog.telemetry(current_job(), "watchdog.heal", res["outcome"], res.get("ms", 0), res)
+        return emit({"verb": "doctor", **res, "ok": res["outcome"] == "healed"},
+                    0 if res["outcome"] == "healed" else 1)
 
     if namespace.group == "doctor":
         report = _doctor()

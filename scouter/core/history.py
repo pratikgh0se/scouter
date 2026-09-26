@@ -17,10 +17,17 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
+from darktable_mcp.bridge.client import BridgeTimeoutError
 from scouter import metrics, paths
 from scouter.core import dtbridge, xmp
-from darktable_mcp.bridge.client import BridgeTimeoutError
-from scouter.errors import BridgeTimeout, CommitTimeout, DbLocked, NotInDarkroom, UsageError
+from scouter.errors import (
+    BridgeTimeout,
+    CommitTimeout,
+    DarktableUnresponsive,
+    DbLocked,
+    NotInDarkroom,
+    UsageError,
+)
 from scouter.registry import ArgSpec, Verb, register
 from scouter.types import ChangedResult, CommitResult, HistoryEntry, HistoryResult
 
@@ -577,6 +584,10 @@ def commit(
         result = dtbridge.call(
             "history.commit", params, timeout=max(deadline - time.monotonic(), 0.05)
         )
+    except DarktableUnresponsive:
+        # Fix round 1 (I1): a wedged darktable is its own answer, not a slow
+        # commit -- surface it before the CommitTimeout conversion below.
+        raise
     except BridgeTimeout as e:
         if not isinstance(e.__cause__, BridgeTimeoutError):
             raise
