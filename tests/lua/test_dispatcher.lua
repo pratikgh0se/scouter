@@ -2767,6 +2767,91 @@ do
   os.remove(tmp)
 end
 
+-- Row 430 regression (bench 20260926t073459z, E1/W1/S2...): on the host the
+-- synchronize-selection flush did NOT carry the darkroom's in-memory edit
+-- into library.db, yet the rating touch still rewrote the XMP from the
+-- stale DB -- a new change_timestamp, so a new mtime/size, but the SAME
+-- history. no_bounce took that rewrite as proof of a commit, auto never fell
+-- back to the bounce, and every relative move / enable reported
+-- committed=true with the sidecar unchanged. A rewrite whose history is
+-- unchanged is not a commit: no_bounce must say sidecar_written=false and
+-- auto must fall back to the view bounce (which does write the history).
+do
+  local tmp = os.tmpname()
+  local db_history_end = 11
+  local touches = 0
+  local function write_xmp(history_end, stamp)
+    local h = io.open(tmp, "w")
+    h:write('<x:xmpmeta>\n  <rdf:Description\n'
+      .. '   darktable:change_timestamp="' .. stamp .. '"\n'
+      .. '   darktable:history_end="' .. history_end .. '"\n'
+      .. '   darktable:history_current_hash="h' .. history_end .. '">\n'
+      .. '   <darktable:history>\n    <rdf:Seq>\n')
+    for n = 0, history_end - 1 do
+      h:write('     <rdf:li darktable:num="' .. n .. '" darktable:operation="op' .. n .. '"/>\n')
+    end
+    h:write('    </rdf:Seq>\n   </darktable:history>\n  </rdf:Description>\n</x:xmpmeta>\n')
+    h:close()
+  end
+  write_xmp(db_history_end, "1")
+  local backing = {id = 106, filename = "DB_106.ORF", path = "/photos", rating = 2,
+                   sidecar = tmp, is_altered = true}
+  local img = setmetatable({}, {
+    __index = backing,
+    __newindex = function(_, k, v)
+      backing[k] = v
+      if k == "rating" then
+        -- dt_image_synch_xmp from a DB the flush never reached: same
+        -- history, fresh change_timestamp (longer each time, so the
+        -- stat signature moves even within one mtime second).
+        touches = touches + 1
+        write_xmp(db_history_end, "1" .. string.rep("0", touches))
+      end
+    end,
+  })
+  images_by_id[106] = img
+  stub_dt.gui.action_images = {img}
+  view_state.current = "darkroom"
+  -- The flush is a silent no-op on this host (a command action returns nan
+  -- either way, so the plugin cannot tell from the return value).
+  action_returns["views/darkroom/synchronize selection"] = "nan"
+
+  local nb = plugin.methods["history.commit"]({strategy = "no_bounce", image_id = 106})
+  assertEq(touches, 1, "the rating touch did rewrite the sidecar")
+  assertEq(nb.sidecar_written, false,
+    "a rewrite with an unchanged history is not a commit: " .. tostring(nb.detail))
+  assertEq(nb.ok, false, "no_bounce does not claim the commit")
+  assertTrue(type(nb.detail) == "string" and nb.detail:find("history", 1, true) ~= nil,
+    "and says the history did not change: " .. tostring(nb.detail))
+
+  -- auto: the bounce (leaving the darkroom writes the in-memory history)
+  -- is what really commits, so auto must reach it.
+  local original_action = stub_dt.gui.action
+  stub_dt.gui.action = function(path, ...)
+    local r = original_action(path, ...)
+    if path == "global/switch views/lighttable" then
+      db_history_end = 12
+      write_xmp(db_history_end, "2")
+    end
+    return r
+  end
+  local c = plugin.methods["history.commit"]({strategy = "auto", image_id = 106, attempts = 1})
+  stub_dt.gui.action = original_action
+  assertEq(c.strategy_used, "view_bounce_action",
+    "auto falls back to the bounce when no_bounce only rewrote the same history")
+  assertEq(c.ok, true, "and the bounce commits: " .. tostring(c.detail))
+  assertEq(c.sidecar_written, true, "with the history really changed")
+  assertTrue(type(c.fallback_from) == "table" and c.fallback_from.strategy == "no_bounce",
+    "the no_bounce attempt is reported")
+
+  action_returns["views/darkroom/synchronize selection"] = nil
+  images_by_id[106] = nil
+  stub_dt.gui.selection_now = nil
+  stub_dt.gui.action_images = {}
+  view_state.current = "darkroom"
+  os.remove(tmp)
+end
+
 -- no_bounce in the darkroom: narrow the selection, flush history to the DB
 -- with "synchronize selection", rewrite the XMP from the DB with a rating
 -- touch, and confirm on disk -- never switching views.
@@ -2794,7 +2879,8 @@ do
   local names = {}
   for _, st in ipairs(c.steps) do names[#names + 1] = st.step .. "=" .. tostring(st.ok) end
   assertEq(table.concat(names, ","),
-    "select=true,synchronize_selection_db_flush=true,rating_touch_xmp_from_db=true,sidecar_changed=true",
+    "select=true,synchronize_selection_db_flush=true,rating_touch_xmp_from_db=true,sidecar_changed=true,"
+    .. "history_changed=true",
     "the ladder's steps are reported in order")
 
   -- is_altered false: the flush is SKIPPED (it would dereference an empty

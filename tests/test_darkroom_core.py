@@ -9,7 +9,7 @@ from unittest import mock
 from scouter.core import darkroom, dtbridge, journal
 from scouter.errors import CommitTimeout, NotInDarkroom, ScouterError, UsageError, WrongView
 from scouter.types import CommitResult
-from tests.scouter_fakes import FakeBridge, TempCache
+from tests.scouter_fakes import FakeBridge, TempCache, with_new_history_hash
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "P6281348.ORF.xmp"
 
@@ -867,6 +867,7 @@ class DarkroomCommitSeamTest(unittest.TestCase):
             # Simulate darktable writing the sidecar on commit: bump its
             # mtime forward so history.commit's poll loop sees it advance.
             sidecar = Path(str(self.raw) + ".xmp")
+            sidecar.write_text(with_new_history_hash(sidecar.read_text()))
             future = time.time() + 2
             os.utime(sidecar, (future, future))
             return {

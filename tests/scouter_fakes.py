@@ -311,3 +311,29 @@ class FakeCli:
         if self.raises is not None:
             raise self.raises
         return self.path
+
+
+_history_commits = {"n": 0}
+
+
+def with_new_history_hash(text: str) -> str:
+    """`text` as darktable writes it after a REAL commit: same decoded values,
+    a new `history_current_hash` (same length, so the size is unchanged).
+
+    Row 430: `history.commit` proves a commit by the sidecar's HISTORY
+    changing, not by its mtime moving, so a commit double that only rewrites
+    identical text models the metadata-only rewrite bug, not a commit.
+    """
+    import re
+
+    _history_commits["n"] += 1
+    fresh = f"{_history_commits['n']:032x}"
+    new, count = re.subn(
+        r'darktable:history_current_hash="[0-9a-f]*"',
+        f'darktable:history_current_hash="{fresh}"',
+        text,
+        count=1,
+    )
+    if not count:
+        raise AssertionError("fixture sidecar has no history_current_hash to change")
+    return new

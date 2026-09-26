@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 
 from scouter.core import darkroom, dtbridge, history
-from tests.scouter_fakes import FakeBridge, TempCache
+from tests.scouter_fakes import FakeBridge, TempCache, with_new_history_hash
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "P6281348.ORF.xmp"
 
@@ -27,7 +27,7 @@ FIXTURE_EXPOSURE_VALUE = 1.5500002
 
 def _write_sidecar(sidecar: Path, original_text: str) -> None:
     time.sleep(0.01)  # guarantee the mtime tick
-    sidecar.write_text(original_text)
+    sidecar.write_text(with_new_history_hash(original_text))
     future = time.time() + 2
     os.utime(sidecar, (future, future))
 

@@ -10,6 +10,7 @@ fail for lack of a mechanism -- only for lack of time.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import subprocess
 import time
@@ -464,6 +465,32 @@ def _sidecar_signature(sidecar) -> tuple[int, int]:
     return (stat.st_mtime_ns, stat.st_size)
 
 
+_HISTORY_MARKERS = (
+    re.compile(r'darktable:history_end="[^"]*"'),
+    re.compile(r'darktable:history_current_hash="[^"]*"'),
+    re.compile(r"<darktable:masks_history>.*?</darktable:masks_history>", re.S),
+    re.compile(r"<darktable:history>.*?</darktable:history>", re.S),
+)
+
+
+def _history_fingerprint(sidecar: Path) -> str | None:
+    """The part of a sidecar that IS the edit, as text; `None` if unreadable.
+
+    Row 430: a metadata-only rewrite (the no_bounce rating touch re-synching
+    the XMP from a library.db the darkroom never flushed to) moves
+    `change_timestamp` -- so mtime and size -- while the history stays
+    byte-identical. A commit is proven by the history changing, not by the
+    file being touched. Mirrors the Lua plugin's `sidecar_history_signature`.
+    A file with none of the markers is compared whole.
+    """
+    try:
+        text = sidecar.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    parts = [m.group(0) for rx in _HISTORY_MARKERS if (m := rx.search(text))]
+    return "\n".join(parts) if parts else text
+
+
 @metrics.instrumented("history.commit")
 def commit(
     image: str | int | None = None,
@@ -507,6 +534,8 @@ def commit(
     resolved = dtbridge.resolve_image(target, may_import=True)
     sidecar = xmp.sidecar_path(resolved.path)
     before_ns, before_size = _sidecar_signature(sidecar)
+    before_history = _history_fingerprint(sidecar) if sidecar.exists() else None
+    metadata_only_rewrites = 0
 
     started = time.monotonic()
     if strategy not in COMMIT_STRATEGIES:
@@ -556,6 +585,12 @@ def commit(
         text = sidecar.read_text(encoding="utf-8", errors="replace")
         if not xmp.parse(text).well_formed:
             return None
+        if before_history is not None and _history_fingerprint(sidecar) == before_history:
+            # Touched, not committed (row 430): keep polling -- a real write
+            # may still land -- but never report this rewrite as the commit.
+            nonlocal metadata_only_rewrites
+            metadata_only_rewrites += 1
+            return None
         warnings: list[str] = []
         if view_after != "darkroom":
             warnings.append(
@@ -602,6 +637,12 @@ def commit(
             "view_after": view_after,
             "ms": int((time.monotonic() - started) * 1000),
             "bridge_detail": result.get("detail"),
+            "sidecar_rewritten_history_unchanged": (
+                f"the sidecar was rewritten but its history did not change "
+                f"({metadata_only_rewrites} look(s)): the edit never reached it"
+                if metadata_only_rewrites
+                else None
+            ),
         },
     )
 
