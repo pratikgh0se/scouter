@@ -673,12 +673,23 @@ shows which words work today.
 - **Relative white balance needs the camera's measured table and assumes
   tint 1.0.** Without a table: `value_unknown`, naming `scouter wb
   calibrate`.
-- **`darkroom adjust`/`darkroom say` bounce the view once before they read**,
-  because a hand-moved slider is invisible on disk until darktable commits.
-  On the 2026-09-24 host run that bounce made a one-move `darkroom say` take
-  a median **4.1 s** (target 3.5 s, missed); with `--trust-sidecar` (no
-  pre-commit bounce, for scripts that own the darkroom) the median was
-  **1.4 s**.
+- **`darkroom adjust`/`darkroom say` trust the sidecar by default, behind a
+  staleness guard** (product close, row 427 item 4). The pre-read view
+  bounce -- which makes darktable write a hand-moved slider to disk -- cost
+  ~2.7 s of a 4.1 s one-move `say` on the 2026-09-24 host run (1.37 s
+  without it; target 3.5 s). It now runs only when Scouter cannot show the
+  sidecar is current: no sidecar yet, the first move on an image in this
+  session (or the image changed since the last move), or the sidecar is
+  older than the journal's last move (a `--no-commit` move). Each result's
+  `plan` says whether it bounced and why. So a conversation pays the bounce
+  once per image and then runs at the trust-sidecar speed; the guarded
+  default is not yet host-measured (`tests/test_host_phase3.py::
+  test_4_conversation_timing` measures it and a forced-bounce loop).
+  What the guard cannot see is a slider **you** moved by hand in darktable
+  since Scouter's last commit -- darktable writes nothing until the darkroom
+  is left. Pass `--bounce` (MCP `bounce: true`) after touching sliders
+  yourself; `--trust-sidecar` still skips the bounce unconditionally.
+  `darkroom get` never bounces unless `--bounce`.
 - **Undoing a preset application is refused.** darktable's Lua API cannot
   remove history items. Use the history panel.
 - **Color zones' zone curves are unreachable.** Only its global mix
@@ -744,9 +755,10 @@ host run").
   r/b.
 - **Preset round trip** (save, list, apply to the open image, delete)
   passed.
-- **Timing.** A one-move `darkroom say` has a median of 4.1 s with the
-  pre-commit bounce, which misses the 3.5 s target, so the host timing test
-  fails. With `--trust-sidecar` the median is 1.4 s.
+- **Timing.** A one-move `darkroom say` had a median of 4.1 s with the
+  pre-commit bounce, which missed the 3.5 s target; with `--trust-sidecar`
+  the median was 1.4 s. The default is now the staleness guard (see
+  "Honest limits, phase 3"), pending a host re-measure.
 
 To re-run it, close darktable first and have the hero ORF present:
 

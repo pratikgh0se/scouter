@@ -55,6 +55,17 @@ EDUCATIVE = {
     "description": "explanation level for this call; omit to use the config's `educative` "
     "(default brief)",
 }
+TRUST_SIDECAR = {
+    "type": "boolean",
+    "default": False,
+    "description": "never bounce before reading, even when the staleness guard would",
+}
+BOUNCE = {
+    "type": "boolean",
+    "default": False,
+    "description": "force the pre-read commit bounce (~2.7 s): use after the user moved sliders "
+    "by hand in darktable, which Scouter cannot see until darktable writes the sidecar",
+}
 PRESET_NAME = {
     "type": "string",
     "description": "preset (darktable style) name",
@@ -895,12 +906,13 @@ TOOL_SPECS: list[dict] = [
     {
         "name": "darkroom_get",
         "description": "Read one parameter's current VALUE from the image's XMP sidecar (or Kelvin "
-        "via the camera's measured table). Never moves the view; `fresh: false` means darktable "
-        "may hold newer, uncommitted changes.",
+        "via the camera's measured table). Never moves the view unless bounce; `fresh: false` "
+        "means darktable may hold newer, uncommitted changes.",
         "inputSchema": _schema(
             {"module": {"type": "string", "description": "darktable module, e.g. sigmoid"},
              "param": {"type": "string", "description": "parameter, e.g. contrast"},
-             "instance": INSTANCE},
+             "instance": INSTANCE,
+             "bounce": BOUNCE},
             ["module", "param"],
         ),
     },
@@ -908,7 +920,8 @@ TOOL_SPECS: list[dict] = [
         "name": "darkroom_adjust",
         "description": "Change one module parameter by a relative delta in internal units (EV for "
         "exposure, K for temperature, fractions for color balance rgb: 0.05 means 5 %). Reads the "
-        "current value first (one view bounce to flush unsaved slider moves unless trust_sidecar), "
+        "current value first (trusting the sidecar unless the staleness guard sees it is older than "
+        "the last move or the image changed; then one view bounce), "
         "clamps to Scouter's safe range, sets it, and returns previous/target/applied plus a "
         "one-line summary.",
         "inputSchema": _schema(
@@ -918,8 +931,8 @@ TOOL_SPECS: list[dict] = [
              "instance": INSTANCE,
              "commit": {"type": "boolean", "default": True,
                         "description": "commit history to the XMP after the write"},
-             "trust_sidecar": {"type": "boolean", "default": False,
-                               "description": "skip the pre-read commit bounce"},
+             "trust_sidecar": TRUST_SIDECAR,
+             "bounce": BOUNCE,
              "educative": EDUCATIVE,
              "dry_run": DRY_RUN},
             ["module", "param", "delta"],
@@ -938,8 +951,8 @@ TOOL_SPECS: list[dict] = [
             {"phrase": PHRASE, "amount": AMOUNT,
              "commit": {"type": "boolean", "default": True,
                         "description": "commit history to the XMP after the write"},
-             "trust_sidecar": {"type": "boolean", "default": False,
-                               "description": "skip the pre-read commit bounce"},
+             "trust_sidecar": TRUST_SIDECAR,
+             "bounce": BOUNCE,
              "educative": EDUCATIVE,
              "dry_run": DRY_RUN},
             ["phrase"],

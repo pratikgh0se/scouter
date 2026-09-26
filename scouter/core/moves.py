@@ -9,6 +9,8 @@ the measured WB table or a declared neutral -- never from a slider position
 from __future__ import annotations
 
 import time
+from datetime import datetime
+from pathlib import Path
 
 from scouter import metrics
 from scouter.core import darkroom, dtbridge, explain, history, journal, phrases, vocab, wb, xmp
@@ -319,18 +321,90 @@ def _precommit(job: str, image_id: int) -> str | None:
     return None
 
 
+def _contradiction() -> None:
+    raise UsageError("bounce and trust_sidecar contradict each other; pass one",
+                     detail={"bounce": True, "trust_sidecar": True})
+
+
+def precommit_decision(job: str, resolved: ResolvedImage, *, bounce: bool = False,
+                       trust_sidecar: bool = False) -> tuple[bool, str]:
+    """Does this read need the pre-read bounce? `(bounce_it, reason)`.
+
+    Product close, row 427 item 4: the bounce is ~2.7 s of a 4.1 s one-move
+    `say` (row 415), and it only ever buys something when the sidecar may be
+    older than what darktable holds. Trusting the sidecar is the default; the
+    staleness guard bounces only when Scouter cannot show the sidecar is
+    current:
+
+    - there is no sidecar yet;
+    - the image changed: the journal's last move was on another image, or
+      this session has no move yet (unless Scouter's own watermark proves the
+      sidecar is exactly what Scouter last committed);
+    - the sidecar's mtime is older than the journal's last move on this image
+      (a `commit=False` move darktable has not written yet).
+
+    What it cannot see: a slider Pratik moved BY HAND in darktable since the
+    last commit (darktable writes nothing until the darkroom is left). That
+    is what `bounce=True` is for. Local reads only; no bridge call.
+    """
+    if bounce and trust_sidecar:
+        _contradiction()
+    if bounce:
+        return True, "forced (bounce)"
+    if trust_sidecar:
+        return False, "trust_sidecar: pre-read bounce skipped unconditionally"
+    try:
+        mtime = Path(resolved.xmp_path).stat().st_mtime
+    except OSError:
+        return True, "no sidecar yet"
+    entries = journal.read_all(job)
+    last = entries[-1] if entries else None
+    if last is None or int(last.image_id) != int(resolved.image_id):
+        fresh, _why = history.watermark_fresh(job, resolved.image_id, resolved.xmp_path)
+        if fresh:
+            return False, "sidecar matches Scouter's own last commit (watermark)"
+        if last is None:
+            return True, "first move on this image in this session"
+        return True, f"image changed since the last move (was image {int(last.image_id)})"
+    try:
+        moved_at = datetime.fromisoformat(last.ts).timestamp()
+    except (TypeError, ValueError):
+        return True, "the last move's time is unreadable"
+    if mtime < moved_at:
+        return True, "sidecar is older than the last move (not committed yet)"
+    return False, "sidecar is newer than the last move on this image"
+
+
+def _maybe_precommit(job: str, resolved: ResolvedImage, *, bounce: bool,
+                     trust_sidecar: bool) -> tuple[str | None, dict]:
+    """Run the guard, and the bounce if it asks for one. `(warning, plan_row)`."""
+    do_it, reason = precommit_decision(job, resolved, bounce=bounce, trust_sidecar=trust_sidecar)
+    warning = None
+    t0 = time.monotonic()
+    if do_it:
+        warning = _precommit(job, resolved.image_id)
+    ms = int((time.monotonic() - t0) * 1000) if do_it else 0
+    return warning, {"action": "precommit", "bounced": do_it, "reason": reason, "ms": ms}
+
+
 @metrics.instrumented("darkroom.get")
-def get(module: str, param: str, *, instance: int = 0, job: str | None = None) -> ValueResult:
-    """A parameter's current VALUE. Never commits, never moves the view."""
+def get(module: str, param: str, *, instance: int = 0, bounce: bool = False,
+        job: str | None = None) -> ValueResult:
+    """A parameter's current VALUE. Never commits or moves the view unless
+    `bounce=True`, which first asks darktable to write pending edits."""
     job = job or current_job()
     s = require_row(module, param)
     resolved = darkroom._current_image()
+    pre_warning = None
+    if bounce:
+        dtbridge.require_darkroom()
+        pre_warning = _precommit(job, resolved.image_id)
     value, source, reason = read_current(resolved, s, instance, job)
     fresh, why = history.watermark_fresh(job, resolved.image_id, resolved.xmp_path)
-    warnings: list[str] = []
-    if not fresh:
+    warnings: list[str] = [pre_warning] if pre_warning else []
+    if not fresh and not bounce:
         warnings.append(f"sidecar not known-fresh ({why}): darktable may hold newer, uncommitted "
-                        "changes; `darkroom adjust` commits before it reads")
+                        "changes; pass bounce to commit before reading")
     if value is None:
         warnings.append(reason or f"{module}.{param} is not readable")
     return ValueResult(
@@ -344,8 +418,8 @@ def get(module: str, param: str, *, instance: int = 0, job: str | None = None) -
 
 @metrics.instrumented("darkroom.adjust")
 def adjust(module: str, param: str, delta: float, *, instance: int = 0, commit: bool = True,
-           trust_sidecar: bool = False, educative: str | None = None, dry_run: bool = False,
-           job: str | None = None) -> AdjustResult:
+           trust_sidecar: bool = False, bounce: bool = False, educative: str | None = None,
+           dry_run: bool = False, job: str | None = None) -> AdjustResult:
     """Move one parameter by `delta` (internal units), relative to its current value."""
     job = job or current_job()
     s = require_row(module, param)
@@ -354,6 +428,8 @@ def adjust(module: str, param: str, delta: float, *, instance: int = 0, commit: 
         raise UsageError("delta must be non-zero", detail={"argument": "delta"})
     level = explain.resolve_level(educative)
     gate(s, relative=True)
+    if bounce and trust_sidecar:
+        _contradiction()
     if dry_run:
         return AdjustResult(
             outcome="dry_run", module=module, param=param, instance=instance, unit=s.unit,
@@ -365,14 +441,10 @@ def adjust(module: str, param: str, delta: float, *, instance: int = 0, commit: 
     resolved = darkroom._current_image()
     darkroom._require_job_image(job, resolved.image_id)
     dtbridge.require_darkroom()
-    ms_precommit = 0
-    warning = None
-    if not trust_sidecar:
-        t_pre = time.monotonic()
-        warning = _precommit(job, resolved.image_id)
-        ms_precommit = int((time.monotonic() - t_pre) * 1000)
+    warning, pre = _maybe_precommit(job, resolved, bounce=bounce, trust_sidecar=trust_sidecar)
     result = _adjust_core(module, param, delta, resolved=resolved, instance=instance,
-                          commit=commit, level=level, job=job, ms_precommit=ms_precommit)
+                          commit=commit, level=level, job=job, ms_precommit=pre["ms"])
+    result.plan[0]["precommit"] = {"bounced": pre["bounced"], "reason": pre["reason"]}
     if warning:
         result.warnings.insert(0, warning)
     return result
@@ -403,12 +475,14 @@ def _raise_refused(phrase: str, key: str, refused: list[dict], total: int,
 
 @metrics.instrumented("darkroom.say")
 def say(phrase: str, *, amount: float | None = None, commit: bool = True,
-        trust_sidecar: bool = False, educative: str | None = None, dry_run: bool = False,
-        job: str | None = None) -> SayResult:
+        trust_sidecar: bool = False, bounce: bool = False, educative: str | None = None,
+        dry_run: bool = False, job: str | None = None) -> SayResult:
     """A plain-words edit: every move of the phrase, as one undoable group (§6.3)."""
     job = job or current_job()
     res = phrases.resolve(phrase, amount)
     level = explain.resolve_level(educative)
+    if bounce and trust_sidecar:
+        _contradiction()
     if dry_run:
         return SayResult(
             outcome="dry_run", phrase=phrase, key=res.key, intensity=res.intensity,
@@ -434,7 +508,7 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
     if refused:
         _raise_refused(phrase, res.key, refused, len(concrete))
     group = f"say-{journal.next_seq(job)}"
-    warning = None if trust_sidecar else _precommit(job, resolved.image_id)
+    warning, pre = _maybe_precommit(job, resolved, bounce=bounce, trust_sidecar=trust_sidecar)
     # Final review #1a ruling, all-or-nothing: a `set` move whose before
     # value is unreadable and whose row declares no neutral/default would
     # journal an entry `undo_last` can only refuse. Refuse the whole phrase
@@ -495,23 +569,27 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
         summary="; ".join(m.get("summary", "") for m in landed),
         explain=explain.lines(notes, level=level, job=job),
         warnings=[w for w in [warning] if w],
+        plan=[pre],
     )
 
 
 EDUCATIVE_ARG = ArgSpec("educative", "str", default=None, choices=("off", "brief", "full"),
                         help="explanation level for this call (default: config's educative)")
 TRUST_ARG = ArgSpec("trust_sidecar", "bool", default=False,
-                    help="skip the pre-read commit bounce (scripts that own the darkroom)")
+                    help="never bounce before reading, even when the staleness guard would")
+BOUNCE_ARG = ArgSpec("bounce", "bool", default=False,
+                     help="force the pre-read commit bounce (after moving sliders by hand)")
 
 for verb in (
     Verb(
         id="darkroom.get",
         group="darkroom",
         fn=get,
-        args=(darkroom.MODULE_ARG, darkroom.PARAM_ARG, darkroom.INSTANCE_ARG),
+        args=(darkroom.MODULE_ARG, darkroom.PARAM_ARG, darkroom.INSTANCE_ARG, BOUNCE_ARG),
         writes=False,
         gated=False,
-        summary="Read one parameter's current value from the XMP (never moves the view).",
+        summary="Read one parameter's current value from the XMP (moves the view only with "
+        "--bounce).",
     ),
     Verb(
         id="darkroom.adjust",
@@ -525,6 +603,7 @@ for verb in (
             darkroom.INSTANCE_ARG,
             darkroom.COMMIT_ARG,
             TRUST_ARG,
+            BOUNCE_ARG,
             EDUCATIVE_ARG,
             darkroom.DRY_RUN_ARG,
         ),
@@ -543,6 +622,7 @@ for verb in (
                     help="multiplier on the phrase's step (0-5]"),
             darkroom.COMMIT_ARG,
             TRUST_ARG,
+            BOUNCE_ARG,
             EDUCATIVE_ARG,
             darkroom.DRY_RUN_ARG,
         ),

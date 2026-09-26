@@ -473,3 +473,14 @@ The earlier run's default medians were 4.03 and 4.02, with some calls at
 2.1 s. The pre-commit bounce (P3-R3) costs about 2.7 s per phrase.
 `test_4_conversation_timing` keeps its 3.5 s assertion and fails on the
 host. This is an open finding, not a code defect hidden by the test.
+
+**Follow-up (product close, 2026-09-26, row 427 item 4).** The default is now
+trust-the-sidecar behind a staleness guard (`moves.precommit_decision`): the
+pre-read bounce runs only for the first move on an image in a session, after
+the image changed, when there is no sidecar, or when the sidecar is older than
+the journal's last move. `bounce=True` forces it. Unit-tested with the fake
+bridge (`tests/test_precommit_guard.py`: a single move on a fresh sidecar
+performs no bounce). **Not yet host-measured**: the expected steady-state
+median is the `trust_sidecar` row above (1.37 s), with one ~4 s move per image
+per session. `test_4_conversation_timing` now asserts the guarded default and
+records a forced-bounce loop beside it.

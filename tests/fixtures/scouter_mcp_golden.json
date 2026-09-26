@@ -144,10 +144,15 @@
     "name": "cull_propose"
   },
   {
-    "description": "Change one module parameter by a relative delta in internal units (EV for exposure, K for temperature, fractions for color balance rgb: 0.05 means 5 %). Reads the current value first (one view bounce to flush unsaved slider moves unless trust_sidecar), clamps to Scouter's safe range, sets it, and returns previous/target/applied plus a one-line summary.",
+    "description": "Change one module parameter by a relative delta in internal units (EV for exposure, K for temperature, fractions for color balance rgb: 0.05 means 5 %). Reads the current value first (trusting the sidecar unless the staleness guard sees it is older than the last move or the image changed; then one view bounce), clamps to Scouter's safe range, sets it, and returns previous/target/applied plus a one-line summary.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
+        "bounce": {
+          "default": false,
+          "description": "force the pre-read commit bounce (~2.7 s): use after the user moved sliders by hand in darktable, which Scouter cannot see until darktable writes the sidecar",
+          "type": "boolean"
+        },
         "commit": {
           "default": true,
           "description": "commit history to the XMP after the write",
@@ -187,7 +192,7 @@
         },
         "trust_sidecar": {
           "default": false,
-          "description": "skip the pre-read commit bounce",
+          "description": "never bounce before reading, even when the staleness guard would",
           "type": "boolean"
         }
       },
@@ -247,10 +252,15 @@
     "name": "darkroom_enable"
   },
   {
-    "description": "Read one parameter's current VALUE from the image's XMP sidecar (or Kelvin via the camera's measured table). Never moves the view; `fresh: false` means darktable may hold newer, uncommitted changes.",
+    "description": "Read one parameter's current VALUE from the image's XMP sidecar (or Kelvin via the camera's measured table). Never moves the view unless bounce; `fresh: false` means darktable may hold newer, uncommitted changes.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
+        "bounce": {
+          "default": false,
+          "description": "force the pre-read commit bounce (~2.7 s): use after the user moved sliders by hand in darktable, which Scouter cannot see until darktable writes the sidecar",
+          "type": "boolean"
+        },
         "instance": {
           "default": 0,
           "description": "module instance (darktable's multi_priority)",
@@ -381,6 +391,11 @@
           "maximum": 5,
           "type": "number"
         },
+        "bounce": {
+          "default": false,
+          "description": "force the pre-read commit bounce (~2.7 s): use after the user moved sliders by hand in darktable, which Scouter cannot see until darktable writes the sidecar",
+          "type": "boolean"
+        },
         "commit": {
           "default": true,
           "description": "commit history to the XMP after the write",
@@ -408,7 +423,7 @@
         },
         "trust_sidecar": {
           "default": false,
-          "description": "skip the pre-read commit bounce",
+          "description": "never bounce before reading, even when the staleness guard would",
           "type": "boolean"
         }
       },

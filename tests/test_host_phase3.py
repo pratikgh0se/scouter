@@ -403,6 +403,10 @@ class Phase3LiveHostTest(unittest.TestCase):
                     f"{memory and not Path(memory).exists()}")
 
     def test_4_conversation_timing(self) -> None:
+        """Row 427 item 4: the DEFAULT is now trust-the-sidecar with the
+        staleness guard (moves.precommit_decision), so only a move the guard
+        cannot vouch for pays the ~2.7 s pre-read bounce. The forced-bounce
+        loop is kept for comparison with row 415's 4.12 s."""
         from scouter import registry
 
         times = []
@@ -413,13 +417,13 @@ class Phase3LiveHostTest(unittest.TestCase):
             self.assertTrue(r.ok, (r.data, r.error))
             _record(f"  say {phrase!r}: {times[-1]:.2f} s, verb ms {r.ms}, "
                     f"plan {r.data.get('plan')}")
-        _record(f"darkroom.say wall times (s): {[round(t, 2) for t in times]}, "
-                f"median {statistics.median(times):.2f}")
-        trusted = []
+        _record(f"darkroom.say default (staleness guard) wall times (s): "
+                f"{[round(t, 2) for t in times]}, median {statistics.median(times):.2f}")
+        forced = []
         for phrase in ("brighter", "darker", "brighter", "darker", "less contrast"):
             t0 = time.monotonic()
-            r = registry.call("darkroom.say", "cli", phrase=phrase, trust_sidecar=True)
-            trusted.append(time.monotonic() - t0)
-        _record(f"darkroom.say trust_sidecar=True (no pre-commit bounce) wall times (s): "
-                f"{[round(t, 2) for t in trusted]}, median {statistics.median(trusted):.2f}")
+            r = registry.call("darkroom.say", "cli", phrase=phrase, bounce=True)
+            forced.append(time.monotonic() - t0)
+        _record(f"darkroom.say bounce=True (forced pre-commit bounce) wall times (s): "
+                f"{[round(t, 2) for t in forced]}, median {statistics.median(forced):.2f}")
         self.assertLess(statistics.median(times), 3.5)
