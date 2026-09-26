@@ -98,10 +98,16 @@ local suppress_main_thread_proxy = false
 -- (dt_action_process: "lua action '%s' triggered from lua").
 local darktable_refuses_lua_actions = false
 
+-- Row 433: dt.register_event registrations, keyed by event type.
+local registered_events = {}
+
 local stub_dt = {
   database = stub_db,
   print_log = function(msg) table.insert(dt_log, msg) end,
   register_event = function(event_name, event_type, callback, name)
+    -- Row 433: every registration is recorded by event type, so a test can
+    -- fire e.g. "pixelpipe-processing-complete" the way darktable would.
+    registered_events[event_type] = {name = event_name, callback = callback}
     if event_type == "shortcut" then
       registered_shortcuts[name] = callback
       shortcut_handler = callback
@@ -316,6 +322,14 @@ package.path = package.path .. ";./darktable_mcp/lua/?.lua"
 local internals = require("darktable_mcp")
 -- Scouter darkroom-verb tests below use `plugin` as the module alias.
 local plugin = internals
+
+-- Row 433: the plugin holds every GUI-touching request until darktable's GTK
+-- main loop is provably running (a pixelpipe has finished). Capture whether
+-- the load-time registration happened BEFORE firing it, then fire it once, as
+-- darktable does a few seconds after a darkroom launch, so the pre-existing
+-- tests below run against an up-and-running GUI exactly as before.
+local gui_ready_registration_at_load = registered_events["pixelpipe-processing-complete"]
+if gui_ready_registration_at_load then gui_ready_registration_at_load.callback() end
 
 -- ---- Verify the plugin announces itself on load ----------------------------
 do
@@ -3089,6 +3103,83 @@ do
   stub_dt.gui.action_images = {}
   view_state.current = "darkroom"
   os.remove(tmp)
+end
+
+
+-- ---- Row 433: no gtk-wrapped call before darktable's main loop runs -------
+--
+-- Benchmark run 3 (2026-09-26, bench-runs/20260926t092247z): every launch
+-- deadlocked darktable itself on the first history.commit, ~2.4s after
+-- launch. The hang report's stack: pool-1 -> gtk_wrap ->
+-- g_main_context_invoke_full -> dt_lua_gtk_wrap_callback -> g_mutex_lock,
+-- "Deadlocked: pool-1 -> pool-1". darktable's gtk_wrap (src/lua/call.c
+-- 665-666) locks its end_mutex, then invokes on the default main context;
+-- before gtk_main has started that context is un-owned, so GLib runs the
+-- callback INLINE on the pool thread, which re-locks the same mutex (call.c
+-- 639) forever, and the main thread then blocks in g_main_loop_run waiting
+-- for the context. So: a gated verb must not touch dt.gui.selection (or any
+-- other gtk-wrapped API) until the gate is open.
+do
+  assertTrue(gui_ready_registration_at_load ~= nil,
+    "row433: plugin registers a pixelpipe-processing-complete handler at load")
+  assertTrue(type(plugin.gui_gate) == "table", "row433: plugin exports gui_gate")
+  local gate = plugin.gui_gate or {reset = function() end, open_now = function() end}
+
+  -- Gate closed, as right after a launch; the pipe never finishes here.
+  gate.reset()
+  local real_sleep = stub_dt.control.sleep
+  local naps = 0
+  stub_dt.control.sleep = function(ms) naps = naps + 1; return real_sleep(ms) end
+  local selections_before = #selection_log
+  local calls_before = #action_log
+  local held = plugin.handle({id = "g1", method = "history.commit",
+                              params = {image_id = 101, budget_ms = 500, expect_change = false}})
+  assertEq(#selection_log, selections_before,
+    "row433: a closed gate means dt.gui.selection is never called (the deadlock trigger)")
+  assertEq(#action_log, calls_before, "row433: and no dt.gui.action either")
+  assertTrue(held.error ~= nil and string.find(held.error, "gui_not_ready", 1, true) ~= nil,
+    "row433: a gated verb answers gui_not_ready instead of deadlocking: " .. tostring(held.error))
+  assertTrue(naps >= 1 and naps <= 10,
+    "row433: the gate wait yields and stays within budget_ms (" .. naps .. " naps)")
+
+  -- Read-only verbs that touch no gtk-wrapped API still answer: the launch
+  -- readiness poll (view.current, darkroom.current) and doctor's diag.
+  local v = plugin.handle({id = "g2", method = "view.current", params = {}})
+  assertTrue(v.result ~= nil, "row433: view.current answers with the gate closed")
+  local dc = plugin.handle({id = "g3", method = "darkroom.current", params = {}})
+  assertTrue(dc.result ~= nil, "row433: darkroom.current answers with the gate closed")
+  local dg = plugin.handle({id = "g4", method = "darktable_mcp.diag", params = {}})
+  assertTrue(dg.result ~= nil, "row433: diag answers with the gate closed")
+  assertEq(dg.result and dg.result.gui_ready, false, "row433: diag reports gui_ready=false")
+
+  -- The pipe finishing DURING the wait opens the gate and the call proceeds.
+  gate.reset()
+  naps = 0
+  stub_dt.control.sleep = function(ms)
+    naps = naps + 1
+    if naps == 3 and gui_ready_registration_at_load then
+      gui_ready_registration_at_load.callback()
+    end
+    return real_sleep(ms)
+  end
+  local went = plugin.handle({id = "g5", method = "view_photos", params = {limit = 1}})
+  assertTrue(went.error == nil, "row433: once the pipe finishes, the held call runs: "
+    .. tostring(went.error))
+  local dg2 = plugin.handle({id = "g6", method = "darktable_mcp.diag", params = {}})
+  assertEq(dg2.result and dg2.result.gui_ready, true, "row433: diag reports gui_ready=true")
+  assertEq(dg2.result and dg2.result.gui_ready_source, "pixelpipe-processing-complete",
+    "row433: and says what opened it")
+
+  -- A lighttable launch never runs a pixelpipe: the gate opens on its own
+  -- once GUI_READY_FALLBACK_S have passed since the plugin loaded.
+  gate.reset()
+  gate.loaded_at = os.time() - (plugin.gui_ready_timing or {fallback_s = 0}).fallback_s
+  local late = plugin.handle({id = "g7", method = "view_photos", params = {limit = 1}})
+  assertTrue(late.error == nil, "row433: the elapsed-time fallback opens the gate")
+  assertEq(gate.source, "fallback_elapsed", "row433: fallback is recorded as the source")
+
+  stub_dt.control.sleep = real_sleep
+  gate.open_now("test")
 end
 
 -- ---- Report ----------------------------------------------------------------

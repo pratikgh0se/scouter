@@ -30,6 +30,28 @@ class ClassificationTest(unittest.TestCase):
         with self.assertRaises(DbLocked):
             dtbridge.current_view()
 
+    def test_gui_not_ready_is_a_retryable_bridge_timeout_not_a_restart(self) -> None:
+        """Row 433: the plugin refuses GUI-touching verbs until darktable's
+        main loop runs (the startup gtk_wrap self-deadlock). That refusal is
+        tagged gui_not_ready and its fix says "retry", never "restart
+        darktable" -- darktable is fine, it is still starting."""
+        dtbridge.set_bridge(
+            FakeBridge(
+                raises={
+                    "history.commit": BridgeError(
+                        "gui_not_ready: darktable's main loop has not started yet "
+                        "(no pixelpipe has finished 3s after the plugin loaded; waited "
+                        "9500ms). Nothing was done; retry in a few seconds."
+                    )
+                }
+            )
+        )
+        with self.assertRaises(BridgeTimeout) as ctx:
+            dtbridge.call("history.commit", {"image_id": 1})
+        self.assertTrue(ctx.exception.detail.get("gui_not_ready"))
+        self.assertIn("retry", ctx.exception.fix)
+        self.assertNotIn("restart", ctx.exception.fix)
+
     def test_wrong_view_names_the_view_and_the_fix(self) -> None:
         dtbridge.set_bridge(FakeBridge({"view.current": {"view": "lighttable"}}))
         with self.assertRaises(WrongView) as ctx:

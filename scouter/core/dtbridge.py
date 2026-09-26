@@ -96,6 +96,17 @@ _WRONG_IMAGE_FIX = (
     "it, then retry"
 )
 
+#: Row 433: the plugin refuses a GUI-touching verb while darktable is still
+#: starting (its GTK main loop is not running yet, and a gtk-wrapped Lua call
+#: in that window self-deadlocks darktable -- see the GUI-ready gate in
+#: darktable_mcp.lua). Nothing was done, darktable is healthy: retry, never
+#: "restart darktable".
+_GUI_NOT_READY_RE = re.compile(r"gui_not_ready:", re.I)
+_GUI_NOT_READY_FIX = (
+    "darktable is still starting (its window has not finished opening); "
+    "retry in a few seconds -- `scouter doctor` shows gui_ready once it is up"
+)
+
 _bridge: Bridge | None = None
 
 
@@ -191,6 +202,10 @@ def call(method: str, params: dict | None = None, timeout: float | None = None) 
         message = str(e)
         if _WRONG_IMAGE_RE.search(message):
             raise NotInDarkroom(message, fix=_WRONG_IMAGE_FIX, detail={"method": method}) from e
+        if _GUI_NOT_READY_RE.search(message):
+            raise BridgeTimeout(
+                message, fix=_GUI_NOT_READY_FIX, detail={"method": method, "gui_not_ready": True}
+            ) from e
         if _DB_LOCKED_RE.search(message):
             from scouter.errors import DbLocked
 
