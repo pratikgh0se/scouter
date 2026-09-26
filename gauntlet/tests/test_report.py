@@ -13,7 +13,7 @@ def _run(tmp_path, **kw):
     a = ToyAdapter(**kw)
     run = RunDir(tmp_path, "s")
     write_generation(run, a)
-    Runner(a, run).run_layers()
+    Runner(a, run, commit="abc1234").run_layers()
     return a, run
 
 
@@ -200,7 +200,7 @@ def test_an_adapter_blocker_fails_the_bar_and_is_listed(tmp_path):
     a = _BlockingToy()
     run = RunDir(tmp_path, "s")
     write_generation(run, a)
-    Runner(a, run).run_layers()
+    Runner(a, run, commit="abc1234").run_layers()
     rep = report.write(run, a)
     s8 = rep["S8_signoff"]
     assert not s8["release_bar_met"] and s8["blockers"] == ["toy originals changed"]
@@ -212,3 +212,43 @@ def test_no_blockers_method_means_no_blockers(tmp_path):
     a, run = _run(tmp_path)
     s8 = report.write(run, a)["S8_signoff"]
     assert s8["blockers"] == [] and s8["release_bar_met"]
+
+
+# -- final fix I5: one full run of one commit ---------------------------------
+
+def test_results_carry_the_commit_and_a_clean_one_commit_run_meets_the_bar(tmp_path):
+    a, run = _run(tmp_path)
+    assert run.read_result("alpha-0")["commit"] == "abc1234"
+    s8 = report.write(run, a)["S8_signoff"]
+    assert s8["commits"] == ["abc1234"] and s8["release_bar_met"]
+    assert "- Commits: abc1234" in run.report_md.read_text()
+
+
+def test_results_from_two_commits_do_not_meet_the_bar(tmp_path):
+    a, run = _run(tmp_path)
+    doc = run.read_result("alpha-1")
+    doc["commit"] = "def5678"  # a --resume after a new commit
+    run.write_result("alpha-1", doc)
+    s8 = report.write(run, a)["S8_signoff"]
+    assert s8["commits"] == ["abc1234", "def5678"] and not s8["release_bar_met"]
+
+
+def test_a_result_without_a_commit_does_not_meet_the_bar(tmp_path):
+    a = ToyAdapter()
+    run = RunDir(tmp_path, "s")
+    write_generation(run, a)
+    Runner(a, run).run_layers()  # commit unknown ("")
+    s8 = report.write(run, a)["S8_signoff"]
+    assert s8["commits"] == [""] and not s8["release_bar_met"]
+
+
+def test_a_partial_generation_does_not_meet_the_bar(tmp_path):
+    """Every adapter layer must have cases in cases.jsonl (generate --layer X
+    alone must not meet the bar)."""
+    a = ToyAdapter()
+    run = RunDir(tmp_path, "s")
+    write_generation(run, a, ["alpha"])
+    Runner(a, run, commit="abc1234").run_layers()
+    s8 = report.write(run, a)["S8_signoff"]
+    assert s8["layers_without_cases"] == ["beta"] and not s8["release_bar_met"]
+    assert s8["p0"] == "1/1" and s8["cases_missing"] == 0

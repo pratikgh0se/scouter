@@ -79,6 +79,7 @@ class Runner:
                  max_consecutive_open_failures: int = MAX_CONSECUTIVE_OPEN_FAILURES) -> None:
         self.adapter = adapter
         self.run = run.ensure()
+        self.commit = commit
         self.clock = clock
         self.sleep = sleep
         self.wall = wall
@@ -292,6 +293,8 @@ class Runner:
             "body": case.body, "frame_role": case.frame_role, "source": case.source,
             "meta": case.meta, "repro": case.repro.replace("<stamp>", self.run.stamp),
             "started_at": t_wall, "wall_s": round(obs.wall_s, 3),
+            #: (final fix I5): release bar 6 is "one full run of one commit".
+            "commit": self.commit,
             "verdict": verdict.to_dict(),
             "observation": asdict(obs),
         }
