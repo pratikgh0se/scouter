@@ -692,7 +692,7 @@
         },
         "strategy": {
           "default": "auto",
-          "description": "commit trigger; auto picks the cheapest that works on this build. view_bounce_action bounces through darktable's own switch-views commands; no_bounce flushes history without leaving the view",
+          "description": "commit trigger; auto is no_bounce (flushes history without leaving the view), falling back to view_bounce_action (a bounce through darktable's own switch-views commands) when the sidecar did not change",
           "enum": [
             "auto",
             "sidecar_action",
@@ -715,7 +715,7 @@
     "name": "history_commit"
   },
   {
-    "description": "Read an image's history from its XMP sidecar (default), or read-only from darktable's library.db (source=db), or the sidecar with a library.db fallback when there is none (source=auto). Returns confirmed=false when the sidecar is missing or mid-write.",
+    "description": "Read an image's history from its XMP sidecar (default), or read-only from darktable's library.db (source=db), or the sidecar unless it is stale -- missing, mid-write, or older than library.db's last history change -- then library.db (source=auto). Returns confirmed=false when the sidecar is missing or mid-write.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {

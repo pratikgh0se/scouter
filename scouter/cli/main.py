@@ -248,18 +248,15 @@ def _doctor() -> dict:
         report["bridge"] = e.code
         report["bridge_fix"] = e.fix
 
-    # Row 422: surface the main-thread proxy's resolved action path (or its
-    # absence) directly, instead of only ever discovering a wrong path when
-    # some later write verb's `history.commit` refuses mid-session. `doctor`
-    # never raises for this -- an unresolved proxy is a report line, not a
-    # reason to fail the whole check, same rule as the config half below.
+    # Row 422/429: the plugin's view-switch transport. "action" is the only
+    # one since row 429 removed the main-thread proxy; anything else (or no
+    # answer) means an old plugin install -- `scouter setup` reinstalls it.
+    # A report line, never a reason to fail the whole check.
     try:
         diag = dtbridge.diag()
-        path = diag.get("main_thread_proxy_path")
-        fired = diag.get("main_thread_proxy_fired")
-        report["main_thread_proxy"] = path if (path and fired) else "not firing"
+        report["view_transport"] = str(diag.get("view_switch_transport") or "unknown")
     except ScouterError:
-        report["main_thread_proxy"] = "not firing"
+        report["view_transport"] = "unknown"
 
     # Phase 2's four lines (task 14 step 4). `doctor` is the one verb whose
     # job is to answer "why did that refuse?" before the refusal happens,

@@ -473,3 +473,25 @@ The earlier run's default medians were 4.03 and 4.02, with some calls at
 2.1 s. The pre-commit bounce (P3-R3) costs about 2.7 s per phrase.
 `test_4_conversation_timing` keeps its 3.5 s assertion and fails on the
 host. This is an open finding, not a code defect hidden by the test.
+
+## Commit strategies on the host (row 429, 2026-09-26)
+
+darktable 5.4.1, one ORF in the bench library, an exposure edit before each
+commit, `history.commit` wall time from the bridge call:
+
+| strategy | wall times (s) | XMP changed | notes |
+|---|---|---|---|
+| `no_bounce` | 1.17 (first of the session), 0.16 | yes | select=y, synchronize_selection_db_flush=y, rating touch rewrote the XMP |
+| `view_bounce_action` | 0.75, 0.80, 1.07 | yes | both legs via `global/switch views/*`, no crash |
+| `view_bounce` (old proxy transport) | refused at once | no | nan: lua-owned action pressed from Lua; transport removed |
+| `sidecar_action` | - | no | nan from the darkroom (copy_history is lighttable-only) |
+
+`history read --source db` and `--source xmp` agreed afterwards
+(history_end 12). 0 new crash reports.
+
+Expected from here (not yet re-measured end to end): a commit costs
+0.2-1.1 s (`auto` = `no_bounce`, falling back to `view_bounce_action`), and
+one `darkroom say` move stays well under the 3.5 s target with the sidecar
+trusted (row 427's guard; 1.37 s median measured with `trust_sidecar`). The
+acceptance run (row 429, part B) re-measures both.
+

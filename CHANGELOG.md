@@ -7,6 +7,36 @@ vault; decision row 407).
 
 ## Unreleased (fix/bounce-main-thread)
 
+Row 429 (host probe on darktable 5.4.1, 2026-09-26, then this change):
+
+- `history.commit` `auto` is now `no_bounce` (select the image, "synchronize
+  selection" DB flush, rating touch rewrites the XMP; no view switch), with
+  `view_bounce_action` as the automatic fallback when `no_bounce` did not
+  change the sidecar (`fallback_from` reports the `no_bounce` attempt). With
+  `expect_change=false` a `no_bounce` that wrote nothing is an honest no-op,
+  no bounce. Host: `no_bounce` 1.17 s cold / 0.16 s warm, `view_bounce_action`
+  0.75 / 0.80 / 1.07 s, 0 new crash reports. The Python layer sends
+  `image_id` with `auto` too.
+- Removed the main-thread proxy (Lua shortcut pressed via `dt.gui.action`)
+  and its candidate paths: the host confirmed darktable answers nan and never
+  runs the handler. `darkroom.open`, `return_to_darkroom` and every bounce use
+  the switch-views action transport by default; an unknown transport
+  (including `proxy`) is refused with a reason. `darktable_mcp.diag` now
+  reports `view_switch_transport` and the auto commit order; `scouter
+  doctor` shows `view_transport`.
+- `darktable_mcp.probe_main_thread` no longer raises on 5.4.1: it read
+  `dt.control.timer` unguarded, and darktable's singleton userdata raise on an
+  unknown field (`field "timer" not found for type
+  dt_lua_singleton_control`). Every optional `dt.control`/`dt.gui`/
+  `dt.configuration` field in the probe goes through `opt_field` (pcall).
+- `history read --source auto`: the XMP unless it is stale -- missing,
+  mid-write, or older than library.db's `images.change_timestamp` (GTimeSpan
+  decoded to unix time, 1 s slack) -- then library.db.
+- README: the row 418 crash is closed, and B1's first-commit hang is
+  explained as that crash. docs/measurements.md: commit timings.
+
+Earlier on this branch (rows 418/422):
+
 - Row 418 (controller, 2026-09-24 21:22): darktable crashed 4 of 7 live
   benchmark-run-2 launches, SIGSEGV, `thread pool-1`:
   `_dt_ctl_switch_mode_to_by_view -> dt_view_manager_switch_by_view ->

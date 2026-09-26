@@ -96,20 +96,15 @@ class FakeBridge:
     ) -> None:
         self.responses: dict[str, Any] = {
             "view.current": {"view": "darkroom"},
-            # Row 422: a sane default for `darktable_mcp.diag` (`scouter
-            # doctor`'s main-thread proxy line) -- a resolved, firing proxy,
-            # so a test that isn't specifically exercising the row 422
-            # refusal doesn't have to restate this shape.
+            # Row 422/429: a sane default for `darktable_mcp.diag` (`scouter
+            # doctor`'s view-transport line), the shape the plugin answers
+            # since row 429 removed the main-thread proxy.
             "darktable_mcp.diag": {
-                "main_thread_proxy_path": "lua/darktable_mcp_main_thread_proxy",
-                "main_thread_proxy_fired": True,
-                "main_thread_proxy_registered": True,
-                "main_thread_proxy_candidates": [
-                    "lua/darktable_mcp_main_thread_proxy",
-                    "lua/darktable_mcp",
-                    "lua/darktable_mcp/darktable_mcp_main_thread_proxy",
-                ],
-                "main_thread_proxy_candidates_tried": ["lua/darktable_mcp_main_thread_proxy"],
+                "view_switch_transport": "action",
+                "view_transports": ["action"],
+                "default_commit_strategy": "auto",
+                "auto_commit_order": ["no_bounce", "view_bounce_action"],
+                "view": "darkroom",
             },
             # A sane default for `library.import`/`library.register`'s
             # `import_batch` call, so a test that isn't specifically exercising

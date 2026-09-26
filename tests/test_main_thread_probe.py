@@ -15,7 +15,7 @@ from unittest import mock
 from scouter.cli import main as cli_main
 from scouter.core import dtbridge, history
 from scouter.errors import CommitTimeout, UsageError
-from tests.scouter_fakes import FakeBridge, TempCache
+from tests.scouter_fakes import MINIMAL_STYLE_SIDECAR, FakeBridge, TempCache
 
 #: exposure v7's 28-byte params (the same bytes MINIMAL_STYLE_SIDECAR carries):
 #: mode 0, black -0.000244, exposure 0.7, ...
@@ -125,6 +125,55 @@ class ReadDbTest(unittest.TestCase):
         result = history.read(str(self.raw), source="auto", library=str(self.lib))
         self.assertEqual(result.source, "db")
         self.assertIn("fell back to library.db", result.warnings[0])
+
+    def _sidecar(self, mtime: float) -> Path:
+        sidecar = self.raw.with_name(self.raw.name + ".xmp")
+        sidecar.write_text(MINIMAL_STYLE_SIDECAR, encoding="utf-8")
+        os.utime(sidecar, (mtime, mtime))
+        return sidecar
+
+    def _db_changed(self, unix: float | None) -> None:
+        conn = sqlite3.connect(self.lib)
+        conn.execute("ALTER TABLE images ADD COLUMN change_timestamp INTEGER DEFAULT -1")
+        if unix is not None:
+            gts = int((unix + history.GTIMESPAN_UNIX_OFFSET_S) * 1_000_000)
+            conn.execute("UPDATE images SET change_timestamp = ?", (gts,))
+        conn.commit()
+        conn.close()
+
+    def test_db_changed_at_decodes_darktables_gtimespan(self) -> None:
+        self._db_changed(1790406202.096029)
+        self.assertAlmostEqual(history.db_changed_at(12, str(self.lib)), 1790406202.096, places=2)
+
+    def test_db_changed_at_is_none_when_unknown(self) -> None:
+        self.assertIsNone(history.db_changed_at(12, str(self.lib)), "no column: old schema")
+        self._db_changed(None)
+        self.assertIsNone(history.db_changed_at(12, str(self.lib)), "-1: never changed")
+        self.assertIsNone(history.db_changed_at(99, str(self.lib)), "unknown image")
+
+    def test_read_source_auto_is_the_xmp_when_it_is_current(self) -> None:
+        self._sidecar(1790406300.0)
+        self._db_changed(1790406200.0)
+        result = history.read(str(self.raw), source="auto", library=str(self.lib))
+        self.assertEqual(result.source, "xmp")
+
+    def test_read_source_auto_reads_the_db_when_the_xmp_is_stale(self) -> None:
+        self._sidecar(1790406100.0)
+        self._db_changed(1790406200.0)
+        result = history.read(str(self.raw), source="auto", library=str(self.lib))
+        self.assertEqual(result.source, "db")
+        self.assertIn("older than library.db", result.warnings[0])
+
+    def test_read_source_auto_tolerates_the_db_written_just_before_the_xmp(self) -> None:
+        self._sidecar(1790406200.0)
+        self._db_changed(1790406200.5)
+        result = history.read(str(self.raw), source="auto", library=str(self.lib))
+        self.assertEqual(result.source, "xmp")
+
+    def test_read_source_auto_is_the_xmp_without_a_readable_db(self) -> None:
+        self._sidecar(1790406100.0)
+        result = history.read(str(self.raw), source="auto", library=str(self.lib))
+        self.assertEqual(result.source, "xmp", "no change_timestamp column: trust the XMP")
 
     def test_read_default_is_still_the_xmp(self) -> None:
         result = history.read(str(self.raw))
@@ -236,15 +285,15 @@ class CommitStrategyTest(unittest.TestCase):
 PROBE = {
     "api_version": "9.6.0",
     "view": "darkroom",
-    "view_switch_transport": "proxy",
+    "view_switch_transport": "action",
     "recommended_view_transport": "action",
     "rows": [
         {
             "route": "a_lua_shortcut",
-            "candidate": "lua/darktable_mcp_main_thread_proxy",
+            "candidate": "lua/<registered shortcut> (removed)",
             "ran": False,
-            "action_return": "nan",
-            "detail": "dt.gui.action returned nan: darktable refused it",
+            "skipped": True,
+            "detail": "removed in row 429: dt.gui.action returned nan: darktable refused it",
             "thread": "lua pool",
             "expect": "never runs",
         },
@@ -288,7 +337,7 @@ class DoctorProbeTest(unittest.TestCase):
         code, text = self._run("--probe-main-thread")
         self.assertEqual(code, 0)
         self.assertIn("recommended action", text)
-        self.assertIn("lua/darktable_mcp_main_thread_proxy", text)
+        self.assertIn("(removed)", text)
         self.assertIn("returned nan", text)
         self.assertIn("skip", text)
         self.assertIn("thread: GTK main thread", text)
@@ -313,10 +362,10 @@ class DoctorProbeTest(unittest.TestCase):
 
     def test_view_transport_helper(self) -> None:
         bridge = FakeBridge(
-            {"darktable_mcp.view_transport": lambda p: {"transport": p.get("set", "proxy")}}
+            {"darktable_mcp.view_transport": lambda p: {"transport": p.get("set", "action")}}
         )
         dtbridge.set_bridge(bridge)
-        self.assertEqual(dtbridge.view_transport(), "proxy")
+        self.assertEqual(dtbridge.view_transport(), "action")
         self.assertEqual(dtbridge.view_transport("action"), "action")
         self.assertEqual(bridge.calls[-1], ("darktable_mcp.view_transport", {"set": "action"}))
 

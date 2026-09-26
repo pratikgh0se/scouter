@@ -116,6 +116,54 @@ def darktable_library_db(library: str | Path | None = None) -> tuple[Path, str]:
     )
 
 
+#: darktable stores `images.change_timestamp` as a GTimeSpan: microseconds
+#: since 0001-01-01 00:00 UTC (src/common/datetime.h, DT_DATETIME_ORIGIN).
+#: Checked against a real 5.4.1 library.db (row 429): change_timestamp
+#: 63926003002096029 -> unix 1790406202.1, write_timestamp 1790406204.
+GTIMESPAN_UNIX_OFFSET_S = 62135596800
+
+#: `source="auto"` reads the DB instead of the XMP when library.db's last
+#: history change is more than this many seconds newer than the sidecar's
+#: mtime. Slack for darktable writing the DB first and the XMP right after.
+STALE_SLACK_S = 1.0
+
+
+def db_changed_at(image_id: int, library: str | Path | None = None) -> float | None:
+    """Unix time of library.db's last history change for this image
+    (`images.change_timestamp`), or None when it cannot be read -- no
+    library found, locked, an old schema, or a never-changed image (-1).
+    Read-only; never raises."""
+    try:
+        db_path, _how = darktable_library_db(library)
+    except UsageError:
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{quote(str(db_path))}?mode=ro", uri=True, timeout=2.0)
+    except sqlite3.Error:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT change_timestamp FROM main.images WHERE id = ?", (int(image_id),)
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    if row is None or row[0] is None:
+        return None
+    try:
+        raw = int(row[0])
+    except (TypeError, ValueError):
+        return None
+    if raw <= 0:
+        return None
+    unix = raw / 1_000_000 - GTIMESPAN_UNIX_OFFSET_S
+    # Anything outside 2000-01-01 .. far future is not a timestamp we understand.
+    if not 946684800 <= unix <= 4102444800:
+        return None
+    return unix
+
+
 def _entry_from_db_row(row: tuple, history_end: int) -> HistoryEntry:
     (
         num,
@@ -254,7 +302,11 @@ def read(
     disabled module in the history is never mistaken for a live one.
 
     `source` (row 422): "xmp" (the default, unchanged), "db" (`read_db`), or
-    "auto" -- the XMP, falling back to library.db when there is no sidecar.
+    "auto" (row 429) -- the XMP unless it is stale, then library.db. Stale
+    means: no sidecar, a sidecar caught mid-write, or a sidecar whose mtime
+    is older than library.db's `change_timestamp` for the image (darktable
+    flushed history to the DB -- autosave, synchronize selection -- without
+    writing the XMP yet). When library.db cannot be read, auto is the XMP.
     """
     if source not in READ_SOURCES:
         raise UsageError(f"unknown source {source!r} (valid: {', '.join(READ_SOURCES)})")
@@ -281,6 +333,25 @@ def read(
         )
     parsed = xmp.parse(text)
     warnings: list[str] = []
+    if source == "auto":
+        stale_reason = None
+        if not parsed.well_formed:
+            stale_reason = f"the sidecar at {resolved.xmp_path} was mid-write"
+        else:
+            changed_at = db_changed_at(resolved.image_id, library)
+            if changed_at is not None and changed_at > mtime + STALE_SLACK_S:
+                stale_reason = (
+                    f"the sidecar at {resolved.xmp_path} is {changed_at - mtime:.1f}s older than "
+                    "library.db's last history change for this image"
+                )
+        if stale_reason is not None:
+            try:
+                result = read_db(resolved.image_id, library=library, job=job)
+            except (UsageError, DbLocked) as e:
+                warnings.append(f"{stale_reason}, but library.db could not be read ({e.message})")
+            else:
+                result.warnings.insert(0, f"{stale_reason}; read library.db instead")
+                return result
     if not parsed.well_formed:
         warnings.append(
             "sidecar was mid-write: parsed with the regex fallback, retry after the "
@@ -441,9 +512,11 @@ def commit(
     if strategy not in COMMIT_STRATEGIES:
         raise UsageError(f"unknown strategy {strategy!r} (valid: {', '.join(COMMIT_STRATEGIES)})")
     params = {"strategy": strategy, "attempts": attempts, "expect_change": expect_change}
-    if strategy == "no_bounce":
+    if strategy in ("no_bounce", "auto"):
         # no_bounce acts on a named image (selection + DB flush + XMP write)
         # rather than whatever the darkroom has loaded, so it is told which.
+        # Row 429: "auto" starts with no_bounce (falling back to the
+        # view_bounce_action bounce), so it needs the image too.
         params["image_id"] = resolved.image_id
     result = dtbridge.call("history.commit", params)
     strategy_used = str(result.get("strategy_used", strategy))
@@ -644,7 +717,8 @@ for verb in (
                 default="xmp",
                 choices=READ_SOURCES,
                 help="xmp (sidecar), db (darktable's library.db, read-only), or auto "
-                "(xmp, falling back to db when there is no sidecar)",
+                "(xmp unless it is stale -- missing, mid-write, or older than library.db's "
+                "last history change -- then db)",
             ),
             ArgSpec(
                 "library",
@@ -674,9 +748,9 @@ for verb in (
                 "str",
                 default="auto",
                 choices=COMMIT_STRATEGIES,
-                help="commit trigger; auto picks the cheapest that works. view_bounce_action "
-                "bounces through darktable's own switch-views commands (GTK main thread); "
-                "no_bounce flushes history without leaving the view",
+                help="commit trigger; auto is no_bounce (flushes history without leaving "
+                "the view), falling back to view_bounce_action (a bounce through "
+                "darktable's own switch-views commands) when the sidecar did not change",
             ),
             ArgSpec(
                 "attempts",
