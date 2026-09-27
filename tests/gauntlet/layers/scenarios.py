@@ -256,6 +256,16 @@ def agent_case(req: dict, plan: RequestPlan, tax: Taxonomy, tier: str) -> Case:
     role = cmap["role_for_problem"][req["problem"]]
     meta = {"sentence": req["sentence"], "class": plan.klass, "genre": req["genre"],
             "followups": list(req["followups"])}
+    if plan.klass in ("impossible", "out"):
+        #: (row 501 item C, night-1 triage rank 3, SCA-refuse-case-followup-
+        #: presupposes-edit): a scripted follow-up (e.g. r0019's "That's too
+        #: crunchy now, back it off a bit.") presupposes an edit was made --
+        #: scripting it after an honest, no-write refusal induces exactly
+        #: the edit the refusal correctly declined to make. Agent mode has
+        #: no per-request follow-up wording of its own (unlike tool mode's
+        #: dry-run "a bit" steps), so the only sound choice for a case whose
+        #: own turn 1 is scored `refuse` is no follow-up turn at all.
+        meta["followups"] = []
     # (final fix C1): the case has no steps; its hard cap is every claude turn
     # (initial + each follow-up) at its timeout plus the usual 30 s slack.
     meta["cap_s"] = (1 + len(meta["followups"])) * (AGENT_TURN_TIMEOUT_S + 30.0)

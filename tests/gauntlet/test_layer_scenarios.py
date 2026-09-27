@@ -118,3 +118,18 @@ def test_workflow_agent_expect_fails_generation_for_an_unknown_verb():
         scenarios._workflow_agent_expect("no-such-verb")
 
 
+def test_no_followup_turn_after_an_out_or_impossible_agent_case():
+    """(row 501 item C, night-1 rank 3, SCA-refuse-case-followup-
+    presupposes-edit, r0019): a scripted follow-up after an honest, no-write
+    refusal presupposes an edit was made. r0019 itself has a scripted
+    follow-up in requests.json ("That's too crunchy now, back it off a
+    bit."); the agent case must not carry it."""
+    _, agent = scenarios.generate(taxonomy.load())
+    r0019 = next(c for c in agent if c.id == "sca-r0019-olympus-agent")
+    assert r0019.meta["class"] in ("impossible", "out")
+    assert r0019.meta["followups"] == []
+    for c in agent:
+        if c.meta["class"] in ("impossible", "out"):
+            assert c.meta["followups"] == [], c.id
+
+
