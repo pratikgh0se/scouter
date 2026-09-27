@@ -587,12 +587,9 @@ def adjust(module: str, param: str, delta: float, *, instance: int = 0, commit: 
         module, param, instance = _target(routed)
         darkroom.refuse_wb_late(resolved.path, module, [param], instance,
                                 what=f"darkroom adjust {module}.{param}")
-    token = darkroom.NO_WB_REROUTE.set(True)
-    try:
+    with darkroom.no_wb_reroute_scope():
         result = _adjust_core(module, param, delta, resolved=resolved, instance=instance,
                               commit=commit, level=level, job=job, ms_precommit=pre["ms"])
-    finally:
-        darkroom.NO_WB_REROUTE.reset(token)
     result.plan[0]["precommit"] = {"bounced": pre["bounced"], "reason": pre["reason"]}
     if routed is not None:
         result.warnings.append(darkroom.wb_routed_note(routed))
@@ -743,77 +740,76 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
     notes: list[explain.MoveNote] = []
     failures: list[dict] = []
     token = journal.GROUP.set(group)
-    no_reroute = darkroom.NO_WB_REROUTE.set(True)
     try:
-        for module, mv in concrete:
-            s = vocab.spec(module, mv.param)
-            try:
-                if mv.kind == "toggle":
-                    r = (darkroom.enable if mv.value else darkroom.disable)(
-                        module, instance=0, job=job)
-                    landed.append({**r.to_dict(), "summary": f"{s.ui}: "
-                                   f"{'on' if mv.value else 'off'}"})
-                    continue
-                if mv.kind == "crop":
-                    cur = dtbridge.call("darkroom.current")
-                    w, h = int(cur.get("width") or 0), int(cur.get("height") or 0)
-                    if not (w and h):
-                        raise ValueUnknown("the image size is unknown, so a crop preset "
-                                           "cannot be placed", detail={"reason": "no width/height"})
-                    # Fix round 1, I3: `darkroom.current`'s width/height are the
-                    # RAW stored dimensions -- darktable's Lua image API does
-                    # not reliably expose a post-orientation size (see
-                    # scouter.core.exif.rotation_degrees's docstring), so a
-                    # portrait frame is read from the file's own EXIF
-                    # Orientation tag instead, the same source
-                    # darktable_mcp/tools/preview_tools.py already trusts for
-                    # auto-rotating previews. A mirrored orientation (2, 4, 5,
-                    # 7) has no honest left/right mapping, so it refuses.
-                    degrees = exif.rotation_degrees(exif.read_tags(resolved.path).orientation)
-                    if degrees is None:
-                        raise ValueUnknown(
-                            "the image's EXIF orientation is mirrored, so a crop preset "
-                            "cannot tell which edge is left",
-                            detail={"reason": "mirrored_orientation"},
-                        )
-                    if degrees in (90, 270):
-                        w, h = h, w
-                    for side, v in crop_margins(float(mv.value), w, h).items():
-                        r = _set_recording_before("crop", side, v, instance=0, commit=commit,
-                                                  job=job, fallback=before_fallback(
-                                                      resolved, vocab.spec("crop", side), 0, job))
-                        landed.append({**r.to_dict(), "target": v})
-                    continue
-                if mv.kind == "adjust":
-                    delta = mv.value if mv.notches is None else mv.notches * s.step
-                    r = _adjust_core(module, mv.param, delta, resolved=resolved, instance=0,
-                                     commit=commit, level="off", job=job)
-                    notes.append(explain.MoveNote(s, r.previous, r.target))
-                    landed.append(r.to_dict())
-                else:
-                    target, _ = vocab.clamp(s, float(mv.value))
-                    # Re-read per move: an earlier move of this phrase may
-                    # have given the module a history entry since the gate.
-                    fallback = before_fallback(resolved, s, 0, job)
-                    r = _set_recording_before(
-                        module, mv.param, target, instance=0, commit=commit, job=job,
-                        fallback=fallback)
-                    if r.previous is None and fallback is not None and not r.noop:
-                        r.previous = fallback[0]
-                    notes.append(explain.MoveNote(s, r.previous, target, "set"))
-                    landed.append({**r.to_dict(), "target": target,
-                                   "summary": f"{s.ui}: set to {explain.with_unit(s, f'{vocab.to_display(s, target):.4g}')}"})
-            except ScouterError as e:
-                if not landed:
-                    raise
-                # Row 433 / spec 5.4 point 4: a move that was SENT but did
-                # not verify is reported with what the sidecar really says
-                # (`detail`), so every write the phrase made is accounted for.
-                failures.append({"module": module, "param": mv.param, "code": e.code,
-                                 "message": e.message, "detail": e.detail})
-                break
+        with darkroom.no_wb_reroute_scope():
+            for module, mv in concrete:
+                s = vocab.spec(module, mv.param)
+                try:
+                    if mv.kind == "toggle":
+                        r = (darkroom.enable if mv.value else darkroom.disable)(
+                            module, instance=0, job=job)
+                        landed.append({**r.to_dict(), "summary": f"{s.ui}: "
+                                       f"{'on' if mv.value else 'off'}"})
+                        continue
+                    if mv.kind == "crop":
+                        cur = dtbridge.call("darkroom.current")
+                        w, h = int(cur.get("width") or 0), int(cur.get("height") or 0)
+                        if not (w and h):
+                            raise ValueUnknown("the image size is unknown, so a crop preset "
+                                               "cannot be placed", detail={"reason": "no width/height"})
+                        # Fix round 1, I3: `darkroom.current`'s width/height are the
+                        # RAW stored dimensions -- darktable's Lua image API does
+                        # not reliably expose a post-orientation size (see
+                        # scouter.core.exif.rotation_degrees's docstring), so a
+                        # portrait frame is read from the file's own EXIF
+                        # Orientation tag instead, the same source
+                        # darktable_mcp/tools/preview_tools.py already trusts for
+                        # auto-rotating previews. A mirrored orientation (2, 4, 5,
+                        # 7) has no honest left/right mapping, so it refuses.
+                        degrees = exif.rotation_degrees(exif.read_tags(resolved.path).orientation)
+                        if degrees is None:
+                            raise ValueUnknown(
+                                "the image's EXIF orientation is mirrored, so a crop preset "
+                                "cannot tell which edge is left",
+                                detail={"reason": "mirrored_orientation"},
+                            )
+                        if degrees in (90, 270):
+                            w, h = h, w
+                        for side, v in crop_margins(float(mv.value), w, h).items():
+                            r = _set_recording_before("crop", side, v, instance=0, commit=commit,
+                                                      job=job, fallback=before_fallback(
+                                                          resolved, vocab.spec("crop", side), 0, job))
+                            landed.append({**r.to_dict(), "target": v})
+                        continue
+                    if mv.kind == "adjust":
+                        delta = mv.value if mv.notches is None else mv.notches * s.step
+                        r = _adjust_core(module, mv.param, delta, resolved=resolved, instance=0,
+                                         commit=commit, level="off", job=job)
+                        notes.append(explain.MoveNote(s, r.previous, r.target))
+                        landed.append(r.to_dict())
+                    else:
+                        target, _ = vocab.clamp(s, float(mv.value))
+                        # Re-read per move: an earlier move of this phrase may
+                        # have given the module a history entry since the gate.
+                        fallback = before_fallback(resolved, s, 0, job)
+                        r = _set_recording_before(
+                            module, mv.param, target, instance=0, commit=commit, job=job,
+                            fallback=fallback)
+                        if r.previous is None and fallback is not None and not r.noop:
+                            r.previous = fallback[0]
+                        notes.append(explain.MoveNote(s, r.previous, target, "set"))
+                        landed.append({**r.to_dict(), "target": target,
+                                       "summary": f"{s.ui}: set to {explain.with_unit(s, f'{vocab.to_display(s, target):.4g}')}"})
+                except ScouterError as e:
+                    if not landed:
+                        raise
+                    # Row 433 / spec 5.4 point 4: a move that was SENT but did
+                    # not verify is reported with what the sidecar really says
+                    # (`detail`), so every write the phrase made is accounted for.
+                    failures.append({"module": module, "param": mv.param, "code": e.code,
+                                     "message": e.message, "detail": e.detail})
+                    break
     finally:
-        darkroom.NO_WB_REROUTE.reset(no_reroute)
         journal.GROUP.reset(token)
     return SayResult(
         outcome="partial" if failures else "ok",

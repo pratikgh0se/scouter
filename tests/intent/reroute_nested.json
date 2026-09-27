@@ -1,0 +1,24 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for scouter.core.darkroom.no_wb_reroute_scope (htc-colorcal-rereview follow-up, decision rows 458/461's WB reroute guard). Each example is a call to no_wb_reroute_scope with the outcome a human calls right. Run by tests/intent/test_reroute_nested_intent.py.",
+  "subject": "scouter/core/darkroom.py no_wb_reroute_scope + NO_WB_REROUTE",
+  "examples": [
+    {
+      "id": "single-scope-runs-and-clears",
+      "input": {"already_active": false},
+      "expect": {"outcome": "ok", "flag_during": true, "flag_after": false},
+      "source": "the ordinary case: moves.adjust/moves.say entering their own reroute critical section once, with nothing else active"
+    },
+    {
+      "id": "nested-scope-refuses",
+      "input": {"already_active": true},
+      "expect": {"outcome": "refused", "code": "reroute_nested", "flag_after": true},
+      "source": "htc-colorcal-rereview: 'a nested cross-image reroute ... could inherit or clobber the flag' -- refused before the body runs rather than silently nesting; the already-active flag is left exactly as the outer call set it"
+    },
+    {
+      "id": "refused-nested-attempt-does-not-affect-the-outer-move",
+      "input": {"already_active": true, "then_finish_outer": true},
+      "expect": {"outcome": "ok", "code": null, "flag_after": false},
+      "source": "cross-image case, end to end (tests/test_reroute_nested.py): image A's own adjust completes normally and NO_WB_REROUTE reads back False once A's own scope exits, even though a nested attempt for image B was refused partway through A's move"
+    }
+  ]
+}

@@ -270,6 +270,28 @@ class DarktableUnresponsive(BridgeTimeout):
     )
 
 
+class RerouteNested(ScouterError):
+    """`moves.adjust`/`moves.say` refuse to enter their WB-reroute critical
+    section (`darkroom.NO_WB_REROUTE`) while another one is already active.
+
+    htc-colorcal-rereview follow-up: no caller in this codebase actually
+    nests these calls today (`darkroom.no_wb_reroute_scope`'s docstring has
+    the proof -- a genuinely nested, single-thread call is safe by
+    construction, since `contextvars.Token.reset` always restores the exact
+    prior value in LIFO order). This is defense-in-depth against a FUTURE
+    caller nesting them, where "safe by construction" would silently depend
+    on strict call-stack discipline the type system cannot check: refusing
+    is cheaper than auditing every future call site for that discipline.
+    """
+
+    code = "reroute_nested"
+    fix = (
+        "a white-balance reroute (moves.adjust/moves.say) was entered while another "
+        "one was already active; these never nest -- finish or refuse the outer move "
+        "before starting a new one"
+    )
+
+
 class WriteUnverified(ScouterError):
     """A write verb committed, but the value read back from the sidecar is not
     the one it asked for, and no darktable hard limit explains the difference
@@ -341,6 +363,10 @@ EXIT_CODES: dict[str, int] = {
     # mode darktable holds it in (first use: white balance, camera reference late).
     # 25 is taken by write_unverified on fix/htc-applied-verify (merges first).
     "module_unavailable": 26,
+    # htc-colorcal-rereview follow-up: a WB reroute (moves.adjust/moves.say)
+    # entered while another one was already active. Never observed live --
+    # defense-in-depth (see errors.RerouteNested).
+    "reroute_nested": 27,
 }
 
 ERROR_CLASSES: tuple[type[ScouterError], ...] = (
@@ -365,6 +391,7 @@ ERROR_CLASSES: tuple[type[ScouterError], ...] = (
     DarktableUnresponsive,
     WriteUnverified,
     ModuleUnavailable,
+    RerouteNested,
 )
 
 
