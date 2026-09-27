@@ -412,3 +412,115 @@ def test_parity_pair_records_fixture_errors_in_obs_extra(corpus, tmp_path, monke
     exec_parity.parity_pair(s, case, step, obs)
     assert obs.extra["fixture_errors"] == \
         ["mcp_import_failed: no_files_named", "cli_import_failed: no_files_named"]
+
+
+def test_frame_switch_relaunch_does_not_hide_a_real_mismatch(corpus, tmp_path, monkeypatch):
+    # R2-1 (review fix round 3): both sides needing the relaunch must NEVER
+    # lift a genuine envelope mismatch from fail to needs_review -- only
+    # when the pair still AGREES after both relaunches. Real
+    # par-darkroom.open-happy shape: not_in_darkroom on the first try, a
+    # genuine (differing) open answer on the retry.
+    err = {"ok": False, "outcome": "error:not_in_darkroom",
+          "error": {"code": "not_in_darkroom"}}
+    ok_mcp = {"ok": True, "outcome": "ok", "data": {"opened": True, "view": "darkroom"}}
+    ok_cli = {"ok": True, "outcome": "ok", "data": {"opened": True, "view": "lighttable"}}
+    mcp = FakeMcp(answers={"darkroom_open": [err, ok_mcp]})
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+
+    cli_answers = [err, ok_cli]
+
+    def fake_run(*a, **k):
+        env = cli_answers.pop(0) if len(cli_answers) > 1 else cli_answers[0]
+        code = 0 if env.get("ok") else 6
+        return subprocess.CompletedProcess(a[0], code, stdout=json.dumps(env), stderr="")
+
+    monkeypatch.setattr(exec_parity.subprocess, "run", fake_run)
+    case = Case(id="par-darkroom-open-happy", layer="parity", tier="P0", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "darkroom_open", "variant": "happy"})
+    step = Step("parity_pair", {"verb": "darkroom.open", "args": {"image": "{frame:hero}"}},
+               60.0, False)
+    obs = Observation()
+    exec_parity.parity_pair(s, case, step, obs)
+    assert obs.extra["frame_switch_relaunch"] == ["mcp", "cli"]
+    assert obs.extra["envelopes_match"] is False
+    assert obs.extra["parity_needs_review"] is None
+
+
+# ---- R2-2 (review fix round 3): the per-case sidecar-restore isolation in
+# _staged_dests/_restore_sidecars was untested -- a hand mutant that
+# replaced _restore_sidecars's body with `pass` still left the whole suite
+# green. These two tests kill that exact mutant.
+
+
+def test_staged_dests_restores_a_real_baseline_between_cases(tmp_path):
+    from scouter.core import xmp
+
+    hero = tmp_path / "trial" / "H.ORF"
+    hero.parent.mkdir(parents=True, exist_ok=True)
+    hero.write_bytes(b"raw")
+    s = _FakeStageSession(tmp_path)
+    s.staged.frames["hero"] = hero
+    # Pre-create the sidecar at the destination _stage_side's fallback will
+    # use (library_import fails in this fake, same as
+    # test_stage_side_falls_back_and_records_the_failure), so the FIRST
+    # _staged_dests call captures a REAL, non-empty baseline.
+    dest_dir = s.root / "parity" / "mcp"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    expected_dest = dest_dir / "H-mcp.ORF"
+    baseline_bytes = b"<xmp>baseline history_end=0</xmp>"
+    xmp.sidecar_path(expected_dest).write_bytes(baseline_bytes)
+
+    mcp_dest, _cli_dest = exec_parity._staged_dests(s)
+    assert mcp_dest == expected_dest
+    assert xmp.sidecar_path(mcp_dest).read_bytes() == baseline_bytes
+
+    # Case 1 (a write verb) dirties the sidecar.
+    xmp.sidecar_path(mcp_dest).write_bytes(b"<xmp>case-1 wrote something else</xmp>")
+
+    # Case 2: _staged_dests must restore the ORIGINAL baseline, not case
+    # 1's leftovers.
+    mcp_dest2, _cli_dest2 = exec_parity._staged_dests(s)
+    assert mcp_dest2 == mcp_dest
+    assert xmp.sidecar_path(mcp_dest2).read_bytes() == baseline_bytes
+
+
+def test_staged_dests_missing_baseline_deletes_a_dirtied_sidecar(tmp_path):
+    from scouter.core import xmp
+
+    hero = tmp_path / "trial" / "H.ORF"
+    hero.parent.mkdir(parents=True, exist_ok=True)
+    hero.write_bytes(b"raw")
+    s = _FakeStageSession(tmp_path)
+    s.staged.frames["hero"] = hero
+    # No pre-existing sidecar this time -> the baseline snapshot is None.
+    mcp_dest, _cli_dest = exec_parity._staged_dests(s)
+    assert exec_parity._read_sidecar_bytes(mcp_dest) is None
+
+    # A case writes a sidecar into existence (e.g. a real darkroom write).
+    xmp.sidecar_path(mcp_dest).write_bytes(b"<xmp>written by a case, no baseline existed</xmp>")
+    assert xmp.sidecar_path(mcp_dest).exists()
+
+    # The NEXT case: with no baseline to restore to, _staged_dests must
+    # DELETE it -- not leave the previous case's write in place.
+    exec_parity._staged_dests(s)
+    assert not xmp.sidecar_path(mcp_dest).exists()
+
+
+def test_parity_pair_records_the_isolation_mechanism_honestly(corpus, tmp_path, monkeypatch):
+    # Review fix round 3, residual ruling: the per-case restore is XMP-file
+    # only, never darktable's library.db -- recorded, not claimed as full
+    # isolation.
+    ok = {"ok": True, "outcome": "ok", "data": {}}
+    mcp = FakeMcp(answers={"wb_kelvin": ok})
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(ok), stderr=""))
+    case = Case(id="par-wb-kelvin-happy", layer="parity", tier="P0", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "wb_kelvin", "variant": "happy"})
+    step = Step("parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0,
+               False)
+    obs = Observation()
+    exec_parity.parity_pair(s, case, step, obs)
+    assert obs.extra["isolation"] == "xmp_file_restore (library.db not reset)"

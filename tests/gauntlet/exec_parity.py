@@ -165,8 +165,18 @@ def _staged_dests(session):
       (2 x 92 cases). Importing once and caching removes that cost.
 
     Per-case isolation for the (now-shared-across-cases) destinations comes
-    from `_restore_sidecars`, called on every lookup -- pure file I/O, so it
-    is independent of which verb wrote to them last."""
+    from `_restore_sidecars`, called on every lookup -- pure file I/O,
+    restoring the XMP SIDECAR only. Review fix round 3's ruling (n1-harness-
+    review.md section 3): this is NOT isolation of darktable's own state.
+    darktable also keeps history in `library.db`, written together with the
+    XMP on autosave/leaving the darkroom (`scouter/core/history.py`), and
+    rewriting the sidecar behind a running darktable does not touch that DB
+    -- its next write can re-serialise old DB history back into the XMP.
+    It is acceptable HERE, for parity only: both dests get the same
+    sequence of verbs in lockstep, so any DB residue is symmetric, and the
+    comparison is MCP-vs-CLI, never against an absolute baseline. It is not
+    a reusable isolation primitive for any other layer. `parity_pair`
+    records this honestly as `obs.extra["isolation"]`."""
     cached = getattr(session, "_parity_staged_dests", None)
     if cached is None:
         hero = session.staged.frames["hero"]
@@ -191,13 +201,20 @@ def _read_sidecar_bytes(path) -> bytes | None:
 
 
 def _restore_sidecars(session, dests) -> None:
-    """Review fix round 2, A-1: per-case isolation for the once-per-session
-    imported parity frames. Restores each dest's XMP sidecar to the
-    byte-exact snapshot taken right after import, before this case's own
-    writes -- so a style.extract/cull.apply/etc from an EARLIER case cannot
-    leak into this one (the triage's own complaint: "the frame's sidecar
-    accumulates all 92 cases' writes"). Pure file I/O: it isolates every
-    write-capable verb, not only the ones `session.touched` tracks."""
+    """Review fix round 2, A-1: per-case XMP-SIDECAR restore for the
+    once-per-session imported parity frames. Restores each dest's sidecar
+    to the byte-exact snapshot taken right after import, before this
+    case's own writes -- so a style.extract/cull.apply/etc from an EARLIER
+    case cannot leak into this one's SIDECAR (the triage's own complaint:
+    "the frame's sidecar accumulates all 92 cases' writes").
+
+    Review fix round 3's ruling: this restores the XMP FILE only, never
+    darktable's own `library.db` (which the next write can re-serialise
+    old history back out of) -- it is not a general isolation primitive,
+    only an acceptable one for parity's own MCP-vs-CLI comparison (see
+    `_staged_dests`'s docstring). Pure file I/O either way: it runs for
+    every write-capable verb, not only the ones `session.touched`
+    tracks."""
     from scouter.core import xmp
 
     baseline = getattr(session, "_parity_sidecar_baseline", {})
@@ -292,6 +309,12 @@ def parity_pair(session, case, step, obs) -> CallRecord:
         cli_copy = copy_readonly(hero, session.root / "parity" / "cli" / f"{stem}-cli{ext}")
     else:
         mcp_copy, cli_copy = _staged_dests(session)
+        # Review fix round 3 ruling (n1-harness-review.md section 3): named
+        # honestly, not "isolated" -- the once-per-session dests are only
+        # restored at the XMP-sidecar level between cases, never
+        # darktable's own library.db. Acceptable for parity's own
+        # MCP-vs-CLI comparison; not a claim the frame is otherwise clean.
+        obs.extra["isolation"] = "xmp_file_restore (library.db not reset)"
     session.staged.frames["hero"] = mcp_copy
     mcp_args = substitute(step.args["args"], session, [])
     if is_open:
@@ -334,10 +357,13 @@ def parity_pair(session, case, step, obs) -> CallRecord:
     reason = _parity_needs_review(variant, mcp_norm, cli_norm, not diffs,
                                   _policy.transient_codes)
     fsr = obs.extra.get("frame_switch_relaunch") or []
-    if set(fsr) >= {"mcp", "cli"}:
-        # Review fix round 2, A-3: both sides needing the relaunch proves
-        # nothing about a genuine frame switch -- the second answer is
-        # "open the image darktable already shows".
+    if not diffs and set(fsr) >= {"mcp", "cli"}:
+        # Review fix round 3, R2-1: this must NEVER lift a genuine mismatch
+        # from fail to needs_review -- only apply when the pair still
+        # AGREES after both relaunches. Both sides needing the relaunch
+        # proves nothing about a genuine frame switch (the second answer is
+        # "open the image darktable already shows"), but a diff on top of
+        # that is still a real product failure, not a harness artefact.
         reason = "LK-frame-switch-relaunch: both sides needed a relaunch to open the frame"
     obs.extra["parity_needs_review"] = reason
     fixture_errors = getattr(session, "_parity_fixture_errors", None)
