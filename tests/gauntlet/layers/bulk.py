@@ -23,8 +23,12 @@ def _import(n: int) -> Step:
 
 
 def _hero_edit() -> list[Step]:
+    # (n1-bulk fix): "warmer" is a WB phrase and hits the WB guard
+    # (commit_timeout on olympus, value_unknown on a7 -- no WB calibration
+    # table for a7). Use a non-WB, always-live edit here; WB coverage lives
+    # in the coverage layer, not bulk.
     return [_s("darkroom_open", 30.0, image="{job_frame:1}"),
-            _s("darkroom_say", 8.0, phrase="warmer")]
+            _s("darkroom_say", 8.0, phrase="brighter")]
 
 
 def flow_steps(flow: str, n: int) -> tuple[list[Step], list[Check], str]:
@@ -49,13 +53,13 @@ def flow_steps(flow: str, n: int) -> tuple[list[Step], list[Check], str]:
     if flow == "copy_paste_history":
         return ([_import(n), *_hero_edit(),
                  _s("style_extract", 30.0, image="{job_frame:1}", name="{style}",
-                    modules=["temperature"], confirm=True),
+                    modules=["exposure"], confirm=True),
                  _s("style_apply_set", t, name="{style}", job_slug="{job_slug}", confirm=True)],
                 [ok(4), count("changed_n", n - 1)], "workflow")
     if flow == "styles":
         return ([_import(n), *_hero_edit(),
                  _s("style_extract", 30.0, image="{job_frame:1}", name="{style}",
-                    modules=["temperature"], confirm=True),
+                    modules=["exposure"], confirm=True),
                  _s("style_apply", 30.0, image="{job_frame:2}", name="{style}")],
                 [ok(4), count("changed_n", 1)], "workflow")
     if flow == "module_presets":
@@ -112,7 +116,7 @@ def generate(tax: Taxonomy) -> list[Case]:
                             preset="{export_preset}", out_dir="{out_dir}", confirm=True))
         elif verb == "style_apply_set":
             steps.extend([*_hero_edit(), _s("style_extract", 30.0, image="{job_frame:1}",
-                          name="{style}", modules=["temperature"], confirm=True)])
+                          name="{style}", modules=["exposure"], confirm=True)])
             steps.append(_s("style_apply_set", PER_FRAME_S * n, name="{style}",
                             job_slug="{job_slug}", confirm=True))
         else:

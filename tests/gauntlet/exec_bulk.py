@@ -10,12 +10,63 @@ from pathlib import Path
 
 from gauntlet.adapter import Observation
 from gauntlet.case import Case
+from scouter import config as scouter_config
+from scouter import paths as scouter_paths
+from scouter.errors import UsageError
 from tests.gauntlet import observe
 from tests.gauntlet.corpus import build_card, delete_card
 from tests.gauntlet.execute import substitute
 from tests.gauntlet.session import SessionBlocked
 
 STATS_SAMPLE = 10
+
+
+def job_slug_for(case_id: str) -> str:
+    """A valid `library.import` job slug (`scouter.paths.SLUG_RE`) for a
+    gauntlet bulk case id.
+
+    Case ids are `-`-joined `gauntlet.case.slug()` parts, and a part may
+    itself carry `_` -- `SLUG_RE` forbids underscores entirely, and the
+    old `f"htc-{case.id}"[-40:]` kept them while also slicing from the
+    LEFT, which cut the disambiguating suffix (flow/body/size) off 34 of
+    40 real case ids and left every one failing `usage: invalid job slug`.
+
+    Underscores become hyphens (never dropped -- still legible, still
+    unique), and any excess length is trimmed from the RIGHT one
+    character at a time by asking `validate_slug` itself whether the
+    result is valid -- the length bound and character class live in
+    `scouter.paths` and are never duplicated here."""
+    raw = "htc-" + case_id.replace("_", "-")
+    while True:
+        try:
+            return scouter_paths.validate_slug(raw)
+        except UsageError:
+            if len(raw) <= 1:
+                raise
+            raw = raw[:-1]
+
+
+def _imported_frames(session, envelope: dict | None,
+                      source_frames: list[Path]) -> list[Path] | None:
+    """Map `source_frames` (the staged card copies) to the absolute paths
+    `library_import` actually wrote them to, using ITS OWN envelope
+    (`data.files[].source_name` -> `.dest`, relative to the job directory --
+    spec section 6, `scouter.types.ImportResult`). Returns `None` when the
+    envelope carries nothing usable (the import did not run or errored);
+    callers keep the card paths rather than guess. Every later step
+    (`{job_frame:N}`, `{job_frames}`) must address these destination files:
+    the card copies are deleted at the end of the case and were never what
+    darktable's library, style/preset verbs or exports operate on."""
+    data = (envelope or {}).get("data") or {}
+    files = data.get("files") or []
+    job_slug, date = data.get("job_slug"), data.get("date")
+    if not files or not job_slug or not date:
+        return None
+    cfg = scouter_config.load(str(session.staged.config))
+    job_path = scouter_config.job_dir(cfg, date, job_slug)
+    dest_by_source = {f.get("source_name"): f.get("dest") for f in files if f.get("source_name")}
+    return [(job_path / dest_by_source[src.name]) if src.name in dest_by_source else src
+            for src in source_frames]
 
 
 def reported_n(envelopes: list[dict]) -> int | None:
@@ -43,11 +94,21 @@ def run_bulk_case(session, case: Case) -> Observation:
     frames = build_card(session.corpus, case.body, n, card)
     session.staged.job_frames = frames
     session.staged.vars["card"] = str(card)
-    session.staged.vars["job_slug"] = f"htc-{case.id}"[-40:]
+    session.staged.vars["job_slug"] = job_slug_for(case.id)
+    # (n1-bulk fix c): `library_relocate` refuses a `new_root` that does not
+    # already exist -- that is the product's own contract (an operator must
+    # prepare the destination), so the harness creates it up front rather
+    # than asking the product to relax a deliberate safety check.
+    Path(session.staged.vars["relocate_root"]).mkdir(parents=True, exist_ok=True)
     obs = Observation()
     # (final fix M1): the kill timer must never outlive its case (it could
     # SIGKILL darktable in a later case); set in `finally`.
     stop_killer = threading.Event()
+    # job_files/before start on the card copies (the `time_lapse_deflicker`
+    # refusal case never imports, so these stay the honest baseline); the
+    # first successful `library_import` step below replaces both with the
+    # destination files it actually wrote.
+    job_files = frames
     try:
         before = {str(f): observe.snapshot(f).get("fingerprint") for f in frames}
         kill_at = case.meta.get("kill_after_frame")
@@ -63,22 +124,37 @@ def run_bulk_case(session, case: Case) -> Observation:
                 obs.calls.append(rec)
                 if kill_at and rec.error:
                     session.relaunch()
-                    again = session.call(st.tool, args, st.budget_s, write=st.write)
-                    obs.calls.append(again)
-                    obs.extra["journal_resumed"] = "resum" in json.dumps(again.envelope or {})
+                    rec = session.call(st.tool, args, st.budget_s, write=st.write)
+                    obs.calls.append(rec)
+                    obs.extra["journal_resumed"] = "resum" in json.dumps(rec.envelope or {})
+                if st.tool == "library_import" and not rec.error:
+                    resolved = _imported_frames(session, rec.envelope, frames)
+                    if resolved is not None:
+                        job_files = resolved
+                        session.staged.job_frames = resolved
+                        before = {str(f): observe.snapshot(f).get("fingerprint")
+                                  for f in resolved}
         except SessionBlocked as e:
             obs.blocked = f"session: {e}"
             obs.hang_evidence.append(f"session: {e}")
-        job_files = [f for f in frames if f.exists()]
-        obs.extra["changed_n"] = count_changed(job_files, before)
-        obs.extra["reported_n"] = reported_n([c.envelope for c in obs.calls if c.write])
+        existing = [f for f in job_files if f.exists()]
+        obs.extra["changed_n"] = count_changed(existing, before)
+        # (n1-bulk fix e): `library_import`'s own envelope claims `imported`
+        # files every time it runs -- folding it into the max over every
+        # write envelope made `reported_n` (the harness's "did anything
+        # claim it wrote N frames" signal) true on an import-only case even
+        # when every real bulk verb after it errored, scoring a genuine
+        # failure as `silent_failure` instead. `imported_n` below already
+        # tracks the import's own count on its own terms.
+        obs.extra["reported_n"] = reported_n([c.envelope for c in obs.calls
+                                              if c.write and c.tool != "library_import"])
         out_dir = Path(session.staged.vars["out_dir"])
         obs.extra["export_files"] = sum(1 for _ in out_dir.rglob("*") if _.is_file()) \
             if out_dir.exists() else 0
         obs.extra["imported_n"] = reported_n([c.envelope for c in obs.calls
                                               if c.tool == "library_import"]) or 0
         obs.extra["frames_verified"] = max(obs.extra["changed_n"], obs.extra["export_files"])
-        obs.extra["exactly_once"] = _exactly_once(frames)
+        obs.extra["exactly_once"] = _exactly_once(job_files)
         obs.extra["stats_ok_n"] = min(STATS_SAMPLE, obs.extra["changed_n"])
     finally:
         stop_killer.set()
