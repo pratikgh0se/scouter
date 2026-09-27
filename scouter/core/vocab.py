@@ -134,7 +134,13 @@ PARAMS: tuple[ParamSpec, ...] = (
     ParamSpec("exposure", "black", "exposure › black level correction", "ratio", 1.0,
               -0.1, 0.1, 0.005, "xmp", None, False, "black_level",
               "moves the point that renders as pure black",
-              "the darkest areas: a few thousandths is a visible change"),
+              "the darkest areas: a few thousandths is a visible change",
+              # darktable's module default is unambiguous for this row: an
+              # additive correction with no active history entry applies no
+              # correction (row LK-calibration-holes: the gauntlet's chart
+              # calibration probe reads this to set an absolute value on a
+              # module the PFM chart never activates, instead of guessing).
+              default=0.0),
     ParamSpec("sigmoid", "contrast", "sigmoid › contrast", "ratio", 1.0, 0.5, 3.0, 0.1,
               "xmp", None, False, "tone_mapper",
               "steepens or flattens the middle of the tone curve",

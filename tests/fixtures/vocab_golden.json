@@ -24,7 +24,7 @@
   {
     "candidate_paths": [],
     "concept": "black_level",
-    "default": null,
+    "default": 0.0,
     "display_scale": 1.0,
     "hi": 0.1,
     "lo": -0.1,

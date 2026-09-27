@@ -18,6 +18,38 @@ def _cal_path(session) -> Path:
     return session.run_root / "chart" / CAL_FILE
 
 
+def _probe_base(module: str, param: str) -> float | None:
+    """The value the calibration probe sets FROM: the vocabulary row's
+    declared `neutral`, else its darktable `default` (spec §4.3) -- read
+    from `scouter.core.vocab`, never a number picked here.
+
+    The PFM chart's pipeline is colorin/colorout/gamma only (row
+    LK-calibration-holes): sigmoid, exposure and temperature never have an
+    active history entry on it, so a RELATIVE `darkroom_adjust` has no
+    current value to add its delta to and refuses `value_unknown` -- for
+    every row here, not only the ones with no declared neutral/default
+    (`gate`/`read_current`, `scouter/core/moves.py`). An ABSOLUTE
+    `darkroom_set` needs no current value at all, so probing with
+    `base + amount` (an absolute target) instead of a bare `amount` (a
+    delta) reaches the module regardless. When neither `neutral` nor
+    `default` is declared for a row (still true for `temperature.temperature`
+    -- the PFM chart has no white-balance module and no camera EXIF, so
+    there is no honest Kelvin to probe from), there is nothing to build an
+    absolute target from either; the caller must skip probing that key and
+    record it as a calibration failure, never silently a zero slope.
+    """
+    from scouter.core import vocab
+
+    row = vocab.spec(module, param)
+    if row is None:
+        return None
+    if row.neutral is not None:
+        return float(row.neutral)
+    if row.default is not None:
+        return float(row.default)
+    return None
+
+
 def chart_golden(session, case, step, obs) -> CallRecord:
     try:
         frame = session.ensure_frame("chart")
@@ -30,10 +62,22 @@ def chart_golden(session, case, step, obs) -> CallRecord:
         obs.extra["patch_de"] = golden["patch_de"] or repeat["patch_de"]
         obs.extra["golden"] = golden
         cal: dict[str, float | None] = {}
+        cal_errors: dict[str, str] = {}
         for key, amount in chart_render.PROBE.items():
             module, param = key.split(".")
-            session.call("darkroom_adjust", {"module": module, "param": param, "delta": amount},
-                         8.0, write=True)
+            base = _probe_base(module, param)
+            if base is None:
+                cal[key] = None
+                cal_errors[key] = (f"{key} has no declared neutral or darktable default in "
+                                    "the vocabulary to probe from")
+                continue
+            rec = session.call("darkroom_set",
+                               {"module": module, "param": param, "value": base + amount},
+                               8.0, write=True)
+            if rec.error or not (rec.envelope or {}).get("ok"):
+                cal[key] = None
+                cal_errors[key] = rec.error or "darkroom_set did not report ok"
+                continue
             after = chart_render.render_stats(frame, work / f"cal-{key}.ppm")
             cal[key] = chart_render.slope(first, after, key, amount)
             session.call("darkroom_undo_last", {}, 8.0, write=True)
@@ -42,6 +86,11 @@ def chart_golden(session, case, step, obs) -> CallRecord:
         (session.run_root / "chart").mkdir(parents=True, exist_ok=True)
         _cal_path(session).write_text(json.dumps(cal, indent=2, sort_keys=True) + "\n")
         obs.extra["calibration"] = cal
+        if cal_errors:
+            # Reported, never silently folded into a falsy 0.0 slope: a
+            # calibration hole this run hit, distinct from a genuinely flat
+            # (zero) measured slope.
+            obs.extra["calibration_errors"] = cal_errors
         obs.extra["calibration_ok"] = all(v not in (None, 0.0) for k, v in cal.items()
                                           if not k.startswith("_"))
         return CallRecord("chart_golden", {}, {"ok": True, "outcome": "ok",
