@@ -18,6 +18,7 @@ from pathlib import Path
 from gauntlet.adapter import CallRecord, RefuseRun
 from scouter.core.dtprocess import LaunchError
 from tests.gauntlet.corpus import Corpus, copy_readonly
+from tests.gauntlet.jobslug import job_slug_for
 
 REPO = Path(__file__).resolve().parents[2]
 PY = sys.executable
@@ -116,7 +117,7 @@ def stage(corpus: Corpus, body: str, root: Path, *, job_size: int = 7,
     return Staged(root=root, frames=frames, job_frames=job_frames, card=root / "card",
                   config=config, cache=root / "cache", vault=root / "vault",
                   library=root / "library" / "library.db", env=env,
-                  vars={"job_slug": f"htc-{body}-{stamp}"[-40:], "card": str(root / "card"),
+                  vars={"job_slug": job_slug_for(f"{body}-{stamp}"), "card": str(root / "card"),
                         "out_dir": str(root / "exports"), "export_preset": EXPORT_PRESETS[0],
                         "export_preset_2": EXPORT_PRESETS[1], "preset": f"htc-{stamp}",
                         "style": f"htc-style-{stamp}", "config_path": str(config),
