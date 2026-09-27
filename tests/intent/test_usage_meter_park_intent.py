@@ -1,3 +1,4 @@
+# mutation-check: targets-predate-range e9f7e95 -- check_usage_budget/usage_fraction predate this range, only adapter.py's call site changed :: UsageMeterParkIntentTest.test_sixty_percent_parks_with_the_window_reset_time, UsageMeterParkIntentTest.test_fifty_nine_percent_runs, UsageMeterParkIntentTest.test_stale_reading_is_no_source_and_does_not_park
 """Runs tests/intent/usage_meter_park.json (Zenkai Rules Z1). Two oracles per
 example (Z2): whether Park was raised, and (when it was) that `until` equals
 the window's own `reset_at` (tests/gauntlet/agent_budget.py)."""
@@ -7,8 +8,6 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
-
-import pytest
 
 from gauntlet.adapter import Park
 from tests.gauntlet import agent_budget
@@ -29,13 +28,15 @@ class UsageMeterParkIntentTest(unittest.TestCase):
         real_path, agent_budget.USAGE_WINDOW_PATH = agent_budget.USAGE_WINDOW_PATH, path
         try:
             usage_fn = lambda: agent_budget.usage_fraction(now=now)  # noqa: E731
-            if want["parked"]:
-                with pytest.raises(Park, match="usage_meter") as exc_info:
-                    agent_budget.check_usage_budget(usage_fn=usage_fn)
-                got_until = exc_info.value.until - now
-                self.assertAlmostEqual(got_until, want["until_offset_s"], msg=ex["id"])
-            else:
-                agent_budget.check_usage_budget(usage_fn=usage_fn)  # must not raise
+            parked, until = False, None
+            try:
+                agent_budget.check_usage_budget(usage_fn=usage_fn)
+            except Park as p:
+                parked, until = True, p.until - now
+            # Oracle 1: Park raised (or not) matches the ruling's threshold.
+            self.assertEqual(parked, want["parked"], ex["id"])
+            # Oracle 2: when it parked, `until` is the window's own reset_at.
+            self.assertEqual(until, want["until_offset_s"], ex["id"])
         finally:
             agent_budget.USAGE_WINDOW_PATH = real_path
 

@@ -134,7 +134,8 @@ def test_check_usage_budget_runs_at_59_percent_and_parks_at_60_from_the_real_win
     now = 1_000_000.0
     path.write_text(json.dumps({"utilization": 0.59, "reset_at": now + 1800,
                                 "written_at": now - 60}))
-    agent_budget.check_usage_budget(usage_fn=lambda: agent_budget.usage_fraction(now=now))
+    result = agent_budget.check_usage_budget(usage_fn=lambda: agent_budget.usage_fraction(now=now))
+    assert result is None  # ran: no Park at 59%
     path.write_text(json.dumps({"utilization": 0.60, "reset_at": now + 1800,
                                 "written_at": now - 60}))
     with pytest.raises(Park, match="usage_meter"):
