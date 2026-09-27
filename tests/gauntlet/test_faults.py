@@ -69,7 +69,11 @@ def _cases():
 
 
 class FakeSession:
-    """Just enough ScouterSession for faults: records calls and relaunches."""
+    """Just enough ScouterSession for faults: records calls and relaunches.
+
+    `touched`/`baselines` + `ensure_frame` (fix C): enough for a real
+    `execute.isolate()` call to run against this fake, since `run_fault_case`
+    now calls it directly for the freeze faults, before `arm`."""
 
     def __init__(self, tmp_path, relaunch_error=None):
         base = _session(tmp_path)
@@ -77,11 +81,16 @@ class FakeSession:
         self.relaunches = 0
         self.tools: list[str] = []
         self.relaunch_error = relaunch_error
+        self.touched: set[str] = set()
+        self.baselines: dict = {}
 
     def relaunch(self, frame=None):
         self.relaunches += 1
         if self.relaunch_error:
             raise self.relaunch_error
+
+    def ensure_frame(self, role):
+        return self.staged.frames[role]
 
     def call(self, tool, args, budget_s, *, write=False):
         self.tools.append(tool)
@@ -327,6 +336,38 @@ def test_r2_timer_starts_on_the_fault_step_not_on_isolate_resets(tmp_path, monke
     # started exactly as darkroom_say began: every reset had already run
     assert started_after[0] == s.tools[:-1] and "darkroom_say" not in started_after[0]
     assert "call" not in vars(s) and s.relaunches == 1
+
+
+def test_r3_isolate_runs_before_the_freeze_signal(tmp_path, monkeypatch, kills):
+    """Fix C (night1-robustness-triage.md item 3): rob-r3's own isolate()
+    resets ran against a darktable the fault had already SIGSTOPped -- 6
+    resets x ~20s each blew the whole 132s hard cap. isolate must run while
+    darktable is still responsive, before arm's SIGSTOP freezes it."""
+    from tests.gauntlet import observe
+
+    order: list[str] = []
+
+    class ToolSession(FakeSession):
+        def __init__(self, tmp_path):
+            super().__init__(tmp_path)
+            self.touched = {"exposure"}
+
+        def call(self, tool, args, budget_s, *, write=False):
+            order.append(tool)
+            return super().call(tool, args, budget_s, write=write)
+
+    def recording_kill(sig=signal.SIGKILL):
+        order.append({signal.SIGSTOP: "SIGSTOP", signal.SIGCONT: "SIGCONT"}.get(sig, "kill"))
+
+    monkeypatch.setattr(faults, "_owned_kill", recording_kill)
+    monkeypatch.setattr(observe, "snapshot", lambda *a, **k: {"params": {}, "units": {}})
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case: Observation())
+    s = ToolSession(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R3"])  # wedge_worker
+    assert obs.blocked is None
+    # the reset ran, and answered, BEFORE the freeze signal -- never after
+    assert order == ["darkroom_reset", "SIGSTOP", "SIGCONT"]
+    assert s.touched == set()  # isolate cleared it before arm ever ran
 
 
 def test_r18_attach_timeout_detaches_the_image(tmp_path, monkeypatch):

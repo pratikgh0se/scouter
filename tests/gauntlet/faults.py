@@ -15,7 +15,7 @@ from gauntlet.adapter import CallRecord, Observation
 from gauntlet.case import Case
 from tests.gauntlet import observe
 from tests.gauntlet.corpus import copy_readonly
-from tests.gauntlet.execute import VIRTUAL, substitute
+from tests.gauntlet.execute import VIRTUAL, isolate, substitute
 
 #: Seconds after the fault step's call STARTS before kill_during_call fires.
 KILL_DELAY_S = 1.0
@@ -328,9 +328,23 @@ def _small_disk(session, v: dict) -> None:
         raise
 
 
+#: (night1-robustness-triage.md item 3, rob-r3): these two freeze darktable
+#: with SIGSTOP the instant they arm. Isolation's own `darkroom_reset` calls
+#: (for a module the PREVIOUS case touched) must run before that freeze, on a
+#: still-responsive darktable, or they eat the case's hard cap retrying
+#: against a frozen process.
+_FREEZE_FAULTS = ("wedge_worker", "slow_bridge")
+
+
 def run_fault_case(session, case: Case) -> Observation:
     """Arm, run, disarm. Never raises: a failing arm or step is a typed
-    `blocked`; failing disarm steps land in obs.extra["disarm_errors"]."""
+    `blocked`; failing disarm steps land in obs.extra["disarm_errors"].
+
+    (night1-robustness-triage.md item 3): for `_FREEZE_FAULTS`, isolation
+    runs BEFORE `arm` -- see `_FREEZE_FAULTS`'s docstring above. The normal
+    `run_tool_case` still runs its own `isolate()` afterwards; with
+    `session.touched` already cleared here, that second call is a cheap
+    local snapshot compare, never a bridge call."""
     from tests.gauntlet.execute import run_tool_case
     from tests.gauntlet.session import SessionBlocked
 
@@ -343,6 +357,10 @@ def run_fault_case(session, case: Case) -> Observation:
     v: dict = {}
     obs: Observation | None = None
     try:
+        if fault in _FREEZE_FAULTS:
+            role = case.frame_role or "hero"
+            frame = session.ensure_frame(role)
+            isolate(session, frame, role)
         arm(session, fault, v, step_tool=case.steps[0].tool if case.steps else None)
         session.staged.vars.update({k: val for k, val in v.items() if not k.startswith("_")})
         if v.get("_skip"):
