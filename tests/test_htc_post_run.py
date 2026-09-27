@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -177,7 +178,11 @@ class PreconditionGateTest(_FakeRepoCase):
         first = self.invoke()
         second = self.invoke()
         self.assertEqual(first.returncode, second.returncode)
-        self.assertEqual(first.stdout, second.stdout)
+        # T1: strip say()'s second-granularity timestamps before comparing
+        # -- a rerun that straddles a wall-clock second boundary otherwise
+        # fails this on timestamp text alone, not on any real disagreement.
+        strip = lambda s: re.sub(r"(?m)^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] ", "", s)  # noqa: E731,E501
+        self.assertEqual(strip(first.stdout), strip(second.stdout))
 
 
 class MergeBaseGateTest(_FakeRepoCase):
