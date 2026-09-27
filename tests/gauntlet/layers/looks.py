@@ -7,7 +7,7 @@ from __future__ import annotations
 import math
 
 from gauntlet.case import Case, Check, Expect, Step, case_id
-from tests.gauntlet.layers.common import BODIES
+from tests.gauntlet.layers.common import BODIES, frame
 from tests.gauntlet.taxonomy import Taxonomy
 
 LAYER, PREFIX = "looks", "lk"
@@ -150,12 +150,19 @@ def generate(tax: Taxonomy) -> list[Case]:
                         source={"file": "looks.json", "id": look["id"]}, meta=meta))
         body = BODIES[i % 2]
         fchecks, ftags = frame_checks(look)
+        # Row LK-hero-below-floor: olympus's `hero` (P6281348.ORF) surveys
+        # near the darkest frame in the corpus, so moves sized from the
+        # chart's calibration land below the noise floor when applied
+        # direction-only on it. `hero_bright` (corpus.EXTRA_ROLES, wired for
+        # coverage's touch-floor rows) is the normally-exposed stand-in;
+        # sony_a7 has no bright hero yet and stays on `hero`.
+        role = "hero_bright" if body == "olympus" else "hero"
         out.append(Case(id=case_id(PREFIX, look["id"], body), layer=LAYER, tier=tier,
                         mode="tool", steps=[Step("look_plan", {"look_id": look["id"],
-                                                               "image": "{frame:hero}"},
+                                                               "image": frame(role)},
                                                  40.0, True)],
                         expect=Expect("edit", fchecks, {"changed": bool(fchecks[0].sign)}),
-                        body=body, frame_role="hero",
+                        body=body, frame_role=role,
                         source={"file": "looks.json", "id": look["id"]},
                         meta=dict(meta, check_tags=ftags, gaps=[])))
     return out
