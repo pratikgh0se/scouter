@@ -101,6 +101,23 @@ class SetupTest(unittest.TestCase):
         self.assertFalse(report["ok"])
         self.assertTrue(any("restart darktable" in n for n in report["next"]))
 
+    def test_doctor_is_optional_in_install_mode_and_required_under_check(self) -> None:
+        """Pratik's ruling, row 496 item 6 (night1-parity-install-guide-triage.md
+        rank 5/'needs Pratik' 2): a fresh machine's first `scouter setup`
+        (install mode, check=False) must not fail purely because no
+        darktable is running yet -- it completes and prints what `doctor`
+        will verify once one is. `scouter setup --check` keeps doctor
+        required, exactly as before."""
+        self.bridge.raises["view.current"] = BridgeTimeout("no darktable")
+        report = setup.run(check=False)
+        doctor = self.items(report)
+        self.assertEqual(doctor["doctor"]["status"], "bridge_timeout")
+        self.assertTrue(report["ok"], report)  # doctor down does not fail plain setup
+        self.assertTrue(any("doctor" in n and "verif" in n for n in report["next"]), report["next"])
+
+        report = setup.run(check=True)
+        self.assertFalse(report["ok"])  # --check still requires doctor
+
     def test_the_claude_mcp_add_command_is_stdio_with_absolute_paths(self) -> None:
         cmd = setup.mcp_command(repo_root=Path("/r/scouter"), python="/r/scouter/.venv/bin/python")
         self.assertEqual(

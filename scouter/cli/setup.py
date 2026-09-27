@@ -160,21 +160,29 @@ def _config_item() -> dict:
             "detail": str(cfg), "required": False}
 
 
-def _doctor_item() -> dict:
+def _doctor_item(check: bool) -> dict:
+    """Pratik's ruling, row 496 item 6 (night1-parity-install-guide-triage.md
+    rank 5, "needs Pratik" item 2): a fresh machine's first `scouter setup`
+    (install mode) must not fail purely because no darktable is running
+    yet -- `doctor` is `required` only under `--check`, so `run()`'s own
+    `required_ok` never counts it against a plain install. `--check`
+    (an explicit "is this healthy right now" ask) keeps it required,
+    unchanged."""
     from scouter.cli.main import _doctor
 
     report = _doctor()
     if report.get("ok"):
-        return {"item": "doctor", "status": "ok", "detail": f"view: {report.get('view')}"}
+        return {"item": "doctor", "status": "ok", "detail": f"view: {report.get('view')}",
+                "required": check}
     return {"item": "doctor", "status": str(report.get("bridge") or "error"),
-            "detail": report.get("bridge_fix") or "bridge not answering"}
+            "detail": report.get("bridge_fix") or "bridge not answering", "required": check}
 
 
 def run(check: bool = False) -> dict:
     """Run (or with `check`, only inspect) every setup item. Never raises for
     a missing item: the report says what is missing and the next step."""
     items = [_plugin_item(check), _luarc_item(check), _wb_item(check), _config_item()]
-    items.append(_doctor_item())
+    items.append(_doctor_item(check))
     root = repo_root()
     python = server_python(root)
     installed_now = any(i["status"] in ("installed", "updated")
@@ -189,7 +197,12 @@ def run(check: bool = False) -> dict:
         nxt.append("run `scouter setup` to install the Lua plugin and its luarc line")
     if check and by["wb_tables"]["status"] == "missing":
         nxt.append("run `scouter setup` to install the measured white-balance tables")
-    if installed_now or by["doctor"]["status"] != "ok":
+    if by["doctor"]["status"] != "ok" and not check:
+        nxt.append("doctor (darktable running with the plugin loaded and answering) was not "
+                   "required to complete this setup and was skipped; restart darktable (it "
+                   "loads the plugin at launch), open an image in the darkroom, then run "
+                   "`scouter setup --check` to verify it")
+    elif installed_now or by["doctor"]["status"] != "ok":
         nxt.append("restart darktable (it loads the plugin at launch), open an image in the "
                    "darkroom, then run `scouter setup --check`")
     if by["config"]["status"] == "missing":
