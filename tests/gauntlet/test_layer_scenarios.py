@@ -1,5 +1,7 @@
 import collections
 
+import pytest
+
 from tests.gauntlet import taxonomy
 from tests.gauntlet.layers import scenarios
 
@@ -92,3 +94,94 @@ def test_agent_cases_get_a_real_cap():
     for c in agent:
         turns = 1 + len(c.meta["followups"])
         assert c.budget_cap_s() >= turns * TURN_TIMEOUT_S, c.id
+
+
+def test_workflow_agent_cases_never_generate_with_no_checks():
+    """(row 501 item B, night-1 rank 10, SCA-hollow-workflow-pass): every
+    workflow agent case (sca-r0159's cull included) must carry at least one
+    check -- a checkless workflow Expect is exactly what let r0159 score
+    `verified` with zero MCP calls."""
+    _, agent = scenarios.generate(taxonomy.load())
+    workflow_cases = [c for c in agent if c.expect.kind == "workflow"]
+    assert workflow_cases, "expected at least one workflow agent case"
+    for c in workflow_cases:
+        assert c.expect.checks, c.id
+    r0159 = next(c for c in agent if c.id == "sca-r0159-olympus-agent")
+    assert r0159.expect.checks
+
+
+def test_workflow_agent_cases_check_the_real_verb_not_a_generic_last_call():
+    """(row 501 item B, fix round 1, Opus finding 3): sca-r0159 (cull) must
+    check for cull.propose specifically, not just "the last call was ok" --
+    the generic check let a clarify-only, read-only conversation pass."""
+    _, agent = scenarios.generate(taxonomy.load())
+    r0159 = next(c for c in agent if c.id == "sca-r0159-olympus-agent")
+    assert r0159.expect.checks[0].metric == "verb"
+    assert r0159.expect.checks[0].target["any_of"] == ["cull.propose"]
+    for c in agent:
+        if c.expect.kind == "workflow" and c.meta.get("class") == "workflow":
+            metric = c.expect.checks[0].metric
+            assert metric in ("verb", "undo"), c.id
+
+
+def test_workflow_agent_expect_fails_generation_for_an_unknown_verb():
+    """A checkless (or unresolvable) workflow expectation fails generation
+    outright, rather than reaching evaluate.py as a hollow pass waiting to
+    happen."""
+    with pytest.raises(ValueError, match="no agent workflow expectation") as exc_info:
+        scenarios._workflow_agent_expect("no-such-verb")
+    assert "no-such-verb" in str(exc_info.value)
+
+
+def test_out_of_scope_agent_cases_carry_the_refuse_and_offer_policy():
+    """(row 501 item G, Pratik's ruling row 501): every "out" agent case
+    documents the refuse-and-offer-only policy explicitly, so a write
+    before the user picks is a named policy failure (unrequested_edit),
+    not an accident of an unset default."""
+    _, agent = scenarios.generate(taxonomy.load())
+    out_cases = [c for c in agent if c.meta["class"] == "out"]
+    assert out_cases
+    for c in out_cases:
+        assert c.meta["out_of_scope_policy"] == "refuse_and_offer_only", c.id
+        assert c.meta["substitute_ok"] is False, c.id
+        assert c.meta["unrequested_write_reason"] == "unrequested_edit", c.id
+
+
+def test_client_proof_gallery_is_in_scope_and_stages_a_job():
+    """(row 501 item I, Pratik's ruling 501(3); fix round 1, Opus finding 4):
+    r0066 is a workflow/export_release case, not "out" and not the generic
+    export_run -- a real staged job, released through the client-proof
+    preset with a checksum manifest, is the ruling's own shape."""
+    tool, agent = scenarios.generate(taxonomy.load())
+    a = next(c for c in agent if c.id == "sca-r0066-olympus-agent")
+    assert a.meta["class"] == "workflow"
+    assert a.expect.kind == "workflow"
+    assert a.meta["stage_job"] is True
+    assert a.expect.checks[0].metric == "verb"
+    assert a.expect.checks[0].target["any_of"] == ["export.release"]
+    t = next(c for c in tool if c.id.startswith("scn-r0066-") and c.id.endswith("-tool"))
+    assert t.meta["class"] == "workflow"
+    assert [s.tool for s in t.steps] == ["library_import", "export_release"]
+    assert t.steps[1].args["preset"] == "client-proof"
+    assert t.steps[1].args["images"] == "{job_frames}"  # bypasses rating-based selection
+    checks = {(c.target["path"], c.target.get("op")) for c in t.expect.checks}
+    assert ("ok", "eq") in checks
+    assert ("data.manifest_path", "exists") in checks
+    assert ("data.exported", "gte") in checks
+
+
+def test_no_followup_turn_after_an_out_or_impossible_agent_case():
+    """(row 501 item C, night-1 rank 3, SCA-refuse-case-followup-
+    presupposes-edit, r0019): a scripted follow-up after an honest, no-write
+    refusal presupposes an edit was made. r0019 itself has a scripted
+    follow-up in requests.json ("That's too crunchy now, back it off a
+    bit."); the agent case must not carry it."""
+    _, agent = scenarios.generate(taxonomy.load())
+    r0019 = next(c for c in agent if c.id == "sca-r0019-olympus-agent")
+    assert r0019.meta["class"] in ("impossible", "out")
+    assert r0019.meta["followups"] == []
+    for c in agent:
+        if c.meta["class"] in ("impossible", "out"):
+            assert c.meta["followups"] == [], c.id
+
+

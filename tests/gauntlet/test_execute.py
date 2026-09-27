@@ -1,5 +1,7 @@
 """Tool-mode execution against the session fakes: no darktable, no MCP server."""
 
+from pathlib import Path
+
 import pytest
 
 from gauntlet.case import Case, Check, Expect, Step
@@ -421,3 +423,85 @@ def test_a_virtual_tool_that_blocks_stops_the_later_steps(corpus, tmp_path, monk
     assert obs.blocked == "session: frame switch failed"
     assert [c.tool for c in obs.calls] == ["blocker"]
     assert "darkroom_set" not in [t for t, _ in mcp.calls]
+
+
+# -- Fix round 2 (review finding "I", Opus re-review 5e398c5): a tool-mode --
+# workflow case's `library_import` step must rewrite `{job_frames}` to the
+# paths library_import actually wrote, the same way `exec_bulk.run_bulk_case`
+# already does for the bulk layer. Before this fix, r0066's own
+# `export_release {images: "{job_frames}"}` step named the STAGED CARD
+# paths -- files darktable's library never imported -- and `export.release`
+# raised `ImageNotFound` on every one of them.
+
+def test_library_import_step_rewrites_job_frames_for_a_later_step(corpus, tmp_path, monkeypatch):
+    """RED (before the fix): `{job_frames}` in the `export_release` step
+    still resolves to the staged card copies `stage()` set once, never the
+    paths `library_import`'s own envelope reports. GREEN: after a
+    successful `library_import` step, `session.staged.job_frames` (and so
+    every later `{job_frames}` substitution) is the imported destination
+    paths."""
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
+                                                                 "params": {}, "units": {}})
+    s = _session(corpus, tmp_path).open()
+    card_frames = list(s.staged.job_frames)
+    assert card_frames, "the fixture corpus must stage at least one job frame"
+    job_slug, date = "htc-x", "2026-05-24"
+    dest_names = [f"imported_{f.name}" for f in card_frames]
+    files = [{"source_name": src.name, "dest": f"raw/{dest}"}
+             for src, dest in zip(card_frames, dest_names)]
+    mcp = FakeMcp({
+        "library_import": {"ok": True, "outcome": "ok", "verb": "library.import",
+                           "data": {"job_slug": job_slug, "date": date, "files": files,
+                                    "imported": len(files)}},
+        "export_release": {"ok": True, "outcome": "ok", "verb": "export.release",
+                           "data": {"manifest_path": "manifest.json", "exported": len(files)}},
+    })
+    s.mcp = mcp
+    case = Case(id="r0066", layer="scenarios_export_release", tier="P0", mode="tool",
+                steps=[Step("library_import", {"source": "{card}", "job_slug": "{job_slug}",
+                                               "confirm": True}, 60.0, True),
+                       Step("export_release", {"job_slug": "{job_slug}", "preset": "client-proof",
+                                               "images": "{job_frames}", "confirm": True},
+                            60.0, True)],
+                expect=Expect("workflow"), body="olympus", frame_role="hero")
+    obs = execute.run_tool_case(s, case)
+    export_call = next(args for tool, args in mcp.calls if tool == "export_release")
+    from scouter import config as scouter_config
+
+    cfg = scouter_config.load(str(s.staged.config))
+    job_path = scouter_config.job_dir(cfg, date, job_slug)
+    expected = [str(job_path / f"raw/{dest}") for dest in dest_names]
+    assert export_call["images"] == expected
+    assert not any("card" in Path(p).parts for p in export_call["images"])
+    assert obs.blocked is None
+
+
+def test_library_import_partial_import_blocks_a_tool_mode_workflow_case(corpus, tmp_path,
+                                                                        monkeypatch):
+    """A partial import (the sanctioned `ImportIncomplete` case, moved here
+    unchanged from `exec_bulk`) blocks the case honestly instead of letting
+    a later step silently address a guessed path."""
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
+                                                                 "params": {}, "units": {}})
+    s = _session(corpus, tmp_path).open()
+    card_frames = list(s.staged.job_frames)
+    assert len(card_frames) >= 1
+    job_slug, date = "htc-x", "2026-05-24"
+    #: only the first staged frame is named in library_import's own files[]
+    files = [{"source_name": card_frames[0].name, "dest": "raw/only-one.orf"}]
+    mcp = FakeMcp({
+        "library_import": {"ok": True, "outcome": "ok", "verb": "library.import",
+                           "data": {"job_slug": job_slug, "date": date, "files": files,
+                                    "imported": 1}},
+    })
+    s.mcp = mcp
+    case = Case(id="r0066-partial", layer="scenarios_export_release", tier="P0", mode="tool",
+                steps=[Step("library_import", {"source": "{card}", "job_slug": "{job_slug}",
+                                               "confirm": True}, 60.0, True),
+                       Step("export_release", {"job_slug": "{job_slug}", "preset": "client-proof",
+                                               "images": "{job_frames}", "confirm": True},
+                            60.0, True)],
+                expect=Expect("workflow"), body="olympus", frame_role="hero")
+    obs = execute.run_tool_case(s, case)
+    assert obs.blocked is not None and "import_incomplete" in obs.blocked
+    assert [c.tool for c in obs.calls] == ["library_import"]  # export_release never ran

@@ -36,6 +36,15 @@ class Progress:
             self.doc = {"schema": SCHEMA, "stamp": run.stamp, "adapter": adapter_name,
                         "commit": commit, "started": _now(), "status": "running",
                         "current_case": None, "layers": {}, "parked": [], "eta_s": None}
+        #: (row 501 item H, fix round 1): a generate --subset's own record,
+        #: folded in once so it survives every later progress.json
+        #: save() -- "recorded in progress.json" (the ruling), read here
+        #: rather than duplicating the write in the runner.
+        if "subset" not in self.doc and run.subset_json.exists():
+            try:
+                self.doc["subset"] = json.loads(run.subset_json.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                pass
         self._rate: dict[str, float] = {}
 
     def layer(self, name: str, total: int, p0_total: int, live: bool) -> dict:

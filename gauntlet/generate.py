@@ -3,11 +3,13 @@ check ids, tiers and counts, and write cases.jsonl + generation.md."""
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 from gauntlet.adapter import Adapter, LayerSpec
 from gauntlet.case import Case
 from gauntlet.store import RunDir, atomic_write_text
+from gauntlet.subset import stratified_subset
 
 COUNT_TOLERANCE = 0.02
 
@@ -45,8 +47,19 @@ def check_layer(spec: LayerSpec, cases: list[Case]) -> LayerCount:
                       [c.id for c in cases if c.meta.get("unmapped")])
 
 
-def generate_all(adapter: Adapter, layers: list[str] | None = None) -> tuple[list[Case],
-                                                                             list[LayerCount]]:
+def generate_all(adapter: Adapter, layers: list[str] | None = None, *,
+                 subset: int | None = None, subset_layer: str | None = None,
+                 subset_keys: list[str] | None = None, seed: int = 0
+                 ) -> tuple[list[Case], list[LayerCount], dict | None]:
+    """(row 501 item H, fix round 1): when `subset` is given, `subset_layer`
+    is generated and VALIDATED in full first (check_layer runs against the
+    complete, unsubsetted list -- the count gate that catches a real
+    generation bug must never be weakened by subsetting), and only then
+    replaced by a deterministic, seeded, multi-axis stratified subset of
+    itself (`gauntlet.subset.stratified_subset`, keyed on
+    `case.meta[k] for k in subset_keys`). Every other layer is
+    untouched. Returns the subset's own record (for the caller to persist,
+    e.g. into progress.json) or None when no subset was requested."""
     specs = sorted(adapter.layers(), key=lambda s: s.order)
     if layers:
         unknown = set(layers) - {s.name for s in specs}
@@ -56,18 +69,33 @@ def generate_all(adapter: Adapter, layers: list[str] | None = None) -> tuple[lis
     all_cases: list[Case] = []
     counts: list[LayerCount] = []
     seen: set[str] = set()
+    subset_record: dict | None = None
     for spec in specs:
         cases = adapter.generate(spec.name)
-        dup = [c.id for c in cases if c.id in seen]
-        seen.update(c.id for c in cases)
-        if len(seen) != len(all_cases) + len(cases) or dup:
+        #: Duplicate detection over the FULL, unsubsetted `cases` -- both
+        #: within this layer's own batch and against every earlier layer.
+        #: (Fix round 1: subsetting removing a within-layer duplicate by
+        #: chance must never silently defeat this check -- it now runs
+        #: entirely before any subsetting happens.)
+        ids = [c.id for c in cases]
+        dup = sorted({i for i in ids if ids.count(i) > 1} | (set(ids) & seen))
+        if dup:
             raise GenerationError(f"duplicate case ids in {spec.name}: {dup[:5]}")
+        seen.update(ids)
         counts.append(check_layer(spec, cases))
+        if subset is not None and spec.name == subset_layer:
+            full_n = len(cases)
+            keys = subset_keys or []
+            key_fns = [(lambda c, k=k: c.meta.get(k)) for k in keys]
+            cases = stratified_subset(cases, subset, seed, key_fns)
+            subset_record = {"layer": subset_layer, "size": len(cases), "of": full_n,
+                             "seed": seed, "keys": keys}
         all_cases.extend(cases)
-    return all_cases, counts
+    return all_cases, counts, subset_record
 
 
-def generation_md(adapter: Adapter, counts: list[LayerCount], cases: list[Case]) -> str:
+def generation_md(adapter: Adapter, counts: list[LayerCount], cases: list[Case],
+                  subset_record: dict | None = None) -> str:
     lines = [f"# Generation: {adapter.name}", "",
              "| # | Layer | Formula | Generated | P0 | P1 | P2 | Live |",
              "|---|---|---|---|---|---|---|---|"]
@@ -79,6 +107,11 @@ def generation_md(adapter: Adapter, counts: list[LayerCount], cases: list[Case])
     total = sum(c.got for c in counts)
     lines += ["", f"**Total:** {total} cases "
               f"({sum(c.got for c in counts if c.spec.live)} live).", ""]
+    if subset_record:
+        lines += [f"**Subset:** layer `{subset_record['layer']}` generated "
+                  f"{subset_record['of']}, kept {subset_record['size']} "
+                  f"(stratified on {subset_record['keys']}, seed {subset_record['seed']}) "
+                  "-- the layer table above and this run's cases.jsonl differ by design.", ""]
     unmapped = [i for c in counts for i in c.unmapped_p2]
     if unmapped:
         lines += ["## P2 cases with no mapping", ""] + [f"- `{i}`" for i in unmapped] + [""]
@@ -88,10 +121,15 @@ def generation_md(adapter: Adapter, counts: list[LayerCount], cases: list[Case])
     return "\n".join(lines)
 
 
-def write_generation(run: RunDir, adapter: Adapter, layers: list[str] | None = None
-                     ) -> list[LayerCount]:
-    cases, counts = generate_all(adapter, layers)
+def write_generation(run: RunDir, adapter: Adapter, layers: list[str] | None = None, *,
+                     subset: int | None = None, subset_layer: str | None = None,
+                     subset_keys: list[str] | None = None, seed: int = 0) -> list[LayerCount]:
+    cases, counts, subset_record = generate_all(adapter, layers, subset=subset,
+                                                subset_layer=subset_layer,
+                                                subset_keys=subset_keys, seed=seed)
     run.ensure()
     run.write_cases(cases)
-    atomic_write_text(run.generation_md, generation_md(adapter, counts, cases))
+    atomic_write_text(run.generation_md, generation_md(adapter, counts, cases, subset_record))
+    if subset_record:
+        atomic_write_text(run.subset_json, json.dumps(subset_record) + "\n")
     return counts

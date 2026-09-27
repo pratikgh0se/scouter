@@ -267,13 +267,17 @@ def test_run_bulk_case_blocks_on_a_partial_import(tmp_path):
 
 
 def test_imported_frames_raises_import_incomplete_naming_the_missing_source(tmp_path):
+    """`_imported_frames`/`ImportIncomplete` live in `tests.gauntlet.execute`
+    (shared with `run_tool_case`), not re-exported here."""
+    from tests.gauntlet import execute
+
     envelope = {"ok": True, "data": {
         "job_slug": "htc-x", "date": "2026-05-24",
         "files": [{"source_name": "DUP0000_H.ORF", "dest": "raw/a.orf"}]}}
     session = SimpleNamespace(staged=SimpleNamespace(config=tmp_path / "config.json"))
-    with pytest.raises(exec_bulk.ImportIncomplete) as exc_info:
-        exec_bulk._imported_frames(session, envelope,
-                                   [Path("card/DUP0000_H.ORF"), Path("card/DUP0001_H.ORF")])
+    with pytest.raises(execute.ImportIncomplete) as exc_info:
+        execute._imported_frames(session, envelope,
+                                 [Path("card/DUP0000_H.ORF"), Path("card/DUP0001_H.ORF")])
     assert "import_incomplete" in str(exc_info.value)
     assert "DUP0001_H.ORF" in str(exc_info.value)
 

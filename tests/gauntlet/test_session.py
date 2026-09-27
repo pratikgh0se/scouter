@@ -1,6 +1,8 @@
 """Session + tool-mode execution against fakes: no darktable, no MCP server."""
 
 
+import time
+
 import pytest
 
 from scouter.core.dtprocess import LaunchError
@@ -30,11 +32,18 @@ class FakeDt:
     def owned(self):
         return self._owned
 
-    def launch(self, frame, library, log, env=None):
+    def launch(self, frame, library, log, **kw):
+        #: (fix round 1, Opus finding 2): **kw for forward compatibility
+        #: with fix/htc-hang-recovery's DtControl.launch(..., env=...) --
+        #: a future merge must not break this fake over an unrelated kwarg.
         self.launches += 1
         self.launched.append(frame)
 
-    def ready(self, timeout_s):
+    def ready(self, timeout_s, *, stop_if=None):
+        #: (fix round 2, Pratik's ruling 4): stop_if for forward
+        #: compatibility with `DtControl.ready`'s new keyword; this plain
+        #: fake never calls it (nothing here spans real time to poll
+        #: during) -- `SlowLockDt` below does.
         return {"ready": self._ready.pop(0) if self._ready else True}
 
     def health(self):
@@ -128,7 +137,7 @@ class LaunchFailDt(FakeDt):
         super().__init__(**kw)
         self.fails = fails
 
-    def launch(self, frame, library, log, env=None):
+    def launch(self, frame, library, log, **kw):
         self.launches += 1
         if self.launches <= self.fails:
             raise LaunchError(f"could not read the start time of darktable pid {self.launches}")
@@ -142,6 +151,213 @@ def test_launch_error_is_a_failed_attempt(corpus, tmp_path):
     with pytest.raises(sess.SessionBlocked, match="LaunchError: could not read the start time"):
         _session(corpus, tmp_path, dt).open()
     assert dt.launches == 2
+
+
+def test_stage_frames_under_role_blind_directories(tmp_path):
+    """(row 501 item F, fix round 1, Opus finding 1, BLOCKER): the earlier
+    fix (a symlink alias inside agent.py) broke darktable's own path
+    matching and still leaked the real, role-named path through every MCP
+    envelope's own `path` field. Staging every role under a hashed,
+    role-blind directory in stage() itself removes the leak at its one
+    source: the library, the envelopes and the agent's prompt all ever see
+    this one path."""
+    from tests.gauntlet.corpus import ROLES
+
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "H.ORF").write_bytes(b"raw")
+    roles = {r: "H.ORF" for r in ROLES}
+    doc = {"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {"olympus": roles}}
+    corpus = Corpus(doc, trial)
+    staged = sess.stage(corpus, "olympus", tmp_path / "s1")
+    for role, path in staged.frames.items():
+        rel = str(path.relative_to(tmp_path / "s1"))
+        for token in ROLES:
+            assert token not in rel, (role, token, rel)
+    # the library's own staged path is real and readable -- not a symlink,
+    # not a copy under a second, hidden directory tree.
+    assert staged.frames["warm_cast"].is_file() and not staged.frames["warm_cast"].is_symlink()
+    assert staged.frames["warm_cast"].read_bytes() == b"raw"
+
+
+class LockedDt(FakeDt):
+    """launch() APPENDS a line to darktable.log on every call, as
+    `dtprocess.launch` genuinely does (`open(log_path, "ab")`) -- across the
+    whole session, not one log per launch. (Fix round 1, Opus finding 2:
+    the first cut of this fake used `write_text`, which OVERWRITES on every
+    call and so could never reproduce the sticky-log bug it was meant to
+    catch.) `lines` is one string per call, in order; the last one repeats
+    once exhausted. `**kw` for forward compatibility with
+    fix/htc-hang-recovery's `DtControl.launch(..., env=...)`."""
+
+    def __init__(self, *lines, **kw):
+        super().__init__(**kw)
+        self.lines = list(lines)
+
+    def launch(self, frame, library, log, **kw):
+        super().launch(frame, library, log, **kw)
+        line = self.lines.pop(0) if len(self.lines) > 1 else (self.lines[0] if self.lines else "")
+        if line:
+            with log.open("a", encoding="utf-8") as f:
+                f.write(line)
+
+
+#: darktable's own real wording (fix round 1, Opus finding 2): "[init] the
+#: database lock file contains a pid that seems to be alive in your
+#: system: 69648". The first cut's test used invented wording ("contains a
+#: pid 69648 that seems...") that happened to satisfy the old, too-narrow
+#: regex -- never the real one.
+REAL_LOCK_LINE = ("2026-09-26 13:45:06 [init] the database lock file contains a pid "
+                  "that seems to be alive in your system: 69648\n")
+
+
+def test_library_lock_in_the_log_stops_the_session_fast(corpus, tmp_path):
+    """The session fails fast on the first attempt (never burns a second
+    doomed launch) with a typed reason naming the offending pid, parsed
+    from darktable's REAL wording."""
+    dt = LockedDt(REAL_LOCK_LINE)
+    with pytest.raises(sess.LibraryLocked, match="library_lock 69648"):
+        _session(corpus, tmp_path, dt).open()
+    assert dt.launches == 1
+    assert dt._ready == []  # ready() ran once; the post-ready check caught the lock
+
+
+def test_locked_launch_quits_before_raising_no_orphan(corpus, tmp_path):
+    """A locked launch must not leave an owned darktable running."""
+    dt = LockedDt(REAL_LOCK_LINE)
+    with pytest.raises(sess.LibraryLocked):
+        _session(corpus, tmp_path, dt).open()
+    assert dt.terminated == [False]  # terminate(responsive=False), same as abort()'s own path
+
+
+def test_sqlite_database_is_locked_line_is_also_caught(corpus, tmp_path):
+    dt = LockedDt("sqlite3_step: database is locked\n")
+    with pytest.raises(sess.LibraryLocked, match="library_lock unknown") as exc_info:
+        _session(corpus, tmp_path, dt).open()
+    assert "library_lock unknown" in str(exc_info.value)
+
+
+def test_lock_is_not_sticky_a_clean_relaunch_after_a_locked_one_succeeds(corpus, tmp_path):
+    """(fix round 1, Opus finding 2, the sticky-log bug, reproduced then
+    fixed): darktable.log is append-mode across the whole session. A first
+    launch that logs the real lock line must not poison a LATER, clean
+    launch that reached gui_ready and appended nothing more -- only the
+    bytes THIS launch appended are ever in scope. Probe: a first session
+    logs the real lock line and fails; a second session against the SAME
+    log file (append mode -- the old line is still sitting there) launches
+    cleanly and must succeed, not inherit the first session's own lock."""
+    dt = LockedDt(REAL_LOCK_LINE, "")  # session 1: locked; session 2: a clean launch
+    s1 = _session(corpus, tmp_path, dt)
+    with pytest.raises(sess.LibraryLocked):
+        s1.open()
+    s2 = _session(corpus, tmp_path, dt)  # same tmp_path -> same root -> same darktable.log
+    s2.open()
+    assert dt.launches == 2
+
+
+def test_no_lock_line_launches_normally(corpus, tmp_path):
+    """Control: a plain log (or no log at all, FakeDt's default) never
+    trips the breaker."""
+    dt = LockedDt("darktable started fine\n")
+    _session(corpus, tmp_path, dt).open()
+    assert dt.launches == 1
+
+
+class SlowLockDt(FakeDt):
+    """(row 501 item D, fix round 2, Pratik's ruling 4, Opus re-review
+    finding 4): `launch()` starts the process WITHOUT writing the lock line
+    -- exactly like real darktable, whose `dt_init`/database check (and so
+    the lock-file error) lands well after `dtprocess.launch` itself
+    returns, during what would otherwise be the 30 s `gui_ready` wait.
+    `ready()` stands in for `dtprocess.wait_gui_ready`'s own poll loop: it
+    writes the lock line partway through its own polling and calls
+    `stop_if()` every poll, the same cadence the real fix wires through
+    `session._launch` -> `DtControl.ready(stop_if=...)` ->
+    `dtprocess.wait_gui_ready`. `poll_s` is real wall-clock (`time.sleep`)
+    so a caller measuring elapsed time with `time.monotonic()` sees the
+    genuine saving."""
+
+    def __init__(self, lock_line: str, *, write_after_polls: int = 2, poll_s: float = 0.05,
+                 **kw):
+        super().__init__(**kw)
+        self.lock_line = lock_line
+        self.write_after_polls = write_after_polls
+        self.poll_s = poll_s
+        self._log_path = None
+        self.ready_calls = 0
+
+    def launch(self, frame, library, log, **kw):
+        super().launch(frame, library, log, **kw)
+        self._log_path = log
+
+    def ready(self, timeout_s, *, stop_if=None):
+        self.ready_calls += 1
+        for i in range(int(timeout_s / self.poll_s) + 1):
+            if i == self.write_after_polls and self._log_path is not None:
+                with self._log_path.open("a", encoding="utf-8") as f:
+                    f.write(self.lock_line)
+            if stop_if is not None and stop_if():
+                return {"ready": False, "stopped": True}
+            time.sleep(self.poll_s)
+        return {"ready": False}
+
+
+def test_lock_line_written_during_the_ready_wait_is_caught_within_about_a_second(
+        corpus, tmp_path):
+    """RED (before the fix): the lock check only ran once before the ready
+    wait and once after `dt.ready(LAUNCH_READY_S)` returns -- a lock line
+    darktable writes only DURING that wait (the real, common timing: the
+    process is running well before `dt_init` gets to the database check)
+    was invisible until the full 30 s elapsed. GREEN: `stop_if` is checked
+    once per ready poll (~poll_s apart), so a line written on the SECOND
+    poll is caught almost immediately -- proven here by a real elapsed-time
+    bound, not a mocked clock, against a fake whose own `poll_s` (0.05 s)
+    stands in for `wait_gui_ready`'s real ~0.5 s cadence."""
+    dt = SlowLockDt(REAL_LOCK_LINE, write_after_polls=2, poll_s=0.05)
+    t0 = time.monotonic()
+    with pytest.raises(sess.LibraryLocked, match="library_lock 69648"):
+        _session(corpus, tmp_path, dt).open()
+    elapsed = time.monotonic() - t0
+    assert elapsed < 5.0, elapsed
+    assert dt.ready_calls == 1  # one ready() call; stop_if caught it mid-poll, no retry
+    assert dt.launches == 1  # no second, doomed launch attempt either
+
+
+def test_dtcontrol_ready_passes_stop_if_through_to_wait_gui_ready(monkeypatch):
+    """`_launch`'s early lock catch only works if `DtControl.ready` actually
+    forwards its `stop_if` to `dtprocess.wait_gui_ready` -- nothing else
+    exercises that one link (`SlowLockDt` fakes `ready()` itself)."""
+    from scouter.core import dtprocess
+
+    seen = {}
+    monkeypatch.setattr(dtprocess, "wait_gui_ready",
+                        lambda timeout_s, *, stop_if=None: seen.update(
+                            timeout_s=timeout_s, stop_if=stop_if) or {"ready": True})
+    marker = lambda: False  # noqa: E731 - identity is the whole point here
+    sess.DtControl().ready(12.0, stop_if=marker)
+    assert seen == {"timeout_s": 12.0, "stop_if": marker}
+
+
+def test_stage_job_imports_the_staged_card_into_the_session_slug(corpus, tmp_path):
+    """(row 501 item I): a real library_import of the staged card into the
+    session's own job slug, so library_jobs/export_release find a real job
+    (night-1 rank 11: r0066's agent found library_jobs empty)."""
+    mcp = FakeMcp({"library_import": {"ok": True, "outcome": "ok", "data": {}}})
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    s.stage_job()
+    assert s.job_stage_error is None
+    tool, args = mcp.calls[-1]
+    assert tool == "library_import"
+    assert args["job_slug"] == s.staged.vars["job_slug"]
+    assert args["source"] == str(s.staged.card)
+
+
+def test_stage_job_records_a_failed_import_without_raising(corpus, tmp_path):
+    mcp = FakeMcp({"library_import": {"ok": False, "outcome": "error",
+                                      "error": {"code": "no_frames"}}})
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    s.stage_job()  # never raises
+    assert s.job_stage_error == "no_frames"
 
 
 def test_refreshing_a_role_twice_never_reuses_a_contaminated_dir(corpus, tmp_path):

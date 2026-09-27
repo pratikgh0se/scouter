@@ -1,0 +1,27 @@
+{
+  "about": "Zenkai Rules Z1 intent examples: the out-of-scope agent policy is refuse-and-offer-only (Pratik's ruling, row 501 item G, resolving night-1 triage rank 4's three-way question -- option (a), not the disclosed-approximation or enable-the-real-module options). Fix round 1 (Opus review finding 6): evaluate.py now READS the policy meta scenarios.py:agent_case writes (out_of_scope_policy/substitute_ok) and emits the ruling's own outcome name, unrequested_edit -- not the generic unexpected_edit -- and a bare refusal with no offered alternative (policy.offer_markers) scores needs_review, not a silent pass. Run by tests/intent/test_out_of_scope_policy_intent.py against the REAL generator's r0019 case (an actual out-of-scope request), not a hand-built one. Two oracles per example: the verdict's `score` (pass/partial/fail) and its `outcome` label.",
+  "subject": "gauntlet/evaluate.py:evaluate, kind == \"refuse\" (agent mode) + tests/gauntlet/layers/scenarios.py:agent_case's out_of_scope_policy meta",
+  "examples": [
+    {
+      "id": "write-before-the-user-picks-fails-unrequested-edit",
+      "input": {"agent_text": "I can't sharpen with Scouter's own tools, but I can enable it at darktable's defaults -- want me to?",
+                "wrote": true},
+      "expect": {"status": "fail", "outcome": "unrequested_edit"},
+      "source": "night-1 r0019 turn 2 / r0025 / r0097 shape: a write made before the user answers the offered options, on an out-of-scope request -- the ruling names this failure unrequested_edit, and evaluate.py now emits that exact name"
+    },
+    {
+      "id": "refuse-and-offer-with-no-write-passes",
+      "input": {"agent_text": "I can't sharpen with Scouter's own tools. I can enable darktable's own sharpen module at its defaults if you'd like, or leave it as is.",
+                "wrote": false},
+      "expect": {"status": "pass", "outcome": "correct_refusal"},
+      "source": "control example: refuse and offer, no write, is the passing shape the ruling keeps"
+    },
+    {
+      "id": "bare-refusal-with-no-offer-needs-review",
+      "input": {"agent_text": "I can't sharpen with Scouter's own tools.",
+                "wrote": false},
+      "expect": {"status": "partial", "outcome": "needs_review"},
+      "source": "fix round 1, Opus finding 6: 'offer' was not checked -- a bare refusal that names no alternative is not the ruling's 'refuse AND offer' shape and must not score a silent pass"
+    }
+  ]
+}

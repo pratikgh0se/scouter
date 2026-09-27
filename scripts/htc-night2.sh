@@ -55,15 +55,11 @@ NIGHT1_PIDFILE="$RUNS_ROOT/night1/runner.pid"
 if [[ -e "$NIGHT1_PIDFILE" ]] && kill -0 "$(cat "$NIGHT1_PIDFILE")" 2>/dev/null; then
   die "a night-1 runner is still running (pid $(cat "$NIGHT1_PIDFILE")); let it finish or stop it first"
 fi
-# N3 (review), fix round 2 (review R2): the two pidfile checks above only
-# catch this script's own launchers -- a smoke run or a manual `gauntlet
-# run --stamp ...` invoked outside either launcher would still race
-# darktable. Catch it directly. The real launcher's argv is
-# `python -c '...from gauntlet.cli import main; sys.exit(main(sys.argv[1:]))'
-# run --stamp ...` (run_pass below) -- "gauntlet" and "run --stamp" are NOT
-# adjacent, so the pattern must allow anything in between
-# (`gauntlet(\.cli)? run --stamp` cannot match it; live-tested against a
-# running night-1 runner's real argv).
+# The two pidfile checks above only catch this script's own launchers -- a
+# smoke run or a manual `gauntlet run --stamp ...` invoked outside either
+# launcher would still race darktable. Catch it directly: the real
+# launcher's argv has "gauntlet" and "run --stamp" NOT adjacent, so the
+# pattern must allow anything in between.
 if pgrep -f "gauntlet.*run --stamp" >/dev/null 2>&1; then
   pgrep -fl "gauntlet.*run --stamp" || true
   die "a gauntlet runner (smoke or manual) is already running outside this launcher"
@@ -83,8 +79,23 @@ cd "$REPO" || die "cannot cd $REPO"
 export PYTHONPATH="$REPO"
 
 if [[ ! -f "$RUN_DIR/cases.jsonl" ]]; then
-  "$PY" -m gauntlet generate --stamp "$STAMP" || die "generate failed" 2
-  grep -m1 -i "total\|cases" "$RUN_DIR/generation.md" || true   # expect 5,167
+  # Night 2 runs a STRATIFIED 40-case subset of scenarios_agent (every
+  # problem class and genre represented at least once), not the full 160.
+  # The seed is derived from the stamp's own text DETERMINISTICALLY (a
+  # sha1 of the stamp string, truncated to 8 hex digits and read as a
+  # base-16 integer -- `--seed` is `type=int`), so a resume (cases.jsonl
+  # already exists -> this block never re-runs) always sees the exact same
+  # subset, and regenerating the same stamp always derives the same seed
+  # too -- unlike `date -j -f '%Y%m%d' "${STAMP#night2-}" +%s`, which fills
+  # hour/minute/second from the current clock and so disagrees between two
+  # calls seconds apart for the same stamp.
+  SUBSET_SEED="${HTC_NIGHT2_SUBSET_SEED:-$((16#$(printf '%s' "$STAMP" | shasum | cut -c1-8)))}"
+  "$PY" -m gauntlet generate --stamp "$STAMP" \
+    --subset "${HTC_NIGHT2_SUBSET_SIZE:-40}" --subset-layer scenarios_agent \
+    --subset-keys class,genre --seed "$SUBSET_SEED" || die "generate failed" 2
+  # The subset (40 of 160 scenarios_agent cases) shrinks the total well
+  # below the full run's own count -- no fixed number to grep for here.
+  grep -m1 -i "total\|cases" "$RUN_DIR/generation.md" || true
 fi
 
 caffeinate -i -w $$ &   # keep the laptop awake for this script's lifetime

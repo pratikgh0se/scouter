@@ -120,6 +120,25 @@ def _workflow(plan: RequestPlan, req: dict) -> tuple[list[Step], Expect]:
         return ([step("cull_propose", 30.0, images=[hero])],
                 Expect("workflow", [Check("envelope", step=0, target={
                     "path": "ok", "op": "eq", "value": True})]))
+    if v == "export_release":
+        #: (row 501 item I, Pratik's ruling 501(3), Opus review finding 4):
+        #: r0066's "client proof gallery" is the job-level release path
+        #: export_run never exercises -- a real staged job (library_import),
+        #: then export_release with the client-proof preset and a checksum
+        #: manifest. `images="{job_frames}"` bypasses export.release's own
+        #: rating-based selection (an empty selection is a `usage` refusal;
+        #: the freshly imported corpus frames carry no rating at all) --
+        #: every staged job frame is explicitly named instead.
+        return ([step("library_import", 60.0, source="{card}", job_slug="{job_slug}",
+                      confirm=True),
+                 step("export_release", 60.0, job_slug="{job_slug}", preset="client-proof",
+                      images="{job_frames}", confirm=True)],
+                Expect("workflow", [
+                    Check("envelope", step=1, target={"path": "ok", "op": "eq", "value": True}),
+                    Check("envelope", step=1,
+                         target={"path": "data.manifest_path", "op": "exists"}),
+                    Check("envelope", step=1,
+                         target={"path": "data.exported", "op": "gte", "value": 1})]))
     raise ValueError(f"no workflow plan for {v!r}")
 
 
@@ -216,21 +235,108 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
                 meta=meta)
 
 
+#: (row 501 item B, fix round 1, Opus finding 3): the envelope `verb` ids
+#: (`scouter.registry`) each workflow verb's own MCP tool answers with.
+#: `export` covers both the generic export_run path and r0066's own
+#: export_release verb (item I) -- either genuinely fulfils "export this".
+_WORKFLOW_VERB_IDS = {
+    "cull": {"cull.propose"},
+    "export": {"export.run", "export.release"},
+    "export_release": {"export.release"},
+    "preset_save": {"preset.save"},
+}
+
+
+def _workflow_agent_expect(verb: str) -> Expect:
+    """(row 501 item B, night-1 triage rank 10, SCA-hollow-workflow-pass;
+    fix round 1, Opus finding 3): `agent_case`'s workflow Expect used to
+    carry `checks=[]` for every verb -- a genuine sidecar-unchanged
+    expectation (cull/export) then scores `verified` with ZERO MCP calls
+    and nothing else asserted (sca-r0159: a cull request the agent answered
+    with clarifying questions only, never calling `cull_propose`, still
+    passed). A workflow case whose expectation carries no checks can never
+    score `verified` again: every verb below returns at least one, so an
+    r0159-style hollow pass is impossible by construction, and an
+    unresolvable verb fails generation outright rather than silently
+    reaching evaluate.py with nothing to check.
+
+    Fix round 1 (Opus finding 3): the FIRST cut's generic check ("the
+    agent's last recorded call answered ok") only ever blocked the
+    zero-call case -- a clarify-only answer whose last call is any
+    successful READ (`scout_stats`, `library_jobs`,
+    `darkroom_describe_history`, ...) still passed (r0159/r0066/r0356's own
+    night-1 shape). `cull`/`export`/`preset_save` now check the envelope
+    `verb` field against `_WORKFLOW_VERB_IDS` (`gauntlet.evaluate`'s new
+    "verb" check kind), scanning every call, not only the last one.
+    `repeat_more` has no single canonical tool, so it checks any
+    successful WRITE call instead (`require_write`).
+
+    `undo` is verified by `gauntlet.evaluate`'s "undo" check kind:
+    history_end decremented OR params restored (OR, not tied to a sidecar
+    change) -- a fresh frame with nothing of the agent's own to undo may
+    never rewrite the sidecar at all, so the sidecar's own `changed` field
+    is left unset for this verb (no `_sidecar_miss` gate)."""
+    if verb == "undo":
+        return Expect("workflow", [Check("undo", target={})], None)
+    if verb == "repeat_more":
+        checks = [Check("verb", target={"require_write": True})]
+    elif verb in _WORKFLOW_VERB_IDS:
+        checks = [Check("verb", target={"any_of": sorted(_WORKFLOW_VERB_IDS[verb])})]
+    else:
+        raise ValueError(f"no agent workflow expectation for verb {verb!r}")
+    changed = verb not in ("cull", "export", "export_release")
+    expect = Expect("workflow", checks, {"changed": changed})
+    if not expect.checks:  # defence in depth: never reach evaluate.py hollow
+        raise ValueError(f"workflow agent expectation for verb {verb!r} has no checks")
+    return expect
+
+
+#: (row 501 item I, Pratik's ruling): requests whose in-scope workflow
+#: answer needs a real staged job to point at (AgentSession.stage_job()),
+#: not just the frames stage() already copies -- today only the client
+#: proof gallery (r0066: clarify, then export_release's client-proof
+#: preset on the staged job).
+STAGE_JOB_REQUEST_IDS = frozenset({"r0066"})
+
+
 def agent_case(req: dict, plan: RequestPlan, tax: Taxonomy, tier: str) -> Case:
     cmap = tax.check_map
     role = cmap["role_for_problem"][req["problem"]]
     meta = {"sentence": req["sentence"], "class": plan.klass, "genre": req["genre"],
             "followups": list(req["followups"])}
+    if req["id"] in STAGE_JOB_REQUEST_IDS:
+        meta["stage_job"] = True
+    if plan.klass in ("impossible", "out"):
+        #: (row 501 item C, night-1 triage rank 3, SCA-refuse-case-followup-
+        #: presupposes-edit): a scripted follow-up (e.g. r0019's "That's too
+        #: crunchy now, back it off a bit.") presupposes an edit was made --
+        #: scripting it after an honest, no-write refusal induces exactly
+        #: the edit the refusal correctly declined to make. Agent mode has
+        #: no per-request follow-up wording of its own (unlike tool mode's
+        #: dry-run "a bit" steps), so the only sound choice for a case whose
+        #: own turn 1 is scored `refuse` is no follow-up turn at all.
+        meta["followups"] = []
     # (final fix C1): the case has no steps; its hard cap is every claude turn
     # (initial + each follow-up) at its timeout plus the usual 30 s slack.
     meta["cap_s"] = (1 + len(meta["followups"])) * (AGENT_TURN_TIMEOUT_S + 30.0)
     if plan.klass in ("impossible", "out"):
         meta["roadmap_key"] = nearest_phrase(req, tax)[1]
         expect = Expect("refuse")
+        if plan.klass == "out":
+            #: (row 501 item G, Pratik's ruling): the out-of-scope policy is
+            #: "refuse and offer only" -- option (a) of triage rank 4's
+            #: three-way question. The oracle itself is unchanged
+            #: (evaluate.py's existing `kind == "refuse"` branch already
+            #: fails any write with no substitute_ok as `unexpected_edit`);
+            #: this only makes the ruling explicit and machine-readable on
+            #: the case, so a write before the user picks between offered
+            #: options is a documented policy failure
+            #: (`unrequested_edit`), not an accident of the default.
+            meta["out_of_scope_policy"] = "refuse_and_offer_only"
+            meta["substitute_ok"] = False
+            meta["unrequested_write_reason"] = "unrequested_edit"
     elif plan.klass == "workflow":
-        expect = Expect("workflow", [], {"changed": plan.workflow_verb not in ("cull", "export")})
-        if plan.workflow_verb == "undo":
-            expect = Expect("workflow", [], {"changed": True})
+        expect = _workflow_agent_expect(plan.workflow_verb)
     else:
         # Rows 458/461: agent mode drives the same product, so the same
         # preset-4 WB refusal applies -- an agent asked to warm/cool/tint an

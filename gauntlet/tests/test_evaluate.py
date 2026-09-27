@@ -1,6 +1,6 @@
 from gauntlet.adapter import CallRecord, Observation
 from gauntlet.case import Case, Check, Expect, Step
-from gauntlet.evaluate import POINTS, Policy, canonical_outcome, evaluate
+from gauntlet.evaluate import FAIL, OUTCOMES, POINTS, Policy, canonical_outcome, evaluate
 
 POLICY = Policy(
     refusal_codes=frozenset({"usage", "value_unknown", "not_pinned"}),
@@ -1264,3 +1264,204 @@ def test_an_untagged_two_check_workflow_case_keeps_todays_partial():
                       extra={"a": True, "b": False})
     v = evaluate(case, obs, POLICY)
     assert (v.score, v.outcome) == ("partial", "partial")
+
+
+# -- row 501 item B (fix round 1, Opus finding 3): the "verb" and "undo" ----
+# check kinds, and the workflow needs_review fallback for a clarify-only
+# conversation with no verb/write call.
+
+def _agent_workflow_case(checks, sidecar):
+    return Case(id="sca-c", layer="scenarios_agent", tier="P0", mode="agent", steps=[],
+               expect=Expect("workflow", checks, sidecar), meta={})
+
+
+def test_verb_check_rejects_a_successful_read_that_is_not_the_workflow_verb():
+    """Night-1 r0159 (cull)/r0066 (export)/r0356 (export) shape: the agent's
+    LAST call is a successful READ, never the tool this workflow verb
+    needs. The old generic check ("last call answered ok") scored this
+    verified; the verb check must not."""
+    check = Check("verb", target={"any_of": ["cull.propose"]})
+    case = _agent_workflow_case([check], {"changed": False})
+    calls = [CallRecord("scout_stats", {}, {"ok": True, "outcome": "ok", "verb": "scout.stats"})]
+    obs = Observation(calls=calls, before=_snap("a"), after=_snap("a"))
+    v = evaluate(case, obs, POLICY)
+    assert v.score != "pass" and v.outcome != "verified", v
+
+
+def test_verb_check_rejects_zero_calls_r0159_hollow_pass_is_impossible():
+    check = Check("verb", target={"any_of": ["cull.propose"]})
+    case = _agent_workflow_case([check], {"changed": False})
+    obs = Observation(calls=[], before=_snap("a"), after=_snap("a"))
+    v = evaluate(case, obs, POLICY)
+    assert v.score != "pass" and v.outcome != "verified", v
+    assert v.outcome == "needs_review", v  # clarify-only, no verb/write call at all
+
+
+def test_clarify_only_needs_review_reaches_r0348_r0364_shape_before_sidecar_gate():
+    """(row 501 item B, fix round 2, Pratik's ruling 3, Opus re-review
+    finding 3): `preset_save` (r0348) and `repeat_more` (r0364, "More.")
+    both carry `sidecar={"changed": True}`. With the sidecar-must-change
+    gate checked BEFORE the clarify-only fallback (the fix round 1 bug), a
+    clarify-only conversation (no calls at all) hit `_sidecar_miss`'s
+    "sidecar expected to change but did not" and returned a hard `failed`
+    -- the clarify-only needs_review branch was never reached. GREEN: the
+    clarify-only branch runs first."""
+    require_write_check = Check("verb", target={"require_write": True})
+    case = _agent_workflow_case([require_write_check], {"changed": True})
+    obs = Observation(calls=[], before=_snap("a"), after=_snap("a"))
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome != "failed", v
+    assert v.outcome == "needs_review", v
+
+    any_of_check = Check("verb", target={"any_of": ["preset.save"]})
+    case2 = _agent_workflow_case([any_of_check], {"changed": True})
+    obs2 = Observation(calls=[], before=_snap("a"), after=_snap("a"))
+    v2 = evaluate(case2, obs2, POLICY)
+    assert v2.outcome == "needs_review", v2
+
+    # A real write that is not the workflow's own verb (not clarify-only:
+    # something WAS written) must still fall through to the sidecar gate,
+    # not needs_review -- the fix must not swallow every failure.
+    calls_wrote_something_else = [
+        CallRecord("darkroom_set", {}, {"ok": True, "verb": "darkroom.set"}, write=True)]
+    obs3 = Observation(calls=calls_wrote_something_else, before=_snap("a"), after=_snap("a"))
+    v3 = evaluate(case2, obs3, POLICY)
+    assert v3.outcome != "needs_review", v3
+
+
+def test_verb_check_passes_on_the_real_verb_even_if_not_the_last_call():
+    """The agent reads state first (a real, sensible habit), then calls the
+    verb: the verb check must not require it to be the LAST call."""
+    check = Check("verb", target={"any_of": ["export.release", "export.run"]})
+    case = _agent_workflow_case([check], {"changed": False})
+    calls = [CallRecord("library_jobs", {}, {"ok": True, "verb": "library.jobs"}),
+             CallRecord("export_release", {}, {"ok": True, "verb": "export.release"}),
+             CallRecord("darkroom_status", {}, {"ok": True, "verb": "darkroom.status"})]
+    obs = Observation(calls=calls, before=_snap("a"), after=_snap("a"))
+    v = evaluate(case, obs, POLICY)
+    assert v.score == "pass" and v.outcome == "verified", v
+
+
+def test_repeat_more_verb_check_requires_a_real_write_not_any_ok_call():
+    check = Check("verb", target={"require_write": True})
+    case = _agent_workflow_case([check], {"changed": True})
+    # a read-only conversation: no write call anywhere
+    calls = [CallRecord("darkroom_get", {}, {"ok": True, "verb": "darkroom.get"})]
+    obs = Observation(calls=calls, before=_snap("a", **{"exposure.exposure": 1.0}),
+                      after=_snap("a", **{"exposure.exposure": 1.0}))
+    v = evaluate(case, obs, POLICY)
+    assert v.score != "pass", v
+    # a real write call passes
+    calls_ok = [CallRecord("darkroom_say", {}, {"ok": True, "verb": "darkroom.say"}, write=True)]
+    obs_ok = Observation(calls=calls_ok, before=_snap("a", **{"exposure.exposure": 1.0}),
+                         after=_snap("b", **{"exposure.exposure": 1.5}))
+    v2 = evaluate(case, obs_ok, POLICY)
+    assert v2.score == "pass" and v2.outcome == "verified", v2
+
+
+def test_undo_check_verified_by_history_end_decrement_no_sidecar_gate():
+    """Ruling: r0340/r0344/r0368-shape undo cases are verified by
+    history_end DECREMENT or params restored -- not gated on a sidecar
+    change a fresh frame with nothing of the agent's own to undo may never
+    produce."""
+    case = _agent_workflow_case([Check("undo", target={})], None)
+    calls = [CallRecord("darkroom_undo_last", {}, {"ok": True, "verb": "darkroom.undo_last"},
+                        write=True)]
+    before = {"fingerprint": "a", "history_end": 3, "params": {"exposure.exposure": 1.0}}
+    after = {"fingerprint": "a", "history_end": 2, "params": {"exposure.exposure": 1.0}}
+    obs = Observation(calls=calls, before=before, after=after)
+    v = evaluate(case, obs, POLICY)
+    assert v.score == "pass" and v.outcome == "verified", v
+
+
+def test_undo_check_needs_review_with_zero_calls_hollow_pass_is_impossible():
+    """(row 501 item B, fix round 2, Pratik's ruling 1, Opus re-review
+    finding 1): the old check only compared before/after snapshots, which
+    are trivially equal to themselves when nothing was called at all --
+    r0340/r0344/r0368 scored `verified` with zero calls, one successful
+    read, or a no-op undo. A successful `darkroom_undo_last` call is now
+    required before `decremented OR restored` is even evaluated; with none,
+    and no write call at all, the workflow needs_review fallback applies
+    (the same shape as the verb check's own zero-call case) -- never a
+    silent pass."""
+    case = _agent_workflow_case([Check("undo", target={})], None)
+    before = {"fingerprint": "a", "history_end": 1, "params": {"exposure.exposure": 1.0}}
+    after = {"fingerprint": "a", "history_end": 1, "params": {"exposure.exposure": 1.0}}
+    obs = Observation(calls=[], before=before, after=after)
+    v = evaluate(case, obs, POLICY)
+    assert v.score != "pass" and v.outcome != "verified", v
+    assert v.outcome == "needs_review", v
+
+    # A successful READ (never an undo call) must not pass either.
+    read_calls = [CallRecord("library_jobs", {}, {"ok": True, "verb": "library.jobs"})]
+    obs_read = Observation(calls=read_calls, before=before, after=after)
+    v_read = evaluate(case, obs_read, POLICY)
+    assert v_read.score != "pass" and v_read.outcome == "needs_review", v_read
+
+
+def test_undo_check_passes_on_a_real_undo_call_that_restores_params():
+    """A genuine, successful `darkroom_undo_last` call (verb
+    `darkroom.undo_last`, envelope `ok`) that restores the snapshotted
+    params -- the guard above lets `decremented OR restored` decide, same
+    as before the fix."""
+    case = _agent_workflow_case([Check("undo", target={})], None)
+    calls = [CallRecord("darkroom_undo_last", {}, {"ok": True, "verb": "darkroom.undo_last"},
+                        write=True)]
+    before = {"fingerprint": "a", "history_end": 1, "params": {"exposure.exposure": 1.0}}
+    after = {"fingerprint": "a", "history_end": 1, "params": {"exposure.exposure": 1.0}}
+    obs = Observation(calls=calls, before=before, after=after)
+    v = evaluate(case, obs, POLICY)
+    assert v.score == "pass" and v.outcome == "verified", v
+
+
+def test_undo_check_fails_when_neither_decremented_nor_restored():
+    case = _agent_workflow_case([Check("undo", target={})], None)
+    calls = [CallRecord("darkroom_undo_last", {}, {"ok": True, "verb": "darkroom.undo_last"},
+                        write=True)]
+    before = {"fingerprint": "a", "history_end": 1, "params": {"exposure.exposure": 1.0}}
+    after = {"fingerprint": "b", "history_end": 2, "params": {"exposure.exposure": 1.8}}
+    obs = Observation(calls=calls, before=before, after=after)
+    v = evaluate(case, obs, POLICY)
+    assert v.score != "pass", v
+
+
+def test_undo_check_honest_noop_scores_needs_review_not_failed():
+    """An empty journal makes `darkroom_undo_last` answer `ok: false,
+    outcome: "noop"` -- an honest "nothing to undo", not a failed attempt.
+    That must not count as a write for the clarify-only fallback, or an
+    agent that honestly finds nothing to undo scores worse than one that
+    never called anything at all."""
+    case = _agent_workflow_case([Check("undo", target={})], None)
+    calls = [CallRecord("darkroom_undo_last", {},
+                        {"ok": False, "outcome": "noop", "verb": "darkroom.undo_last",
+                         "error": {"code": "noop", "message": "nothing to undo"}}, write=True)]
+    before = {"fingerprint": "a", "history_end": 0, "params": {"exposure.exposure": 1.0}}
+    after = {"fingerprint": "a", "history_end": 0, "params": {"exposure.exposure": 1.0}}
+    obs = Observation(calls=calls, before=before, after=after)
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "needs_review", v
+
+
+# -- row 501 item G, ruling 8: `unrequested_edit` in OUTCOMES -----------------
+
+def test_unrequested_edit_is_in_the_outcomes_table_as_a_fail():
+    """(row 501 item G, fix round 1, Opus finding 6): `evaluate()`'s
+    out-of-scope policy branch returns the outcome `unrequested_edit`, but
+    it was missing from `OUTCOMES` -- tidiness only (nothing here reads the
+    table to score a case), but any reporting code that DOES read it must
+    see it as a fail, same as its sibling `unexpected_edit`."""
+    assert OUTCOMES["unrequested_edit"] == FAIL
+
+
+def test_unrequested_edit_outcome_is_produced_and_now_in_the_table():
+    """End to end: the out-of-scope refuse_and_offer_only policy's own
+    write-before-choice case really does produce `unrequested_edit`, and
+    that outcome now has a table entry."""
+    case = Case(id="g-c", layer="scenarios_agent", tier="P0", mode="agent",
+               steps=[], expect=Expect("refuse"),
+               meta={"out_of_scope_policy": "refuse_and_offer_only"})
+    obs = Observation(calls=[], agent_text="Sure, done.",
+                      before={"fingerprint": "a"}, after={"fingerprint": "b"})
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "unrequested_edit"
+    assert OUTCOMES[v.outcome] == FAIL

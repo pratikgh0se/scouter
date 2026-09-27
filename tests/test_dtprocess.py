@@ -183,6 +183,34 @@ def test_wait_gui_ready_times_out():
     assert not res["ready"]
 
 
+def test_wait_gui_ready_stop_if_ends_the_poll_early():
+    """A caller's own fatal-fast condition (checked once per poll, same
+    cadence as the diag call) must end the wait well before `timeout_s`,
+    not only once it elapses."""
+    t = [0.0]
+    polls = [0]
+
+    def stop_if():
+        polls[0] += 1
+        return polls[0] >= 3  # true on the third poll
+
+    res = dtprocess.wait_gui_ready(30, call=lambda *a, **k: {"gui_ready": False},
+                                   clock=lambda: t[0],
+                                   sleep=lambda s: t.__setitem__(0, t[0] + s),
+                                   stop_if=stop_if)
+    assert res == {"ready": False, "gui_ready": False}
+    assert t[0] < 5  # ended after ~2 poll_s (1 s default), nowhere near the 30 s timeout
+
+
+def test_wait_gui_ready_with_no_stop_if_behaves_exactly_as_before():
+    """Control: omitting `stop_if` (every existing caller) never calls it."""
+    t = [0.0]
+    res = dtprocess.wait_gui_ready(2, call=lambda *a, **k: {"gui_ready": False},
+                                   clock=lambda: t[0],
+                                   sleep=lambda s: t.__setitem__(0, t[0] + s))
+    assert not res["ready"]
+
+
 def test_stale_lock_removed_only_for_dead_owner(owner, tmp_path):
     lib = tmp_path / "library.db"
     lock = tmp_path / "library.db.lock"

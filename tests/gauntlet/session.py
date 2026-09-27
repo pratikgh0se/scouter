@@ -6,8 +6,10 @@ and never one this runner did not launch."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import sys
@@ -24,10 +26,64 @@ REPO = Path(__file__).resolve().parents[2]
 PY = sys.executable
 LAUNCH_READY_S = 30.0
 EXPORT_PRESETS = ("client-proof", "preview")
+#: Night-1 triage rank 9 (SCA-no-lock-breaker): darktable's own "database
+#: lock file contains a pid that seems to be alive" and sqlite's "database
+#: is locked" are the two ways an orphaned darktable (one this runner no
+#: longer owns but never quit) makes every later launch against the SAME
+#: session's library fail identically. Left undetected, this cost 22 cases
+#: at ~40 s each on 2026-09-26 (each burning a full two-attempt launch
+#: retry before SessionBlocked).
+#: darktable's real wording is "the database lock file contains a pid that
+#: seems to be alive in your system: 69648" -- the gap between "pid" and
+#: the digits is far more than 10 non-digit characters, so a naive
+#: `\bpid\D{0,10}(\d+)` never matches it.
+_LOCK_RE = re.compile(r"database lock file contains a pid|database is locked", re.I)
+_LOCK_PID_RE = re.compile(r"alive in your system:\s*(\d+)", re.I)
 
 
 class SessionBlocked(RuntimeError):
     """darktable could not be brought to gui_ready (twice)."""
+
+
+class LibraryLocked(SessionBlocked):
+    """(night-1 triage rank 9): the session's own darktable.log shows the
+    library db is wedged -- a launch that will fail identically every time
+    it is retried within this session. Fatal fast, instead of letting the
+    ordinary two-attempt launch retry (and every later case in the session)
+    burn its own ~40 s finding the same thing out."""
+
+
+def _log_size(log_path: Path) -> int:
+    """The log's current byte size, or 0 if it does not exist yet -- the
+    offset to scan FROM after the next launch, so an old lock line already
+    on disk (a previous case, or a previous session's leftover) is never
+    re-attributed to a launch that never repeated it."""
+    try:
+        return log_path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _check_library_lock(log_path: Path, since: int = 0) -> int | None:
+    """The offending pid parsed from the bytes of `log_path` written AT OR
+    AFTER `since` (or -1 if the log names the condition but no pid is found
+    in it), or None when no lock line is present in that range.
+
+    `dtprocess.launch` opens darktable.log in append mode, so the file
+    accumulates across every launch in a session. Scanning the WHOLE file
+    would mean one real lock line, once written, marks every LATER launch
+    in the session as locked too, including a clean one that reached
+    gui_ready -- so only the bytes this specific launch appended are ever
+    in scope."""
+    if not log_path.exists():
+        return None
+    with log_path.open("rb") as f:
+        f.seek(since)
+        text = f.read().decode("utf-8", errors="replace")
+    if not _LOCK_RE.search(text):
+        return None
+    m = _LOCK_PID_RE.search(text)
+    return int(m.group(1)) if m else -1
 
 
 class ForeignDarktable(RefuseRun):
@@ -68,9 +124,7 @@ def isolated_env(root: Path, *, job: str | None = None) -> dict[str, str]:
 
 
 def reset_journal(staged: Staged) -> int:
-    """Fix round 2 (review R1, triage section 5 item 1); fix round 3
-    (re-review R1: ordering): `SCOUTER_JOB` is pinned once per MCP server
-    process for the whole session (`isolated_env` above / phase 3 task 9's
+    """`SCOUTER_JOB` is pinned once per MCP server process for the whole session (`isolated_env` above / phase 3 task 9's
     `scouter/mcp/server.py::_pin_session_job`), so by default every case in
     a session shares one job's undo journal. A case whose own write was
     refused (nothing landed) must see an EMPTY journal so
@@ -142,16 +196,34 @@ def write_config(root: Path) -> Path:
     return path
 
 
+def _neutral_role_dir(root: Path, role: str) -> Path:
+    """Several corpus roles literally spell the diagnosis (`warm_cast`, `cool_cast`, `blown`,
+    `flat`, `noisy`, `dark`, `bright`) -- r0037's agent read its own
+    tool-result path and used the folder name as evidence. A symlink alias
+    (the earlier fix, bb4f13f) only hid the leak from the PROMPT: the
+    library still holds the real path (darktable's Lua matches paths by
+    exact string, `_image_full_path(image) == path`, no realpath) and every
+    MCP envelope (`darkroom_open`, `scout_preview`, `history_read`, ...)
+    still echoed the real, role-named `path` field back. Staging every
+    role's frame under a hashed, role-blind directory HERE -- the one path
+    the library, the envelopes and the prompt all ever see -- removes the
+    leak at its only source instead of hiding it after the fact."""
+    return root / "frames" / ("f" + hashlib.sha1(role.encode()).hexdigest()[:6])
+
+
 def stage(corpus: Corpus, body: str, root: Path, *, job_size: int = 7,
           chart: Path | None = None) -> Staged:
     """Fresh 0644 copies of every role frame and a small card for this session.
-    `chart` (the run's synthetic chart) is copied in as role `chart`."""
+    `chart` (the run's synthetic chart) is copied in as role `chart`. Every
+    role's frame is staged under a hashed, role-blind directory
+    (`_neutral_role_dir`) -- the disk path, and so every MCP envelope and
+    the agent's own prompt, never spells the role/diagnosis name."""
     root.mkdir(parents=True, exist_ok=True)
     frames: dict[str, Path] = {}
     if chart is not None and chart.exists():
-        frames["chart"] = copy_readonly(chart, root / "frames" / "chart" / chart.name)
+        frames["chart"] = copy_readonly(chart, _neutral_role_dir(root, "chart") / chart.name)
     for role, src in corpus.roles(body).items():
-        dst = root / "frames" / role / src.name
+        dst = _neutral_role_dir(root, role) / src.name
         if not dst.exists():
             copy_readonly(src, dst)
         frames[role] = dst
@@ -204,10 +276,10 @@ class DtControl:
 
         return dtprocess.launch(frame, library, log_path=log, env=env)
 
-    def ready(self, timeout_s: float) -> dict:
+    def ready(self, timeout_s: float, *, stop_if=None) -> dict:
         from scouter.core import dtprocess
 
-        return dtprocess.wait_gui_ready(timeout_s)
+        return dtprocess.wait_gui_ready(timeout_s, stop_if=stop_if)
 
     def health(self) -> str:
         from scouter.core import dtbridge
@@ -285,6 +357,10 @@ class ScouterSession:
         self.aborted = False
         self.launched = None  # dtprocess.Launched of our darktable
         self._mcp_pending = None  # the MCP client while it initialises
+        #: (row 501 item I): set by stage_job(); a failed import's reason,
+        #: read-only for callers that only run a case needing a real job
+        #: when this is still None.
+        self.job_stage_error: str | None = None
 
     # -- lifecycle -------------------------------------------------------
 
@@ -344,19 +420,34 @@ class ScouterSession:
     def relative(self, path: Path) -> str:
         return str(Path(path).relative_to(self.run_root))
 
+    def _raise_library_locked(self, pid: int) -> None:
+        """Quit -- or, mid-session, abort -- whatever THIS launch started
+        before raising, so a locked library never leaves an owned darktable
+        orphaned behind a fatal case."""
+        try:
+            self.abort()
+        except Exception:  # noqa: BLE001 - best effort; the raise below is what matters
+            pass
+        raise LibraryLocked(f"library_lock {pid if pid >= 0 else 'unknown'}")
+
     def _launch(self, frame: Path) -> None:
         assert self.staged is not None
+        log_path = self.root / "darktable.log"
         failures: list[str] = []
         for _attempt in (1, 2):
             self._check_aborted()
+            #: The offset THIS launch's own bytes start at -- darktable.log
+            #: is opened in append mode, so an old lock line already on disk
+            #: from an earlier launch must never be re-attributed to a
+            #: later, clean one.
+            since = _log_size(log_path)
             try:
                 #: (fix round 1 review H3c): `env=self.staged.env` so the
                 #: owner record's cache root comes from THIS session, never
                 #: whatever `os.environ["SCOUTER_CACHE"]` happens to be on
                 #: this thread when a mid-session relaunch fires -- see
                 #: `dtprocess.owner_path`'s docstring.
-                rec = self.dt.launch(frame, self.staged.library, self.root / "darktable.log",
-                                     env=self.staged.env)
+                rec = self.dt.launch(frame, self.staged.library, log_path, env=self.staged.env)
             except LaunchError as e:  # dtprocess already stopped the unowned process
                 failures.append(f"LaunchError: {e}")
                 continue
@@ -364,7 +455,20 @@ class ScouterSession:
             if self.aborted:  # (N1): the abort landed during the launch
                 self.abort()
                 self._check_aborted()
-            ready = self.dt.ready(LAUNCH_READY_S)
+            #: darktable's own lock-file error lands DURING the ready wait,
+            #: not before it (the launched process has its own start time
+            #: well before `dt_init`/database init writes anything) -- catch
+            #: it at the ready poll's own cadence via `stop_if`, under about
+            #: 6 s, instead of waiting out the full LAUNCH_READY_S (30 s).
+            ready = self.dt.ready(
+                LAUNCH_READY_S,
+                stop_if=lambda: _check_library_lock(log_path, since=since) is not None)
+            #: Defense in depth: a lock line landing in the narrow window
+            #: between the last stop_if check and wait_gui_ready returning
+            #: (or a caller that never wires stop_if) is still caught here.
+            pid = _check_library_lock(log_path, since=since)
+            if pid is not None:
+                self._raise_library_locked(pid)
             if ready.get("ready"):
                 self.current_frame = frame
                 return
@@ -563,3 +667,31 @@ class ScouterSession:
                 raise SessionBlocked(f"darkroom_open did not open frame {role} ({path}): "
                                      f"error={rec.error!r} health={rec.health!r}")
         return path
+
+    def stage_job(self) -> None:
+        """(row 501 item I, Pratik's ruling: the client proof gallery, r0066,
+        is in scope): mirrors fix/n1-guide-install-harness's own
+        `_stage_guide_job` (adapter.py) -- a real `library_import` of the
+        session's staged card into `staged.vars["job_slug"]`, so a case
+        whose product tool (`library_jobs`, `export_release`) genuinely
+        needs a staged job to find sees a real one, not the empty library
+        `stage()` alone leaves behind (night-1 triage rank 11: r0066's agent
+        checked `library_jobs`, found it empty, and had nothing to point
+        `export_release` at). Idempotent (a repeat call just re-imports into
+        the same slug, harmless); failure is recorded on
+        `self.job_stage_error`, never raised -- callers that only need this
+        for one case must not fail every other case in the session over it.
+
+        Shared-helper opportunity for the integrator: this is the same
+        shape as `_stage_guide_job`; a future pass could fold both into one
+        helper `session.py` and `adapter.py` share, rather than each
+        re-implementing the same `library_import` call. Not done here --
+        this branch does not depend on fix/n1-guide-install-harness."""
+        self.job_stage_error = None
+        if self.staged is None or not self.staged.job_frames:
+            return
+        rec = self.call("library_import", {"source": str(self.staged.card),
+                                           "job_slug": self.staged.vars["job_slug"],
+                                           "confirm": True}, 60.0, write=True)
+        if rec.error:
+            self.job_stage_error = rec.error

@@ -81,6 +81,18 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("generate")
     g.add_argument("--stamp")
     g.add_argument("--layer", action="append")
+    #: (row 501 item H, fix round 1): a deterministic, seeded, stratified
+    #: subset of ONE layer (e.g. night-2's scenarios_agent), instead of
+    #: every generated case. --subset-layer/--subset-keys are required
+    #: together with --subset; --seed defaults to 0 (still deterministic,
+    #: just not caller-chosen).
+    g.add_argument("--subset", type=int,
+                   help="keep only this many cases of --subset-layer, stratified on "
+                        "--subset-keys")
+    g.add_argument("--subset-layer", help="the one layer --subset applies to")
+    g.add_argument("--subset-keys",
+                   help="comma-separated case.meta keys to stratify on, e.g. class,genre")
+    g.add_argument("--seed", type=int, default=0, help="the --subset selection's own seed")
     r = sub.add_parser("run")
     r.add_argument("--stamp")
     r.add_argument("--layer", action="append")
@@ -109,9 +121,17 @@ def main(argv: list[str] | None = None) -> int:
     adapter = load_adapter(cfg["adapter"])
 
     if args.cmd == "generate":
+        if bool(args.subset) != bool(args.subset_layer) or (args.subset and not
+                                                             args.subset_keys):
+            print("gauntlet: --subset needs --subset-layer and --subset-keys together",
+                 file=sys.stderr)
+            return 2
         run = RunDir(runs_root, args.stamp or new_stamp())
         try:
-            counts = write_generation(run, adapter, args.layer)
+            counts = write_generation(
+                run, adapter, args.layer, subset=args.subset, subset_layer=args.subset_layer,
+                subset_keys=(args.subset_keys.split(",") if args.subset_keys else None),
+                seed=args.seed)
         except GenerationError as e:
             print(f"generation failed: {e}", file=sys.stderr)
             return 2

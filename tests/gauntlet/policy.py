@@ -57,7 +57,8 @@ def load_policy() -> Policy:
                   # Named, provisional overrides (check_map.json's own
                   # "flags_about"): absent here (older check_map.json with no
                   # "flags" key) reads as "nothing overridden", same as today.
-                  flags=_active_flags(cm.get("flags", [])))
+                  flags=_active_flags(cm.get("flags", [])),
+                  offer_markers=tuple(cm.get("offer_markers", ())))
 
 
 POLICY = load_policy()

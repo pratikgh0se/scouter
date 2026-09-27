@@ -16,12 +16,18 @@ from pathlib import Path
 
 from gauntlet.adapter import CallRecord, Observation, Park
 from gauntlet.case import Case
-from tests.gauntlet import observe
+from tests.gauntlet import agent_budget, observe
 from tests.gauntlet.layers.common import AGENT_TURN_TIMEOUT_S, WRITE_TOOLS
 from tests.gauntlet.session import SessionBlocked
 
+#: Night-1 triage rank 2 (SCA-session-limit-unparked): the Claude CLI's own
+#: "session limit" wording ("You've hit your session limit · resets
+#: 3:30pm (Asia/Bangkok)") is a distinct phrase from the usage/rate-limit
+#: forms below and was never matched, so the case was scored as the agent's
+#: own answer instead of parked (14 cases: 12 partial, 1 fail, 1 hollow pass
+#: sca-r0159).
 LIMIT_RE = re.compile(r"(usage limit|rate limit|limit reached|limit will reset|"
-                      r"out of (extra )?usage|5-hour limit|weekly limit)", re.I)
+                      r"out of (extra )?usage|5-hour limit|weekly limit|session limit)", re.I)
 RESET_RE = re.compile(r"resets? (?:at )?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", re.I)
 TURN_TIMEOUT_S = AGENT_TURN_TIMEOUT_S
 
@@ -54,7 +60,11 @@ def parse_stream(lines: list[str]) -> dict:
         elif kind == "result":
             out["text"] = msg.get("result") or ""
             out["is_error"] = bool(msg.get("is_error"))
-    if out["is_error"] and LIMIT_RE.search(out["text"] or ""):
+    #: Fix round 1 (Opus finding 8): capsule-corp's own run.sh notes the
+    #: limit text can arrive with `is_error` unset. A turn that matched the
+    #: limit text AND made no tool calls is never the agent's own scored
+    #: answer either way, so it parks independent of `is_error`.
+    if LIMIT_RE.search(out["text"] or "") and (out["is_error"] or not out["tool_calls"]):
         out["limit"] = out["text"]
     return out
 
@@ -87,9 +97,19 @@ def mcp_config(staged) -> dict:
 
 
 def claude_argv(prompt: str, mcp_json: Path, resume: str | None = None) -> list[str]:
+    # (row 501 item E, night-1 triage rank 12, SCA-agent-sandbox-leak; fix
+    # round 1, Opus finding 7): `--disallowedTools Bash,Write,Edit` named
+    # only three tools, leaving Glob, Grep, WebFetch, WebSearch, NotebookEdit
+    # and Task/Agent reachable -- Glob/Grep alone can list a staged frame's
+    # directory (also the reason for item F's fix). `--tools Read`
+    # (capsule-corp's own build_argv uses the same flag, "built-in tool
+    # names only") is a WHITELIST of Claude's own built-in tools: only Read
+    # is ever reachable (scout_preview PNGs), every other built-in tool is
+    # unavailable by omission, not by name. The scouter MCP tools are scoped
+    # separately through --allowedTools/--mcp-config, as before.
     argv = ["claude", "-p", prompt, "--model", "sonnet", "--output-format", "stream-json",
             "--verbose", "--mcp-config", str(mcp_json), "--strict-mcp-config",
-            "--allowedTools", "mcp__scouter__*"]
+            "--tools", "Read", "--allowedTools", "mcp__scouter__*"]
     if resume:
         argv += ["--resume", resume]
     return argv
@@ -110,17 +130,24 @@ class AgentSession:
     TURN_TIMEOUT_S against the next session's darktable."""
 
     def __init__(self, inner, *, popen=subprocess.Popen, killpg=os.killpg,
-                 clock=time.monotonic) -> None:
+                 clock=time.monotonic, check_usage_budget=agent_budget.check_usage_budget
+                 ) -> None:
         self.inner = inner
         self.popen = popen
         self.killpg = killpg
         self.clock = clock
+        #: (row 501 item H): the pass parks itself (Park("usage_meter: ...")
+        #: -- caught the same way the limit-Park above already is) once the
+        #: usage meter passes its threshold, instead of running every turn
+        #: until the CLI's own wall limit hits mid-case.
+        self.check_usage_budget = check_usage_budget
         self.proc = None
         self.aborted = False
 
     def _turn(self, prompt: str, resume: str | None) -> dict:
         if self.aborted:
             raise AgentAborted("agent session aborted; no further claude turn")
+        self.check_usage_budget()
         path = self.inner.root / "mcp.json"
         path.write_text(json.dumps(mcp_config(self.inner.staged)))
         proc = self.popen(claude_argv(prompt, path, resume), stdout=subprocess.PIPE,
@@ -180,9 +207,26 @@ class AgentSession:
         obs = Observation()
         try:
             frame = self.inner.ensure_frame(case.frame_role or "hero")
+            if case.meta.get("stage_job") and getattr(self.inner, "stage_job", None):
+                #: (row 501 item I): a real staged job for cases whose
+                #: product tool (library_jobs/export_release) needs one to
+                #: point at, e.g. sca-r0066 (client proof gallery).
+                self.inner.stage_job()
         except SessionBlocked as e:
             obs.blocked = f"session: {e}"
             obs.hang_evidence.append(f"session: {e}")
+            obs.wall_s = self.clock() - t0
+            return obs
+        #: (row 501 item I, fix round 1, Opus finding 4): a failed stage_job
+        #: used to set job_stage_error and be read by nothing -- the case
+        #: then ran the agent against an EMPTY library, scoring the product
+        #: a failure over a harness fixture gap. Same pattern
+        #: fix/n1-guide-install-harness was sent back for (round 2, finding
+        #: 6, GB-1): block the case instead, never let it run and mis-score.
+        stage_err = getattr(self.inner, "job_stage_error", None)
+        if case.meta.get("stage_job") and stage_err:
+            obs.blocked = f"fixture: job staging failed: {stage_err}"
+            obs.hang_evidence.append(obs.blocked)
             obs.wall_s = self.clock() - t0
             return obs
         kelvin = observe.kelvin_for({"olympus": "em10iii"}.get(case.body or ""))
@@ -193,6 +237,14 @@ class AgentSession:
             r = observe.render_raster(frame, self.inner.root / "render" / "before.ppm")
             obs.stats_before, masks = observe.stats(r)
             obs.floors = dict(self.inner.floors)
+        #: (row 501 item F, fix round 1, Opus finding 1): `frame` is the
+        #: real, already-opened path the library, the agent's own MCP
+        #: envelopes and this prompt all share -- session.py's `stage()`
+        #: (via `_neutral_role_dir`) now stages every role under a hashed,
+        #: role-blind directory, so this path was never role-named to begin
+        #: with. No alias needed (a symlink alias broke every darktable
+        #: path-matching Lua call, and still leaked the real path back
+        #: through every envelope's own `path` field).
         prompt = f"{case.meta['sentence']}\n\nThe photo open in darktable is {frame}."
         texts: list[str] = []
         calls: list[dict] = []

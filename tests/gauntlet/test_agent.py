@@ -78,10 +78,66 @@ def test_usage_limit_is_detected_with_reset_time():
     assert datetime.fromtimestamp(agent.reset_time(p["limit"], now)).hour == 16
 
 
+def test_session_limit_text_is_also_detected_with_reset_time():
+    """Night-1 triage rank 2 (SCA-session-limit-unparked): the Claude CLI's
+    own "session limit" wording (distinct from the usage/rate-limit forms
+    LIMIT_RE already covered) never parked 14 cases -- it was scored as the
+    agent's own answer, producing 12 partial, 1 fail and one hollow pass
+    (sca-r0159)."""
+    p = agent.parse_stream(_lines({"type": "result", "is_error": True,
+                                   "result": "You've hit your session limit · resets "
+                                             "3:30pm (Asia/Bangkok)"}))
+    assert p["limit"]
+    now = datetime(2026, 9, 27, 13, 51)
+    assert datetime.fromtimestamp(agent.reset_time(p["limit"], now)).hour == 15
+
+
+def test_an_ordinary_answer_is_never_mistaken_for_a_limit():
+    p = agent.parse_stream(_lines({"type": "result", "is_error": False,
+                                   "result": "Done, I've brightened it by half a stop."}))
+    assert p["limit"] is None
+
+
+def test_limit_text_parks_even_when_is_error_is_unset():
+    """Fix round 1 (Opus finding 8): capsule-corp's run.sh notes the CLI can
+    send the limit text with `is_error` unset. A no-tool-call turn matching
+    the limit text must still park, whatever `is_error` says."""
+    p = agent.parse_stream(_lines({"type": "result", "is_error": False,
+                                   "result": "You've hit your session limit · resets "
+                                             "3:30pm (Asia/Bangkok)"}))
+    assert p["limit"]
+
+
+def test_limit_text_with_tool_calls_and_no_error_is_not_parked():
+    """Control: a turn that actually did work (has tool calls) and never
+    errored is never mistaken for a limit hit, even if its own free text
+    happens to echo limit-like wording."""
+    lines = _lines(
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t1", "name": "mcp__scouter__darkroom_say",
+             "input": {"phrase": "brighter"}}]}},
+        {"type": "result", "result": "Done -- note the vignette's own usage limit setting was "
+                                     "left untouched.", "is_error": False})
+    p = agent.parse_stream(lines)
+    assert p["limit"] is None
+
+
 def test_argv_registers_only_scouter_and_sonnet():
     argv = agent.claude_argv("hi", "/tmp/m.json", resume="s1")
     assert argv[argv.index("--model") + 1] == "sonnet"
     assert "--strict-mcp-config" in argv and argv[argv.index("--resume") + 1] == "s1"
+    assert argv[argv.index("--allowedTools") + 1] == "mcp__scouter__*"
+
+
+def test_argv_whitelists_only_read_as_a_built_in_tool():
+    """Fix round 1 (Opus finding 7): --disallowedTools named only three
+    tools (Bash, Write, Edit), leaving Glob/Grep/WebFetch/WebSearch/
+    NotebookEdit/Task reachable -- Glob/Grep alone can list a staged
+    frame's directory. --tools Read (capsule-corp's own build_argv flag)
+    whitelists Claude's own built-in tools to Read only."""
+    argv = agent.claude_argv("hi", "/tmp/m.json")
+    assert argv[argv.index("--tools") + 1] == "Read"
+    assert "--disallowedTools" not in argv
     assert argv[argv.index("--allowedTools") + 1] == "mcp__scouter__*"
 
 
@@ -258,6 +314,167 @@ def test_agent_write_flag_uses_the_one_write_tool_set():
     agent.AgentSession._record_calls(
         obs, [{"name": f"mcp__scouter__{n}", "input": {}, "result": "{}"} for n in names])
     assert {c.tool for c in obs.calls if c.write} == set(WRITE_TOOLS)
+
+
+def test_frame_path_shown_to_the_agent_is_the_real_staged_path_and_names_no_diagnosis(
+        tmp_path, monkeypatch):
+    """(row 501 item F, fix round 1, Opus finding 1, BLOCKER): the earlier
+    alias (a symlink under `frames_view/`) broke darktable's own path
+    matching and still leaked the real, role-named path through every MCP
+    envelope's own `path` field. Now the prompt's path is exactly the real,
+    already-staged path the library, `ensure_frame` and every envelope
+    share -- `session.stage()`'s `_neutral_role_dir` makes THAT path
+    role-blind, so there is nothing left to substitute. Checked against the
+    real corpus.ROLES list (the case generator's own problem list), not
+    only against the request text."""
+    from gauntlet.case import Case, Expect
+    from tests.gauntlet.corpus import Corpus, ROLES
+    from tests.gauntlet.session import stage
+
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "H.ORF").write_bytes(b"raw")
+    roles = {r: "H.ORF" for r in ROLES}
+    doc = {"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {"olympus": roles}}
+    staged = stage(Corpus(doc, trial), "olympus", tmp_path / "s1")
+    real_path = staged.frames["warm_cast"]
+
+    class Inner:
+        root = tmp_path / "s1"
+        floors = {}
+        touched = set()
+
+        def ensure_frame(self, role):
+            #: This IS what ScouterSession.ensure_frame does on success: it
+            #: hands back staged.frames[role] unchanged -- the exact path
+            #: darkroom_open sent to the library.
+            return real_path
+
+    Inner.staged = staged
+    monkeypatch.setattr(agent.observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
+                                                                       "params": {}})
+    FakePopen.spawned = []
+    #: A tool_result envelope carrying the real path back, as darkroom_open
+    #: genuinely does -- proves the envelope's own `path` field is neutral
+    #: too, not only the prompt text.
+    envelope_lines = _lines(
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t1", "name": "mcp__scouter__darkroom_open",
+             "input": {"image": str(real_path)}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": [{"type": "text",
+                          "text": json.dumps({"ok": True, "data": {"path": str(real_path)}})}]}]}},
+        {"type": "result", "result": "Looked at it, it's a touch dim.", "session_id": "s1"})
+    popen = _popen_seq(envelope_lines)
+    s = agent.AgentSession(Inner(), popen=popen)
+    case = Case(id="sca-leak", layer="scenarios_agent", tier="P0", mode="agent", steps=[],
+                expect=Expect("refuse"), body="olympus", frame_role="warm_cast",
+                meta={"sentence": "fix the color balance", "followups": []})
+    obs = s.run_case(case)
+    prompt = FakePopen.spawned[-1].argv[2]
+    prompt_path = prompt.rsplit(" is ", 1)[-1].rstrip(".")
+    assert prompt_path == str(real_path)  # the prompt names the real, library-known path
+    envelope_path = obs.calls[0].envelope["data"]["path"]
+    for token in ROLES:
+        assert token not in prompt_path, ("prompt", token, prompt_path)
+        assert token not in envelope_path, ("envelope", token, envelope_path)
+
+
+def test_agent_session_parks_on_the_usage_budget_before_spawning_claude(tmp_path, monkeypatch):
+    """(row 501 item H): the pass parks itself once the usage meter is over
+    threshold, without ever spawning a claude turn."""
+    from gauntlet.case import Case, Expect
+
+    class Inner:
+        root = tmp_path
+        floors = {}
+        touched = set()
+        staged = type("S", (), {"env": {"PYTHONPATH": "."}})()
+
+        def ensure_frame(self, role):
+            return tmp_path / "f.ORF"
+
+    monkeypatch.setattr(agent.observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
+                                                                       "params": {}})
+
+    def over_budget():
+        raise Park("usage_meter: 75% >= 60%")
+
+    s = agent.AgentSession(Inner(), popen=lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("popen must not be called when parked on budget")),
+        check_usage_budget=over_budget)
+    case = Case(id="sca-budget", layer="scenarios_agent", tier="P0", mode="agent", steps=[],
+                expect=Expect("refuse"), body="olympus", frame_role="hero",
+                meta={"sentence": "warm it", "followups": []})
+    with pytest.raises(Park, match="usage_meter") as exc_info:
+        s.run_case(case)
+    assert "usage_meter" in str(exc_info.value)
+
+
+def test_run_case_stages_a_job_when_the_case_asks_for_one(tmp_path, monkeypatch):
+    """(row 501 item I): sca-r0066-style cases (meta["stage_job"]) get a
+    real staged job before the agent's first turn."""
+    from gauntlet.case import Case, Expect
+
+    staged_calls = []
+
+    class Inner:
+        root = tmp_path
+        floors = {}
+        touched = set()
+        staged = type("S", (), {"env": {"PYTHONPATH": "."}})()
+
+        def ensure_frame(self, role):
+            return tmp_path / "f.ORF"
+
+        def stage_job(self):
+            staged_calls.append(True)
+
+    monkeypatch.setattr(agent.observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
+                                                                       "params": {}})
+    popen = _popen_seq(_lines({"type": "result", "result": "ok", "session_id": "s1"}))
+    s = agent.AgentSession(Inner(), popen=popen)
+    case = Case(id="sca-r0066-olympus-agent", layer="scenarios_agent", tier="P0", mode="agent",
+                steps=[], expect=Expect("workflow", [], {"changed": False}), body="olympus",
+                frame_role="hero", meta={"sentence": "client proof gallery", "followups": [],
+                                        "stage_job": True})
+    s.run_case(case)
+    assert staged_calls == [True]
+
+
+def test_run_case_blocks_when_stage_job_fails_never_runs_against_an_empty_library(
+        tmp_path, monkeypatch):
+    """(row 501 item I, fix round 1, Opus finding 4, GB-1 shape): a failed
+    stage_job used to set job_stage_error and be read by nothing -- the
+    case then ran the agent against an empty library, scoring a harness
+    fixture gap as a product failure. Must block instead, and never spawn
+    a claude turn."""
+    from gauntlet.case import Case, Expect
+
+    class Inner:
+        root = tmp_path
+        floors = {}
+        touched = set()
+        staged = type("S", (), {"env": {"PYTHONPATH": "."}})()
+        job_stage_error = "no_frames"
+
+        def ensure_frame(self, role):
+            return tmp_path / "f.ORF"
+
+        def stage_job(self):
+            pass  # "runs", but leaves job_stage_error set (a real failure)
+
+    monkeypatch.setattr(agent.observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
+                                                                       "params": {}})
+    s = agent.AgentSession(Inner(), popen=lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("popen must not be called when job staging failed")))
+    case = Case(id="sca-r0066-olympus-agent", layer="scenarios_agent", tier="P0", mode="agent",
+                steps=[], expect=Expect("workflow", [], {"changed": False}), body="olympus",
+                frame_role="hero", meta={"sentence": "client proof gallery", "followups": [],
+                                        "stage_job": True})
+    obs = s.run_case(case)
+    assert obs.blocked == "fixture: job staging failed: no_frames"
 
 
 def test_mcp_config_pins_the_session_library(tmp_path):

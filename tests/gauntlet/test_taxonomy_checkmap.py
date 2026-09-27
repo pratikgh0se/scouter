@@ -29,10 +29,19 @@ def test_a_silent_data_edit_fails_loudly(tmp_path):
 
 
 def test_every_request_maps_no_unmapped(tax):
+    """(row 501 item I, Pratik's ruling): r0066 ("client proof gallery")
+    moves out -> workflow/export via check_map.json's workflow_verb_overrides
+    -- export_release has a client-proof preset, so it is in scope."""
     plans = [checkmap.plan_request(r, tax.check_map) for r in tax.requests]
     classes = collections.Counter(p.klass for p in plans)
     assert classes["unmapped"] == 0
-    assert classes == {"out": 323, "in": 168, "impossible": 60, "workflow": 37, "partial": 13}
+    assert classes == {"out": 322, "in": 168, "impossible": 60, "workflow": 38, "partial": 13}
+    r0066 = next(p for p in plans if p.request_id == "r0066")
+    #: (fix round 1, Opus finding 4): a dedicated export_release verb, not
+    #: the generic export_run one -- the ruling names "export_release with
+    #: the client-proof preset on a staged job", a job-level release path
+    #: export_run never exercises.
+    assert r0066.klass == "workflow" and r0066.workflow_verb == "export_release"
 
 
 def test_split_and_direction_examples(tax):

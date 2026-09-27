@@ -11,6 +11,7 @@ from pathlib import Path
 from gauntlet import chart
 from gauntlet.adapter import CallRecord, Observation, Park
 from gauntlet.case import Case
+from scouter import config as scouter_config
 from tests.gauntlet import observe
 from tests.gauntlet.corpus import guard
 from tests.gauntlet.session import SessionBlocked, reset_journal
@@ -22,6 +23,67 @@ VIRTUAL: dict = {}
 STAT_METRICS = {"M2", "M3", "M4", "M5", "M6", "M7", "M8"}
 #: body -> WB table camera id (config `cameras` map).
 CAMERA = {"olympus": "em10iii", "sony_a7": "a7", "sony_nex5n": "nex5n"}
+
+
+class ImportIncomplete(RuntimeError):
+    """`library_import`'s own envelope did not account for every source
+    frame the harness staged (a partial import). The destination for the
+    missing frame(s) is genuinely unknown -- guessing the card path would
+    only surface downstream as a false `usage`/`not_in_darkroom` refusal on
+    a frame that was never the harness's fault. Raised, never swallowed:
+    callers turn it into `obs.blocked`, so the case scores `blocked`,
+    honestly naming what's missing."""
+
+
+def _imported_frames(session, envelope: dict | None,
+                      source_frames: list[Path]) -> list[Path] | None:
+    """Map `source_frames` (the staged copies -- the card, or a workflow
+    case's `job_frames`) to the absolute paths `library_import` actually
+    wrote them to, using ITS OWN envelope (`data.files[].source_name` ->
+    `.dest`, relative to the job directory -- spec section 6,
+    `scouter.types.ImportResult`). Returns `None` when the envelope carries
+    nothing usable at all (the import did not run or errored -- callers keep
+    the original paths, since a downstream step will honestly fail on its
+    own terms). Raises `ImportIncomplete` when the import DID run but its
+    own `files[]` is missing one or more of the frames the harness staged (a
+    partial import): the destination for those frames is unknown, not "the
+    staged path", and must never be guessed. Every later step (`{job_frame:N}`,
+    `{job_frames}`) must address these destination files."""
+    data = (envelope or {}).get("data") or {}
+    files = data.get("files") or []
+    job_slug, date = data.get("job_slug"), data.get("date")
+    if not files or not job_slug or not date:
+        return None
+    dest_by_source = {f.get("source_name"): f.get("dest") for f in files if f.get("source_name")}
+    missing = [src.name for src in source_frames if src.name not in dest_by_source]
+    if missing:
+        raise ImportIncomplete(
+            f"import_incomplete: library_import's files[] names none of {missing!r} "
+            f"({len(missing)} of {len(source_frames)} staged frames)"
+        )
+    cfg = scouter_config.load(str(session.staged.config))
+    job_path = scouter_config.job_dir(cfg, date, job_slug)
+    return [job_path / dest_by_source[src.name] for src in source_frames]
+
+
+def resolve_import_job_frames(obs: Observation, session, rec: CallRecord,
+                              source_frames: list[Path]) -> list[Path] | None:
+    """After a `library_import` step, rewrite `session.staged.job_frames` to
+    the paths it actually wrote (shared by `run_tool_case` and
+    `exec_bulk.run_bulk_case` -- the same rewrite, one place). A no-op
+    unless `rec` is an errorless `library_import` call; sets `obs.blocked`
+    on a partial import instead of guessing a destination."""
+    if rec.tool != "library_import" or rec.error:
+        return None
+    try:
+        resolved = _imported_frames(session, rec.envelope, source_frames)
+    except ImportIncomplete as e:
+        obs.blocked = f"harness_error: {e}"
+        obs.hang_evidence.append(str(e))
+        return None
+    if resolved is not None:
+        session.staged.job_frames = resolved
+    return resolved
 
 
 def substitute(value, session, calls: list[CallRecord]):
@@ -278,6 +340,9 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic, pre_ping: bool =
         else:
             rec = session.call(st.tool, args, st.budget_s, write=st.write)
         obs.calls.append(rec)
+        #: a workflow case's later `{job_frames}` step must see where
+        #: library_import actually wrote its files, not the staged copies.
+        resolve_import_job_frames(obs, session, rec, session.staged.job_frames)
         if obs.blocked:  # (final fix M3): a virtual tool blocked the case itself
             break
         if rec.error == "timeout" and rec.health == "unresponsive":
