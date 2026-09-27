@@ -443,6 +443,40 @@ def test_run_case_stages_a_job_when_the_case_asks_for_one(tmp_path, monkeypatch)
     assert staged_calls == [True]
 
 
+def test_run_case_blocks_when_stage_job_fails_never_runs_against_an_empty_library(
+        tmp_path, monkeypatch):
+    """(row 501 item I, fix round 1, Opus finding 4, GB-1 shape): a failed
+    stage_job used to set job_stage_error and be read by nothing -- the
+    case then ran the agent against an empty library, scoring a harness
+    fixture gap as a product failure. Must block instead, and never spawn
+    a claude turn."""
+    from gauntlet.case import Case, Expect
+
+    class Inner:
+        root = tmp_path
+        floors = {}
+        touched = set()
+        staged = type("S", (), {"env": {"PYTHONPATH": "."}})()
+        job_stage_error = "no_frames"
+
+        def ensure_frame(self, role):
+            return tmp_path / "f.ORF"
+
+        def stage_job(self):
+            pass  # "runs", but leaves job_stage_error set (a real failure)
+
+    monkeypatch.setattr(agent.observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
+                                                                       "params": {}})
+    s = agent.AgentSession(Inner(), popen=lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("popen must not be called when job staging failed")))
+    case = Case(id="sca-r0066-olympus-agent", layer="scenarios_agent", tier="P0", mode="agent",
+                steps=[], expect=Expect("workflow", [], {"changed": False}), body="olympus",
+                frame_role="hero", meta={"sentence": "client proof gallery", "followups": [],
+                                        "stage_job": True})
+    obs = s.run_case(case)
+    assert obs.blocked == "fixture: job staging failed: no_frames"
+
+
 def test_mcp_config_pins_the_session_library(tmp_path):
     staged = type("S", (), {"env": {"PYTHONPATH": ".", "SCOUTER_CACHE": "/c",
                                     "SCOUTER_DARKTABLE_LIBRARY_DB": str(tmp_path / "l.db")}})()

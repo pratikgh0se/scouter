@@ -217,6 +217,18 @@ class AgentSession:
             obs.hang_evidence.append(f"session: {e}")
             obs.wall_s = self.clock() - t0
             return obs
+        #: (row 501 item I, fix round 1, Opus finding 4): a failed stage_job
+        #: used to set job_stage_error and be read by nothing -- the case
+        #: then ran the agent against an EMPTY library, scoring the product
+        #: a failure over a harness fixture gap. Same pattern
+        #: fix/n1-guide-install-harness was sent back for (round 2, finding
+        #: 6, GB-1): block the case instead, never let it run and mis-score.
+        stage_err = getattr(self.inner, "job_stage_error", None)
+        if case.meta.get("stage_job") and stage_err:
+            obs.blocked = f"fixture: job staging failed: {stage_err}"
+            obs.hang_evidence.append(obs.blocked)
+            obs.wall_s = self.clock() - t0
+            return obs
         kelvin = observe.kelvin_for({"olympus": "em10iii"}.get(case.body or ""))
         obs.before = observe.snapshot(frame, kelvin)
         stats = any(c.metric in ("M2", "M3", "M4", "M5", "M6") for c in case.expect.checks)

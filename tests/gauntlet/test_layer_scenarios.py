@@ -148,15 +148,26 @@ def test_out_of_scope_agent_cases_carry_the_refuse_and_offer_policy():
 
 
 def test_client_proof_gallery_is_in_scope_and_stages_a_job():
-    """(row 501 item I, Pratik's ruling): r0066 is a workflow/export case,
-    not "out", and its agent case asks the session to stage a real job."""
+    """(row 501 item I, Pratik's ruling 501(3); fix round 1, Opus finding 4):
+    r0066 is a workflow/export_release case, not "out" and not the generic
+    export_run -- a real staged job, released through the client-proof
+    preset with a checksum manifest, is the ruling's own shape."""
     tool, agent = scenarios.generate(taxonomy.load())
     a = next(c for c in agent if c.id == "sca-r0066-olympus-agent")
     assert a.meta["class"] == "workflow"
     assert a.expect.kind == "workflow"
     assert a.meta["stage_job"] is True
+    assert a.expect.checks[0].metric == "verb"
+    assert a.expect.checks[0].target["any_of"] == ["export.release"]
     t = next(c for c in tool if c.id.startswith("scn-r0066-") and c.id.endswith("-tool"))
     assert t.meta["class"] == "workflow"
+    assert [s.tool for s in t.steps] == ["library_import", "export_release"]
+    assert t.steps[1].args["preset"] == "client-proof"
+    assert t.steps[1].args["images"] == "{job_frames}"  # bypasses rating-based selection
+    checks = {(c.target["path"], c.target.get("op")) for c in t.expect.checks}
+    assert ("ok", "eq") in checks
+    assert ("data.manifest_path", "exists") in checks
+    assert ("data.exported", "gte") in checks
 
 
 def test_no_followup_turn_after_an_out_or_impossible_agent_case():

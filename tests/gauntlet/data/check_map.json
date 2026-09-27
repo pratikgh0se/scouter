@@ -128,7 +128,7 @@
     "r0033": [{"concept": "contrast", "sign": -1}, {"concept": "saturation", "sign": -1}, {"concept": "luminance", "sign": 1}]
   },
   "workflow_verb_overrides": {
-    "r0066": "export"
+    "r0066": "export_release"
   },
   "offer_markers": [
     "can enable", "if you'd like", "if you like", "or leave it", "would you like",

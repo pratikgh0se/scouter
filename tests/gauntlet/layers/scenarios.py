@@ -120,6 +120,25 @@ def _workflow(plan: RequestPlan, req: dict) -> tuple[list[Step], Expect]:
         return ([step("cull_propose", 30.0, images=[hero])],
                 Expect("workflow", [Check("envelope", step=0, target={
                     "path": "ok", "op": "eq", "value": True})]))
+    if v == "export_release":
+        #: (row 501 item I, Pratik's ruling 501(3), Opus review finding 4):
+        #: r0066's "client proof gallery" is the job-level release path
+        #: export_run never exercises -- a real staged job (library_import),
+        #: then export_release with the client-proof preset and a checksum
+        #: manifest. `images="{job_frames}"` bypasses export.release's own
+        #: rating-based selection (an empty selection is a `usage` refusal;
+        #: the freshly imported corpus frames carry no rating at all) --
+        #: every staged job frame is explicitly named instead.
+        return ([step("library_import", 60.0, source="{card}", job_slug="{job_slug}",
+                      confirm=True),
+                 step("export_release", 60.0, job_slug="{job_slug}", preset="client-proof",
+                      images="{job_frames}", confirm=True)],
+                Expect("workflow", [
+                    Check("envelope", step=1, target={"path": "ok", "op": "eq", "value": True}),
+                    Check("envelope", step=1,
+                         target={"path": "data.manifest_path", "op": "exists"}),
+                    Check("envelope", step=1,
+                         target={"path": "data.exported", "op": "gte", "value": 1})]))
     raise ValueError(f"no workflow plan for {v!r}")
 
 
