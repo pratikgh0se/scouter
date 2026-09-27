@@ -191,14 +191,33 @@ class MergeBaseGateTest(_FakeRepoCase):
         self.assertIn(f"BASE={self.base_sha} HEAD={self.batch_sha}", p.stdout)
         self.assertNotEqual(self.base_sha, self.batch_sha)
 
-    def test_refuses_when_batch_is_already_on_main(self) -> None:
+    def test_reports_already_merged_instead_of_refusing(self) -> None:
+        """Fix round 2 (review R3): merge-base(main, BATCH) == BATCH can
+        only mean BATCH is already merged into main -- never an error.
+        Rerunning this script right after a human ran step 2 (the merge)
+        must still exit 0 ("idempotent, rerun anytime"), not refuse."""
         self.write_progress("done")
         # Fast-forward main to batch: merge-base(main, BATCH) == BATCH now.
         git(self.repo, "merge", "--ff-only", self.batch_sha)
         p = self.invoke()
-        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-        self.assertIn("BLOCKED", p.stdout)
-        self.assertIn("nothing to gate", p.stdout)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("already merged", p.stdout)
+        self.assertNotIn("BLOCKED", p.stdout)
+        # The remaining steps still print (host probes, stale-history, the
+        # targeted rerun); step 1's own gate command is skipped, not shown
+        # with a vacuous BASE==HEAD.
+        self.assertIn("SKIPPED", p.stdout)
+        self.assertIn("host probes", p.stdout)
+        self.assertIn("targeted GAUNTLET rerun", p.stdout)
+        self.assertNotIn(f"BASE={self.batch_sha} HEAD={self.batch_sha}", p.stdout)
+
+    def test_execute_on_an_already_merged_batch_exits_0_without_running_anything(self) -> None:
+        self.write_progress("done")
+        git(self.repo, "merge", "--ff-only", self.batch_sha)
+        marker = Path(self.tmp.name) / "gate-ran.marker"
+        p = self.invoke(["--execute"], GATE_CMD=f"echo ran > {marker}")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(marker.exists(), "the gate must not run against an already-merged batch")
 
     def test_refuses_when_batch_is_not_a_real_ref(self) -> None:
         self.write_progress("done")
@@ -270,6 +289,98 @@ class LiveRunnerRefusalTest(_FakeRepoCase):
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("BLOCKED", p.stdout)
         self.assertIn("still running", p.stdout)
+
+
+class PythonResolutionTest(unittest.TestCase):
+    """Fix round 2 (review R3): before the merge, this script typically runs
+    from the batch's own checkout or a bare worktree, neither of which has
+    its own `.venv` -- PY must fall back to the MAIN checkout's `.venv`
+    (found via git's own common-dir), not a bare `python3` with no pytest."""
+
+    def test_falls_back_to_the_main_checkouts_venv_from_a_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            main_repo = root / "main"
+            main_repo.mkdir()
+            git(main_repo, "init", "-q", "-b", "main")
+            git(main_repo, "config", "user.email", "test@example.com")
+            git(main_repo, "config", "user.name", "Test")
+            (main_repo / "f.txt").write_text("base\n", encoding="utf-8")
+            git(main_repo, "add", "-A")
+            git(main_repo, "commit", "-q", "-m", "base")
+
+            marker = root / "main-venv-used.marker"
+            venv_bin = main_repo / ".venv" / "bin"
+            venv_bin.mkdir(parents=True)
+            stub = venv_bin / "python3"
+            stub.write_text(
+                f"#!/usr/bin/env bash\n"
+                f"echo used >> {marker}\n"
+                f"exec /usr/bin/env python3 \"$@\"\n",
+                encoding="utf-8")
+            stub.chmod(0o755)
+
+            worktree = root / "wt"
+            git(main_repo, "worktree", "add", "-q", str(worktree), "-b", "batch")
+            (worktree / "f.txt").write_text("batch\n", encoding="utf-8")
+            git(worktree, "add", "-A")
+            git(worktree, "commit", "-q", "-m", "batch work")
+            batch_sha = git(worktree, "rev-parse", "HEAD")
+
+            run_dir = root / "rundir"
+            run_dir.mkdir()
+            layers = {name: {"status": "done"} for name in DEFAULT_LAYERS}
+            (run_dir / "progress.json").write_text(
+                json.dumps({"status": "done", "layers": layers}), encoding="utf-8")
+
+            env = dict(os.environ)
+            env.pop("SCOUTER_PYTHON", None)
+            env.update({"HTC_REPO": str(worktree), "BATCH": batch_sha, "RUN_DIR": str(run_dir)})
+            p = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=env)
+
+            self.assertTrue(marker.exists(),
+                            "PY did not resolve to the main checkout's venv:\n" + p.stdout)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def test_scouter_python_env_var_wins_over_everything(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "test@example.com")
+            git(repo, "config", "user.name", "Test")
+            (repo / "f.txt").write_text("base\n", encoding="utf-8")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "base")
+            git(repo, "checkout", "-q", "-b", "batch")
+            (repo / "f.txt").write_text("batch\n", encoding="utf-8")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "batch work")
+            batch_sha = git(repo, "rev-parse", "HEAD")
+
+            marker = root / "explicit-python-used.marker"
+            explicit_py = root / "explicit-python3"
+            explicit_py.write_text(
+                f"#!/usr/bin/env bash\n"
+                f"echo used >> {marker}\n"
+                f"exec /usr/bin/env python3 \"$@\"\n",
+                encoding="utf-8")
+            explicit_py.chmod(0o755)
+
+            run_dir = root / "rundir"
+            run_dir.mkdir()
+            layers = {name: {"status": "done"} for name in DEFAULT_LAYERS}
+            (run_dir / "progress.json").write_text(
+                json.dumps({"status": "done", "layers": layers}), encoding="utf-8")
+
+            env = dict(os.environ)
+            env.update({"HTC_REPO": str(repo), "BATCH": batch_sha, "RUN_DIR": str(run_dir),
+                       "SOUTER_PYTHON_UNUSED": "", "SCOUTER_PYTHON": str(explicit_py)})
+            p = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=env)
+
+            self.assertTrue(marker.exists(), "SCOUTER_PYTHON override was not used:\n" + p.stdout)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
 
 class ExecuteModeTest(_FakeRepoCase):

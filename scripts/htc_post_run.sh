@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # HTC post-run runbook (rows 458/461/463: night-1's exit hands off into the
-# post-run batch -- merge, push, host probes, the stale-history live check,
-# the merge-time gate, then the targeted gauntlet rerun -- before night-2
-# starts).
+# post-run batch -- the merge-time gate, the merge and push, host probes,
+# the stale-history live check, then the targeted gauntlet rerun -- before
+# night-2 starts).
 #
 # Usage:
 #   BATCH=<sha> RUN_DIR=<path/to/run-dir> scripts/htc_post_run.sh [--execute]
@@ -16,9 +16,16 @@
 # runs the one step that is genuinely non-darktable and safe to run for
 # real here: the merge-time gate (fix round 1, review I6 -- the mutation
 # check PLUS pytest, over the batch's own range, not `make gate` alone).
+#
+# Fix round 2 (review R3): the gate is step 1, BEFORE the merge (so it runs
+# from a batch checkout/worktree that may have no `.venv`, hence the PY
+# resolution below); once BATCH is already merged into main, a rerun
+# reports that plainly and still prints the remaining steps, rather than
+# refusing -- "idempotent, rerun anytime" holds either way.
+#
 # Exit 0 when preconditions hold (and, with --execute, the gate and pytest
-# pass); exit 1 when a precondition fails or --execute's checks fail;
-# exit 2 on a usage error.
+# pass, or BATCH is already merged); exit 1 when a precondition fails or
+# --execute's checks fail; exit 2 on a usage error.
 set -uo pipefail
 
 usage() { echo "usage: BATCH=<sha> RUN_DIR=<run-dir> $0 [--execute]" >&2; }
@@ -46,8 +53,25 @@ fi
 # real scouter checkout in tests, without this script ever guessing wrong
 # about which repo BATCH/main belong to.
 SCRIPT_HOME="${HTC_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-PY="$SCRIPT_HOME/.venv/bin/python3"
-[[ -x "$PY" ]] || PY=python3
+# Fix round 2 (review R3): before the merge, this script typically runs
+# from the batch's OWN checkout or a bare worktree, neither of which has
+# its own `.venv` -- resolve, in order: an explicit $SCOUTER_PYTHON, this
+# repo's own `.venv`, then the MAIN checkout's `.venv` (found via git's
+# common dir, which a worktree always has and a plain checkout's own root
+# equals), before falling back to a bare `python3` on PATH.
+if [[ -n "${SCOUTER_PYTHON:-}" && -x "${SCOUTER_PYTHON}" ]]; then
+  PY="$SCOUTER_PYTHON"
+elif [[ -x "$SCRIPT_HOME/.venv/bin/python3" ]]; then
+  PY="$SCRIPT_HOME/.venv/bin/python3"
+else
+  GIT_COMMON_DIR="$(git -C "$SCRIPT_HOME" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  MAIN_ROOT="$([[ -n "$GIT_COMMON_DIR" ]] && dirname "$GIT_COMMON_DIR" || true)"
+  if [[ -n "$MAIN_ROOT" && -x "$MAIN_ROOT/.venv/bin/python3" ]]; then
+    PY="$MAIN_ROOT/.venv/bin/python3"
+  else
+    PY=python3
+  fi
+fi
 
 say() { echo "[$(date '+%F %T')] $*"; }
 
@@ -152,43 +176,64 @@ if [[ -z "$MERGE_BASE" || -z "$BATCH_SHA" ]]; then
   say "BLOCKED: could not compute merge-base(main, $BATCH) in $SCRIPT_HOME"
   exit 1
 fi
+# Fix round 2 (review R3): merge-base(main, BATCH) == BATCH can only happen
+# when BATCH is already an ancestor of main (git's own definition of
+# merge-base) -- i.e. BATCH is ALREADY MERGED, never an error. Round 1
+# treated this as BLOCKED/exit 1, which broke "idempotent, rerun anytime":
+# rerunning this script right after the human ran step 2 (the merge) used
+# to refuse. Report it plainly instead and keep going -- steps 2-5 (the
+# merge itself is a no-op by then, but harmless to print; the host probes,
+# stale-history check and targeted rerun still apply) print as usual, and
+# step 1 explains why there is nothing new to gate rather than printing a
+# vacuous BASE==HEAD command.
+ALREADY_MERGED=0
 if [[ "$MERGE_BASE" == "$BATCH_SHA" ]]; then
-  say "BLOCKED: merge-base(main, $BATCH) == $BATCH -- nothing to gate (already on main, or main is ahead)"
-  exit 1
+  ALREADY_MERGED=1
+  say "$BATCH_SHA is already merged into main (merge-base(main, $BATCH) == $BATCH_SHA) -- nothing new to gate for it"
 fi
 
 say "preconditions met for batch $BATCH ($RUN_DIR)"
 echo
 echo "# --- post-run batch: run these IN ORDER, by hand -----------------------"
 echo
-echo "# 1) ff-merge the batch into main, then push (never run by this script)"
+if [[ "$ALREADY_MERGED" -eq 1 ]]; then
+  echo "# 1) merge-time gate: SKIPPED -- $BATCH_SHA is already merged into main"
+  echo "#    (a NEW batch's own BASE is this run's current main tip; rerun this"
+  echo "#    script with that batch's sha to get a real gate command)"
+else
+  echo "# 1) merge-time gate: mutation check + pytest, BASE computed BEFORE the merge"
+  echo "make -C \"$SCRIPT_HOME\" gate BASE=$MERGE_BASE HEAD=$BATCH_SHA"
+  echo "$PY -m pytest -q -m \"not host\""
+fi
+echo
+echo "# 2) ff-merge the batch into main, then push (never run by this script)"
 echo "git -C \"$SCRIPT_HOME\" fetch origin main"
 echo "git -C \"$SCRIPT_HOME\" checkout main"
 echo "git -C \"$SCRIPT_HOME\" merge --ff-only $BATCH"
 echo "git -C \"$SCRIPT_HOME\" push origin main"
 echo
-echo "# 2) host probes (quit any running darktable first; never run by this script)"
-echo "SCOUTER_HOST_TESTS=1 $SCRIPT_HOME/.venv/bin/python -m pytest tests/test_host_phase3.py::ProbeCandidatePathsHostTest -q -s"
-echo "SCOUTER_HOST_TESTS=1 $SCRIPT_HOME/.venv/bin/python -m pytest tests/test_host_colorcal.py -q -s"
+echo "# 3) host probes (quit any running darktable first; never run by this script)"
+echo "SCOUTER_HOST_TESTS=1 $PY -m pytest tests/test_host_phase3.py::ProbeCandidatePathsHostTest -q -s"
+echo "SCOUTER_HOST_TESTS=1 $PY -m pytest tests/test_host_colorcal.py -q -s"
 echo
-echo "# 3) stale-history live check (never run by this script):"
+echo "# 4) stale-history live check (never run by this script):"
 echo "#    darkroom_say \"faded blacks a touch\""
 echo "#    then verify: history_end >= before, newest is exposure,"
 echo "#    black == target, strategy == view_bounce_action"
 echo
-echo "# 4) merge-time gate: mutation check + pytest, BASE computed BEFORE the merge"
-echo "make -C \"$SCRIPT_HOME\" gate BASE=$MERGE_BASE HEAD=$BATCH_SHA"
-echo "$SCRIPT_HOME/.venv/bin/python -m pytest -q -m \"not host\""
-echo
 echo "# 5) targeted GAUNTLET rerun (not 'make gate') of night-1's failed/"
 echo "#    changed case ids, via the gauntlet runner (RULING: this is what"
 echo "#    'targeted gate rerun' means in the post-run batch -- an id-list"
-echo "#    file, not the mutation-check gate above, which is step 4)"
-echo "$SCRIPT_HOME/.venv/bin/python -m gauntlet run --stamp <new-stamp> --ids-file <path/to/targeted-ids.txt>"
+echo "#    file, not the mutation-check gate above, which is step 1)"
+echo "$PY -m gauntlet run --stamp <new-stamp> --ids-file <path/to/targeted-ids.txt>"
 echo
 
 if [[ "$EXECUTE" -eq 1 ]]; then
-  say "--execute: running step 4 (the merge-time gate + pytest) for real; steps 1-3 and 5 stay print-only"
+  if [[ "$ALREADY_MERGED" -eq 1 ]]; then
+    say "--execute: $BATCH_SHA is already merged; nothing to gate, exiting 0"
+    exit 0
+  fi
+  say "--execute: running step 1 (the merge-time gate + pytest) for real; steps 2-5 stay print-only"
   GATE_CMD=${GATE_CMD:-"make -C \"$SCRIPT_HOME\" gate BASE=\"$MERGE_BASE\" HEAD=\"$BATCH_SHA\""}
   say "+ $GATE_CMD"
   # A subshell, not a bare `eval`: GATE_CMD/PYTEST_CMD may themselves be (or
@@ -201,7 +246,7 @@ if [[ "$EXECUTE" -eq 1 ]]; then
   if [[ "$rc" -ne 0 ]]; then
     exit "$rc"
   fi
-  PYTEST_CMD=${PYTEST_CMD:-"\"$SCRIPT_HOME/.venv/bin/python\" -m pytest -q -m \"not host\""}
+  PYTEST_CMD=${PYTEST_CMD:-"\"$PY\" -m pytest -q -m \"not host\""}
   say "+ $PYTEST_CMD"
   ( cd "$SCRIPT_HOME" && eval "$PYTEST_CMD" )
   rc=$?
