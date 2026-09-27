@@ -193,6 +193,27 @@
     "unchanged_keys": ["temperature.preset"],
     "stat_check": "unchanged: M4 rb with the phrase's sign is the second oracle",
     "until_pinned": {"pin": ["channelmixerrgb", "temperature"], "expect": "typed_error", "accept_codes": ["module_unavailable"]},
-    "direction_verified": false
+    "direction_verified": false,
+    "xmp_offsets": {
+      "about": "scouter/core/xmp.py LAYOUTS[('channelmixerrgb', 3)] -- darktable's channelmixerrgb XMP v3 params blob (modversion 3, 160 bytes), verified against tests/fixtures/P6281348.ORF.xmp num 7.",
+      "modversion": 3,
+      "illuminant": 120,
+      "adaptation": 132,
+      "x": 136,
+      "y": 140,
+      "temperature": 144
+    },
+    "guard": {
+      "name": "NO_WB_REROUTE",
+      "kind": "contextvars.ContextVar[bool]",
+      "where": "scouter/core/darkroom.py",
+      "about": "Set True around a call that must not be re-routed onto color calibration (darkroom.py line ~899 checks `route['route'] == 'color_calibration' and not NO_WB_REROUTE.get()`); moves.py sets/resets it around the paths that already decided the route themselves."
+    },
+    "wb_verify_tolerance": {
+      "value": 0.03,
+      "about": "scouter/core/moves.py _WB_VERIFY_TOLERANCE = 3 * wb._EXACT_TOLERANCE (wb._EXACT_TOLERANCE = 0.01); the post-move r/b ratio must land within this fraction of the expected ratio.",
+      "source": "scouter/core/moves.py, scouter/core/wb.py"
+    },
+    "intent_examples": "tests/intent/colorcal_warmth.json (run by tests/intent/test_colorcal_warmth_intent.py; Zenkai Rules Z1)"
   }
 }
