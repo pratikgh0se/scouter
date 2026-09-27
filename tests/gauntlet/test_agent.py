@@ -316,44 +316,69 @@ def test_agent_write_flag_uses_the_one_write_tool_set():
     assert {c.tool for c in obs.calls if c.write} == set(WRITE_TOOLS)
 
 
-def test_frame_path_shown_to_the_agent_never_names_the_diagnosis(tmp_path, monkeypatch):
-    """(row 501 item F, night-1 rank 8, SCA-fixture-frame-mismatch-and-
-    leak): r0037's agent read the staged frame's own directory name
-    ("the folder is literally named warm_cast") as evidence for its
-    diagnosis. The prompt (and the path in it) must carry no problem-name
-    token from the case generator's problem list (tests.gauntlet.corpus.
-    ROLES)."""
+def test_frame_path_shown_to_the_agent_is_the_real_staged_path_and_names_no_diagnosis(
+        tmp_path, monkeypatch):
+    """(row 501 item F, fix round 1, Opus finding 1, BLOCKER): the earlier
+    alias (a symlink under `frames_view/`) broke darktable's own path
+    matching and still leaked the real, role-named path through every MCP
+    envelope's own `path` field. Now the prompt's path is exactly the real,
+    already-staged path the library, `ensure_frame` and every envelope
+    share -- `session.stage()`'s `_neutral_role_dir` makes THAT path
+    role-blind, so there is nothing left to substitute. Checked against the
+    real corpus.ROLES list (the case generator's own problem list), not
+    only against the request text."""
     from gauntlet.case import Case, Expect
-    from tests.gauntlet.corpus import ROLES
+    from tests.gauntlet.corpus import Corpus, ROLES
+    from tests.gauntlet.session import stage
 
-    frame = tmp_path / "frames" / "warm_cast" / "IMG_0001.ORF"
-    frame.parent.mkdir(parents=True)
-    frame.write_bytes(b"raw")
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "H.ORF").write_bytes(b"raw")
+    roles = {r: "H.ORF" for r in ROLES}
+    doc = {"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {"olympus": roles}}
+    staged = stage(Corpus(doc, trial), "olympus", tmp_path / "s1")
+    real_path = staged.frames["warm_cast"]
 
     class Inner:
-        root = tmp_path
+        root = tmp_path / "s1"
         floors = {}
         touched = set()
-        staged = type("S", (), {"env": {"PYTHONPATH": "."}})()
 
         def ensure_frame(self, role):
-            return frame
+            #: This IS what ScouterSession.ensure_frame does on success: it
+            #: hands back staged.frames[role] unchanged -- the exact path
+            #: darkroom_open sent to the library.
+            return real_path
 
+    Inner.staged = staged
     monkeypatch.setattr(agent.observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
                                                                        "params": {}})
     FakePopen.spawned = []
-    popen = _popen_seq(_lines({"type": "result", "result": "ok", "session_id": "s1"}))
+    #: A tool_result envelope carrying the real path back, as darkroom_open
+    #: genuinely does -- proves the envelope's own `path` field is neutral
+    #: too, not only the prompt text.
+    envelope_lines = _lines(
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t1", "name": "mcp__scouter__darkroom_open",
+             "input": {"image": str(real_path)}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": [{"type": "text",
+                          "text": json.dumps({"ok": True, "data": {"path": str(real_path)}})}]}]}},
+        {"type": "result", "result": "Looked at it, it's a touch dim.", "session_id": "s1"})
+    popen = _popen_seq(envelope_lines)
     s = agent.AgentSession(Inner(), popen=popen)
     case = Case(id="sca-leak", layer="scenarios_agent", tier="P0", mode="agent", steps=[],
                 expect=Expect("refuse"), body="olympus", frame_role="warm_cast",
                 meta={"sentence": "fix the color balance", "followups": []})
-    s.run_case(case)
+    obs = s.run_case(case)
     prompt = FakePopen.spawned[-1].argv[2]
-    alias_path = prompt.rsplit(" is ", 1)[-1].rstrip(".")
+    prompt_path = prompt.rsplit(" is ", 1)[-1].rstrip(".")
+    assert prompt_path == str(real_path)  # the prompt names the real, library-known path
+    envelope_path = obs.calls[0].envelope["data"]["path"]
     for token in ROLES:
-        if token in ("hero", "neutral"):
-            continue
-        assert token not in alias_path, (token, alias_path)
+        assert token not in prompt_path, ("prompt", token, prompt_path)
+        assert token not in envelope_path, ("envelope", token, envelope_path)
 
 
 def test_agent_session_parks_on_the_usage_budget_before_spawning_claude(tmp_path, monkeypatch):

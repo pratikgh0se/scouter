@@ -138,6 +138,33 @@ def test_launch_error_is_a_failed_attempt(corpus, tmp_path):
     assert dt.launches == 2
 
 
+def test_stage_frames_under_role_blind_directories(tmp_path):
+    """(row 501 item F, fix round 1, Opus finding 1, BLOCKER): the earlier
+    fix (a symlink alias inside agent.py) broke darktable's own path
+    matching and still leaked the real, role-named path through every MCP
+    envelope's own `path` field. Staging every role under a hashed,
+    role-blind directory in stage() itself removes the leak at its one
+    source: the library, the envelopes and the agent's prompt all ever see
+    this one path."""
+    from tests.gauntlet.corpus import ROLES
+
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "H.ORF").write_bytes(b"raw")
+    roles = {r: "H.ORF" for r in ROLES}
+    doc = {"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {"olympus": roles}}
+    corpus = Corpus(doc, trial)
+    staged = sess.stage(corpus, "olympus", tmp_path / "s1")
+    for role, path in staged.frames.items():
+        rel = str(path.relative_to(tmp_path / "s1"))
+        for token in ROLES:
+            assert token not in rel, (role, token, rel)
+    # the library's own staged path is real and readable -- not a symlink,
+    # not a copy under a second, hidden directory tree.
+    assert staged.frames["warm_cast"].is_file() and not staged.frames["warm_cast"].is_symlink()
+    assert staged.frames["warm_cast"].read_bytes() == b"raw"
+
+
 class LockedDt(FakeDt):
     """launch() writes a darktable.log with the lock line, as darktable
     itself would when the library db is wedged by an orphaned process."""

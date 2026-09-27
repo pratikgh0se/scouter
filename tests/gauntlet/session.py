@@ -6,6 +6,7 @@ and never one this runner did not launch."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -173,16 +174,35 @@ def write_config(root: Path) -> Path:
     return path
 
 
+def _neutral_role_dir(root: Path, role: str) -> Path:
+    """(row 501 item F, fix round 1, Opus finding 1, BLOCKER): several corpus
+    roles literally spell the diagnosis (`warm_cast`, `cool_cast`, `blown`,
+    `flat`, `noisy`, `dark`, `bright`) -- r0037's agent read its own
+    tool-result path and used the folder name as evidence. A symlink alias
+    (the earlier fix, bb4f13f) only hid the leak from the PROMPT: the
+    library still holds the real path (darktable's Lua matches paths by
+    exact string, `_image_full_path(image) == path`, no realpath) and every
+    MCP envelope (`darkroom_open`, `scout_preview`, `history_read`, ...)
+    still echoed the real, role-named `path` field back. Staging every
+    role's frame under a hashed, role-blind directory HERE -- the one path
+    the library, the envelopes and the prompt all ever see -- removes the
+    leak at its only source instead of hiding it after the fact."""
+    return root / "frames" / ("f" + hashlib.sha1(role.encode()).hexdigest()[:6])
+
+
 def stage(corpus: Corpus, body: str, root: Path, *, job_size: int = 7,
           chart: Path | None = None) -> Staged:
     """Fresh 0644 copies of every role frame and a small card for this session.
-    `chart` (the run's synthetic chart) is copied in as role `chart`."""
+    `chart` (the run's synthetic chart) is copied in as role `chart`. Every
+    role's frame is staged under a hashed, role-blind directory
+    (`_neutral_role_dir`) -- the disk path, and so every MCP envelope and
+    the agent's own prompt, never spells the role/diagnosis name."""
     root.mkdir(parents=True, exist_ok=True)
     frames: dict[str, Path] = {}
     if chart is not None and chart.exists():
-        frames["chart"] = copy_readonly(chart, root / "frames" / "chart" / chart.name)
+        frames["chart"] = copy_readonly(chart, _neutral_role_dir(root, "chart") / chart.name)
     for role, src in corpus.roles(body).items():
-        dst = root / "frames" / role / src.name
+        dst = _neutral_role_dir(root, role) / src.name
         if not dst.exists():
             copy_readonly(src, dst)
         frames[role] = dst
