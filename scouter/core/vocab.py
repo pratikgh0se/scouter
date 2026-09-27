@@ -75,6 +75,42 @@ class ParamSpec:
 _CB_HUE_DEFAULT = 0.0
 
 
+#: darktable's exposure module stores `black` (an additive ratio correction)
+#: quantised to steps of this size: a fresh module's `black` lands at
+#: -(2**-12) == -0.000244140625, not exactly 0.0 (row 495/496,
+#: `tests/test_host_phase3.py::ProbeExposureBlackDefaultHostTest`, host run
+#: 2026-09-27 -- the stale-history live check saw the same ~4.4e-5-class gap
+#: after a `set` landed on the nearest quantised slot rather than the exact
+#: requested value). `default = 0.0` stays the cited value for this row;
+#: nothing has ever measured `black` at anything other than a multiple of
+#: this slot floor near zero, so a read within one step of 0.0 is the
+#: default, not an uncorrected real offset.
+EXPOSURE_BLACK_QUANT = 2 ** -12
+
+#: Per-row overrides of the "is this live value its declared default"
+#: tolerance, keyed `(module, param)`. A row with no entry here keeps its
+#: caller's generic epsilon (`darkroom._close`'s historical `1e-4`, tight
+#: enough for every other default/neutral, which are all exact by
+#: construction). `1.5x` the quantisation step: strictly bigger than the
+#: exact -(2**-12) gap a fresh module reports (so that reading lands inside
+#: the tolerance, not exactly on its edge), while still rejecting a real
+#: offset an order of magnitude bigger (e.g. -0.0027, the stale-history
+#: live check's landed value against ITS target, not its default -- not a
+#: default match either way, and correctly refused by this margin).
+_DEFAULT_TOLERANCE: dict[tuple[str, str], float] = {
+    ("exposure", "black"): EXPOSURE_BLACK_QUANT * 1.5,
+}
+
+
+def default_tolerance(module: str, param: str, fallback: float = 1e-4) -> float:
+    """Tolerance for "does this live value equal (module, param)'s declared
+    `neutral`/`default`" -- applied wherever that comparison is made (today:
+    `darkroom._module_at_defaults`), never special-cased to one caller.
+    `fallback` is the caller's own generic epsilon for a row with no
+    override here."""
+    return _DEFAULT_TOLERANCE.get((module, param), fallback)
+
+
 def _cb(param: str, ui: str, unit: str, lo: float, hi: float, step: float, concept: str,
         why: str, watch: str, candidates: tuple[str, ...] = (), *, wraps: bool = False,
         neutral: float | None = 0.0) -> ParamSpec:
@@ -156,19 +192,25 @@ PARAMS: tuple[ParamSpec, ...] = (
               # -- it fills that column only where a value is asserted
               # neutral by construction, and groups exposure.black with
               # exposure.exposure/sigmoid.skew/temperature.tint as rows that
-              # are not. `0.0` is a plausible value (darktable's
+              # are not. `0.0` was a plausible CANDIDATE (darktable's
               # dt_iop_exposure_params_t.black is 0.0f in its C default, and
               # an additive correction with no active history entry applies
-              # none), but nothing in this repo has host-verified it the way
-              # the sign convention was (§10, a rendered before/after
-              # scout.stats run) -- so it is a CANDIDATE, not a cited
-              # default, until tests/test_host_phase3.py's
-              # ProbeExposureBlackDefaultHostTest pins it (row
-              # LK-calibration-holes: the gauntlet's chart calibration probe
-              # may still probe from this candidate to reach a module the
-              # PFM chart never activates, but records the result as
-              # unverified rather than a settled measurement).
-              default_candidate=0.0),
+              # none), pending host verification -- unlike the sign
+              # convention (§10, a rendered before/after scout.stats run),
+              # which was already measured.
+              #
+              # Row 495/496: `tests/test_host_phase3.py::
+              # ProbeExposureBlackDefaultHostTest` (host run 2026-09-27)
+              # found a fresh exposure module's `black` at
+              # -0.000244140625 == -(2**-12), a slot-floor quantisation
+              # (`EXPOSURE_BLACK_QUANT`, this module), not a real
+              # uncorrected offset -- within the tolerance the probe and
+              # every default-equality check now use for this row
+              # (`default_tolerance`). PASS: promoted from
+              # `default_candidate` to the cited `default` below; this is
+              # NOT a spec §4.3 edit (that table stays as-is, blank), only
+              # this repo's own host-verified value.
+              default=0.0),
     ParamSpec("sigmoid", "contrast", "sigmoid › contrast", "ratio", 1.0, 0.5, 3.0, 0.1,
               "xmp", None, False, "tone_mapper",
               "steepens or flattens the middle of the tone curve",

@@ -3,11 +3,11 @@
   "subject": "tests/gauntlet/exec_looks.py chart_golden + plan_moves, scouter/core/vocab.py ParamSpec.default / default_candidate",
   "examples": [
     {
-      "id": "black-point-probes-absolute-from-a-candidate-default-but-stays-unverified",
+      "id": "black-point-probes-absolute-from-a-host-verified-default",
       "input": {"module": "exposure", "param": "black", "amount": -0.01},
-      "expect": {"tool": "darkroom_set", "value": -0.01, "calibration": "measured_unverified",
-                "planned": false},
-      "source": "night-1 golden-case audit (looks/001, 23:21): 'exposure.black' -> value_unknown 'did not decode from the XMP' on a relative darkroom_adjust; scouter/core/vocab.py declares exposure.black's darktable default only as a `default_candidate` (0.0, an additive correction with no history entry is believed to apply none), so the probe still sets 0.0 + -0.01 = -0.01 absolutely instead of adjusting a delta with nothing to add it to -- but row 474 (final-review issue I1) found the phase3 design spec's own §4.3 table leaves this row's `default` column blank by design and no host probe had confirmed the value, so a real slope IS measured yet recorded as calibration_errors['exposure.black'] = 'default_unverified', and plan_moves treats it exactly like a skipped calibration (never planned) until tests/test_host_phase3.py's ProbeExposureBlackDefaultHostTest pins it"
+      "expect": {"tool": "darkroom_set", "value": -0.01, "calibration": "measured",
+                "planned": true},
+      "source": "night-1 golden-case audit (looks/001, 23:21): 'exposure.black' -> value_unknown 'did not decode from the XMP' on a relative darkroom_adjust; the probe sets 0.0 + -0.01 = -0.01 absolutely instead of adjusting a delta with nothing to add it to. Row 474 (final-review issue I1) found the phase3 design spec's own §4.3 table leaves this row's `default` column blank by design, so until a host probe confirmed the value scouter/core/vocab.py declared it only as a `default_candidate` and the measured slope was recorded as calibration_errors['exposure.black'] = 'default_unverified' (never planned). Row 495/496: tests/test_host_phase3.py's ProbeExposureBlackDefaultHostTest host-verified it (a fresh exposure module's black lands within darktable's slot-floor quantisation, vocab.EXPOSURE_BLACK_QUANT, of 0.0), promoting it to a cited `default=0.0` -- the probe now reads it via that branch, is no longer flagged unverified, and plan_moves DOES plan a black-point move from the measured slope"
     },
     {
       "id": "colour-balance-probes-absolute-from-declared-neutral",

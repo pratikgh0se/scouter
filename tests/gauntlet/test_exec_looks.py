@@ -64,7 +64,7 @@ def _run_chart_golden(monkeypatch, tmp_path) -> tuple[_FakeChartSession, Observa
     return session, obs
 
 
-def test_chart_golden_probes_exposure_black_with_an_absolute_set_from_its_candidate_default(
+def test_chart_golden_probes_exposure_black_with_an_absolute_set_from_its_default(
         monkeypatch, tmp_path):
     """RED (pre-fix, e2fc2dd): `chart_golden` only ever called
     `darkroom_adjust`. The fake bridge above refuses that `value_unknown`
@@ -78,14 +78,23 @@ def test_chart_golden_probes_exposure_black_with_an_absolute_set_from_its_candid
     GREEN (row 474, final-review issue I1): the probe reads exposure.black's
     `default_candidate` (0.0, `scouter/core/vocab.py` -- NOT a cited spec
     §4.3 default: that column is blank for this row by design, and no host
-    probe has pinned the value yet) and sends an ABSOLUTE `darkroom_set`
+    probe had pinned the value yet) and sends an ABSOLUTE `darkroom_set`
     instead, which the fake bridge answers ok without needing a current
     value at all -- `darkroom_adjust` is never called for this key, and a
-    real (non-zero) slope IS measured. But because the base came from an
-    un-pinned candidate, not a verified `neutral`/`default`, the result is
-    recorded as `calibration_errors["exposure.black"] = "default_unverified"`
-    and `plan_moves` treats it exactly like a skipped calibration: no
-    black-point move is planned until a host probe promotes the row."""
+    real (non-zero) slope IS measured. At that point the base came from an
+    un-pinned candidate, not a verified `neutral`/`default`, so the result
+    was recorded as
+    `calibration_errors["exposure.black"] = "default_unverified"` and
+    `plan_moves` treated it exactly like a skipped calibration.
+
+    RE-GREEN (row 495/496): `tests/test_host_phase3.py::
+    ProbeExposureBlackDefaultHostTest` host-verified the candidate (within
+    darktable's slot-floor quantisation, `vocab.EXPOSURE_BLACK_QUANT`) and
+    `scouter/core/vocab.py` promoted it to a cited `default=0.0`. `_probe_base`
+    now returns `("default", 0.0)` for this row ahead of `default_candidate`,
+    so `chart_golden` no longer flags `exposure.black` as
+    `default_unverified`, and `plan_moves` DOES plan a black-point move from
+    the measured slope."""
     session, obs = _run_chart_golden(monkeypatch, tmp_path)
 
     calls_by_tool = {tool for tool, _ in session.calls}
@@ -98,15 +107,16 @@ def test_chart_golden_probes_exposure_black_with_an_absolute_set_from_its_candid
     # Really measured (the fake renders a distinct black-point stat for this
     # key, see `fake_render_stats` above) -- not a falsy zero slope.
     assert cal["exposure.black"] not in (None, 0.0)
-    # But flagged unverified, not folded in as a settled measurement.
-    assert obs.extra["calibration_errors"]["exposure.black"] == "default_unverified"
-    assert cal["_errors"]["exposure.black"] == "default_unverified"
-    assert obs.extra["calibration_ok"] is False
+    # No longer flagged unverified: the row's default is cited now, not a
+    # candidate.
+    assert "exposure.black" not in obs.extra.get("calibration_errors", {})
+    assert "exposure.black" not in cal.get("_errors", {})
 
     look = {"targets": {"tone": {}, "black_lift": 1.0}}
     moves, notes = exec_looks.plan_moves(look, cal, {})
-    assert ("exposure", "black") not in {(m, p) for m, p, _ in moves}
-    assert any("exposure.black calibration unverified: default_unverified" in n for n in notes)
+    move_by_pair = {(m, p): v for m, p, v in moves}
+    assert ("exposure", "black") in move_by_pair
+    assert not any("exposure.black calibration unverified" in n for n in notes)
 
 
 def test_chart_golden_reports_a_probe_with_no_declared_default_as_a_failure_not_a_zero(

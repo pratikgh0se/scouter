@@ -267,10 +267,21 @@ class ProbeExposureBlackDefaultHostTest(unittest.TestCase):
     column only where a value is asserted neutral by construction, and
     groups `exposure.black` with rows it does NOT assert that for. Nothing
     else in this repo may claim the value is known; this is the probe that
-    can. On a PASS here, promote `default_candidate=0.0` to `default=0.0` in
-    `scouter/core/vocab.py`, citing this test (not spec §4.3, which stays
-    unedited), and drop the `default_unverified` flag from
-    `tests/gauntlet/exec_looks.py`'s `chart_golden`.
+    can.
+
+    Row 495/496: the host run found a fresh exposure module's `black` at
+    -0.000244140625, not exactly 0.0 -- darktable's slot-floor quantisation
+    for this ratio param (`vocab.EXPOSURE_BLACK_QUANT`, 2**-12), the same
+    ~4.4e-5-class gap the stale-history live check saw. Equality here uses
+    that quantisation step as its tolerance (`vocab.default_tolerance`)
+    instead of a fixed decimal-places check, since a places-based
+    `assertAlmostEqual` would fail on this exact, expected quantised
+    reading. PASS: `default_candidate=0.0` has been promoted to
+    `default=0.0` in `scouter/core/vocab.py`, citing this test (not spec
+    §4.3, which stays unedited); `tests/gauntlet/exec_looks.py`'s
+    `chart_golden` no longer flags `exposure.black` as `default_unverified`
+    (it now reads `row.default`, ahead of `default_candidate`, in
+    `_probe_base`).
     """
 
     def test_fresh_exposure_module_defaults_black_to_zero(self) -> None:
@@ -303,7 +314,9 @@ class ProbeExposureBlackDefaultHostTest(unittest.TestCase):
                     f"({time.strftime('%Y-%m-%d %H:%M')})\n\n"
                     f"fresh exposure module (modversion {entry.modversion}, "
                     f"num {entry.num}, enabled={entry.enabled}): black={black!r}\n")
-            self.assertAlmostEqual(black, 0.0, places=6)
+            from scouter.core import vocab
+
+            self.assertAlmostEqual(black, 0.0, delta=vocab.default_tolerance("exposure", "black"))
         finally:
             hs.quit_darktable(proc)
             install.restore()

@@ -926,10 +926,33 @@ class CommitReadbackTest(unittest.TestCase):
         self.assertTrue(any("no new sidecar" in w for w in result.warnings))
 
     def test_a_reset_timeout_is_never_dressed_up_as_a_commit(self) -> None:
-        """`reset` cannot be confirmed from the XMP, so its timeout propagates."""
+        """`reset` cannot be confirmed from the XMP, so its timeout propagates.
+
+        `sigmoid` (not `exposure`, row 495/496): neither of its rows
+        declares a neutral or a darktable default, so
+        `_module_at_defaults` always returns `False` for it and a reset can
+        never be confirmed -- `exposure` no longer proves this: its `black`
+        row now has a host-verified `default=0.0`
+        (`scouter/core/vocab.py`), and this fixture's own `exposure.black`
+        (-0.000244140625, darktable's slot-floor quantisation for that
+        param) reads AS that default within `default_tolerance`, so a reset
+        of `exposure` on this fixture really is honestly confirmable now.
+        """
         with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
             with self.assertRaises(CommitTimeout):
-                darkroom.reset(module="exposure", confirm=True)
+                darkroom.reset(module="sigmoid", confirm=True)
+
+    def test_a_reset_of_exposure_already_at_its_slot_floor_default_is_committed_honestly(
+            self) -> None:
+        """Row 495/496: the fixture's own `exposure.black` is
+        -0.000244140625 -- darktable's slot-floor quantisation of the
+        default, not a real offset -- so a reset of `exposure` (which
+        writes nothing here: it is already effectively at its declared
+        defaults) is now confirmed from the XMP instead of timing out,
+        exactly like the already-enabled/already-landed cases above."""
+        with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
+            result = darkroom.reset(module="exposure", confirm=True)
+        self.assertTrue(result.committed)
 
 
 class DarkroomCommitSeamTest(unittest.TestCase):

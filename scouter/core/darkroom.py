@@ -636,7 +636,13 @@ def _module_at_defaults(path: str, module: str, instance: int) -> bool:
         value = params.get(s.param)
         if not isinstance(value, (int, float)):
             return False
-        if not _close(float(value), _declared_default(module, s.param)):
+        # Row 495/496: a row-specific tolerance (e.g. exposure.black's
+        # slot-floor quantisation, `vocab.EXPOSURE_BLACK_QUANT`) applies
+        # here, not just the generic float epsilon -- this is the one place
+        # a live XMP value is checked for equality against a declared
+        # neutral/default.
+        if not _close(float(value), _declared_default(module, s.param),
+                      tol=vocab.default_tolerance(module, s.param)):
             return False
     return True
 

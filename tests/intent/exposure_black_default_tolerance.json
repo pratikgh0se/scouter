@@ -1,0 +1,24 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for the exposure.black default-equality tolerance (row 495/496, tests/test_host_phase3.py::ProbeExposureBlackDefaultHostTest, host run 2026-09-27: a fresh exposure module's black reads -0.000244140625, darktable's slot-floor quantisation, not exactly 0.0). Run by tests/intent/test_exposure_black_default_tolerance_intent.py.",
+  "subject": "scouter/core/vocab.py EXPOSURE_BLACK_QUANT / default_tolerance, scouter/core/darkroom.py _module_at_defaults",
+  "examples": [
+    {
+      "id": "reported-slot-floor-value-is-the-default",
+      "reported": -0.000244140625,
+      "expect": {"at_default": true},
+      "source": "tests/test_host_phase3.py::ProbeExposureBlackDefaultHostTest host run 2026-09-27: a fresh exposure module's black lands at exactly -(2**-12), darktable's slot-floor quantisation for this ratio param -- within default_tolerance('exposure', 'black'), so an equality check against the row's declared default=0.0 treats this reading as the default, not an uncorrected real offset"
+    },
+    {
+      "id": "reported-real-offset-is-not-the-default",
+      "reported": -0.0027,
+      "expect": {"at_default": false},
+      "source": "row 495/496 stale-history live check: committing a set landed black at -0.0027000010013580322 against a target near there -- over 10x EXPOSURE_BLACK_QUANT away from 0.0, so it must NOT be mistaken for the default by the same tolerance that accepts the slot-floor reading above"
+    },
+    {
+      "id": "reported-exact-zero-is-the-default",
+      "reported": 0.0,
+      "expect": {"at_default": true},
+      "source": "the plain case: darktable reporting exactly 0.0 (the cited default) must still pass, with or without the quantisation tolerance"
+    }
+  ]
+}
