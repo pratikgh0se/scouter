@@ -13,7 +13,11 @@ def load_policy() -> Policy:
     return Policy(refusal_codes=frozenset(cm["refusal_codes"]),
                   transient_codes=frozenset(cm["transient_codes"]),
                   refusal_markers=tuple(cm["refusal_markers"]),
-                  claim_markers=tuple(cm["claim_markers"]))
+                  claim_markers=tuple(cm["claim_markers"]),
+                  # Named, provisional overrides (check_map.json's own
+                  # "flags_about"): absent here (older check_map.json with no
+                  # "flags" key) reads as "nothing overridden", same as today.
+                  flags=frozenset(cm.get("flags", [])))
 
 
 POLICY = load_policy()

@@ -1,3 +1,4 @@
+import json
 import subprocess
 
 import pytest
@@ -6,7 +7,7 @@ from gauntlet.adapter import Observation
 from gauntlet.case import Case, Expect, Step
 from tests.gauntlet import exec_parity
 from tests.gauntlet.corpus import Corpus
-from tests.gauntlet.test_session import _session
+from tests.gauntlet.test_session import FakeMcp, _session
 
 
 @pytest.fixture
@@ -64,3 +65,39 @@ def test_cli_timeout_blocks_as_hang_without_raising(corpus, tmp_path, monkeypatc
     assert rec.error == "timeout"
     assert obs.blocked == "hang: scouter cli exceeded budget"
     assert obs.hang_evidence and obs.extra["envelopes_match"] is False
+
+
+def test_parity_both_failed_when_both_sides_answer_the_same_error(corpus, tmp_path, monkeypatch):
+    # PAR-hollow-pass (triage rank 2): envelopes_match alone can't tell a
+    # genuine pass from both sides refusing identically -- the verb never
+    # ran either way. parity_pair must flag that fact for the evaluator.
+    err = {"ok": False, "outcome": "error:usage",
+          "error": {"code": "usage", "message": "bad"}}
+    mcp = FakeMcp(answers={"vocab_list": err})
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 2, stdout=json.dumps(err), stderr=""))
+    case = Case(id="par-vocab-list-error", layer="parity", tier="P1", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "vocab_list"})
+    step = Step("parity_pair", {"verb": "vocab.list", "args": {"__htc_unknown__": 1}}, 60.0, False)
+    obs = Observation()
+    exec_parity.parity_pair(s, case, step, obs)
+    assert obs.extra["envelopes_match"] is True
+    assert obs.extra["parity_both_failed"] is True
+
+
+def test_parity_both_failed_is_false_when_both_sides_answer_ok(corpus, tmp_path, monkeypatch):
+    ok = {"ok": True, "outcome": "ok", "data": {}}
+    mcp = FakeMcp(answers={"vocab_list": ok})
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(ok), stderr=""))
+    case = Case(id="par-vocab-list-happy", layer="parity", tier="P1", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "vocab_list"})
+    step = Step("parity_pair", {"verb": "vocab.list", "args": {}}, 60.0, False)
+    obs = Observation()
+    exec_parity.parity_pair(s, case, step, obs)
+    assert obs.extra["envelopes_match"] is True
+    assert obs.extra["parity_both_failed"] is False

@@ -55,6 +55,12 @@ class Policy:
     transient_codes: frozenset[str]
     refusal_markers: tuple[str, ...]
     claim_markers: tuple[str, ...]
+    #: Named, provisional overrides (row 488 pending Pratik): a flag's mere
+    #: PRESENCE turns it on; a flag never in this set is off -- so a fresh
+    #: Policy (an empty set, the dataclass default) behaves exactly as before
+    #: any flag existed. One flag lives here today:
+    #: "parity.same_failure_is_pass" (see `evaluate`'s PAR-hollow-pass check).
+    flags: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -896,6 +902,19 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     if obs.healed and not case.meta.get("allow_heal"):
         return Verdict(FAIL, "failed", notes=["watchdog heal inside a case (spec 6.4)"])
     results = [run_check(i, ch, obs) for i, ch in enumerate(case.expect.checks)]
+    # PAR-hollow-pass (night-1 triage rank 2, row 488 -- provisional pending
+    # Pratik): a layer 6 parity pair (tests/gauntlet/exec_parity.py
+    # parity_pair) where BOTH sides answered the SAME failure is not
+    # evidence the verb itself ran -- `envelopes_match` alone would read it
+    # as a pass. `parity.same_failure_is_pass` restores the old scoring with
+    # a one-line config flip (tests/gauntlet/data/check_map.json's "flags"),
+    # and defaults off.
+    if obs.extra.get("parity_both_failed") and \
+            "parity.same_failure_is_pass" not in policy.flags:
+        return Verdict(PARTIAL, "needs_review", results,
+                       notes=["both sides answered the same failure; the verb never ran "
+                              "(parity_diffs empty, neither envelope ok) -- flip "
+                              "parity.same_failure_is_pass to score this a pass instead"])
     kind = case.expect.kind
 
     if kind == "refuse":

@@ -1,0 +1,29 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for PAR-hollow-pass's outcome check (night-1 triage rank 2, scratchpad/night1-parity-install-guide-triage.md, row 488): a layer 6 parity pair where BOTH sides fail the SAME way used to score a pass (envelopes_match alone can't tell a genuine pass from an identical refusal on both sides). Provisional pending Pratik: gated behind policy flag parity.same_failure_is_pass (tests/gauntlet/data/check_map.json's flags list), default off/false, so a one-line config flip restores the old scoring. Run by gauntlet/tests/test_evaluate.py and tests/gauntlet/test_exec_parity.py (two independent parts of the same fix: the flag the evaluator reads, and the flag exec_parity.parity_pair computes).",
+  "subject": "gauntlet/evaluate.py evaluate() + Policy.flags; tests/gauntlet/exec_parity.py parity_pair",
+  "examples": [
+    {
+      "id": "both-sides-error-same-way-is-needs-review",
+      "input": {"mcp_envelope": {"ok": false, "outcome": "error:usage"},
+                "cli_envelope": {"ok": false, "outcome": "error:usage"},
+                "parity_diffs": [], "flag_set": false},
+      "expect": {"score": "partial", "outcome": "needs_review"},
+      "source": "night1-parity-install-guide-triage.md PAR-hollow-pass: 'the layer's only check is envelopes_match ... which holds whenever MCP and CLI agree, including when both fail the same way. So the 77 passes overstate coverage.' Needs Pratik section item 1."
+    },
+    {
+      "id": "both-sides-ok-same-envelope-is-pass",
+      "input": {"mcp_envelope": {"ok": true, "outcome": "ok"}, "cli_envelope": {"ok": true, "outcome": "ok"},
+                "parity_diffs": [], "flag_set": false},
+      "expect": {"score": "pass", "outcome": "verified"},
+      "source": "a genuine pair (the verb ran identically on both sides) must not regress -- only the SAME-FAILURE case changes"
+    },
+    {
+      "id": "flag-flip-restores-old-scoring",
+      "input": {"mcp_envelope": {"ok": false, "outcome": "error:usage"},
+                "cli_envelope": {"ok": false, "outcome": "error:usage"},
+                "parity_diffs": [], "flag_set": true},
+      "expect": {"score": "pass", "outcome": "verified"},
+      "source": "brief: 'implement it behind a flag parity.same_failure_is_pass defaulting to false so a one-line config flip restores the old scoring'"
+    }
+  ]
+}

@@ -101,6 +101,12 @@ def parity_pair(session, case, step, obs) -> CallRecord:
     obs.extra["envelopes_match"] = not diffs
     obs.extra["parity_diffs"] = diffs
     obs.extra["cli_envelope"] = cli_env
+    # PAR-hollow-pass (triage rank 2): the pair agreeing is not, on its own,
+    # evidence the verb ran -- both sides answering the SAME failure means it
+    # never did. `gauntlet.evaluate.evaluate` scores this `needs_review`
+    # unless the policy flag `parity.same_failure_is_pass` is set.
+    obs.extra["parity_both_failed"] = (not diffs) and \
+        not normalise(mcp_rec.envelope)["ok"] and not normalise(cli_env)["ok"]
     return CallRecord("parity_pair", step.args, {"ok": not diffs, "outcome": "ok",
                                                  "data": {"diffs": diffs}}, write=step.write)
 

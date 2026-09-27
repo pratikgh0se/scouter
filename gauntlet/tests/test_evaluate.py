@@ -1148,3 +1148,39 @@ def test_fix4_derived_key_is_restored_only_when_its_coefficients_are():
     v = evaluate(case, _steps_obs(ok_undo, [s0, s1, s2, s1], before_meta=WB_META, tools=tools),
                  POLICY)
     assert v.outcome == "verified", v
+
+
+# ---- PAR-hollow-pass (night-1 triage rank 2, row 488 -- provisional pending
+# Pratik): a parity pair where BOTH sides fail the SAME way must not read as
+# a pass just because envelopes_match is truthy -- the verb never ran.
+
+
+def test_parity_both_sides_error_same_way_is_needs_review_by_default():
+    case = _edit_case([Check("extra", target={"path": "envelopes_match", "op": "truthy"})],
+                      None, kind="workflow", steps=[Step("parity_pair")])
+    obs = Observation(calls=[CallRecord("parity_pair", {}, _ok({"diffs": []}))],
+                      extra={"envelopes_match": True, "parity_diffs": [],
+                             "parity_both_failed": True})
+    v = evaluate(case, obs, POLICY)
+    assert (v.score, v.outcome) == ("partial", "needs_review"), v
+
+
+def test_parity_both_sides_ok_same_envelope_is_still_pass():
+    case = _edit_case([Check("extra", target={"path": "envelopes_match", "op": "truthy"})],
+                      None, kind="workflow", steps=[Step("parity_pair")])
+    obs = Observation(calls=[CallRecord("parity_pair", {}, _ok({"diffs": []}))],
+                      extra={"envelopes_match": True, "parity_diffs": [],
+                             "parity_both_failed": False})
+    v = evaluate(case, obs, POLICY)
+    assert (v.score, v.outcome) == ("pass", "verified"), v
+
+
+def test_parity_same_failure_is_pass_flag_restores_the_old_scoring():
+    case = _edit_case([Check("extra", target={"path": "envelopes_match", "op": "truthy"})],
+                      None, kind="workflow", steps=[Step("parity_pair")])
+    obs = Observation(calls=[CallRecord("parity_pair", {}, _ok({"diffs": []}))],
+                      extra={"envelopes_match": True, "parity_diffs": [],
+                             "parity_both_failed": True})
+    lenient = Policy(**{**vars(POLICY), "flags": frozenset({"parity.same_failure_is_pass"})})
+    v = evaluate(case, obs, lenient)
+    assert (v.score, v.outcome) == ("pass", "verified"), v
