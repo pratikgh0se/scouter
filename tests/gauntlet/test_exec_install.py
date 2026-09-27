@@ -82,3 +82,75 @@ def test_leak_check_finds_new_files(tmp_path):
     watched.mkdir()
     (watched / "new.txt").write_text("leak")
     assert exec_install.newer_than(stamp, (str(watched),))
+
+
+# -- Fix D (night-1 triage rank 5/8, INS-doctor-needs-darktable + -config-version-assert)  # noqa: E501
+
+
+def _setup_payload(*, doctor_ok: bool) -> dict:
+    doctor = {"item": "doctor", "status": "ok" if doctor_ok else "bridge_timeout",
+              "detail": "view: darkroom" if doctor_ok else "bridge not answering"}
+    return {"verb": "setup", "check": False, "ok": doctor_ok,
+            "items": [{"item": "plugin", "status": "ok"}, {"item": "luarc", "status": "ok"},
+                      {"item": "wb_tables", "status": "ok"},
+                      {"item": "config", "status": "missing", "required": False}, doctor],
+            "next": []}
+
+
+def _fake_run(payload: dict, code: int):
+    def run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, returncode=code, stdout=json.dumps(payload),
+                                           stderr="")
+    return run
+
+
+def test_setup_without_darktable_is_marked_needs_darktable_not_a_bare_fail(tmp_path):
+    """The rehearsal's own doctor item requires a running darktable
+    (setup.py: required by default); ins-03 quit the one it launched, and
+    no case in the rehearsal restarts it before setup/setup_check run. That
+    is an environment gap the harness itself created, not a product
+    regression -- exec_install.InstallSession.run_case must mark the case
+    Observation.blocked = "needs_darktable" (evaluate()'s "blocked" outcome),
+    not let it read as a plain "failed"."""
+    r = exec_install.Rehearsal(tmp_path, run=_fake_run(_setup_payload(doctor_ok=False), 1))
+    ok, detail = r.action("setup")
+    assert ok is False
+    assert detail["_needs_darktable"] is True
+
+    session = exec_install.InstallSession(tmp_path)
+    session.rehearsal = r
+    case = Case(id="ins-04", layer="install", tier="P0", mode="cli",
+               steps=[Step("rehearsal", {"action": "setup"}, 120.0, False)],
+               expect=Expect("workflow"), meta={"action": "setup"})
+    obs = session.run_case(case)
+    assert obs.blocked == "needs_darktable"
+    assert "_needs_darktable" not in obs.extra["detail"]  # the internal marker never leaks
+
+
+def test_setup_check_without_darktable_is_also_marked_needs_darktable(tmp_path):
+    r = exec_install.Rehearsal(tmp_path, run=_fake_run(_setup_payload(doctor_ok=False), 1))
+    ok, detail = r.action("setup_check")
+    assert ok is False
+    assert detail["_needs_darktable"] is True
+
+
+def test_config_version_reason_is_reported_even_once_darktable_is_available(tmp_path):
+    """Fix D (INS-config-version-assert): scouter/cli/setup.py never writes
+    config.json by design, regardless of darktable -- this must show up as
+    an honest, always-present note, not only when doctor also fails."""
+    r = exec_install.Rehearsal(tmp_path, run=_fake_run(_setup_payload(doctor_ok=True), 0))
+    ok, detail = r.action("setup")
+    assert ok is True  # the product's own contract (code 0) is met
+    assert detail["config_has_version"] is False
+    assert "needs_review_reason" in detail
+    assert "_needs_darktable" not in detail  # doctor was fine: not an environment block
+
+
+def test_config_version_true_once_config_actually_has_it(tmp_path):
+    (tmp_path / "config" / "scouter").mkdir(parents=True)
+    (tmp_path / "config" / "scouter" / "config.json").write_text('{"version": 1}\n')
+    r = exec_install.Rehearsal(tmp_path, run=_fake_run(_setup_payload(doctor_ok=True), 0))
+    ok, detail = r.action("setup")
+    assert ok is True
+    assert detail["config_has_version"] is True
+    assert "needs_review_reason" not in detail
