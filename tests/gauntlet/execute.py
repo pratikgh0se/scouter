@@ -108,9 +108,21 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
     obs = Observation()
     t0 = clock()
     role = case.frame_role or "hero"
+    #: Fix A (night-1 triage rank 6, GD-walkthrough-state): the user-guide
+    #: walkthrough (layers/guide.py WALKTHROUGH, meta["session"] ==
+    #: "walkthrough") is one stateful session in document order -- gd-02's
+    #: "set contrast" runs on top of gd-01's "set exposure", gd-04's undo
+    #: expects gd-02/03's history to still be there, gd-09's preset save
+    #: needs the frame the earlier steps actually left. Isolating every case
+    #: (the ordinary rule) or resetting its undo journal would erase exactly
+    #: the state the next scripted step depends on. An ordinary case (any
+    #: other meta["session"], or none) keeps the ordinary per-case isolation.
+    #: Z1 intent example: tests/intent/walkthrough_state.json.
+    walkthrough = case.meta.get("session") == "walkthrough"
+    continuing = walkthrough and session.walkthrough_started
     try:
         frame = session.ensure_frame(role)
-        if isolate(session, frame, role):
+        if not continuing and isolate(session, frame, role):
             frame = session.ensure_frame(role)
             obs.extra["contaminated_restaged"] = True
     except SessionBlocked as e:
@@ -118,6 +130,8 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
         obs.hang_evidence.append(f"session: {e}")
         obs.wall_s = clock() - t0
         return obs
+    if walkthrough:
+        session.walkthrough_started = True
     #: Fix round 2 (review R1); fix round 3 (re-review R1, ordering): per-case
     #: undo journal isolation -- see session.reset_journal's own docstring.
     #: Must run AFTER isolate() (whose own darkroom_reset calls, for a
@@ -126,7 +140,10 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
     #: steps below, so no earlier entry -- isolate's own or an earlier
     #: case's -- can leak into THIS case's darkroom_undo_last. The count is
     #: kept in obs.extra so a leak stays visible rather than disappearing.
-    if session.staged is not None:
+    #: A continuing walkthrough case (fix A above) skips this too: gd-04's
+    #: and gd-08's own undo steps must see the REAL journal the walkthrough
+    #: built up, not an empty one.
+    if session.staged is not None and not continuing:
         obs.extra["journal_reset_entries"] = reset_journal(session.staged)
     kelvin = observe.kelvin_for(CAMERA.get(case.body or ""))
     obs.before = observe.snapshot(frame, kelvin)

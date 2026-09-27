@@ -245,6 +245,15 @@ class ScouterSession:
         self.current_frame: Path | None = None
         self.touched: set[str] = set()
         self.baselines: dict[str, dict] = {}
+        #: Fix A (night-1 triage rank 6, GD-walkthrough-state): set once
+        #: execute.run_tool_case has run the FIRST case of the user-guide
+        #: walkthrough (case.meta["session"] == "walkthrough") in this
+        #: session, so every later walkthrough case skips isolate() and
+        #: reset_journal() -- the walkthrough is one scripted session
+        #: sharing darktable state and the undo journal (gd-04's undo must
+        #: see gd-02/03's history, not a reset frame). Never set for any
+        #: other meta["session"] value (edu-* cases stay isolated per case).
+        self.walkthrough_started: bool = False
         self.floors: dict[str, float] = {}
         #: (final fix I3): "mcp_server_death: exit N" notes not yet handed to
         #: an observation; mcp_dead marks the session for reopen.
