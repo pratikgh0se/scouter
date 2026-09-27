@@ -20,8 +20,14 @@ from tests.gauntlet import observe
 from tests.gauntlet.layers.common import AGENT_TURN_TIMEOUT_S, WRITE_TOOLS
 from tests.gauntlet.session import SessionBlocked
 
+#: Night-1 triage rank 2 (SCA-session-limit-unparked): the Claude CLI's own
+#: "session limit" wording ("You've hit your session limit · resets
+#: 3:30pm (Asia/Bangkok)") is a distinct phrase from the usage/rate-limit
+#: forms below and was never matched, so the case was scored as the agent's
+#: own answer instead of parked (14 cases: 12 partial, 1 fail, 1 hollow pass
+#: sca-r0159).
 LIMIT_RE = re.compile(r"(usage limit|rate limit|limit reached|limit will reset|"
-                      r"out of (extra )?usage|5-hour limit|weekly limit)", re.I)
+                      r"out of (extra )?usage|5-hour limit|weekly limit|session limit)", re.I)
 RESET_RE = re.compile(r"resets? (?:at )?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", re.I)
 TURN_TIMEOUT_S = AGENT_TURN_TIMEOUT_S
 

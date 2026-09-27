@@ -78,6 +78,26 @@ def test_usage_limit_is_detected_with_reset_time():
     assert datetime.fromtimestamp(agent.reset_time(p["limit"], now)).hour == 16
 
 
+def test_session_limit_text_is_also_detected_with_reset_time():
+    """Night-1 triage rank 2 (SCA-session-limit-unparked): the Claude CLI's
+    own "session limit" wording (distinct from the usage/rate-limit forms
+    LIMIT_RE already covered) never parked 14 cases -- it was scored as the
+    agent's own answer, producing 12 partial, 1 fail and one hollow pass
+    (sca-r0159)."""
+    p = agent.parse_stream(_lines({"type": "result", "is_error": True,
+                                   "result": "You've hit your session limit · resets "
+                                             "3:30pm (Asia/Bangkok)"}))
+    assert p["limit"]
+    now = datetime(2026, 9, 27, 13, 51)
+    assert datetime.fromtimestamp(agent.reset_time(p["limit"], now)).hour == 15
+
+
+def test_an_ordinary_answer_is_never_mistaken_for_a_limit():
+    p = agent.parse_stream(_lines({"type": "result", "is_error": False,
+                                   "result": "Done, I've brightened it by half a stop."}))
+    assert p["limit"] is None
+
+
 def test_argv_registers_only_scouter_and_sonnet():
     argv = agent.claude_argv("hi", "/tmp/m.json", resume="s1")
     assert argv[argv.index("--model") + 1] == "sonnet"

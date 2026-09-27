@@ -1,0 +1,19 @@
+{
+  "about": "Zenkai Rules Z1 intent examples: the Claude CLI's 'session limit' text must park the agent-mode case (verdict `parked`, reason `claude_limit`), never score it as the agent's own answer (night-1 triage rank 2, SCA-session-limit-unparked, row 501 item A). Run by tests/intent/test_session_limit_intent.py against tests.gauntlet.agent.parse_stream. Two oracles per example: the parsed envelope's own `limit` field (agent.py:LIMIT_RE / parse_stream) and the reset time `reset_time` decodes from it (agent.py:RESET_RE) -- an ordinary answer must show neither.",
+  "subject": "tests/gauntlet/agent.py:parse_stream + LIMIT_RE + reset_time",
+  "examples": [
+    {
+      "id": "session-limit-text-parks-not-scored",
+      "input": {"is_error": true,
+                "result": "You've hit your session limit · resets 3:30pm (Asia/Bangkok)"},
+      "expect": {"limit_set": true, "reset_hour": 15},
+      "source": "night-1 triage rank 2: from 13:51:12 every agent turn returned this text; it was scored as the agent's own answer (12 partial, 1 fail r0137, 1 hollow pass sca-r0159) because LIMIT_RE did not match 'session limit'"
+    },
+    {
+      "id": "ordinary-answer-is-scored-not-parked",
+      "input": {"is_error": false, "result": "Done, I've brightened it by half a stop."},
+      "expect": {"limit_set": false, "reset_hour": null},
+      "source": "control example: a normal successful turn must never be mistaken for a limit just because the wider regex now exists"
+    }
+  ]
+}
