@@ -331,6 +331,20 @@ class ScouterSession:
         self._quit("relaunch")
         self._launch(frame or self.current_frame or self.staged.frames["hero"])  # type: ignore[union-attr]
 
+    def reopen_mcp(self) -> None:
+        """(night1-robustness-triage.md item 1): a hang can leave the MCP
+        server's own queue backlogged with the abandoned call, so a fresh
+        `relaunch()` of darktable alone is not enough -- the next case's
+        first call would still queue behind it. Close the old client (best
+        effort) and open a fresh one."""
+        old, self.mcp = self.mcp, None
+        if old is not None:
+            try:
+                old.close()
+            except Exception:  # noqa: BLE001 - best effort; a fresh client follows anyway
+                pass
+        self.mcp = self.mcp_factory(self.staged.env, self.root)
+
     def refresh_frame(self, role: str) -> Path:
         """Contaminated: re-stage this role from a fresh copy and relaunch on it.
 

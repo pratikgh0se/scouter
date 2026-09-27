@@ -83,11 +83,15 @@ class FakeSession:
         self.relaunch_error = relaunch_error
         self.touched: set[str] = set()
         self.baselines: dict = {}
+        self.mcp_reopened = 0
 
     def relaunch(self, frame=None):
         self.relaunches += 1
         if self.relaunch_error:
             raise self.relaunch_error
+
+    def reopen_mcp(self) -> None:
+        self.mcp_reopened += 1
 
     def ensure_frame(self, role):
         return self.staged.frames[role]
@@ -164,6 +168,51 @@ def test_disarm_step_raising_is_recorded_not_raised(tmp_path, monkeypatch):
     errors = faults.disarm(s, v)
     assert len(errors) == 1 and errors[0].startswith("relaunch: SessionBlocked")
     assert side.read_bytes() == before
+
+
+def test_hang_triggers_relaunch_and_mcp_reopen(tmp_path, monkeypatch):
+    """Fix A (night1-robustness-triage.md item 1): a case that ends `hang`
+    must relaunch darktable and reopen the MCP client before returning, so
+    the NEXT case starts clean instead of inheriting the wedge (rob-r11's one
+    true hang scored as six, r12-r15/r17 all queued behind it)."""
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case: Observation(blocked="hang"))
+    s = FakeSession(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R12"])
+    assert obs.blocked == "hang"
+    assert s.relaunches == 1
+    assert s.mcp_reopened == 1
+
+
+def test_a_typed_hang_reason_also_triggers_recovery(tmp_path, monkeypatch):
+    """`obs.blocked` from a real hang is never the bare string "hang" alone
+    (`execute.run_tool_case` writes "hang" exactly, but a virtual tool's own
+    subprocess timeout writes "hang: <tool> exceeded budget") -- recovery
+    must fire on the whole `hang*` family, matching `evaluate.is_hang`."""
+    monkeypatch.setattr(execute, "run_tool_case",
+                        lambda session, case: Observation(blocked="hang: scouter cli exceeded "
+                                                           "budget"))
+    s = FakeSession(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R12"])
+    assert obs.blocked.startswith("hang")
+    assert s.relaunches == 1 and s.mcp_reopened == 1
+
+
+def test_non_hang_case_never_triggers_recovery(tmp_path, monkeypatch):
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case: Observation())
+    s = FakeSession(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R12"])
+    assert obs.blocked is None
+    assert s.relaunches == 0 and s.mcp_reopened == 0
+
+
+def test_hang_recovery_failure_is_reported_not_raised(tmp_path, monkeypatch):
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case: Observation(blocked="hang"))
+    s = FakeSession(tmp_path, relaunch_error=SessionBlocked("relaunch: did not quit"))
+    obs = faults.run_fault_case(s, _cases()["R12"])
+    assert obs.blocked == "hang"
+    assert obs.extra["disarm_errors"] == [
+        "hang recovery relaunch: SessionBlocked: relaunch: did not quit"]
+    assert s.mcp_reopened == 0  # relaunch failed; reopen was never attempted
 
 
 def test_r21_fake_version_returns_without_raising(tmp_path):

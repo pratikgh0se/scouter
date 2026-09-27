@@ -344,7 +344,14 @@ def run_fault_case(session, case: Case) -> Observation:
     runs BEFORE `arm` -- see `_FREEZE_FAULTS`'s docstring above. The normal
     `run_tool_case` still runs its own `isolate()` afterwards; with
     `session.touched` already cleared here, that second call is a cheap
-    local snapshot compare, never a bridge call."""
+    local snapshot compare, never a bridge call.
+
+    (night1-robustness-triage.md item 1): when the case ends `hang`,
+    darktable is left wedged and the MCP server's own queue backlogged with
+    the abandoned call -- nothing else relaunches it, so the NEXT case
+    inherits the same wedge and is scored as its own hang (rob-r11 scored as
+    six). `_recover_from_hang` runs once, right here, before that next
+    case's isolate() has a chance to run against the still-wedged darktable."""
     from tests.gauntlet.execute import run_tool_case
     from tests.gauntlet.session import SessionBlocked
 
@@ -378,9 +385,33 @@ def run_fault_case(session, case: Case) -> Observation:
         obs = Observation(blocked=f"harness_bug: {type(e).__name__}: {e}"[:500])
     finally:
         errors = disarm(session, v)
+        if obs is not None and (obs.blocked or "").startswith("hang"):
+            errors = errors + _recover_from_hang(session)
     if errors:
         obs.extra["disarm_errors"] = errors
     return obs
+
+
+def _recover_from_hang(session) -> list[str]:
+    """(night1-robustness-triage.md item 1): relaunch darktable and reopen the
+    MCP client after a hang, so the next case starts clean instead of
+    inheriting the wedge (and the abandoned call's backlog) and being scored
+    as its own hang. Never raises: a failure here is reported like any other
+    disarm error. `reopen_mcp` is optional (real `ScouterSession` has it; a
+    minimal test double may not, and skips that half)."""
+    errors: list[str] = []
+    try:
+        session.relaunch()
+    except Exception as e:  # noqa: BLE001 - reported, never raised
+        errors.append(f"hang recovery relaunch: {type(e).__name__}: {e}"[:300])
+        return errors  # the mcp client may still be stale; nothing more to try
+    reopen = getattr(session, "reopen_mcp", None)
+    if reopen is not None:
+        try:
+            reopen()
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"hang recovery reopen_mcp: {type(e).__name__}: {e}"[:300])
+    return errors
 
 
 def _post_facts(fault: str, obs: Observation, v: dict) -> None:
