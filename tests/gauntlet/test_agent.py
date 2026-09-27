@@ -105,6 +105,13 @@ def test_argv_registers_only_scouter_and_sonnet():
     assert argv[argv.index("--allowedTools") + 1] == "mcp__scouter__*"
 
 
+def test_argv_disallows_bash_write_edit():
+    """(row 501 item E, night-1 rank 12, SCA-agent-sandbox-leak): the
+    sandbox tools must be off, not merely unlisted in --allowedTools."""
+    argv = agent.claude_argv("hi", "/tmp/m.json")
+    assert argv[argv.index("--disallowedTools") + 1] == "Bash,Write,Edit"
+
+
 def test_limit_mid_followup_parks_the_whole_case(tmp_path, monkeypatch):
     """Review focus 5: a limit in a follow-up parks the case; on resume the
     whole case reruns from a fresh conversation (nothing is written)."""

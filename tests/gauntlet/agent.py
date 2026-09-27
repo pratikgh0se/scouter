@@ -93,9 +93,17 @@ def mcp_config(staged) -> dict:
 
 
 def claude_argv(prompt: str, mcp_json: Path, resume: str | None = None) -> list[str]:
+    # (row 501 item E, night-1 triage rank 12, SCA-agent-sandbox-leak): with
+    # only --allowedTools naming the scouter MCP tools, Claude's own
+    # sandbox tools (Bash, Write, Edit) were still reachable -- r0031's
+    # agent used Bash 8 times to grep its own tool-result file, and r0066's
+    # used `find` on the session dir, both recorded as CallRecords with
+    # `error:unparsed` (harness noise, not a tool failure) instead of being
+    # unavailable in the first place. Read stays allowed (scout_preview
+    # PNGs).
     argv = ["claude", "-p", prompt, "--model", "sonnet", "--output-format", "stream-json",
             "--verbose", "--mcp-config", str(mcp_json), "--strict-mcp-config",
-            "--allowedTools", "mcp__scouter__*"]
+            "--allowedTools", "mcp__scouter__*", "--disallowedTools", "Bash,Write,Edit"]
     if resume:
         argv += ["--resume", resume]
     return argv
