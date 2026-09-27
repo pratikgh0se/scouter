@@ -13,7 +13,7 @@ from gauntlet.adapter import CallRecord, Observation, Park
 from gauntlet.case import Case
 from tests.gauntlet import observe
 from tests.gauntlet.corpus import guard
-from tests.gauntlet.session import SessionBlocked
+from tests.gauntlet.session import SessionBlocked, reset_journal
 
 _PH = re.compile(r"\{([a-z_0-9]+)(?::([^}]+))?\}")
 #: Virtual tools, registered by the layer executors (tests/gauntlet/exec_*.py):
@@ -118,6 +118,16 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
         obs.hang_evidence.append(f"session: {e}")
         obs.wall_s = clock() - t0
         return obs
+    #: Fix round 2 (review R1); fix round 3 (re-review R1, ordering): per-case
+    #: undo journal isolation -- see session.reset_journal's own docstring.
+    #: Must run AFTER isolate() (whose own darkroom_reset calls, for a
+    #: module the PREVIOUS case touched, write their own journal entries)
+    #: and any re-stage above, but before this case's own before-snapshot/
+    #: steps below, so no earlier entry -- isolate's own or an earlier
+    #: case's -- can leak into THIS case's darkroom_undo_last. The count is
+    #: kept in obs.extra so a leak stays visible rather than disappearing.
+    if session.staged is not None:
+        obs.extra["journal_reset_entries"] = reset_journal(session.staged)
     kelvin = observe.kelvin_for(CAMERA.get(case.body or ""))
     obs.before = observe.snapshot(frame, kelvin)
     snaps = [obs.before["params"]]

@@ -175,3 +175,77 @@ def route_a_pinned(cmap: dict) -> bool:
 
     module, param = cmap["wb_route_a"]["until_pinned"]["pin"]
     return (module, param) in dtbridge.ACTION_PATHS
+
+
+#: Rows 458/461 (night-1 triage class COV-WB-preset4-expectation): every
+#: corpus hero frame, every body (olympus, sony_a7, sony_nex5n), is
+#: darktable's temperature preset 4 -- confirmed by the recorded night-1
+#: run. `wb_route_a_expect_for_hero`/`wb_route_a_tint_expect_for_hero` are
+#: the convenience form the generators (coverage.py, scenarios.py) actually
+#: call; the preset-taking functions above stay generic for anything that
+#: is not a hero-frame case (there is none today, but the taxonomy layer
+#: should not have to know the corpus fact to use the check map correctly).
+HERO_WB_PRESET = 4
+
+
+def wb_route_a_expect_for_hero(cmap: dict, case_key: str) -> dict | None:
+    return wb_route_a_expect(cmap, case_key, HERO_WB_PRESET, pinned=route_a_pinned(cmap))
+
+
+def wb_route_a_tint_expect_for_hero(cmap: dict) -> dict | None:
+    return wb_route_a_tint_expect(cmap, HERO_WB_PRESET)
+
+
+def wb_route_a_tint_expect(cmap: dict, preset: int | None) -> dict | None:
+    """What a `temperature.tint` case (set, adjust, or a tint phrase such as
+    `tint_green`/`tint_magenta`) must verify on a preset-4 frame: tint has no
+    color-calibration reroute target (check_map.json's `wb_route_a.tint_note`),
+    so `scouter.core.darkroom.refuse_wb_late` refuses it unconditionally --
+    unlike Kelvin/warmer/cooler, pinning `channelmixerrgb.temperature` makes
+    no difference here. None when the block does not apply (another preset)."""
+    r = cmap["wb_route_a"]
+    if preset != r["applies_when"]["equals"] or not r.get("tint_always_unavailable"):
+        return None
+    u = r["until_pinned"]
+    return {"expect": "typed_error", "codes": list(u["accept_codes"])}
+
+
+def wb_route_a_nudge_expect(cmap: dict, preset: int | None) -> dict | None:
+    """What a `darkroom_nudge` on `temperature.temperature` must verify on a
+    preset-4 frame (fix round 1, review I4): unlike `darkroom_set`/`adjust`,
+    `darkroom.nudge` never re-routes onto color calibration at all -- it
+    always calls `refuse_wb_late` unconditionally -- so it refuses
+    `module_unavailable` whether or not `channelmixerrgb.temperature` is
+    pinned. Like `wb_route_a_tint_expect`, pin status is irrelevant, so this
+    does not take one. None when the block does not apply (another preset)."""
+    r = cmap["wb_route_a"]
+    if preset != r["applies_when"]["equals"]:
+        return None
+    u = r["until_pinned"]
+    return {"expect": "typed_error", "codes": list(u["accept_codes"])}
+
+
+def wb_route_a_nudge_expect_for_hero(cmap: dict) -> dict | None:
+    return wb_route_a_nudge_expect(cmap, HERO_WB_PRESET)
+
+
+def wb_route_a_undo_expect(cmap: dict, antecedent: dict | None) -> dict | None:
+    """What `darkroom_undo_last` must verify right after a WB route-A case
+    (a set/adjust/nudge on `temperature.temperature`, or any `temperature.tint`
+    move) that was itself refused: `antecedent` is that move's own
+    `wb_route_a_expect`/`wb_route_a_tint_expect` result. When it was a
+    refusal, no write ever reached the journal (`refuse_wb_late` runs before
+    `journal.begin`), so the undo sees an EMPTY journal and answers its own
+    fixed code -- `darkroom_undo_last`'s "noop" outcome (fix round 1, review
+    I2; NOT the antecedent's own code -- the undo call never reaches
+    `refuse_wb_late` itself, so it cannot answer `module_unavailable`), from
+    check_map.json's `wb_route_a.undo_after_refused_codes`. The antecedent's
+    refused call must still run as a real step first (it is what leaves the
+    journal empty for the undo to find) -- this only decides the Expect, not
+    whether the case keeps that step. None when the antecedent was not a
+    refusal (route A pinned and live) or was not itself a WB route-A case --
+    the ordinary `m1_restored` undo check applies there."""
+    if antecedent is None or antecedent.get("expect") != "typed_error":
+        return None
+    r = cmap["wb_route_a"]
+    return {"expect": r["undo_after_refused_expect"], "codes": list(r["undo_after_refused_codes"])}

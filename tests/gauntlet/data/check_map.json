@@ -193,6 +193,37 @@
     "unchanged_keys": ["temperature.preset"],
     "stat_check": "unchanged: M4 rb with the phrase's sign is the second oracle",
     "until_pinned": {"pin": ["channelmixerrgb", "temperature"], "expect": "typed_error", "accept_codes": ["module_unavailable"]},
-    "direction_verified": false
+    "direction_verified": false,
+    "xmp_offsets": {
+      "about": "scouter/core/xmp.py LAYOUTS[('channelmixerrgb', 3)] -- darktable's channelmixerrgb XMP v3 params blob (modversion 3, 160 bytes), verified against tests/fixtures/P6281348.ORF.xmp num 7.",
+      "modversion": 3,
+      "illuminant": 120,
+      "adaptation": 132,
+      "x": 136,
+      "y": 140,
+      "temperature": 144
+    },
+    "guard": {
+      "name": "NO_WB_REROUTE",
+      "kind": "contextvars.ContextVar[bool]",
+      "where": "scouter/core/darkroom.py",
+      "about": "Set True around a call that must not be re-routed onto color calibration (darkroom.py line ~899 checks `route['route'] == 'color_calibration' and not NO_WB_REROUTE.get()`); moves.py sets/resets it around the paths that already decided the route themselves."
+    },
+    "wb_verify_tolerance": {
+      "value": 0.03,
+      "about": "scouter/core/moves.py _WB_VERIFY_TOLERANCE = 3 * wb._EXACT_TOLERANCE (wb._EXACT_TOLERANCE = 0.01); the post-move r/b ratio must land within this fraction of the expected ratio.",
+      "source": "scouter/core/moves.py, scouter/core/wb.py"
+    },
+    "intent_examples": "tests/intent/colorcal_warmth.json (run by tests/intent/test_colorcal_warmth_intent.py; Zenkai Rules Z1)",
+    "nudge_param_keys": ["temperature.temperature"],
+    "nudge_always_unavailable": true,
+    "nudge_note": "Fix round 1 (review I4): a darkroom_nudge on temperature.temperature does NOT follow the same rule as darkroom_set/adjust once channelmixerrgb.temperature is pinned -- darkroom.nudge never re-routes onto color calibration at all (it calls refuse_wb_late unconditionally, scouter/core/darkroom.py:1173), so it stays module_unavailable pinned or not, like tint. checkmap.wb_route_a_nudge_expect(_for_hero) returns that refusal unconditionally, the same shape as wb_route_a_tint_expect; wb_route_a_expect's until_pinned/pinned distinction does NOT apply to nudge (the old note claiming it did was wrong).",
+    "tint_key": "temperature.tint",
+    "tint_always_unavailable": true,
+    "tint_scope": "absolute_set_only",
+    "tint_note": "Fix round 1 (review I1): tint_always_unavailable applies ONLY to an ABSOLUTE darkroom_set on temperature.tint -- it reaches scouter/core/darkroom.py's refuse_wb_late directly (module==\"temperature\" is enough; refuse_wb_late fires on preset 4 regardless of param, and tint has no color-calibration reroute target: channelmixerrgb has no tint slider, wb_late_fix's else branch says so), so it is ALWAYS module_unavailable there, pinned or not. A RELATIVE tint move (adjust, or the more_magenta/more_green say phrase and its synonyms/P4/P5 forms) is DIFFERENT: temperature.tint's vocab status is absolute_only (value_source \"none\", vocab.py:150), so scouter/core/moves.py's gate(relative=True) -- called from _refusal, before _current_image/_route_wb/_refuse_wb_late ever run -- raises ValueUnknown first, on every preset, not just preset 4. checkmap.wb_route_a_tint_expect_for_hero must be called only for the absolute-set case; a relative tint move keeps the ordinary value_unknown expectation, unrelated to this block.",
+    "undo_after_refused_expect": "typed_error",
+    "undo_after_refused_codes": ["noop"],
+    "undo_note": "Fix round 1 (review I2): when the set/adjust/nudge an undo would revert was itself refused module_unavailable (route candidate on temperature.temperature, or an absolute tint set), no write ever reached the journal (refuse_wb_late runs before journal.begin), so darkroom_undo_last sees an EMPTY journal for this job and returns UndoResult(outcome=\"noop\") -- NOT module_unavailable; the undo call is not itself a WB-route refusal, it never reaches refuse_wb_late at all. scouter/registry.py special-cases darkroom.undo_last's \"noop\" outcome into error={\"code\": \"noop\", ...} with ok=False (row 408 B2), so the case is still a typed_error, just with checkmap.wb_route_a_undo_expect's own fixed code (\"noop\"), never the antecedent's code. The case must keep the antecedent's own refused call as a real step (session.call runs every step regardless of an earlier one's outcome, tests/gauntlet/execute.py:124-145) so the journal is genuinely empty when the undo runs, rather than dropping it."
   }
 }

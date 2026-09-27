@@ -1,0 +1,24 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for scripts/htc-night2.sh, over a fake repo/runs-root (HTC_REPO/HTC_RUNS_ROOT) with a stub .venv/bin/python and a stubbed-out pgrep -- never the real main checkout, never darktable, never the real corpus.",
+  "subject": "scripts/htc-night2.sh",
+  "examples": [
+    {
+      "id": "clean-start-logs-a-night2-stamp",
+      "input": {"pidfile": null, "stamp_env": null},
+      "expect": {"exit_code": 2, "stdout_matches": "stamp night2-\\d{8}"},
+      "why": "a first start (no CURRENT_STAMP, no pidfile) mints a night2-YYYYMMDD stamp and gets all the way to the (stubbed) generate step -- exit 2 is that stub's failure, not a precondition refusal"
+    },
+    {
+      "id": "own_runner_alive_refuses",
+      "input": {"pidfile": "night2", "stamp_env": null},
+      "expect": {"exit_code": 5, "stdout_contains": ["night-2 runner is already running"]},
+      "why": "a live night-2 runner.pid must block a second start before darktable could ever be launched twice"
+    },
+    {
+      "id": "night1_runner_alive_refuses",
+      "input": {"pidfile": "night1", "stamp_env": null},
+      "expect": {"exit_code": 5, "stdout_contains": ["night-1 runner is still running"]},
+      "why": "night-2 must not start while night-1's runner is still up, even though they use separate stamps and pidfiles -- only one darktable-driving runner may run at a time"
+    }
+  ]
+}

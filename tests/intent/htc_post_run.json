@@ -1,0 +1,24 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for scripts/htc_post_run.sh (rows 458/461/463, the HTC post-run runbook). Run by tests/intent/test_htc_post_run_intent.py against a fake run dir -- never a real gauntlet run, never darktable.",
+  "subject": "scripts/htc_post_run.sh",
+  "examples": [
+    {
+      "id": "done-no-pidfile-prints-batch",
+      "input": {"progress_status": "done", "pidfile": null},
+      "expect": {"exit_code": 0, "stdout_contains": ["ff-merge", "tests/mutation_check.py"]},
+      "why": "the ordinary post-run case: the run finished and the runner already exited cleanly, so the script prints the five-step batch for a human to run -- step 1 (fix round 3, review R3b) calls tests/mutation_check.py directly, not `make gate` (whose own wrapper falls back to a bare python3 with no pytest from a worktree)"
+    },
+    {
+      "id": "running-refuses",
+      "input": {"progress_status": "running", "pidfile": null},
+      "expect": {"exit_code": 1, "stdout_contains": ["BLOCKED", "not done"]},
+      "why": "a run still in progress must never hand off into merge/push -- this is the guard the whole script exists for"
+    },
+    {
+      "id": "live-runner-pid-refuses",
+      "input": {"progress_status": "done", "pidfile": "self"},
+      "expect": {"exit_code": 1, "stdout_contains": ["BLOCKED", "still running"]},
+      "why": "progress.json can say done while the runner process itself has not exited yet (e.g. mid-report); the pid check is the second, independent oracle for that"
+    }
+  ]
+}

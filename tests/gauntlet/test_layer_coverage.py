@@ -1,6 +1,7 @@
 import pytest
 
 from scouter.core import vocab
+from tests.gauntlet import checkmap
 from tests.gauntlet.layers import coverage
 
 
@@ -57,10 +58,17 @@ def test_boundary_accepts_refusal_but_not_a_silent_clamp():
     assert c.steps[-1].args["value"] == chk.target["request"]
 
 
-def test_kelvin_cases_reset_tint_first_and_offset_their_checks():
+def test_kelvin_cases_no_longer_reset_tint_first_on_a_wb_route_a_refusal():
+    """Superseded by rows 458/461 (COV-WB-preset4-expectation): the corpus
+    hero's preset 4 refuses every temperature.temperature write outright
+    (checkmap.wb_route_a_expect, candidate until pinned), which preempts
+    item 4a's tint-reset prep entirely -- an item-4a tint-reset write would
+    itself refuse the same way, so it is dropped, same as the (former)
+    "no calibration table" refusal cases already dropped their prep."""
     c = _case("cov-temperature.temperature-olympus-adjust_up1")
-    assert c.steps[0].args == {"module": "temperature", "param": "tint", "value": 1.0}
-    assert c.expect.checks[0].target["from"] == 2
+    assert [s.tool for s in c.steps] == ["darkroom_adjust"]
+    assert c.expect.kind == "typed_error"
+    assert c.expect.codes == ["module_unavailable"]
 
 
 # ---------------------------------------------------------------- item 1:
@@ -124,35 +132,43 @@ def test_phrase_explicit_beyond_range_uses_the_boundary_check():
 
 
 # ---------------------------------------------------------------- item 4:
-# WB by body/range. sony_a7 has no calibration table, so a Kelvin-relative
-# move (adjust/nudge/warmer/cooler) honestly refuses; olympus does have one,
-# but its probe values must stay inside the table's sampled Kelvin range.
+# WB by body/range. Superseded by rows 458/461 (COV-WB-preset4-expectation):
+# the corpus hero's preset 4 refuses every temperature.temperature write on
+# EVERY body (checkmap.wb_route_a_expect, candidate until
+# channelmixerrgb.temperature is pinned) -- this preempts item 4a's
+# "no calibration table" distinction between sony_a7 and olympus, which
+# never gets a chance to fire on a preset-4 frame. `_probe_lo_hi`'s
+# WB_SAMPLED_K narrowing is still exercised (it decides the refused step's
+# own request value, which matters once route A is pinned and live), but
+# the boundary CHECK itself no longer applies to a refused write.
 
 
-def test_temperature_adjust_on_uncalibrated_body_accepts_refusal():
-    c = _case("cov-temperature.temperature-sony_a7-adjust_up1")
-    assert c.meta.get("accept_refusal") is True
+def test_temperature_adjust_refuses_on_every_body_preset_4():
+    for body in ("sony_a7", "olympus"):
+        c = _case(f"cov-temperature.temperature-{body}-adjust_up1")
+        assert c.expect.kind == "typed_error"
+        assert c.expect.codes == ["module_unavailable"]
+        assert not c.meta.get("accept_refusal")  # a strict refusal, not a permissive one
 
 
-def test_temperature_adjust_on_calibrated_body_does_not_accept_refusal():
-    c = _case("cov-temperature.temperature-olympus-adjust_up1")
-    assert not c.meta.get("accept_refusal")
+def test_warmer_phrase_refuses_on_every_body_preset_4():
+    for body in ("sony_a7", "olympus"):
+        for label in ("bare", "touch", "lot", "explicit"):
+            c = _case(f"cov-phrase-warmer-{body}-{label}")
+            assert c.expect.kind == "typed_error", (body, label)
+            assert c.expect.codes == ["module_unavailable"], (body, label)
 
 
-def test_warmer_phrase_on_uncalibrated_body_accepts_refusal():
-    for label in ("bare", "touch", "lot", "explicit"):
-        c = _case(f"cov-phrase-warmer-sony_a7-{label}")
-        assert c.meta.get("accept_refusal") is True, label
-
-
-def test_temperature_boundary_probes_stay_inside_the_calibration_sample_range():
+def test_temperature_boundary_probe_requests_stay_inside_the_calibration_sample_range():
     for label in ("set_lo", "set_hi"):
         c = _case(f"cov-temperature.temperature-olympus-{label}")
-        v = c.expect.checks[0].target["value"]
+        assert c.expect.kind == "typed_error"  # refused; no M1 check to read a value from
+        v = c.steps[-1].args["value"]
         assert 3000.0 <= v <= 12000.0
     for label in ("set_lo_minus", "set_hi_plus"):
         c = _case(f"cov-temperature.temperature-olympus-{label}")
-        v = c.expect.checks[0].target["request"]
+        assert c.expect.kind == "typed_error"
+        v = c.steps[-1].args["value"]
         assert 3000.0 <= v <= 12000.0
 
 
@@ -210,3 +226,109 @@ def test_colorzones_strength_nudge_down_precondition_is_away_from_the_baseline()
     # at s.lo going up), so it keeps the plain midpoint precondition.
     up = _case("cov-colorzones.strength-sony_a7-nudge_up1")
     assert up.steps[-2].args["value"] == 1.0
+
+
+# ---------------------------------------------------------------- fix round
+# 1 (review I1-I4): the WB route-A expectation, corrected.
+
+
+def test_relative_tint_moves_expect_value_unknown_not_module_unavailable():
+    """Review I1: temperature.tint's vocab status is absolute_only, so a
+    RELATIVE tint move (adjust, or the more_magenta/more_green say phrase
+    and its synonyms/P4/P5 forms) hits moves.gate(relative=True)'s
+    ValueUnknown before refuse_wb_late ever runs -- on every preset, not
+    just the corpus hero's preset 4. Only an ABSOLUTE tint darkroom_set
+    reaches refuse_wb_late and is module_unavailable."""
+    adj = _case("cov-temperature.tint-olympus-adjust")
+    assert adj.expect.kind == "typed_error" and adj.expect.codes == ["value_unknown"]
+    say = _case("cov-temperature.tint-olympus-say_more_magenta")
+    assert say.expect.kind == "typed_error" and say.expect.codes == ["value_unknown"]
+    phrase_bare = _case("cov-phrase-more_magenta-olympus-bare")
+    assert phrase_bare.expect.kind == "typed_error"
+    assert phrase_bare.expect.codes == ["value_unknown"]
+    syn = _case("cov-synonym-more_green-more_green-olympus")
+    assert syn.expect.kind == "typed_error" and syn.expect.codes == ["value_unknown"]
+    # the absolute SET is unchanged -- it does reach refuse_wb_late.
+    absolute = _case("cov-temperature.tint-olympus-set_0.9")
+    assert absolute.expect.kind == "typed_error"
+    assert absolute.expect.codes == ["module_unavailable"]
+
+
+def test_undo_after_a_refused_wb_write_keeps_the_antecedent_and_expects_noop():
+    """Review I2: the undo_after_set/undo_after_adjust cases must keep the
+    refused set/adjust as a real step (it is what leaves the journal empty
+    for the undo to find) and expect the undo's OWN code (its "noop"
+    outcome, an empty journal), never the antecedent's module_unavailable."""
+    c = _case("cov-temperature.temperature-olympus-undo_after_set")
+    assert [s.tool for s in c.steps] == ["darkroom_set", "darkroom_undo_last"]
+    assert c.expect.kind == "typed_error" and c.expect.codes == ["noop"]
+    c2 = _case("cov-temperature.temperature-olympus-undo_after_adjust")
+    assert [s.tool for s in c2.steps] == ["darkroom_adjust", "darkroom_undo_last"]
+    assert c2.expect.kind == "typed_error" and c2.expect.codes == ["noop"]
+
+
+def test_mixed_commutative_p2_pair_stays_an_honest_property_not_a_deterministic_fail():
+    """Review I3: cov-p2-brighter-warmer's "warmer" half refuses on the
+    corpus hero's preset 4, but "brighter" (the non-WB half) still lands
+    both times it says (steps 0 and 5) -- the case must not become a single
+    `typed_error` (the last step, say(brighter), always succeeds, so a
+    live rerun would fail it deterministically). It stays `property` P2,
+    scoped to the non-WB key, with an explicit envelope ok==false and error
+    code check on each of warmer's own two (refused) steps."""
+    c = _case("cov-p2-brighter-warmer-olympus")
+    assert c.expect.kind == "property" and c.expect.property == "P2"
+    m1 = next(chk for chk in c.expect.checks if chk.metric == "M1")
+    assert m1.target["keys"] == ["exposure.exposure"]
+    env_checks = [chk for chk in c.expect.checks if chk.metric == "envelope"]
+    assert {chk.step for chk in env_checks} == {1, 4}
+    for chk in env_checks:
+        if chk.target["path"] == "ok":
+            assert chk.target == {"path": "ok", "op": "eq", "value": False}
+        else:
+            assert chk.target == {"path": "error.code", "op": "eq", "value": "module_unavailable"}
+    # a pure non-WB pair is unaffected
+    c2 = _case("cov-p2-more_contrast-more_saturation-olympus")
+    assert c2.expect.kind == "property"
+    assert not any(chk.metric == "envelope" for chk in c2.expect.checks)
+    # a pure WB pair (both sides refuse) is still an honest single refusal
+    c3 = _case("cov-p5-warmer-cooler-olympus")
+    assert c3.expect.kind == "typed_error"
+
+
+def test_wb_route_a_pinned_verifies_the_real_target_not_a_placeholder(monkeypatch):
+    """Review I4: once channelmixerrgb.temperature is pinned, the generator
+    must build a real Expect from the check-map dict (M1 on
+    channelmixerrgb.temperature, the derived sidecar keys, temperature.preset
+    unchanged) rather than falling through to the ordinary
+    temperature.temperature checks (the write never touches that key once
+    pinned) or a permissive `Expect("edit", [])` placeholder. Nudge always
+    refuses, pinned or not -- darkroom.nudge never reroutes."""
+    monkeypatch.setattr(checkmap, "route_a_pinned", lambda cmap: True)
+    c = _case("cov-temperature.temperature-olympus-set_mid")
+    assert c.expect.kind == "edit"
+    assert c.steps == [coverage._set(vocab.spec("temperature", "temperature"), coverage._mid(
+        vocab.spec("temperature", "temperature")))]
+    m1 = next(chk for chk in c.expect.checks if chk.kind == "equals")
+    assert m1.target["key"] == "channelmixerrgb.temperature"
+    unchanged = next(chk for chk in c.expect.checks if chk.kind == "unchanged")
+    assert unchanged.target["keys"] == ["temperature.preset"]
+    assert c.expect.sidecar["key"] == "channelmixerrgb.temperature"
+    assert c.expect.sidecar["allowed"] == ["channelmixerrgb.x", "channelmixerrgb.y"]
+
+    adj = _case("cov-temperature.temperature-olympus-adjust_up1")
+    assert adj.expect.kind == "edit"
+    chg = next(chk for chk in adj.expect.checks if chk.kind == "changed")
+    assert chg.target["key"] == "channelmixerrgb.temperature"
+    assert chg.sign == 0  # direction_verified is False -- no sign asserted
+    assert chg.tags.get("needs_review")
+
+    warmer = _case("cov-phrase-warmer-olympus-bare")
+    assert warmer.expect.kind == "edit"
+    assert any(chk.metric == "M4" and chk.stat == "rb" for chk in warmer.expect.checks)
+
+    nudge = _case("cov-temperature.temperature-olympus-nudge_up1")
+    assert nudge.expect.kind == "typed_error"
+    assert nudge.expect.codes == ["module_unavailable"]
+
+    tint_set = _case("cov-temperature.tint-olympus-set_0.9")
+    assert tint_set.expect.kind == "typed_error"  # unaffected by the pin
