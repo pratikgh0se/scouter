@@ -31,6 +31,18 @@ Zenkai Z1/Z2 equivalent for this script: `tests/test_mutation_check.py`,
 exercised against a tiny fixture repo built in tempfile - a discriminating
 test passes this gate, a tautological one fails it.
 
+A test file whose subject genuinely predates the range it is committed in can
+opt out of (b) revert-mutation with a `# mutation-check: targets-predate-range
+<sha> -- <reason> :: Class.test_a, Class.test_b` top-of-file marker (round 5,
+mirrored from capsule-corp). Round 13: this marker is per-TEST, not per-file -
+it must name the exact `Class.test_name` (or bare `test_name`) ids it covers
+after a literal `::`; only those ids read `n/a (targets predate range)`,
+every OTHER new/changed test in the same file is still revert-checked below
+it. A marker with no `::` ids at all (the old file-level shape), or one
+naming an id that is not in this range's new/changed set for that file, is
+`marker_stale` - a gate failure, exactly like a sha that does not match
+`--base`, never silently downgraded to n/a.
+
 Usage: tests/mutation_check.py --base <sha> --head <sha> [--repo .]
 Exit 0 and a clean markdown table when every changed test file discriminates
 and no static flag fired; exit 1 and the table naming what didn't otherwise.
@@ -430,21 +442,40 @@ CANNOT_IMPORT_RE = re.compile(r"cannot import name '(\w+)' from '([\w.]+)'")
 # directly and cite WHY, which the table then shows a reviewer). Bound to a
 # specific base sha so it cannot silently outlive the range it was written
 # for.
+#
+# Round 13 (mirrored from capsule-corp): a marker naming no `::` ids used to
+# switch off revert-mutation for EVERY test in the file, including brand-new
+# tests whose subject genuinely changed in this range - now the marker must
+# name the specific `Class.test_name` (or bare `test_name`) ids it covers,
+# comma-separated after a literal `::`. `ids_group` is optional in the regex
+# only so that a marker with no `::` at all still PARSES (as `ids=None`)
+# instead of simply failing to match - `_check_range_impl` is what turns
+# that shape into the `marker_stale` gate failure; this function only reads
+# what is on disk.
 MARKER_RE = re.compile(
-    r"^#\s*mutation-check:\s*targets-predate-range\s+([0-9a-fA-F]{7,40})\s+--\s*(.+?)\s*$",
+    r"^#\s*mutation-check:\s*targets-predate-range\s+([0-9a-fA-F]{7,40})\s+--\s*(.+?)"
+    r"(?:\s*::\s*([\w.]+(?:\s*,\s*[\w.]+)*))?\s*$",
     re.MULTILINE)
 
 
 def extract_marker(source, top_lines=20):
-    """(marker_sha, reason) from a top-of-file `# mutation-check:
-    targets-predate-range <sha> -- <reason>` comment, or None. Only the first
-    `top_lines` are scanned - "top-of-file", not "anywhere in the file" (a
-    marker buried mid-file would be too easy to miss in review)."""
+    """(marker_sha, reason, ids) from a top-of-file `# mutation-check:
+    targets-predate-range <sha> -- <reason> :: Class.test_a, Class.test_b`
+    comment, or None. Only the first `top_lines` are scanned - "top-of-file",
+    not "anywhere in the file" (a marker buried mid-file would be too easy to
+    miss in review). `ids` is a tuple of the comma-separated ids exactly as
+    written (whitespace-stripped), or None when the marker carries no `::`
+    ids section at all (round 13: that shape is a `marker_stale` gate failure
+    downstream, not silently accepted as file-level)."""
     if not source:
         return None
     head_block = "\n".join(source.splitlines()[:top_lines])
     m = MARKER_RE.search(head_block)
-    return (m.group(1), m.group(2)) if m else None
+    if not m:
+        return None
+    sha, reason, ids_str = m.group(1), m.group(2), m.group(3)
+    ids = tuple(i.strip() for i in ids_str.split(",")) if ids_str else None
+    return (sha, reason, ids)
 
 
 def resolve_sha(repo, ref):
@@ -850,9 +881,13 @@ def _cell(state, why=None):
     "new_module" (the reverted file doesn't exist yet - fix round 2),
     "no_prod_change" (none of the production files changed in this range are
     imported by this test file - fix round 4), "targets_predate_range" (an
-    explicit, sha-bound marker says so - fix round 5, `why` is the marker's
-    reason) or "marker_mismatch" (a marker is present but its sha does not
-    match this gate's --base - fix round 5, never silently ignored),
+    explicit, sha-bound, per-test marker says so - fix round 5/13, `why` is
+    the marker's reason), "marker_mismatch" (a marker is present but its sha
+    does not match this gate's --base - fix round 5, never silently
+    ignored), or "marker_stale" (fix round 13: the marker has no `::` ids at
+    all - the old file-level shape - or names an id that is not in this
+    range's new/changed set for that file; a gate failure, exactly like
+    marker_mismatch),
     "fallback_ok"/"fallback_bad" (the weaken column, round 6: the changed
     function(s) had no assertion at all, so the mutation ran against the
     file's first assertion anywhere instead - always labelled, pass or fail,
@@ -869,7 +904,7 @@ def _cell(state, why=None):
     the mutation tried each of the HELPER's own assertions in turn, same
     idea as the file-level fallback but scoped to the helper actually being
     exercised, so it is tried FIRST). Every state but plain
-    True/False, fallback_bad, marker_mismatch, error_runner and
+    True/False, fallback_bad, marker_mismatch, marker_stale, error_runner and
     symbol_kept_bad is n/a, not a fail, and not counted against the gate -
     the weaken column carries the requirement instead."""
     if state is None:
@@ -884,6 +919,8 @@ def _cell(state, why=None):
         return f"n/a (targets predate range: {why})"
     if state == "marker_mismatch":
         return f"marker mismatch (BAD): {why}" if why else "marker mismatch (BAD)"
+    if state == "marker_stale":
+        return f"marker stale (BAD): {why}" if why else "marker stale (BAD)"
     if state == "fallback_ok":
         return f"FAIL (good) [{why}]" if why else "FAIL (good) [weaken: file-level fallback]"
     if state == "fallback_bad":
@@ -903,6 +940,72 @@ def _cell(state, why=None):
     if state == "symbol_kept_bad":
         return f"did not fail (BAD) [revert: {why}]"
     return "FAIL (good)" if state else "did not fail (BAD)"
+
+
+# Round 13 (mirrored from capsule-corp): the sentinel key
+# `revert_by_file[f]` uses for a state that applies to the whole test FILE
+# rather than to any specific test id - the only case left where that
+# happens is "no_functions" (the file has zero new/changed test functions at
+# all, so there is no id to key a per-test state under). Every other state
+# below is always assigned per test id, even when every id in the file
+# happens to share the same one (`render_revert_cell` collapses that
+# identical-everywhere case back to the old, un-prefixed cell text, so a
+# file with no marker and one uniform outcome renders exactly as every
+# pre-round-13 fixture already expects).
+WHOLE_FILE_KEY = "*file*"
+
+
+def _ids_for(funcs):
+    """Fix round 13: the same `{cls}.{name}`-or-bare-`name` id shape used
+    everywhere else in this file (for the table's "names" column, NOT the
+    pytest node id `node_id` builds to actually run something), as a set,
+    for whatever `funcs` list (possibly already filtered down to the ids a
+    marker did NOT cover) is in scope."""
+    return {f"{cls}.{name}" if cls else name for cls, name, _, _ in funcs}
+
+
+def _assign_revert_state(revert_by_file, f, funcs, state, why):
+    """Round 13: record `(state, why)` for every id in `funcs` under
+    `revert_by_file[f]` - one dict entry per test id, so a file can carry
+    DIFFERENT revert-mutation outcomes for different tests (some n/a via a
+    per-test marker, others genuinely revert-checked). Falls back to
+    `WHOLE_FILE_KEY` only when `funcs` has no ids at all (the round-8
+    no-functions-changed shape)."""
+    ids_here = sorted(_ids_for(funcs))
+    bucket = revert_by_file.setdefault(f, {})
+    if not ids_here:
+        bucket[WHOLE_FILE_KEY] = (state, why)
+        return
+    for tid in ids_here:
+        bucket[tid] = (state, why)
+
+
+def render_revert_cell(entries, ids):
+    """Round 13: render the (b) column for one test file from its per-test
+    `entries` dict (`{test_id: (state, why)}`, plus possibly the
+    `WHOLE_FILE_KEY` sentinel) and `ids` (every new/changed test id in the
+    file, sorted). When every id shares the identical `(state, why)` - true
+    of every file this gate ever produced before round 13, since a whole file
+    always got one uniform outcome - this renders EXACTLY the old, bare
+    `_cell(...)` text (no id prefix), so every pre-round-13 fixture keeps
+    passing unchanged. Only a file with a per-test marker that covers some
+    but not all of its new/changed ids (the new round-13 shape) ever produces
+    a mixed cell, one `id: cell` segment per id, in id order."""
+    if not entries:
+        return _cell(None, "-")
+    if WHOLE_FILE_KEY in entries:
+        state, why = entries[WHOLE_FILE_KEY]
+        return _cell(state, why)
+    values = {entries[tid] for tid in ids if tid in entries}
+    if len(values) == 1 and all(tid in entries for tid in ids):
+        state, why = next(iter(values))
+        return _cell(state, why)
+    parts = []
+    for tid in ids:
+        if tid in entries:
+            state, why = entries[tid]
+            parts.append(f"{tid}: {_cell(state, why)}")
+    return "; ".join(parts) if parts else _cell(None, "-")
 
 
 def check_range(repo, base, head):
@@ -1000,26 +1103,64 @@ def _check_range_impl(repo, base, head):
     # ---- (b) revert-mutation, one worktree, production reverted to base ----
     revert_by_file = {}
 
-    # Fix round 5: an explicit, sha-bound marker overrides everything else
-    # below, for exactly the files that carry it - checked first, and
-    # regardless of whether any production file changed at all, so a
-    # wrong-sha marker is caught (never silently ignored) even on a range
-    # with no production changes.
+    # Fix round 5 (per-test as of round 13): an explicit, sha-bound marker
+    # overrides revert-mutation - checked first, and regardless of whether
+    # any production file changed at all, so a wrong-sha or stale marker is
+    # caught (never silently ignored) even on a range with no production
+    # changes. Round 13: a marker with no `::` ids used to switch off
+    # revert-mutation for the WHOLE file, including brand-new tests whose
+    # subject genuinely changed - it must now name the specific ids it
+    # covers; every OTHER new/changed id in the same file still falls
+    # through to the ordinary revert-mutation check below. A marker with no
+    # ids at all, or one naming an id that is not in this range's
+    # new/changed set for that file, is `marker_stale` - a gate failure,
+    # exactly like a sha mismatch.
     resolved_base = resolve_sha(repo, base)
-    for f in per_file_funcs:
+    for f, (status, funcs) in per_file_funcs.items():
         marker = extract_marker(show_file(repo, head, f))
         if marker is None:
             continue
-        marker_sha, reason = marker
+        marker_sha, reason, marker_ids = marker
+        file_ids = _ids_for(funcs)
         resolved_marker = resolve_sha(repo, marker_sha)
-        if resolved_marker and resolved_base and resolved_marker == resolved_base:
-            revert_by_file[f] = ("targets_predate_range", reason)
-        else:
-            revert_by_file[f] = ("marker_mismatch",
-                                  f"marker names {marker_sha}, gate --base is {base} ({reason})")
+        if not (resolved_marker and resolved_base and resolved_marker == resolved_base):
+            why = f"marker names {marker_sha}, gate --base is {base} ({reason})"
+            _assign_revert_state(revert_by_file, f, funcs, "marker_mismatch", why)
             ok = False
+            continue
+        if not marker_ids:
+            why = (f"marker has no `:: <ids>` list ({reason}) - a file-level marker with "
+                   "no ids is stale as of round 13")
+            _assign_revert_state(revert_by_file, f, funcs, "marker_stale", why)
+            ok = False
+            continue
+        unknown = [i for i in marker_ids if i not in file_ids]
+        if unknown:
+            why = (f"marker names test id(s) not in this range's new/changed set for "
+                   f"{f}: {', '.join(unknown)} ({reason})")
+            _assign_revert_state(revert_by_file, f, funcs, "marker_stale", why)
+            ok = False
+            continue
+        covered = [(cls, name, s, e) for cls, name, s, e in funcs
+                   if (f"{cls}.{name}" if cls else name) in set(marker_ids)]
+        _assign_revert_state(revert_by_file, f, covered, "targets_predate_range", reason)
 
-    remaining = {f: v for f, v in per_file_funcs.items() if f not in revert_by_file}
+    # Every id NOT already given a state above (no marker at all, or a marker
+    # that covers only some of this file's new/changed ids) still needs the
+    # ordinary revert-mutation check - `remaining` carries just those ids'
+    # `funcs`, file by file; a file every one of whose ids the marker loop
+    # above already handled (fully covered, or failed outright as
+    # marker_mismatch/marker_stale) is dropped entirely, exactly as before.
+    remaining = {}
+    for f, (status, funcs) in per_file_funcs.items():
+        handled = set(revert_by_file.get(f, {}).keys())
+        uncovered_ids = _ids_for(funcs) - handled
+        if f in revert_by_file and not uncovered_ids:
+            continue
+        if handled:
+            funcs = [(cls, name, s, e) for cls, name, s, e in funcs
+                     if (f"{cls}.{name}" if cls else name) in uncovered_ids]
+        remaining[f] = (status, funcs)
 
     if prod_files and remaining:
         new_prod_files = [f for f in prod_files if file_status(repo, base, head, f) == "A"]
@@ -1041,9 +1182,9 @@ def _check_range_impl(repo, base, head):
                     # BEFORE the no-production-change import check since
                     # there is nothing to import-match against either.
                     if not funcs:
-                        revert_by_file[f] = ("no_functions",
-                                              "no new/changed test function in this file "
-                                              "(decorator-only or fixture-signature edit)")
+                        _assign_revert_state(revert_by_file, f, funcs, "no_functions",
+                                             "no new/changed test function in this file "
+                                             "(decorator-only or fixture-signature edit)")
                         continue
                     # Fix round 4: this test file may not even be ABOUT any of
                     # the production files this range changed (e.g. new tests
@@ -1054,8 +1195,8 @@ def _check_range_impl(repo, base, head):
                     dotted_names = expand_via_init_reexports(repo, head, dotted_names)
                     test_imports = (dotted_names, bare_names)
                     if not any(references_prod_file(test_imports, pf) for pf in prod_files):
-                        revert_by_file[f] = ("no_prod_change",
-                                              "no production file changed in this range is imported by this test file")
+                        _assign_revert_state(revert_by_file, f, funcs, "no_prod_change",
+                                             "no production file changed in this range is imported by this test file")
                         continue
                     ids = sorted({node_id(f, cls, name) for cls, name, _, _ in funcs})
                     rc, out = run_pytest(wt, ids, python)
@@ -1069,7 +1210,7 @@ def _check_range_impl(repo, base, head):
                                 # too) - restoring it whole is not safe to
                                 # call a clean revert. n/a; the weaken column
                                 # carries the requirement, as with new_module.
-                                revert_by_file[f] = ("reverted_symbol_napt", symbol)
+                                _assign_revert_state(revert_by_file, f, funcs, "reverted_symbol_napt", symbol)
                                 continue
                             # B1 (row 459 audit, HTC gate-rows): `M` exists at
                             # base, it just doesn't define `X` yet - the range
@@ -1088,40 +1229,42 @@ def _check_range_impl(repo, base, head):
                             outcome2 = classify_pytest_outcome(rc2, out2)
                             label = f"{module_path} kept at head for import of {symbol}"
                             if outcome2 == "error_runner":
-                                revert_by_file[f] = ("error_runner", out2[-400:])
+                                _assign_revert_state(revert_by_file, f, funcs, "error_runner", out2[-400:])
                                 ok = False
                             elif outcome2 == "failed":
-                                revert_by_file[f] = ("symbol_kept_ok", label)
+                                _assign_revert_state(revert_by_file, f, funcs, "symbol_kept_ok", label)
                             else:
-                                revert_by_file[f] = ("symbol_kept_bad", label)
+                                _assign_revert_state(revert_by_file, f, funcs, "symbol_kept_bad", label)
                                 ok = False
                             continue
                         if new_module_import_error(out, new_prod_files):
                             # n/a, not a fail: the module the test imports
                             # simply doesn't exist yet at base - the weaken
                             # column (below) carries the requirement.
-                            revert_by_file[f] = ("new_module", out[-800:])
+                            _assign_revert_state(revert_by_file, f, funcs, "new_module", out[-800:])
                         else:
-                            revert_by_file[f] = ("error", out[-800:])
+                            _assign_revert_state(revert_by_file, f, funcs, "error", out[-800:])
                             ok = False
                         continue
                     if rc == NO_TESTS_COLLECTED_RC:
-                        revert_by_file[f] = (None, "n/a - only host-only tests changed (filtered by -k 'not host')")
+                        _assign_revert_state(revert_by_file, f, funcs, None,
+                                             "n/a - only host-only tests changed (filtered by -k 'not host')")
                         continue
                     outcome = classify_pytest_outcome(rc, out)
                     if outcome == "error_runner":
-                        revert_by_file[f] = ("error_runner", out[-400:])
+                        _assign_revert_state(revert_by_file, f, funcs, "error_runner", out[-400:])
                         ok = False
                     else:
                         failed = outcome == "failed"
-                        revert_by_file[f] = (failed, out[-800:])
+                        _assign_revert_state(revert_by_file, f, funcs, failed, out[-800:])
                         if not failed:
                             ok = False
             finally:
                 remove_worktree(repo, wt)
     else:
-        for f in remaining:
-            revert_by_file[f] = (None, "no production .py file changed in this range - (b) skipped")
+        for f, (status, funcs) in remaining.items():
+            _assign_revert_state(revert_by_file, f, funcs, None,
+                                 "no production .py file changed in this range - (b) skipped")
 
     # ---- (c) assertion-weakening, per file, same HEAD worktree reused ----
     weaken_by_func = {}
@@ -1246,11 +1389,11 @@ def _check_range_impl(repo, base, head):
 
     for f in test_files:
         status, funcs = per_file_funcs[f]
-        names = ", ".join(sorted({f"{cls}.{name}" if cls else name for cls, name, _, _ in funcs})) or "-"
-        rev_ok, rev_why = revert_by_file.get(f, (None, "-"))
+        ids_sorted = sorted(_ids_for(funcs))
+        names = ", ".join(ids_sorted) or "-"
         weak_ok, weak_why = weaken_by_func.get(f, (None, "-"))
         flags = static_by_file.get(f, [])
-        rev_cell = _cell(rev_ok, rev_why)
+        rev_cell = render_revert_cell(revert_by_file.get(f, {}), ids_sorted)
         weak_cell = _cell(weak_ok, weak_why)
         flags_cell = "; ".join(flags) if flags else "none"
         rows.append((f, names, rev_cell, weak_cell, flags_cell))
