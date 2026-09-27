@@ -304,8 +304,9 @@ def test_darkroom_open_client_timeout_outlasts_the_plugins_own_budget():
 
 
 def test_the_unit_suite_never_creates_the_real_bridge_spool():
-    """Fix round 1, blocker 4: the non-host suite must not be able to reach
-    the user's own bridge spool or their installed Lua plugin.
+    """Fix round 1, blocker 4 (fix round 2: made immune to a concurrent live
+    run): the non-host suite must not be able to reach the user's own bridge
+    spool or their installed Lua plugin.
 
     The failure mode this closes is not hypothetical. `Bridge()` with no
     arguments resolves its spool from `$XDG_CACHE_HOME` (default
@@ -317,13 +318,23 @@ def test_the_unit_suite_never_creates_the_real_bridge_spool():
 
     `tests/conftest.py` pins both paths under the session temp dir for every
     non-host run. This asserts the consequence rather than the mechanism: the
-    real paths are still where they were, and the real spool was not created.
+    real paths are still where they were, and the real spool was not written
+    into BY THIS PROCESS. That last part matters: fix round 1 proved it by
+    scanning the real, shared spool directory for files newer than the
+    session start, and a genuinely concurrent live run (the htc gauntlet on
+    the main checkout, `5501801`, talks to a real darktable through this
+    exact spool) writing its own request file during the session made that
+    scan flag it as if the unit suite had done it. `conftest.REAL_SPOOL_
+    WRITES` instead watches this process's own `os.rename` calls (see
+    `test_it_is_immune_to_a_concurrent_live_run_writing_into_the_real_spool`
+    below for the mechanism proof), so a concurrent process's writes -- in a
+    different interpreter -- can never appear in it.
+
     On a `SCOUTER_HOST_TESTS=1` run the pins are deliberately lifted (a host
     test talks to a real darktable), so the assertion only applies when they
     are in force.
     """
     import os
-    from pathlib import Path
 
     from darktable_mcp.bridge.client import _cache_dir, _plugin_path
     from tests import conftest
@@ -347,15 +358,40 @@ def test_the_unit_suite_never_creates_the_real_bridge_spool():
         assert path.startswith(
             conftest._SESSION_TMP
         ), f"{path} is neither the real path nor under the session temp dir"
-    # And the real spool must not have been created by this run. It may exist
-    # from a genuine host run or from normal use of the tool -- what must be
-    # true is that the SUITE is not what creates it, so this asserts absence
-    # only when it is absent, and otherwise asserts the suite never wrote into
-    # it (no request file younger than the session).
-    real = Path(conftest.REAL_BRIDGE_SPOOL)
-    if real.is_dir():
-        session_started = os.path.getmtime(conftest._SESSION_TMP)
-        fresh = [
-            p.name for p in real.iterdir() if p.is_file() and p.stat().st_mtime >= session_started
-        ]
-        assert fresh == [], f"the unit suite wrote into the real bridge spool: {fresh}"
+    # And this process must never have written into the real spool -- proof
+    # of what WE did, not of what the shared directory happens to contain.
+    assert conftest.REAL_SPOOL_WRITES == [], (
+        "the unit suite wrote into the real bridge spool: " f"{conftest.REAL_SPOOL_WRITES}"
+    )
+
+
+def test_it_is_immune_to_a_concurrent_live_run_writing_into_the_real_spool(tmp_path):
+    """Fix round 2: the mechanism behind the assertion above must not be
+    fooled by another process writing next to it, and must still catch a
+    genuine leak from this process.
+
+    Exercised against a throwaway stand-in directory, never the real spool --
+    the point is to prove the WATCHING mechanism's behaviour, not to touch
+    `~/.cache/darktable-mcp`.
+    """
+    from tests import conftest
+
+    fake_real_spool = tmp_path / "fake-real-spool"
+    fake_real_spool.mkdir()
+    sink = conftest.watch_renames_into(str(fake_real_spool))
+    try:
+        # A concurrent OTHER process writing straight into the shared
+        # directory: no `os.rename` call happens in THIS interpreter, so it
+        # must not be recorded as ours.
+        (fake_real_spool / "request-live-gauntlet.json").write_text("{}", encoding="utf-8")
+        assert sink == [], "an external writer must not be mistaken for this suite"
+
+        # This process performing the exact write pattern Bridge.call uses
+        # (tmp file, then os.rename into place) must still be caught.
+        tmp_file = fake_real_spool / "request-ours.json.tmp"
+        tmp_file.write_text("{}", encoding="utf-8")
+        target = fake_real_spool / "request-ours.json"
+        os.rename(tmp_file, target)
+        assert str(target.resolve()) in sink, "a real leak from this suite must still be caught"
+    finally:
+        conftest.stop_watching(str(fake_real_spool))

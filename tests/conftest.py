@@ -200,3 +200,64 @@ def _never_the_real_vault(monkeypatch):
         if os.environ.get(k) != v and not _is_allowed(os.environ.get(k, "")):
             monkeypatch.setenv(k, v)
     yield
+
+
+#: Fix round 2 (spool isolation): `test_the_unit_suite_never_creates_the_real_
+#: bridge_spool` used to prove "nothing wrote to the real spool" by scanning
+#: the real, SHARED spool directory for files newer than the session start.
+#: That is not proof of what THIS suite did -- it is proof of what anyone did.
+#: A live run (the htc gauntlet on the main checkout, `5501801`, talks to a
+#: real darktable through this exact spool) writing its own request file
+#: during the session made the scan flag it as if the unit suite had done it.
+#:
+#: Watching this PROCESS's own `os.rename` calls instead is immune to that: a
+#: concurrent process's writes happen in a different interpreter and never go
+#: through this module's patched `os.rename`, so they can never be recorded
+#: here, while a genuine leak from this suite (a `Bridge()` built without a
+#: cache_dir override, on a run where the `XDG_CACHE_HOME` pin was somehow not
+#: honoured) still performs its atomic tmp+rename write through this exact
+#: function and is still caught.
+_WATCHED_ROOTS: dict[str, list[str]] = {}
+_real_os_rename = os.rename
+
+
+def _guarded_rename(src, dst, *args, **kwargs):
+    try:
+        real_dst = os.path.realpath(os.fspath(dst))
+    except OSError:
+        real_dst = os.fspath(dst)
+    for root, sink in _WATCHED_ROOTS.items():
+        if real_dst == root or real_dst.startswith(root + os.sep):
+            sink.append(real_dst)
+    return _real_os_rename(src, dst, *args, **kwargs)
+
+
+os.rename = _guarded_rename
+
+
+def watch_renames_into(root: str) -> list[str]:
+    """Start recording every `os.rename` this process performs whose
+    destination lands under `root`.
+
+    Returns the (initially empty) list that is appended to live as writes
+    happen -- inspect it directly, no polling needed. Call `stop_watching`
+    with the same root when done, or it keeps recording for the rest of the
+    session (harmless, but unbounded).
+    """
+    resolved = os.path.realpath(root)
+    sink: list[str] = []
+    _WATCHED_ROOTS[resolved] = sink
+    return sink
+
+
+def stop_watching(root: str) -> None:
+    _WATCHED_ROOTS.pop(os.path.realpath(root), None)
+
+
+#: Watch the real bridge spool for the whole session, not just inside one
+#: assertion -- a leak should fail whichever test triggers it. Only on a
+#: non-host run: a host run deliberately lifts the `XDG_CACHE_HOME` pin and
+#: talks to the real spool on purpose.
+REAL_SPOOL_WRITES: list[str] = (
+    watch_renames_into(REAL_BRIDGE_SPOOL) if "XDG_CACHE_HOME" in _FORCED else []
+)
