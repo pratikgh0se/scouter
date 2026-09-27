@@ -171,7 +171,7 @@ def _stage_guide_job(session) -> None:
     `preset apply-job` honestly (but wrongly, from the harness's own gap)
     answer "no job with slug ...". Mirrors exec_bulk.run_bulk_case's own
     import step: a real `library_import` of the staged card into that slug,
-    then `exec_bulk._imported_frames` resolves `job_frames` to the paths the
+    then `execute._imported_frames` resolves `job_frames` to the paths the
     import actually wrote (never the card copies, which stay outside the
     library the product's own job/preset verbs read from).
 
@@ -187,7 +187,7 @@ def _stage_guide_job(session) -> None:
     guide session on an MCP reopen re-imports into the same slug (a
     resume-skip on the product side, harmless) and clears any earlier
     error."""
-    from tests.gauntlet.exec_bulk import ImportIncomplete, _imported_frames
+    from tests.gauntlet.execute import ImportIncomplete, _imported_frames
 
     staged = session.staged
     session.guide_job_stage_error = None
