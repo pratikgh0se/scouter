@@ -287,6 +287,46 @@ def test_agent_write_flag_uses_the_one_write_tool_set():
     assert {c.tool for c in obs.calls if c.write} == set(WRITE_TOOLS)
 
 
+def test_frame_path_shown_to_the_agent_never_names_the_diagnosis(tmp_path, monkeypatch):
+    """(row 501 item F, night-1 rank 8, SCA-fixture-frame-mismatch-and-
+    leak): r0037's agent read the staged frame's own directory name
+    ("the folder is literally named warm_cast") as evidence for its
+    diagnosis. The prompt (and the path in it) must carry no problem-name
+    token from the case generator's problem list (tests.gauntlet.corpus.
+    ROLES)."""
+    from gauntlet.case import Case, Expect
+    from tests.gauntlet.corpus import ROLES
+
+    frame = tmp_path / "frames" / "warm_cast" / "IMG_0001.ORF"
+    frame.parent.mkdir(parents=True)
+    frame.write_bytes(b"raw")
+
+    class Inner:
+        root = tmp_path
+        floors = {}
+        touched = set()
+        staged = type("S", (), {"env": {"PYTHONPATH": "."}})()
+
+        def ensure_frame(self, role):
+            return frame
+
+    monkeypatch.setattr(agent.observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
+                                                                       "params": {}})
+    FakePopen.spawned = []
+    popen = _popen_seq(_lines({"type": "result", "result": "ok", "session_id": "s1"}))
+    s = agent.AgentSession(Inner(), popen=popen)
+    case = Case(id="sca-leak", layer="scenarios_agent", tier="P0", mode="agent", steps=[],
+                expect=Expect("refuse"), body="olympus", frame_role="warm_cast",
+                meta={"sentence": "fix the color balance", "followups": []})
+    s.run_case(case)
+    prompt = FakePopen.spawned[-1].argv[2]
+    alias_path = prompt.rsplit(" is ", 1)[-1].rstrip(".")
+    for token in ROLES:
+        if token in ("hero", "neutral"):
+            continue
+        assert token not in alias_path, (token, alias_path)
+
+
 def test_mcp_config_pins_the_session_library(tmp_path):
     staged = type("S", (), {"env": {"PYTHONPATH": ".", "SCOUTER_CACHE": "/c",
                                     "SCOUTER_DARKTABLE_LIBRARY_DB": str(tmp_path / "l.db")}})()

@@ -5,6 +5,7 @@ stops the batch the case parks (gauntlet.adapter.Park) and resumes later."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -77,6 +78,29 @@ def reset_time(text: str, now: datetime | None = None) -> float | None:
     if t <= now:
         t += timedelta(days=1)
     return t.timestamp()
+
+
+def neutral_frame_path(root: Path, role: str, frame: Path) -> Path:
+    """(row 501 item F, night-1 triage rank 8, SCA-fixture-frame-mismatch-
+    and-leak): the staged frame's own directory is the corpus ROLE, which
+    for several roles literally spells the diagnosis (`warm_cast`,
+    `cool_cast`, `blown`, `flat`, `noisy`, `dark`, `bright`) --
+    r0037's agent read its own tool-result path and used the folder name as
+    evidence ("the folder is literally named warm_cast") instead of judging
+    the photo it was shown. The prompt must never hand the agent a path
+    that names the answer, so it gets a neutral alias -- a symlink (falling
+    back to a copy) under a hashed, role-blind directory name, inside the
+    session -- instead of the real staged path. The original file's name is
+    kept (never a diagnosis word for the corpora this harness stages)."""
+    alias_dir = root / "frames_view" / ("f" + hashlib.sha1(role.encode()).hexdigest()[:6])
+    alias_dir.mkdir(parents=True, exist_ok=True)
+    alias = alias_dir / frame.name
+    if not alias.exists():
+        try:
+            alias.symlink_to(frame)
+        except OSError:
+            alias.write_bytes(frame.read_bytes())
+    return alias
 
 
 def mcp_config(staged) -> dict:
@@ -207,7 +231,8 @@ class AgentSession:
             r = observe.render_raster(frame, self.inner.root / "render" / "before.ppm")
             obs.stats_before, masks = observe.stats(r)
             obs.floors = dict(self.inner.floors)
-        prompt = f"{case.meta['sentence']}\n\nThe photo open in darktable is {frame}."
+        alias = neutral_frame_path(self.inner.root, case.frame_role or "hero", frame)
+        prompt = f"{case.meta['sentence']}\n\nThe photo open in darktable is {alias}."
         texts: list[str] = []
         calls: list[dict] = []
         try:
