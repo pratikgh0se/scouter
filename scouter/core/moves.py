@@ -162,7 +162,11 @@ def _summary(s: vocab.ParamSpec, delta: float, prev: float, shown: float | None,
     d = explain.with_unit(s, f"{vocab.to_display(s, delta):+.3g}")
     line = f"{s.ui}: {d} ({_fmt(s, prev)} → {_fmt(s, shown if shown is not None else target)})"
     if clamped:
-        line += f" [clamped at {_fmt(s, target)}]"
+        # Pratik's ruling, row 471 (COV-D-residual-clamp-capped): the CLI/
+        # MCP text says "moved to the limit" -- plain "[clamped at X]" read
+        # as a footnote on an otherwise-normal move, not as the honest
+        # partial it is.
+        line += f"; moved to the limit ({_fmt(s, target)})"
     return line
 
 
@@ -227,12 +231,22 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
     clamped = clamped or result.clamped
     warnings.extend(result.warnings)
     explain_lines = explain.lines([explain.MoveNote(s, previous, target)], level=level, job=job)
+    # Pratik's ruling, row 471 (COV-D-residual-clamp-capped): a move that
+    # genuinely moved (not `noop` -- that early return above already
+    # covers "never moved at all") but stopped at its own declared clamp
+    # must never answer a plain "ok": `outcome` is the typed partial
+    # `moved_to_limit`, which `registry.call`'s `ok = outcome in ("ok",
+    # "dry_run")` already excludes, exactly like `darkroom.undo_last`'s
+    # "noop" outcome.
+    moved_to_limit = clamped and not result.noop
     return AdjustResult(
+        outcome="moved_to_limit" if moved_to_limit else "ok",
         image_id=resolved.image_id, path=resolved.path, module=module, param=param,
         instance=instance, unit=s.unit, delta=delta, previous=previous, target=target,
         applied=applied, clamped=clamped, source=source, committed=result.committed,
         noop=result.noop, summary=_summary(s, delta, previous, applied, clamped, target),
         explain=explain_lines, warnings=warnings,
+        requested=previous + delta, cap=target if moved_to_limit else None,
         plan=[{"action": "darkroom.adjust", "ms_precommit": ms_precommit,
                "ms_read": int((t1 - t0) * 1000),
                "ms_set": int((time.monotonic() - t1) * 1000)}],
@@ -830,15 +844,37 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
          "(nothing sent to darktable)"]
         if all_moves_noop else []
     )
+    # Pratik's ruling, row 471 (COV-D-residual-clamp-capped): a phrase with
+    # any move that stopped at its own declared clamp is `moved_to_limit`
+    # too (never plain "ok"), same family as `noop`/`refused` above. Takes
+    # priority over a plain "ok" but not over `failures`' "partial" -- a
+    # real error in a later move is still the more serious fact.
+    moved_to_limit = [
+        {"module": m.get("module"), "param": m.get("param"), "requested": m.get("requested"),
+         "applied": m.get("applied"), "cap": m.get("cap")}
+        for m in landed if m.get("outcome") == "moved_to_limit"
+    ]
+    clamp_warning = (
+        [f"moved to the limit: {len(moved_to_limit)} move(s) of {phrase!r} stopped at "
+         "their own declared clamp (see moved_to_limit)"]
+        if moved_to_limit and not failures else []
+    )
+    if failures:
+        outcome = "partial"
+    elif moved_to_limit:
+        outcome = "moved_to_limit"
+    else:
+        outcome = "ok"
     return SayResult(
-        outcome="partial" if failures else "ok",
+        outcome=outcome,
         noop=all_moves_noop,
+        moved_to_limit=moved_to_limit,
         image_id=resolved.image_id, path=resolved.path, phrase=phrase, key=res.key,
         intensity=res.intensity, group=group, moves=landed, refused=failures,
         summary="; ".join(m.get("summary", "") for m in landed),
         explain=explain.lines(notes, level=level, job=job),
         warnings=[w for w in [warning, wb_routed and darkroom.wb_routed_note(wb_routed)] if w]
-        + noop_warning,
+        + noop_warning + clamp_warning,
         plan=[pre],
     )
 

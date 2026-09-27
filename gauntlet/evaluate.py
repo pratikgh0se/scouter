@@ -586,6 +586,31 @@ def _noop_rule(case: Case, obs: Observation, units: dict) -> str | None:
     return None
 
 
+def _any_moved_to_limit(obs: Observation) -> bool:
+    """Row 471: any write call whose own `outcome` is the typed partial
+    `moved_to_limit` (scouter/core/moves.py `_adjust_core`/`say`) -- a move
+    that genuinely moved but stopped at its own declared clamp."""
+    return any((c.envelope or {}).get("outcome") == "moved_to_limit"
+               for c in obs.calls if c.write)
+
+
+def _moved_to_limit_residual(case: Case, results: list[CheckResult],
+                             obs: Observation) -> Verdict | None:
+    """Row 471 (COV-D-residual-clamp-capped, Pratik's ruling): when every
+    non-passing check on an `edit` case reads "below noise floor" -- the
+    oracle simply cannot see a move that stopped at its own declared clamp
+    -- that is the clamp being honest about its own limit, not a bug.
+    Scored `correct_refusal` (an honest refusal to move further than the
+    clamp allows), tagged `residual: clamp` so the report can name it
+    (gauntlet/report.py)."""
+    if case.expect.kind != "edit" or not _any_moved_to_limit(obs):
+        return None
+    non_passing = [r for r in results if not r.ok]
+    if not non_passing or any(r.note != "below noise floor" for r in non_passing):
+        return None
+    return Verdict(PASS, "correct_refusal", results, notes=["residual: clamp"])
+
+
 def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
                    policy: Policy) -> str | None:
     """Spec 1 conditions (a)-(f). Only asked when the product reported success."""
@@ -631,8 +656,16 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     for r, ch in zip(results, case.expect.checks):
         if ch.tags.get("silent_if_fail") and not r.ok:
             return f"c: {ch.tags.get('why', 'a required report is missing')}"
+        # Row 471 (COV-D-residual-clamp-capped): a stat check that reads
+        # "below noise floor" because the move genuinely stopped at its own
+        # declared clamp (`moved_to_limit`) is not a silent bug -- it is the
+        # clamp being honest about its own limit. `_moved_to_limit_residual`
+        # (below) scores the verdict; here we only must not let rule (c)
+        # pre-empt it with the wrong verdict.
         if ch.metric in ("M2", "M3", "M4", "M5", "M6") and ch.sign and not r.ok \
                 and not r.magnitude_only:
+            if r.note == "below noise floor" and _any_moved_to_limit(obs):
+                continue
             return f"c: {ch.metric} {ch.stat} moved {r.measured!r}, expected sign {ch.sign}"
         if ch.kind == "restored" and not r.ok and undo_reported_ok:
             return f"e: undo reported ok but {r.measured} were not restored"
@@ -779,6 +812,10 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     if sf:
         return Verdict(FAIL, "silent_failure", results, silent_failure=sf)
     miss = _sidecar_miss(case, obs) if kind != "noop" else None
+    if not miss and not blocked:
+        residual = _moved_to_limit_residual(case, results, obs)
+        if residual:
+            return residual
     if blocked and (miss or not all(r.ok for r in results)):
         return Verdict(FAIL, "blocked", results, notes=[blocked])
     if kind == "noop":

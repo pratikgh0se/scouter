@@ -89,10 +89,16 @@ class AdjustTest(_MovesFixture):
         self.assertEqual(self.commits, [])
 
     def test_clamp_is_reported(self) -> None:
+        # Pratik's ruling, row 471 (COV-D-residual-clamp-capped): a real,
+        # clamped move is `moved_to_limit`, never a plain "ok" -- and the
+        # CLI/MCP text says so.
         r = moves.adjust.__wrapped__("exposure", "exposure", 10.0, commit=False, job="job-test")
         self.assertTrue(r.clamped)
         self.assertEqual(r.target, 4.0)
-        self.assertIn("[clamped at 4 EV]", r.summary)
+        self.assertIn("moved to the limit (4 EV)", r.summary)
+        self.assertEqual(r.outcome, "moved_to_limit")
+        self.assertEqual(r.cap, 4.0)
+        self.assertAlmostEqual(r.requested, 11.5500002, places=5)
 
     def test_adjust_at_the_limit_sends_nothing(self) -> None:
         moves.adjust.__wrapped__("exposure", "exposure", 10.0, commit=False, job="job-test")

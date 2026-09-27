@@ -212,6 +212,14 @@ def build(run: RunDir, adapter: Adapter, cases: list[Case], results: list[dict],
     p0_pass = sum(r["verdict"]["score"] == "pass" for r in p0)
     served = sum(_outcome(r) in SERVED for r in p0)
     refused = sum(_outcome(r) == "correct_refusal" for r in p0)
+    #: Row 471 (COV-D-residual-clamp-capped): a `correct_refusal` the
+    #: evaluator reached because a move stopped at its own declared clamp
+    #: below the check floor (gauntlet/evaluate.py `_moved_to_limit_residual`)
+    #: is tagged `residual: clamp` in the verdict's notes -- named here, not
+    #: just counted, so the refused figure in S1 is not a black box.
+    residual_clamp_ids = sorted(r["id"] for r in valid
+                                if _outcome(r) == "correct_refusal"
+                                and "residual: clamp" in (r["verdict"].get("notes") or []))
     missing = len(missing_ids)
     gates_ok = all(row["p1_ok"] and all(g["ok"] for g in row["check_gates"]) for row in layers)
     #: (Task 28 fix round 1, I1): an adapter may name product sign-off items
@@ -249,7 +257,8 @@ def build(run: RunDir, adapter: Adapter, cases: list[Case], results: list[dict],
                         "pass": sum(r["verdict"]["score"] == "pass" for r in valid),
                         "partial": sum(r["verdict"]["score"] == "partial" for r in valid),
                         "fail": sum(r["verdict"]["score"] == "fail" for r in valid),
-                        "p0_served": served, "p0_refused": refused, "p0_total": p0_total},
+                        "p0_served": served, "p0_refused": refused, "p0_total": p0_total,
+                        "residual_clamp_ids": residual_clamp_ids},
         "S2_layers": layers,
         "S3_non_pass": fix_list(valid),
         "S5_timing": timing(valid),
@@ -284,6 +293,10 @@ def markdown(rep: dict) -> str:
          f"{s1['fail']} fail.", "",
          f"**P0 served rate:** {s1['p0_served']} verified edits, {s1['p0_refused']} honest "
          f"refusals, of {s1['p0_total']} P0 cases (a headline, not a gate).", "",
+         f"- Residual (clamp), row 471: {len(s1.get('residual_clamp_ids', []))} of the honest "
+         "refusals above are a move that stopped at its own declared clamp below the check "
+         "floor -- " + (", ".join(f"`{i}`" for i in s1.get("residual_clamp_ids", [])) or "none"),
+         "",
          "## S2 Layers", "",
          "| Layer | Cases | Rate | Pass | Partial | Fail | P0 | P1 rate | Gate |",
          "|---|---|---|---|---|---|---|---|---|"]

@@ -78,6 +78,40 @@ def test_below_floor_is_silent_c_not_partial():
     assert evaluate(_edit_case([chk], {"changed": True}), obs, POLICY).outcome == "silent_failure"
 
 
+def _moved_to_limit(data=None, **kw):
+    return {"ok": False, "outcome": "moved_to_limit", "data": data or {}, **kw}
+
+
+def test_moved_to_limit_below_floor_is_correct_refusal_residual_clamp():
+    """Row 471 (COV-D-residual-clamp-capped, Pratik's ruling). Real shape
+    from the night-1 gauntlet triage (scratchpad/n1/cov_residual.json,
+    cov-phrase-more_chroma-sony_a7-bare): the move stopped at its own
+    declared clamp (scouter/core/moves.py `outcome: "moved_to_limit"`) and,
+    because of that, the stat check reads below its noise floor -- the
+    clamp being honest about its own limit, not a silent bug. Contrast with
+    `test_below_floor_is_silent_c_not_partial` right above: a plain `ok`
+    outcome below floor is still an honest silent failure -- only
+    `moved_to_limit` earns the exception."""
+    chk = Check("M2", stat="L", region="frame", sign=1)
+    obs = _obs(_moved_to_limit(), _snap("a"), _snap("b"),
+               stats_before={"frame": {"L": 50.0}}, stats_after={"frame": {"L": 50.1}},
+               floors={"L": 0.5})
+    v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
+    assert (v.score, v.outcome) == ("pass", "correct_refusal")
+    assert v.notes == ["residual: clamp"]
+
+
+def test_moved_to_limit_wrong_direction_is_still_a_failure():
+    """A `moved_to_limit` outcome only excuses "below noise floor" -- a
+    check that moved the WRONG way is still a real bug, clamp or not."""
+    chk = Check("M2", stat="L", region="frame", sign=1)
+    obs = _obs(_moved_to_limit(), _snap("a"), _snap("b"),
+               stats_before={"frame": {"L": 50.0}}, stats_after={"frame": {"L": 45.0}},
+               floors={"L": 0.5})
+    v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
+    assert v.outcome != "correct_refusal"
+
+
 def test_silent_failure_d_bulk_counts():
     obs = _obs(_ok(), _snap("a"), _snap("b"), extra={"reported_n": 7, "changed_n": 6,
                                                      "verified_n": 7})

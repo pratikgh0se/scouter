@@ -225,7 +225,11 @@ class SetMoveBeforeTest(_MovesFixture):
                                       {"value": 120.0, "enabled": True, "history_end": 9},
                                       False)):
             r = moves.say.__wrapped__("warm the highlights", commit=False, job="job-test")
-        self.assertEqual(r.outcome, "ok")
+        # The mock hands BOTH sub-moves the same raw state, so the chroma
+        # adjust (range 0-0.3) reads a nonsense previous of 120.0 and clamps
+        # hard to its own limit -- `moved_to_limit` (row 471), not "ok". This
+        # test is about the hue set's own `before` tracking, not the clamp.
+        self.assertEqual(r.outcome, "moved_to_limit")
         hue = [e for e in journal.read_all("job-test") if e.param == "highlights_hue"][0]
         self.assertEqual(hue.before.get("value"), 120.0)
         self.assertNotIn(hue.before.get("source"), ("neutral", "default"))
