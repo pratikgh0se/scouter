@@ -38,8 +38,15 @@ def cli_argv(verb_id: str, args: dict) -> list[str]:
         val = args[spec.name]
         if spec.type == "bool":
             if val:
-                argv.append({"dry_run": "--dry-run", "confirm": "--yes"}.get(
-                    spec.name, f"--{spec.name.replace('_', '-')}"))
+                if spec.name == "commit" and spec.default is True:
+                    # PAR-set-commit-flag: `commit=True` is already the
+                    # default (the CLI defines only `--no-commit`, for a
+                    # default-True commit, never a `--commit` flag), so
+                    # nothing is emitted here.
+                    pass
+                else:
+                    argv.append({"dry_run": "--dry-run", "confirm": "--yes"}.get(
+                        spec.name, f"--{spec.name.replace('_', '-')}"))
             elif spec.name == "commit" and spec.default is True:
                 argv.append("--no-commit")
             continue

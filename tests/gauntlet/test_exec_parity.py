@@ -35,6 +35,21 @@ def test_cli_argv_follows_the_registry():
     assert "--dry-run" in argv and "brighter" in argv
 
 
+def test_cli_argv_never_emits_the_nonexistent_commit_flag():
+    # PAR-set-commit-flag (triage rank 10): `commit=True` (SMOKE_ARGS's own
+    # darkroom.set happy/error args) used to map to `--commit`, a flag the CLI
+    # never defines (only `--no-commit` exists, for a default-True commit) --
+    # argparse rejected it, failing both P0 darkroom.set pairs. `commit=True`
+    # is already the default, so no flag at all should be emitted for it.
+    argv = exec_parity.cli_argv("darkroom.set", {"module": "exposure", "param": "exposure",
+                                                 "value": 1.0, "commit": True})
+    assert "--commit" not in argv
+    # commit=False must still emit --no-commit (unchanged behaviour).
+    argv = exec_parity.cli_argv("darkroom.set", {"module": "exposure", "param": "exposure",
+                                                 "value": 1.0, "commit": False})
+    assert "--no-commit" in argv
+
+
 def test_cli_timeout_blocks_as_hang_without_raising(corpus, tmp_path, monkeypatch):
     s = _session(corpus, tmp_path).open()
     monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: (_ for _ in ())
