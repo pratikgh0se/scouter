@@ -53,6 +53,26 @@ def test_inherited_wedge_is_not_scored_as_a_hang(corpus, tmp_path, monkeypatch):
     assert not is_hang("blocked", obs.blocked)
 
 
+def test_inherited_wedge_ping_runs_before_isolates_own_resets(corpus, tmp_path, monkeypatch):
+    """Fix round 1 review M2 (medium): the ping must run BEFORE `ensure_frame`/
+    `isolate`, not after. With `session.touched` non-empty (a previous case's
+    write), `isolate` alone sends one `darkroom_reset` per touched module,
+    each its own 12+30s budget -- against an inherited wedge that alone can
+    burn the case's hard cap before a post-isolate ping ever got to run (the
+    rob-r3 shape). Proven here by NO reset call ever reaching the mcp."""
+    mcp = FakeMcp()
+    s = _session(corpus, tmp_path, FakeDt(health="unresponsive"), mcp).open()
+    s.touched = {"exposure", "sigmoid"}
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
+                                                                 "params": {}, "units": {}})
+    case = Case(id="c", layer="scenarios", tier="P0", mode="tool", steps=[],
+                expect=Expect("edit"), body="olympus", frame_role="hero")
+    obs = execute.run_tool_case(s, case)
+    assert obs.blocked == "inherited_wedge"
+    assert mcp.calls == []  # no darkroom_reset (or anything else) ever sent
+    assert s.touched == {"exposure", "sigmoid"}  # isolate() itself never ran
+
+
 def test_placeholders_and_originals_guard(corpus, tmp_path, monkeypatch):
     s = _session(corpus, tmp_path).open()
     out = execute.substitute({"image": "{frame:hero}", "slug": "{job_slug}"}, s, [])

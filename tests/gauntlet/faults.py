@@ -367,7 +367,18 @@ def run_fault_case(session, case: Case) -> Observation:
         if fault in _FREEZE_FAULTS:
             role = case.frame_role or "hero"
             frame = session.ensure_frame(role)
-            isolate(session, frame, role)
+            #: (fix round 1 review M3): a restage (`isolate` returning True)
+            #: leaves `current_frame = None` (`refresh_frame`'s own docstring:
+            #: launched, never current, until a real follow-up `darkroom_open`
+            #: succeeds). Left unopened here, `arm`'s SIGSTOP freezes darktable
+            #: BEFORE that open ever happens; `run_tool_case`'s own
+            #: `ensure_frame` then sends it to the now-frozen process, times
+            #: out, and relaunches -- which kills the fault this case exists to
+            #: test and silently drops `contaminated_restaged`. Mirror
+            #: `execute.run_tool_case`'s own pattern: re-open, record it.
+            if isolate(session, frame, role):
+                session.ensure_frame(role)
+                v["_contaminated_restaged"] = True
         arm(session, fault, v, step_tool=case.steps[0].tool if case.steps else None)
         session.staged.vars.update({k: val for k, val in v.items() if not k.startswith("_")})
         if v.get("_skip"):
@@ -377,7 +388,12 @@ def run_fault_case(session, case: Case) -> Observation:
         elif fault == "two_clients":
             obs = _two_clients(session, case)
         else:
-            obs = run_tool_case(session, case)
+            #: (fix round 1 review B1): `run_tool_case`'s own pre-case ping
+            #: must be skipped for `_FREEZE_FAULTS` -- darktable is frozen ON
+            #: PURPOSE by `arm` above, and the pre-arm isolate just above
+            #: already proved it responsive before that freeze. Every OTHER
+            #: fault still gets the ping (rob-r12's inherited-wedge shape).
+            obs = run_tool_case(session, case, pre_ping=fault not in _FREEZE_FAULTS)
             _post_facts(fault, obs, v)
     except SessionBlocked as e:
         obs = Observation(blocked=f"session: {e}"[:500])
@@ -387,6 +403,8 @@ def run_fault_case(session, case: Case) -> Observation:
         errors = disarm(session, v)
         if obs is not None and (obs.blocked or "").startswith("hang"):
             errors = errors + _recover_from_hang(session)
+    if obs is not None and v.get("_contaminated_restaged"):
+        obs.extra["contaminated_restaged"] = True
     if errors:
         obs.extra["disarm_errors"] = errors
     return obs

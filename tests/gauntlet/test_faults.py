@@ -154,7 +154,7 @@ def test_arm_raising_is_typed_blocked_and_partial_disarm_ran(tmp_path, monkeypat
 
 
 def test_disarm_step_raising_is_recorded_not_raised(tmp_path, monkeypatch):
-    monkeypatch.setattr(execute, "run_tool_case", lambda session, case: Observation())
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case, **kw: Observation())
     s = FakeSession(tmp_path, relaunch_error=SessionBlocked("relaunch: did not quit"))
     obs = faults.run_fault_case(s, _cases()["R17"])  # slow_bridge: SIGCONT + relaunch
     assert obs.blocked is None
@@ -175,7 +175,7 @@ def test_hang_triggers_relaunch_and_mcp_reopen(tmp_path, monkeypatch):
     must relaunch darktable and reopen the MCP client before returning, so
     the NEXT case starts clean instead of inheriting the wedge (rob-r11's one
     true hang scored as six, r12-r15/r17 all queued behind it)."""
-    monkeypatch.setattr(execute, "run_tool_case", lambda session, case: Observation(blocked="hang"))
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case, **kw: Observation(blocked="hang"))
     s = FakeSession(tmp_path)
     obs = faults.run_fault_case(s, _cases()["R12"])
     assert obs.blocked == "hang"
@@ -189,8 +189,8 @@ def test_a_typed_hang_reason_also_triggers_recovery(tmp_path, monkeypatch):
     subprocess timeout writes "hang: <tool> exceeded budget") -- recovery
     must fire on the whole `hang*` family, matching `evaluate.is_hang`."""
     monkeypatch.setattr(execute, "run_tool_case",
-                        lambda session, case: Observation(blocked="hang: scouter cli exceeded "
-                                                           "budget"))
+                        lambda session, case, **kw: Observation(blocked="hang: scouter cli exceeded "
+                                                                "budget"))
     s = FakeSession(tmp_path)
     obs = faults.run_fault_case(s, _cases()["R12"])
     assert obs.blocked.startswith("hang")
@@ -198,7 +198,7 @@ def test_a_typed_hang_reason_also_triggers_recovery(tmp_path, monkeypatch):
 
 
 def test_non_hang_case_never_triggers_recovery(tmp_path, monkeypatch):
-    monkeypatch.setattr(execute, "run_tool_case", lambda session, case: Observation())
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case, **kw: Observation())
     s = FakeSession(tmp_path)
     obs = faults.run_fault_case(s, _cases()["R12"])
     assert obs.blocked is None
@@ -206,7 +206,7 @@ def test_non_hang_case_never_triggers_recovery(tmp_path, monkeypatch):
 
 
 def test_hang_recovery_failure_is_reported_not_raised(tmp_path, monkeypatch):
-    monkeypatch.setattr(execute, "run_tool_case", lambda session, case: Observation(blocked="hang"))
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case, **kw: Observation(blocked="hang"))
     s = FakeSession(tmp_path, relaunch_error=SessionBlocked("relaunch: did not quit"))
     obs = faults.run_fault_case(s, _cases()["R12"])
     assert obs.blocked == "hang"
@@ -410,13 +410,84 @@ def test_r3_isolate_runs_before_the_freeze_signal(tmp_path, monkeypatch, kills):
 
     monkeypatch.setattr(faults, "_owned_kill", recording_kill)
     monkeypatch.setattr(observe, "snapshot", lambda *a, **k: {"params": {}, "units": {}})
-    monkeypatch.setattr(execute, "run_tool_case", lambda session, case: Observation())
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case, **kw: Observation())
     s = ToolSession(tmp_path)
     obs = faults.run_fault_case(s, _cases()["R3"])  # wedge_worker
     assert obs.blocked is None
     # the reset ran, and answered, BEFORE the freeze signal -- never after
     assert order == ["darkroom_reset", "SIGSTOP", "SIGCONT"]
     assert s.touched == set()  # isolate cleared it before arm ever ran
+
+
+def test_r3_real_run_tool_case_runs_its_step_after_the_freeze(tmp_path, monkeypatch, kills):
+    """Fix round 1 review B1 (blocker): the reviewer's repro. Fix B's pre-case
+    ping and Fix C's pre-arm isolate combined to block r3/r17 as
+    `inherited_wedge` with zero calls -- `run_tool_case`'s OWN ping (unlike
+    the pre-arm isolate) ran AFTER `arm`'s SIGSTOP, against the darktable the
+    fault had just frozen ON PURPOSE. Uses the real `run_fault_case` +
+    `run_tool_case` (not monkeypatched away, unlike every Fix A/C test above --
+    that mock is exactly how this got through review round 1)."""
+    from tests.gauntlet import observe
+
+    state = {"stopped": False}
+
+    class Dt:
+        def health(self):
+            return "unresponsive" if state["stopped"] else "alive"
+
+    def recording_kill(sig=signal.SIGKILL):
+        if sig == signal.SIGSTOP:
+            state["stopped"] = True
+        if sig == signal.SIGCONT:
+            state["stopped"] = False
+
+    class S(FakeSession):
+        def __init__(self, tmp_path):
+            super().__init__(tmp_path)
+            self.dt = Dt()
+
+        def call(self, tool, args, budget_s, *, write=False):
+            self.tools.append(tool)
+            if state["stopped"]:
+                rec = CallRecord(tool, args, {"ok": False,
+                                              "error": {"code": "darktable_unresponsive"}})
+                rec.error = "darktable_unresponsive"
+                return rec
+            return CallRecord(tool, args, {"ok": True})
+
+    monkeypatch.setattr(faults, "_owned_kill", recording_kill)
+    monkeypatch.setattr(observe, "snapshot", lambda *a, **kw: {"params": {}, "units": {}})
+    s = S(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R3"])  # wedge_worker
+    assert "darkroom_say" in s.tools, f"step never ran: blocked={obs.blocked!r} tools={s.tools!r}"
+
+
+def test_r3_restage_is_reopened_before_the_freeze(tmp_path, monkeypatch, kills):
+    """Fix round 1 review M3 (medium): when the pre-arm isolate restages
+    (returns True), the fresh frame must be re-opened BEFORE arm's SIGSTOP
+    freezes it -- `refresh_frame` leaves `current_frame = None` until a real
+    follow-up open succeeds (`session.py`'s own docstring). Skip that
+    re-open and arm's freeze lands on a session that is not actually
+    current; `run_tool_case`'s own `ensure_frame` then sends the real open
+    to the now-frozen process, times out, and relaunches -- silently
+    dropping BOTH the fault and `contaminated_restaged`."""
+    order: list[str] = []
+
+    class ToolSession(FakeSession):
+        def ensure_frame(self, role):
+            order.append("ensure_frame")
+            return self.staged.frames[role]
+
+    def recording_kill(sig=signal.SIGKILL):
+        order.append({signal.SIGSTOP: "SIGSTOP", signal.SIGCONT: "SIGCONT"}.get(sig, "kill"))
+
+    monkeypatch.setattr(faults, "isolate", lambda session, frame, role: True)
+    monkeypatch.setattr(faults, "_owned_kill", recording_kill)
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case, **kw: Observation())
+    s = ToolSession(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R3"])  # wedge_worker
+    assert order == ["ensure_frame", "ensure_frame", "SIGSTOP", "SIGCONT"]
+    assert obs.extra.get("contaminated_restaged") is True
 
 
 def test_r18_attach_timeout_detaches_the_image(tmp_path, monkeypatch):

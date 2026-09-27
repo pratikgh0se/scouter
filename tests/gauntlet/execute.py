@@ -104,10 +104,29 @@ def isolate(session, frame: Path, role: str) -> bool:
     return False
 
 
-def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
+def run_tool_case(session, case: Case, *, clock=time.monotonic, pre_ping: bool = True) -> Observation:
     obs = Observation()
     t0 = clock()
     role = case.frame_role or "hero"
+    #: (night1-robustness-triage.md item 2; fix round 1 review M2): ping
+    #: BEFORE ensure_frame/isolate, not after. `isolate` alone can send one
+    #: `darkroom_reset` per module the previous case touched, each its own
+    #: 12+30s budget -- against an inherited wedge that alone can burn the
+    #: hard cap (the rob-r3 shape) before a post-isolate ping ever ran.
+    #: `pre_ping=False` (fix round 1 review B1): `run_fault_case` passes this
+    #: for a fault that just froze darktable ON PURPOSE (`_FREEZE_FAULTS`) --
+    #: that unresponsiveness is the fault working as intended, not an
+    #: inherited wedge, and `run_fault_case`'s own pre-arm `isolate` already
+    #: ran, responsively, before the freeze. `dt` may be absent on a minimal
+    #: test double; real `ScouterSession` always has it.
+    if pre_ping:
+        dt = getattr(session, "dt", None)
+        if dt is not None and dt.health() == "unresponsive":
+            obs.blocked = "inherited_wedge"
+            obs.hang_evidence.append("darktable was already unresponsive before this case's "
+                                     "own steps ran (inherited from an earlier case)")
+            obs.wall_s = clock() - t0
+            return obs
     try:
         frame = session.ensure_frame(role)
         if isolate(session, frame, role):
@@ -116,23 +135,6 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
     except SessionBlocked as e:
         obs.blocked = f"session: {e}"
         obs.hang_evidence.append(f"session: {e}")
-        obs.wall_s = clock() - t0
-        return obs
-    #: (night1-robustness-triage.md item 2): a hang in an EARLIER case (or a
-    #: failed recovery from one) can leave darktable wedged before this case's
-    #: own steps ever run. `ensure_frame`/`isolate` above skip their own
-    #: `darkroom_open`/`darkroom_reset` calls when nothing needs re-sending
-    #: (current_frame unchanged, session.touched empty) -- exactly rob-r12's
-    #: shape -- so they never notice. A direct ping here catches it before
-    #: this case spends its own budget: `inherited_wedge` is not this case's
-    #: hang (`gauntlet.evaluate.is_hang` does not count it), never confused
-    #: with a hang THIS case's own step caused (`dt` may be absent on a
-    #: minimal test double; real `ScouterSession` always has it).
-    dt = getattr(session, "dt", None)
-    if dt is not None and dt.health() == "unresponsive":
-        obs.blocked = "inherited_wedge"
-        obs.hang_evidence.append("darktable was already unresponsive before this case's own "
-                                 "steps ran (inherited from an earlier case)")
         obs.wall_s = clock() - t0
         return obs
     #: Fix round 2 (review R1); fix round 3 (re-review R1, ordering): per-case
