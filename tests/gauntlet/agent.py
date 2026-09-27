@@ -121,17 +121,19 @@ def mcp_config(staged) -> dict:
 
 
 def claude_argv(prompt: str, mcp_json: Path, resume: str | None = None) -> list[str]:
-    # (row 501 item E, night-1 triage rank 12, SCA-agent-sandbox-leak): with
-    # only --allowedTools naming the scouter MCP tools, Claude's own
-    # sandbox tools (Bash, Write, Edit) were still reachable -- r0031's
-    # agent used Bash 8 times to grep its own tool-result file, and r0066's
-    # used `find` on the session dir, both recorded as CallRecords with
-    # `error:unparsed` (harness noise, not a tool failure) instead of being
-    # unavailable in the first place. Read stays allowed (scout_preview
-    # PNGs).
+    # (row 501 item E, night-1 triage rank 12, SCA-agent-sandbox-leak; fix
+    # round 1, Opus finding 7): `--disallowedTools Bash,Write,Edit` named
+    # only three tools, leaving Glob, Grep, WebFetch, WebSearch, NotebookEdit
+    # and Task/Agent reachable -- Glob/Grep alone can list a staged frame's
+    # directory (also the reason for item F's fix). `--tools Read`
+    # (capsule-corp's own build_argv uses the same flag, "built-in tool
+    # names only") is a WHITELIST of Claude's own built-in tools: only Read
+    # is ever reachable (scout_preview PNGs), every other built-in tool is
+    # unavailable by omission, not by name. The scouter MCP tools are scoped
+    # separately through --allowedTools/--mcp-config, as before.
     argv = ["claude", "-p", prompt, "--model", "sonnet", "--output-format", "stream-json",
             "--verbose", "--mcp-config", str(mcp_json), "--strict-mcp-config",
-            "--allowedTools", "mcp__scouter__*", "--disallowedTools", "Bash,Write,Edit"]
+            "--tools", "Read", "--allowedTools", "mcp__scouter__*"]
     if resume:
         argv += ["--resume", resume]
     return argv

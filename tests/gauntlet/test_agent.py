@@ -129,11 +129,16 @@ def test_argv_registers_only_scouter_and_sonnet():
     assert argv[argv.index("--allowedTools") + 1] == "mcp__scouter__*"
 
 
-def test_argv_disallows_bash_write_edit():
-    """(row 501 item E, night-1 rank 12, SCA-agent-sandbox-leak): the
-    sandbox tools must be off, not merely unlisted in --allowedTools."""
+def test_argv_whitelists_only_read_as_a_built_in_tool():
+    """Fix round 1 (Opus finding 7): --disallowedTools named only three
+    tools (Bash, Write, Edit), leaving Glob/Grep/WebFetch/WebSearch/
+    NotebookEdit/Task reachable -- Glob/Grep alone can list a staged
+    frame's directory. --tools Read (capsule-corp's own build_argv flag)
+    whitelists Claude's own built-in tools to Read only."""
     argv = agent.claude_argv("hi", "/tmp/m.json")
-    assert argv[argv.index("--disallowedTools") + 1] == "Bash,Write,Edit"
+    assert argv[argv.index("--tools") + 1] == "Read"
+    assert "--disallowedTools" not in argv
+    assert argv[argv.index("--allowedTools") + 1] == "mcp__scouter__*"
 
 
 def test_limit_mid_followup_parks_the_whole_case(tmp_path, monkeypatch):
