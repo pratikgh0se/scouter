@@ -650,6 +650,30 @@ def test_fence_and_recover_purges_a_stale_request_before_launch(tmp_path):
     assert not stale_request.exists() and not stale_tmp.exists()
 
 
+def test_inherited_wedge_ping_also_fences_and_recovers(tmp_path, monkeypatch):
+    """Fix round 2 review N3 (medium): `run_case`'s own layer-wide fence
+    (fix round 1 M1) explicitly excludes the robustness layer (never doubled
+    up with a fault case's own recovery) -- so an `inherited_wedge` ping
+    inside `run_fault_case` must fence itself, or nothing in that layer ever
+    recovers it."""
+    from tests.gauntlet import observe
+
+    class Dt:
+        def health(self):
+            return "unresponsive"
+
+    class S(FakeSession):
+        def __init__(self, tmp_path):
+            super().__init__(tmp_path)
+            self.dt = Dt()
+
+    monkeypatch.setattr(observe, "snapshot", lambda *a, **kw: {"params": {}, "units": {}})
+    s = S(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R12"])  # fault="none", not a freeze fault
+    assert obs.blocked == "inherited_wedge"
+    assert s.relaunches == 1 and s.mcp_reopened == 1
+
+
 def test_r18_attach_timeout_detaches_the_image(tmp_path, monkeypatch):
     import plistlib
     import subprocess

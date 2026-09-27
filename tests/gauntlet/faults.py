@@ -422,12 +422,18 @@ def run_fault_case(session, case: Case) -> Observation:
         obs = Observation(blocked=f"harness_bug: {type(e).__name__}: {e}"[:500])
     finally:
         errors = disarm(session, v)
-        if obs is not None and (obs.blocked or "").startswith("hang"):
-            #: (fix round 1 review L4): never doubles up with disarm's own
-            #: fenced recovery for a freeze-fault hang -- `disarm` above
-            #: already ran `fence_and_recover` for `_resume_sigcont`/
-            #: `_relaunch`; a hang from any OTHER fault has neither flag set,
-            #: so this is the only fence that runs for it.
+        blocked = (obs.blocked or "") if obs is not None else ""
+        if blocked.startswith("hang") or blocked == "inherited_wedge":
+            #: (fix round 1 review L4; fix round 2 review N3): never doubles
+            #: up with disarm's own fenced recovery for a freeze-fault hang
+            #: -- `disarm` above already ran `fence_and_recover` for
+            #: `_resume_sigcont`/`_relaunch`. Anything else (any other
+            #: fault's hang, or a ping that came back `inherited_wedge`
+            #: before `arm` even ran, so neither flag is set) has no fence
+            #: yet, and this is it -- `RoutedSession.run_case`'s own
+            #: layer-wide fence (fix round 1 M1) explicitly excludes the
+            #: robustness layer, so nothing else would ever clear an
+            #: `inherited_wedge` ping here.
             if not (v.get("_resume_sigcont") or v.get("_relaunch")):
                 errors = errors + fence_and_recover(session)
     if obs is not None and v.get("_contaminated_restaged"):
