@@ -195,10 +195,14 @@ class GauntletRunnerRefusalTest(_FakeReposCase):
 
     def test_refuses_when_a_gauntlet_runner_is_already_running(self) -> None:
         self._install_pgrep_forwarding_to_real_binary_except_darktable()
-        self._spawn_dummy_launcher("night2-refusal-test-stamp")
+        stamp = "night2-refusal-test-stamp"
+        self._spawn_dummy_launcher(stamp)
         p = self.run_script()
         self.assertEqual(p.returncode, 5, p.stdout + p.stderr)
         self.assertIn("gauntlet runner", p.stdout)
+        # R2 nit: the script's own `pgrep -fl` (printed before it refuses)
+        # must name THIS dummy process specifically.
+        self.assertIn(stamp, p.stdout)
 
     def test_the_refusal_does_not_pin_current_stamp(self) -> None:
         self._install_pgrep_forwarding_to_real_binary_except_darktable()
@@ -215,12 +219,16 @@ class GauntletRunnerRefusalTest(_FakeReposCase):
         (`gauntlet.*run --stamp`) really does catch it -- against the real
         pgrep binary, not a fake."""
         self._install_pgrep_forwarding_to_real_binary_except_darktable()
-        self._spawn_dummy_launcher("night2-pattern-regression-stamp")
+        stamp = "night2-pattern-regression-stamp"
+        self._spawn_dummy_launcher(stamp)
         old = subprocess.run(["pgrep", "-f", r"gauntlet(\.cli)? run --stamp"],
                              capture_output=True)
-        new = subprocess.run(["pgrep", "-f", "gauntlet.*run --stamp"], capture_output=True)
+        new = subprocess.run(["pgrep", "-fl", "gauntlet.*run --stamp"], capture_output=True)
         self.assertEqual(old.returncode, 1, "the old pattern should NOT match")
         self.assertEqual(new.returncode, 0, "the fixed pattern SHOULD match")
+        # R2 nit: prove it matched THIS dummy process specifically, not
+        # some other, coincidental process on the machine.
+        self.assertIn(stamp, new.stdout.decode(), new.stdout)
 
 
 if __name__ == "__main__":
