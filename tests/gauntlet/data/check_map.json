@@ -2,7 +2,7 @@
   "schema": "scouter-gauntlet-check-map/1",
   "about": "The only hand-written gauntlet data (spec 2.1). Maps requests.json check strings to metrics and Scouter capabilities. Edit by hand, review in the PR; the generator fails on any P0/P1 case that falls through.",
   "flags": [],
-  "flags_about": "Named, provisional evaluator overrides (gauntlet.evaluate.Policy.flags), off unless listed here by name -- a one-line config flip, never a code change. Today: 'parity.same_failure_is_pass' (row 488, pending Pratik) restores the pre-fix scoring of a layer-6 parity pair where both sides fail the same way (see gauntlet/evaluate.py's PAR-hollow-pass check).",
+  "flags_about": "Zenkai Rules Z4 override records (docs/ZENKAI.md): each entry that turns a named evaluator flag (gauntlet.evaluate.Policy.flags, validated against gauntlet.evaluate.KNOWN_FLAGS) ON is an object {name, reason, card, expires (YYYY-MM-DD)} -- tests/gauntlet/policy.py refuses an unknown name or a missing field, and drops (with a warning) an entry past its expiry. A flag never listed here is off, same as today -- a one-line config addition, never a code change, to flip one on. Known: 'parity.same_failure_is_pass' (row 488, pending Pratik) restores the pre-fix scoring of a layer-6 parity pair where both sides fail the same way (see gauntlet/evaluate.py's PAR-hollow-pass check); off by default (this list is empty).",
   "rewrites": {
     "dynamic range compression (shadow up, highlight down)": "shadow up, highlight down"
   },
