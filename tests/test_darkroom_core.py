@@ -741,6 +741,54 @@ class NonFiniteValueTest(_DarkroomFixture):
             )
 
 
+class OpenPathGuardTest(_DarkroomFixture):
+    """(night1-robustness-triage.md item 4, rob-r11): `darktable.log` showed a
+    `darkroom.open` on a path that does not exist reach `dt.database.import`
+    and never answer -- the Lua worker wedged for ~5.8 minutes with no typed
+    reply at all, and 4 later cases (r12/r13/r14/r15) queued behind it and
+    inherited the same wedge. A path `open_image` cannot possibly load is
+    refused before it ever reaches the bridge."""
+
+    def test_a_missing_path_is_refused_before_the_bridge(self) -> None:
+        missing = str(self.raw.parent / "does-not-exist.ORF")
+        before = len(self.bridge.calls)
+        with self.assertRaises(UsageError) as ctx:
+            darkroom.open_image(image=missing)
+        self.assertEqual(ctx.exception.detail["reason"], "not_found")
+        self.assertEqual(self.bridge.calls[before:], [])
+
+    def test_an_unsupported_extension_is_refused_before_the_bridge(self) -> None:
+        notes = self.raw.parent / "notes.txt"
+        notes.write_text("not an image")
+        before = len(self.bridge.calls)
+        with self.assertRaises(UsageError) as ctx:
+            darkroom.open_image(image=str(notes))
+        self.assertEqual(ctx.exception.detail["reason"], "unsupported_format")
+        self.assertEqual(self.bridge.calls[before:], [])
+
+    def test_a_real_raw_path_still_opens_normally(self) -> None:
+        self.bridge.responses["darkroom.open"] = {
+            "image_id": 12,
+            "path": str(self.raw),
+            "view": "darkroom",
+            "opened": True,
+            "already_open": False,
+        }
+        result = darkroom.open_image(image=str(self.raw))
+        self.assertEqual(result.image_id, 12)
+
+    def test_an_image_id_is_never_filesystem_checked(self) -> None:
+        self.bridge.responses["darkroom.open"] = {
+            "image_id": 12,
+            "path": str(self.raw),
+            "view": "darkroom",
+            "opened": True,
+            "already_open": False,
+        }
+        result = darkroom.open_image(image=12)
+        self.assertEqual(result.image_id, 12)
+
+
 class JobImageGuardTest(_DarkroomFixture):
     """Ruling 30: a write refuses when the darkroom shows a different image.
 

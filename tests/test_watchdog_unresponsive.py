@@ -85,6 +85,20 @@ class UnresponsiveTest(unittest.TestCase):
             dtbridge.call("view.current")
         self.assertNotIsInstance(cm.exception, DarktableUnresponsive)
 
+    def test_a_wedged_darkroom_open_surfaces_unresponsive_not_bridge_timeout(self) -> None:
+        """(night1-robustness-triage.md item 4, rob-r11): `dtbridge.call` is
+        the one seam every verb's bridge call goes through (`darkroom.open`
+        included) -- the same timeout-then-ping mapping `view.current` gets
+        above must cover it too, so a genuinely wedged darktable is never
+        left as the generic `bridge_timeout` ("start darktable...") a
+        watchdog heal does not act on."""
+        dtbridge.set_bridge(_dead_bridge(**{"darkroom.open": BridgeTimeoutError("t")}))
+        rp, op = _procs(running=[20850], owned=20850)
+        with rp, op, self.assertRaises(DarktableUnresponsive) as cm:
+            dtbridge.call("darkroom.open", {"path": "/trial/P6281348.ORF"})
+        self.assertEqual(cm.exception.code, "darktable_unresponsive")
+        self.assertEqual(cm.exception.detail["last_method"], "darkroom.open")
+
     def test_diag_timeout_never_pings_itself(self) -> None:
         fake = FakeBridge(raises={"darktable_mcp.diag": BridgeTimeoutError("t")})
         dtbridge.set_bridge(fake)

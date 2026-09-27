@@ -7,6 +7,7 @@ import contextvars
 import math
 import time
 from collections.abc import Callable, Iterator
+from pathlib import Path
 
 from scouter import metrics, paths
 from scouter.core import dtbridge, journal, vocab, xmp
@@ -872,11 +873,50 @@ def _current_image() -> dtbridge.ResolvedImage:
     )
 
 
+#: (night1-robustness-triage.md item 4, rob-r11): darktable 5.4's Lua
+#: `darkroom.open` handler ran `dt.database.import` on a path that does not
+#: exist and never answered -- the plugin's own worker thread wedged for
+#: ~5.8 minutes with no typed reply at all (`darktable.log`: "path lookup
+#: '...' fails with: 'No such file or directory'", then silence). A
+#: conservative whitelist of formats darktable actually reads, so a
+#: recognisable raw/image path is never refused by this pre-check; anything
+#: else -- missing, or an extension darktable does not open -- is refused
+#: BEFORE the bridge call, never sent to the plugin to find out the hard way.
+_OPENABLE_EXTENSIONS = frozenset({
+    ".orf", ".arw", ".nef", ".cr2", ".cr3", ".dng", ".rw2", ".raf", ".pef", ".srw", ".x3f",
+    ".3fr", ".erf", ".mrw", ".mos", ".kdc", ".dcr", ".raw", ".iiq",
+    ".jpg", ".jpeg", ".png", ".tif", ".tiff",
+})
+
+
+def _require_openable_path(path: str) -> None:
+    """Reject a path `darkroom.open` cannot possibly load, before it ever
+    reaches the bridge (see `_OPENABLE_EXTENSIONS`'s docstring above): a
+    missing file, or one whose extension darktable does not read. Never
+    touches darktable -- a plain filesystem check."""
+    p = Path(path)
+    if not p.exists():
+        raise UsageError(
+            f"{path} does not exist",
+            fix="check the path and re-run; darktable was never asked to open it",
+            detail={"path": path, "reason": "not_found"},
+        )
+    if p.is_file() and p.suffix.lower() not in _OPENABLE_EXTENSIONS:
+        raise UsageError(
+            f"{path} is not a recognised image format ({p.suffix or 'no extension'})",
+            fix="open a raw or image file darktable reads; darktable was never asked to "
+                "open this one",
+            detail={"path": path, "reason": "unsupported_format", "extension": p.suffix},
+        )
+
+
 @metrics.instrumented("darkroom.open")
 def open_image(image: str | int, *, job: str | None = None) -> OpenResult:
     """Load `image` in the darkroom, importing it into the library if needed."""
     job = job or current_job()
     key = {"image_id": int(image)} if str(image).isdigit() else {"path": str(image)}
+    if "path" in key:
+        _require_openable_path(key["path"])
     result = dtbridge.call("darkroom.open", key)
     # Ruling 30: this job now owns that image. Every later write in the job
     # checks `darkroom.current` against it and refuses if they disagree.
