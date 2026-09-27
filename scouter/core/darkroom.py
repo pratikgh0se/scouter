@@ -873,40 +873,66 @@ def _current_image() -> dtbridge.ResolvedImage:
     )
 
 
-#: (night1-robustness-triage.md item 4, rob-r11): darktable 5.4's Lua
-#: `darkroom.open` handler ran `dt.database.import` on a path that does not
-#: exist and never answered -- the plugin's own worker thread wedged for
-#: ~5.8 minutes with no typed reply at all (`darktable.log`: "path lookup
-#: '...' fails with: 'No such file or directory'", then silence). A
-#: conservative whitelist of formats darktable actually reads, so a
-#: recognisable raw/image path is never refused by this pre-check; anything
-#: else -- missing, or an extension darktable does not open -- is refused
-#: BEFORE the bridge call, never sent to the plugin to find out the hard way.
-_OPENABLE_EXTENSIONS = frozenset({
-    ".orf", ".arw", ".nef", ".cr2", ".cr3", ".dng", ".rw2", ".raf", ".pef", ".srw", ".x3f",
-    ".3fr", ".erf", ".mrw", ".mos", ".kdc", ".dcr", ".raw", ".iiq",
-    ".jpg", ".jpeg", ".png", ".tif", ".tiff",
+#: (night1-robustness-triage.md item 4, rob-r11; fix round 1 review H1):
+#: darktable 5.4's Lua `darkroom.open` handler ran `dt.database.import` on a
+#: path that does not exist and never answered -- the plugin's own worker
+#: thread wedged for ~5.8 minutes with no typed reply at all (`darktable.log`:
+#: "path lookup '...' fails with: 'No such file or directory'", then
+#: silence). Review round 1 found the FIRST version of this guard (a
+#: whitelist) refused the gauntlet's own PFM chart frame and darktable's own
+#: `.exr`/`.heic`/... formats -- about 235 looks-layer cases open
+#: `frames["chart"]` (`tests/gauntlet/session.py`). A DENYLIST of a few
+#: clearly-non-image suffixes is the safe direction: it can only ever refuse
+#: MORE cautiously than darktable would (never refuse a real image format,
+#: since the deny set is short and explicit), where a whitelist can refuse
+#: too aggressively (any format not yet added to it).
+_NON_IMAGE_EXTENSIONS = frozenset({
+    ".txt", ".md", ".json", ".py", ".sh", ".zip", ".tar", ".gz", ".pdf", ".log", ".db",
 })
 
 
 def _require_openable_path(path: str) -> None:
     """Reject a path `darkroom.open` cannot possibly load, before it ever
-    reaches the bridge (see `_OPENABLE_EXTENSIONS`'s docstring above): a
-    missing file, or one whose extension darktable does not read. Never
-    touches darktable -- a plain filesystem check."""
+    reaches the bridge (see `_NON_IMAGE_EXTENSIONS`'s docstring above): a
+    missing path, a directory, or a file whose extension is plainly not an
+    image darktable reads. Never touches darktable -- a plain filesystem
+    check, and (fix round 1 review M4) never lets a raw `OSError` (e.g.
+    `ENAMETOOLONG` on an over-long path component) escape as an untyped
+    crash -- that is still just as much a path darkroom.open cannot load as
+    one that plainly does not exist.
+
+    The suffix is read from the RESOLVED path (fix round 1 review H1), so a
+    symlink with no extension of its own that points at a real raw is judged
+    on what it points AT, never refused for lacking a suffix itself."""
     p = Path(path)
-    if not p.exists():
+    try:
+        exists = p.exists()
+        is_dir = exists and p.is_dir()
+        resolved = p.resolve() if exists else p
+    except OSError as e:
+        raise UsageError(
+            f"{path} could not be checked: {e}",
+            fix="check the path and re-run; darktable was never asked to open it",
+            detail={"path": path, "reason": "not_found", "os_error": str(e)[:200]},
+        ) from e
+    if not exists:
         raise UsageError(
             f"{path} does not exist",
             fix="check the path and re-run; darktable was never asked to open it",
             detail={"path": path, "reason": "not_found"},
         )
-    if p.is_file() and p.suffix.lower() not in _OPENABLE_EXTENSIONS:
+    if is_dir:
         raise UsageError(
-            f"{path} is not a recognised image format ({p.suffix or 'no extension'})",
+            f"{path} is a directory, not an image",
+            fix="name the image file itself; darktable was never asked to open this path",
+            detail={"path": path, "reason": "is_directory"},
+        )
+    if resolved.suffix.lower() in _NON_IMAGE_EXTENSIONS:
+        raise UsageError(
+            f"{path} is not a recognised image format ({resolved.suffix})",
             fix="open a raw or image file darktable reads; darktable was never asked to "
                 "open this one",
-            detail={"path": path, "reason": "unsupported_format", "extension": p.suffix},
+            detail={"path": path, "reason": "unsupported_format", "extension": resolved.suffix},
         )
 
 
