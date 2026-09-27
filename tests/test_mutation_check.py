@@ -513,10 +513,13 @@ class NewModuleUnderATestDirectoryNotItselfATest(unittest.TestCase):
 
 
 class TargetsPredateRangeMarker(unittest.TestCase):
-    """Fix round 5: an explicit, auditable `# mutation-check:
-    targets-predate-range <base-sha> -- <reason>` top-of-file marker. A
-    matching sha reads n/a with the reason shown; any other use (wrong sha)
-    is reported, never silently ignored."""
+    """Fix round 5 (per-test as of round 13): an explicit, auditable `#
+    mutation-check: targets-predate-range <base-sha> -- <reason> ::
+    test_a, test_b` top-of-file marker. A matching sha and a valid `::
+    <ids>` list reads n/a (with the reason shown) for exactly the ids it
+    names; any other use (wrong sha, no ids at all, or an id that isn't
+    actually new/changed in this range) is reported, never silently
+    ignored."""
 
     def test_a_marker_matching_base_reads_n_a_with_the_reason_and_requires_weaken(self):
         with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
@@ -530,7 +533,8 @@ class TargetsPredateRangeMarker(unittest.TestCase):
             (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
             marked_test = (
                 f"# mutation-check: targets-predate-range {base} -- "
-                "new tests for pre-existing production.py, killed 3 hand mutants\n"
+                "new tests for pre-existing production.py, killed 3 hand mutants "
+                ":: test_add_returns_the_sum\n"
                 + DISCRIMINATING_TEST)
             write_test(root, marked_test)
             head = commit_all(root, "fix unrelated.py; add marked tests for untouched production.py")
@@ -575,7 +579,8 @@ class TargetsPredateRangeMarker(unittest.TestCase):
             write_test(root, PLACEHOLDER_TEST)
             base = commit_all(root, "base")
             (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
-            marked_test = (f"# mutation-check: targets-predate-range {base} -- pre-existing coverage\n"
+            marked_test = (f"# mutation-check: targets-predate-range {base} -- pre-existing coverage "
+                            ":: test_add_returns_the_sum\n"
                             + DISCRIMINATING_TEST)
             write_test(root, marked_test)
             head = commit_all(root, "fix unrelated.py; add marked tests")
@@ -612,7 +617,127 @@ class TargetsPredateRangeMarker(unittest.TestCase):
             "\n# mutation-check: targets-predate-range abc1234 -- too late, buried\n"
         self.assertIsNone(mc.extract_marker(buried))
         top = "# mutation-check: targets-predate-range abc1234 -- right at the top\nimport os\n"
-        self.assertEqual(mc.extract_marker(top), ("abc1234", "right at the top"))
+        self.assertEqual(mc.extract_marker(top), ("abc1234", "right at the top", None))
+
+    def test_extract_marker_parses_the_per_test_ids_list(self):
+        top = ("# mutation-check: targets-predate-range abc1234 -- pre-existing coverage "
+               ":: test_a, test_b\nimport os\n")
+        self.assertEqual(
+            mc.extract_marker(top),
+            ("abc1234", "pre-existing coverage", ("test_a", "test_b")))
+
+
+class MarkerIsPerTestAsOfRound13(unittest.TestCase):
+    """Round 13 (mirrored from capsule-corp): a marker used to switch off
+    revert-mutation for EVERY new/changed test in the file - even a
+    brand-new test whose subject genuinely changed in the range. It must now
+    name the exact ids it covers; every OTHER new/changed test in the same
+    file still gets revert-checked, and a marker with no ids at all (the old
+    file-level shape) or one naming an id that isn't actually new/changed is
+    `marker_stale` - a gate failure."""
+
+    def test_a_marker_covering_only_some_new_tests_still_revert_checks_the_rest(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_BUGGY)
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: buggy add()")
+
+            (root / "production.py").write_text(PROD_FIXED)
+            mixed_test = (
+                f"# mutation-check: targets-predate-range {base} -- pre-existing "
+                "coverage for test_marked :: test_marked\n"
+                "from production import add\n\n\n"
+                "def test_marked():\n"
+                "    assert callable(add)\n\n\n"
+                "def test_add_returns_the_sum():\n"
+                "    assert add(2, 3) == 5\n"
+            )
+            write_test(root, mixed_test)
+            head = commit_all(root, "fix add(); marker covers test_marked only, "
+                                     "test_add_returns_the_sum is genuinely new")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertTrue(ok, rows)
+            self.assertEqual(len(rows), 1)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("test_marked", names)
+            self.assertIn("test_add_returns_the_sum", names)
+            # The covered id reads n/a via the marker; the uncovered new test
+            # in the SAME file is still genuinely revert-checked.
+            self.assertIn(
+                "test_marked: n/a (targets predate range: "
+                "pre-existing coverage for test_marked)", rev_cell)
+            self.assertIn("test_add_returns_the_sum: FAIL (good)", rev_cell)
+
+    def test_a_marker_with_no_ids_at_all_is_stale(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - a\n")
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base")
+
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
+            marked_test = (f"# mutation-check: targets-predate-range {base} -- no ids at all\n"
+                            + DISCRIMINATING_TEST)
+            write_test(root, marked_test)
+            head = commit_all(root, "fix unrelated.py; file-level marker with no ids is stale")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("marker stale (BAD)", rev_cell)
+
+    def test_a_marker_naming_an_id_not_in_the_new_changed_set_is_stale(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - a\n")
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base")
+
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
+            marked_test = (
+                f"# mutation-check: targets-predate-range {base} -- wrong id "
+                ":: test_does_not_exist\n" + DISCRIMINATING_TEST)
+            write_test(root, marked_test)
+            head = commit_all(root, "fix unrelated.py; marker names a test id that isn't new/changed")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("marker stale (BAD)", rev_cell)
+            self.assertIn("test_does_not_exist", rev_cell)
+
+    def test_a_mismatched_sha_still_fails_even_with_a_valid_ids_list(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - a\n")
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base")
+
+            (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
+            wrong_sha = "2" * 40
+            marked_test = (
+                f"# mutation-check: targets-predate-range {wrong_sha} -- stale marker "
+                ":: test_add_returns_the_sum\n" + DISCRIMINATING_TEST)
+            write_test(root, marked_test)
+            head = commit_all(root, "fix unrelated.py; wrong-sha marker with an otherwise-valid ids list")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("marker mismatch (BAD)", rev_cell)
 
 
 class WeakeningTargetsOnlyTheChangedFunction(unittest.TestCase):
