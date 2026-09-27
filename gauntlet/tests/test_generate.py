@@ -39,7 +39,7 @@ def test_unmapped_p0_p1_fail_p2_listed():
 
 
 def test_layer_filter_and_unknown_layer():
-    cases, counts = generate_all(ToyAdapter(), ["beta"])
+    cases, counts, _ = generate_all(ToyAdapter(), ["beta"])
     assert [c.layer for c in cases] == ["beta", "beta"]
     with pytest.raises(GenerationError, match="unknown"):
         generate_all(ToyAdapter(), ["gamma"])

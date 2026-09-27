@@ -46,6 +46,10 @@ class RunDir:
         self.generation_md = self.root / "generation.md"
         self.log_md = self.root / "log.md"
         self.progress_json = self.root / "progress.json"
+        #: (row 501 item H, fix round 1): a stratified generate --subset's
+        #: own record ({"layer", "size", "seed", "keys"}), read once by
+        #: Progress and folded into progress.json's own "subset" field.
+        self.subset_json = self.root / "subset.json"
         self.report_md = self.root / "report.md"
         self.report_json = self.root / "report.json"
         self.contact_sheet = self.root / "contact-sheet.html"

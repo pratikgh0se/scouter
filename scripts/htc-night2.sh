@@ -83,7 +83,16 @@ cd "$REPO" || die "cannot cd $REPO"
 export PYTHONPATH="$REPO"
 
 if [[ ! -f "$RUN_DIR/cases.jsonl" ]]; then
-  "$PY" -m gauntlet generate --stamp "$STAMP" || die "generate failed" 2
+  # Row 501 item H (Pratik's ruling): night 2 runs a STRATIFIED 40-case
+  # subset of scenarios_agent (every problem class and genre represented at
+  # least once), not the full 160 -- the seed is derived from the stamp's
+  # own date, so a resume (cases.jsonl already exists -> this block never
+  # re-runs) always sees the exact same subset it started with.
+  SUBSET_SEED="${HTC_NIGHT2_SUBSET_SEED:-$(date -j -f '%Y%m%d' "${STAMP#night2-}" +%s \
+    2>/dev/null || echo 0)}"
+  "$PY" -m gauntlet generate --stamp "$STAMP" \
+    --subset "${HTC_NIGHT2_SUBSET_SIZE:-40}" --subset-layer scenarios_agent \
+    --subset-keys class,genre --seed "$SUBSET_SEED" || die "generate failed" 2
   grep -m1 -i "total\|cases" "$RUN_DIR/generation.md" || true   # expect 5,167
 fi
 

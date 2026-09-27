@@ -233,3 +233,19 @@ class GauntletRunnerRefusalTest(_FakeReposCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubsetWiringTest(unittest.TestCase):
+    """(row 501 item H, fix round 1): the generate call passes the
+    ruling's own --subset 40 --subset-layer scenarios_agent
+    --subset-keys class,genre. A static check on the script source (the
+    class above already covers the script's runtime behaviour without a
+    real gauntlet corpus; exercising --subset end to end needs a real
+    generate step, out of that fixture's scope)."""
+
+    def test_generate_call_passes_the_ruling_subset_flags(self) -> None:
+        text = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("--subset", text)
+        self.assertIn("--subset-layer scenarios_agent", text)
+        self.assertIn("--subset-keys class,genre", text)
+        self.assertIn("--seed", text)

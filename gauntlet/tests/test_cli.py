@@ -56,3 +56,41 @@ def test_rerun_runs_done_cases_again(tmp_path):
     first = (tmp_path / "s" / "cases" / "alpha-0.json").stat().st_mtime_ns
     assert main(_args(tmp_path) + ["run", "--stamp", "s", "--tier", "P0", "--rerun"]) == 0
     assert (tmp_path / "s" / "cases" / "alpha-0.json").stat().st_mtime_ns > first
+
+
+# -- row 501 item H (fix round 1): --subset wiring end to end -------------
+
+def test_generate_subset_keeps_only_the_named_layer_reduced_and_records_it(tmp_path):
+    """(row 501 item H): --subset/--subset-layer/--subset-keys reduce ONLY
+    the named layer's cases in cases.jsonl; every other layer is
+    untouched; the subset's own record is written for Progress to fold
+    into progress.json."""
+    assert main(_args(tmp_path) + ["generate", "--stamp", "s1", "--subset", "2",
+                                   "--subset-layer", "alpha", "--subset-keys", "sleep_s"]) == 0
+    run_dir = tmp_path / "s1"
+    cases = [json.loads(line) for line in
+             (run_dir / "cases.jsonl").read_text().splitlines() if line.strip()]
+    by_layer = {}
+    for c in cases:
+        by_layer.setdefault(c["layer"], 0)
+        by_layer[c["layer"]] += 1
+    assert by_layer["alpha"] == 2  # reduced from the toy adapter's default n=4
+    assert by_layer["beta"] == 2  # untouched
+    subset_doc = json.loads((run_dir / "subset.json").read_text())
+    assert subset_doc == {"layer": "alpha", "size": 2, "of": 4, "seed": 0, "keys": ["sleep_s"]}
+    assert "Subset:" in (run_dir / "generation.md").read_text()
+
+
+def test_subset_flags_must_be_given_together(tmp_path):
+    rc = main(_args(tmp_path) + ["generate", "--stamp", "s1", "--subset", "2"])
+    assert rc == 2
+
+
+def test_progress_folds_in_the_subset_record(tmp_path):
+    """(row 501 item H): the ruling's own "recorded in progress.json"."""
+    main(_args(tmp_path) + ["generate", "--stamp", "s1", "--subset", "2",
+                            "--subset-layer", "alpha", "--subset-keys", "sleep_s"])
+    assert main(_args(tmp_path) + ["run", "--stamp", "s1", "--resume"]) == 0
+    doc = json.loads((tmp_path / "s1" / "progress.json").read_text())
+    assert doc["subset"] == {"layer": "alpha", "size": 2, "of": 4, "seed": 0,
+                             "keys": ["sleep_s"]}

@@ -1,120 +1,110 @@
-"""Row 501 item H (Pratik's ruling): the agent pass's own budget controls,
-separate from the darktable/session budgets in session.py.
+"""Row 501 item H (Pratik's ruling; fix round 1, Opus review finding 5): the
+agent pass's own budget controls, separate from the darktable/session
+budgets in session.py.
 
 1. `stratified_subset`: night 2 runs a STRATIFIED 40-case subset of the
    scenarios_agent layer instead of the full 160 -- every problem class
-   (`case.meta["class"]`: in/partial/out/impossible/workflow) and every
-   genre (`case.meta["genre"]`) represented at least once, a deterministic
-   selection keyed on the run seed.
+   (`case.meta["class"]`) AND every genre (`case.meta["genre"]`) represented
+   at least once, a deterministic, seeded, two-axis greedy cover (the
+   generic engine, `gauntlet.subset.stratified_subset`; re-exported here as
+   `scouter_stratified_subset` bound to the two scouter meta keys the
+   ruling names). Fix round 1: the first cut's single composite-key pass
+   filled its 40 slots one (class, genre) PAIR at a time and truncated
+   before every genre was ever seen (measured on the real 160-case pool:
+   up to 19 of 14 genres missing over 200 seeds) -- the generic engine's
+   version covers each axis independently instead.
 
 2. `usage_fraction` / `check_usage_budget`: the pass must park itself
-   (`Park("usage_meter", ...)`) once the usage meter passes a threshold
-   (60% by Pratik's ruling), resuming after the reset, rather than running
-   until the CLI's own wall limit hits mid-case (item A's `LIMIT_RE` fix).
+   (`Park("usage_meter: ...", until=reset_at)`) once the usage meter passes
+   a threshold (60% by Pratik's ruling), resuming after the reset, rather
+   than running until the CLI's own wall limit hits mid-case (item A's
+   `LIMIT_RE` fix, the sanctioned fallback while no real source exists).
 
-   Read-only source investigated (2026-09-27): capsule-corp's own ledger
-   under `~/.local/share/capsule/` (`config.json` and its siblings) has no
-   usage/meter/budget field for the Claude session/usage meter itself (only
-   agent turn_budget caps, an unrelated concept) -- and per the harness's
-   own forbidden-path/no-network rules this module never probes further
-   than that one documented, read-only location plus an env var override
-   for testing. Until a real source exists, `usage_fraction()` returns
-   `None` and `check_usage_budget` never raises: the pass falls back to
-   parking on the wall-limit text alone (item A), which is the explicitly
-   sanctioned fallback ("if no read-only source exists, park on the
-   wall-limit text only and say so")."""
+   Real source (fix round 1, Opus finding 5): capsule-corp's
+   `maintenance/usage_guard.py` reads the account's session-window
+   utilization through Hermes every 10 minutes, but (as of 2026-09-27) does
+   not persist it -- a capsule-corp card is being filed for a writer that
+   drops `{utilization, reset_at, written_at}` to
+   `~/.local/share/capsule/usage-window.json` on each tick. This module
+   reads exactly that path and schema, read-only, with a staleness bound
+   (`written_at` older than `STALE_S` is treated as no source at all --
+   stale data must never silently gate a live run). Until the writer
+   exists, the file is simply absent, `usage_fraction()` returns `None`
+   and says so (this docstring), and `check_usage_budget` never raises:
+   the pass falls back to parking on the wall-limit text alone (item A)."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
+import time
 from pathlib import Path
-from typing import Callable, Sequence, TypeVar
+from typing import Callable
 
 from gauntlet.adapter import Park
+from gauntlet.subset import stratified_subset as _generic_stratified_subset
 
-T = TypeVar("T")
-
-#: Env var override, read first (and the only source exercised in tests):
-#: a read-only, injectable stand-in for whatever ledger eventually exposes
-#: the Claude usage meter as a 0..1 fraction.
+#: Env var override, read first (and the only source exercised in most
+#: tests): a read-only, injectable stand-in for the real ledger below.
 USAGE_ENV = "SCOUTER_GAUNTLET_USAGE_FRACTION"
-#: The one documented, read-only, on-disk candidate investigated for a
-#: usage-meter field (none found there as of 2026-09-27; see module
-#: docstring). Read-only: this module never writes here.
-USAGE_LEDGER_PATH = Path.home() / ".local" / "share" / "capsule" / "usage.json"
+#: capsule-corp's usage-window state (fix round 1, Opus finding 5): written
+#: by maintenance/usage_guard.py's tick (a card is filed for the writer;
+#: this module only ever READS it). Schema: {"utilization": 0..1,
+#: "reset_at": <epoch seconds>, "written_at": <epoch seconds>}.
+USAGE_WINDOW_PATH = Path.home() / ".local" / "share" / "capsule" / "usage-window.json"
 DEFAULT_USAGE_THRESHOLD = 0.6
+#: A reading older than this is stale -- treated as no source (never gates
+#: a live run on a stopped writer's last-known number).
+STALE_S = 15 * 60
 
 
-def usage_fraction() -> float | None:
-    """The usage meter as a 0..1 fraction, or None when no read-only source
-    has one. Never raises on a missing/malformed source -- an absent meter
-    is not a harness error, it is the documented fallback case."""
+def usage_fraction(*, now: float | None = None) -> tuple[float, float] | None:
+    """`(utilization, reset_at)` from the real source, or `None` when no
+    read-only source exists yet, the file is malformed, or the reading is
+    older than `STALE_S`. Never raises -- an absent/stale meter is the
+    documented fallback case, not a harness error."""
     env = os.environ.get(USAGE_ENV)
     if env:
         try:
-            return float(env)
+            return float(env), time.time() + 3600
         except ValueError:
             return None
-    if USAGE_LEDGER_PATH.exists():
-        try:
-            data = json.loads(USAGE_LEDGER_PATH.read_text(encoding="utf-8"))
-            frac = data.get("fraction")
-            return float(frac) if frac is not None else None
-        except (ValueError, OSError):
+    if not USAGE_WINDOW_PATH.exists():
+        return None
+    try:
+        data = json.loads(USAGE_WINDOW_PATH.read_text(encoding="utf-8"))
+        util, reset_at, written_at = (data.get("utilization"), data.get("reset_at"),
+                                      data.get("written_at"))
+        if util is None or reset_at is None or written_at is None:
             return None
-    return None
+        now = time.time() if now is None else now
+        if now - float(written_at) > STALE_S:
+            return None
+        return float(util), float(reset_at)
+    except (ValueError, OSError, TypeError):
+        return None
 
 
 def check_usage_budget(threshold: float = DEFAULT_USAGE_THRESHOLD,
-                       usage_fn: Callable[[], float | None] = usage_fraction) -> None:
-    """Raises Park("usage_meter") when a real usage fraction is known and at
-    or over `threshold`. A None reading (no source) never parks here --
-    that is the wall-limit fallback's job (agent.py's LIMIT_RE, item A)."""
-    frac = usage_fn()
-    if frac is not None and frac >= threshold:
-        raise Park(f"usage_meter: {frac:.0%} >= {threshold:.0%}")
+                       usage_fn: Callable[[], tuple[float, float] | None] = usage_fraction
+                       ) -> None:
+    """Raises Park("usage_meter: ...", until=reset_at) when a real,
+    non-stale usage reading is known and at or over `threshold`, so the
+    runner resumes after the reset (spec: Park.until). No reading (no
+    source, or stale) never parks here -- that is the wall-limit
+    fallback's job (agent.py's LIMIT_RE, item A)."""
+    reading = usage_fn()
+    if reading is None:
+        return
+    frac, reset_at = reading
+    if frac >= threshold:
+        raise Park(f"usage_meter: {frac:.0%} >= {threshold:.0%}", until=reset_at)
 
 
-def stratified_subset(items: Sequence[T], size: int, seed: int,
-                      key_fn: Callable[[T], object]) -> list[T]:
-    """`size` items from `items`, deterministic on `seed`: every distinct
-    `key_fn(item)` value present in `items` appears at least once in the
-    result (when `size` is at least the number of distinct keys), the rest
-    filled by a seeded, stable pseudo-random order. Never mutates or
-    reorders `items` itself; the same `(items, size, seed)` always returns
-    the same selection, in the same order, on any machine."""
-    if size >= len(items):
-        return list(items)
-    groups: dict[object, list[T]] = {}
-    for it in items:
-        groups.setdefault(key_fn(it), []).append(it)
-
-    def rank(it: T) -> str:
-        #: A seeded, stable sort key (sha256 of the seed + the item's own
-        #: position marker) -- deterministic across runs/machines, unlike
-        #: hash() or random.Random with an unstable item repr.
-        marker = getattr(it, "id", None) or repr(it)
-        return hashlib.sha256(f"{seed}:{marker}".encode()).hexdigest()
-
-    for g in groups.values():
-        g.sort(key=rank)
-    picked: list[T] = []
-    seen_keys: set[object] = set()
-    #: Pass 1: one representative per stratum, in a seeded, deterministic
-    #: key order (never dict insertion order, which would depend on the
-    #: caller's own `items` ordering).
-    for k in sorted(groups, key=lambda k: hashlib.sha256(f"{seed}:{k!r}".encode()).hexdigest()):
-        picked.append(groups[k][0])
-        seen_keys.add(k)
-        if len(picked) >= size:
-            return picked[:size]
-    #: Pass 2: fill the rest from every remaining item, seeded order.
-    rest = [it for k, g in groups.items() for it in g[1:]]
-    rest.sort(key=rank)
-    for it in rest:
-        if len(picked) >= size:
-            break
-        picked.append(it)
-    return picked[:size]
+def scouter_stratified_subset(cases, size: int, seed: int) -> list:
+    """The ruling's own two axes for scenarios_agent: `meta["class"]`
+    (in/partial/out/impossible/workflow) and `meta["genre"]`. Thin binding
+    over the generic, product-agnostic `gauntlet.subset.stratified_subset`."""
+    return _generic_stratified_subset(
+        cases, size, seed,
+        key_fns=[lambda c: c.meta.get("class"), lambda c: c.meta.get("genre")])
