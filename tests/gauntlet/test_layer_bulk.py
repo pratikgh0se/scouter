@@ -1,7 +1,7 @@
 from scouter import paths as scouter_paths
 from tests.gauntlet import taxonomy
 from tests.gauntlet.layers import bulk
-from tests.gauntlet.exec_bulk import job_slug_for
+from tests.gauntlet.jobslug import job_slug_for
 
 
 def test_bulk_count_and_crash_cases():

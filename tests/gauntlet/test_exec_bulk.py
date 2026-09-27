@@ -2,6 +2,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from gauntlet.adapter import CallRecord
 from gauntlet.case import Case, Expect, Step
 from tests.gauntlet import exec_bulk
@@ -192,6 +194,88 @@ def test_run_bulk_case_points_later_steps_at_the_imported_files(tmp_path):
     expected = jobs_root / "2026" / f"{date} {job_slug}" / "raw" / dest_names[0]
     assert darkroom_call["image"] == str(expected)
     assert "card" not in Path(darkroom_call["image"]).parts
+
+
+# -- partial import: blocked, never a silent card-path fallback -------------
+
+def test_run_bulk_case_blocks_on_a_partial_import(tmp_path):
+    """RED (before this follow-up): `_imported_frames` filled in a missing
+    frame's destination with its card path, so a partial import silently
+    downgraded into the SAME false `usage`/`not_in_darkroom` shape a
+    genuine harness bug produces -- indistinguishable from a real product
+    failure. GREEN: a partial import (here, `library_import`'s own
+    `files[]` names only one of the two staged frames) blocks the case
+    with a typed `import_incomplete` harness error naming the missing
+    source, and no further step runs."""
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "H.ORF").write_bytes(b"raw")
+    corpus = Corpus({"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {}}, trial)
+
+    jobs_root = tmp_path / "run" / "jobs"
+    config_path = tmp_path / "run" / "config" / "config.json"
+    _write_config(config_path, jobs_root)
+    job_slug = "htc-blk-styles-olympus-card"
+    date = "2026-05-24"
+
+    seen_tools = []
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.root = tmp_path / "run"
+            self.corpus = corpus
+            self.staged = SimpleNamespace(
+                vars={"out_dir": str(tmp_path / "run" / "exports"),
+                      "relocate_root": str(tmp_path / "run" / "relocated")},
+                env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")},
+                job_frames=[], config=config_path,
+            )
+
+        def call(self, tool, args, budget_s, write=False):
+            seen_tools.append(tool)
+            if tool == "library_import":
+                # Only DUP0000 made it into the import's own manifest --
+                # DUP0001 (the card's second staged frame) is unaccounted
+                # for, a partial import.
+                files = [{"source_name": "DUP0000_H.ORF",
+                          "dest": f"raw/{date}_{job_slug}_em10iii_0001.orf",
+                          "sha256": "x", "seq": 1}]
+                return CallRecord(tool=tool, args=args,
+                                  envelope={"ok": True, "data": {
+                                      "job_slug": job_slug, "date": date,
+                                      "files": files, "imported": len(files)}},
+                                  write=True)
+            return CallRecord(tool=tool, args=args, envelope={"ok": True, "data": {}},
+                              write=write)
+
+    session = FakeSession()
+    case = Case(id="blk-styles-olympus-card", layer="bulk", tier="P1", mode="tool",
+                steps=[Step("library_import", {"source": "{card}", "job_slug": "{job_slug}",
+                                               "confirm": True}, 30.0, True),
+                       Step("darkroom_open", {"image": "{job_frame:1}"}, 30.0, False)],
+                expect=Expect("workflow"), body="olympus", frame_role="card",
+                meta={"frames": 2})
+
+    obs = exec_bulk.run_bulk_case(session, case)
+
+    assert obs.blocked is not None
+    assert "import_incomplete" in obs.blocked
+    assert "DUP0001_H.ORF" in obs.blocked
+    assert obs.hang_evidence and "DUP0001_H.ORF" in obs.hang_evidence[0]
+    # The case stopped at the import step: darkroom_open never ran.
+    assert "darkroom_open" not in seen_tools
+
+
+def test_imported_frames_raises_import_incomplete_naming_the_missing_source(tmp_path):
+    envelope = {"ok": True, "data": {
+        "job_slug": "htc-x", "date": "2026-05-24",
+        "files": [{"source_name": "DUP0000_H.ORF", "dest": "raw/a.orf"}]}}
+    session = SimpleNamespace(staged=SimpleNamespace(config=tmp_path / "config.json"))
+    with pytest.raises(exec_bulk.ImportIncomplete) as exc_info:
+        exec_bulk._imported_frames(session, envelope,
+                                   [Path("card/DUP0000_H.ORF"), Path("card/DUP0001_H.ORF")])
+    assert "import_incomplete" in str(exc_info.value)
+    assert "DUP0001_H.ORF" in str(exc_info.value)
 
 
 # -- n1-bulk fix (c): the relocate root exists before the verb runs ---------

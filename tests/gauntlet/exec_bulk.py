@@ -11,39 +11,28 @@ from pathlib import Path
 from gauntlet.adapter import Observation
 from gauntlet.case import Case
 from scouter import config as scouter_config
-from scouter import paths as scouter_paths
-from scouter.errors import UsageError
 from tests.gauntlet import observe
 from tests.gauntlet.corpus import build_card, delete_card
 from tests.gauntlet.execute import substitute
+from tests.gauntlet.jobslug import job_slug_for
 from tests.gauntlet.session import SessionBlocked
 
 STATS_SAMPLE = 10
 
+#: Re-exported for callers that used to import `job_slug_for` from this
+#: module (now the shared `tests.gauntlet.jobslug`, since
+#: `tests/gauntlet/session.py` needs it too).
+__all__ = ["job_slug_for", "ImportIncomplete", "run_bulk_case", "reported_n", "count_changed"]
 
-def job_slug_for(case_id: str) -> str:
-    """A valid `library.import` job slug (`scouter.paths.SLUG_RE`) for a
-    gauntlet bulk case id.
 
-    Case ids are `-`-joined `gauntlet.case.slug()` parts, and a part may
-    itself carry `_` -- `SLUG_RE` forbids underscores entirely, and the
-    old `f"htc-{case.id}"[-40:]` kept them while also slicing from the
-    LEFT, which cut the disambiguating suffix (flow/body/size) off 34 of
-    40 real case ids and left every one failing `usage: invalid job slug`.
-
-    Underscores become hyphens (never dropped -- still legible, still
-    unique), and any excess length is trimmed from the RIGHT one
-    character at a time by asking `validate_slug` itself whether the
-    result is valid -- the length bound and character class live in
-    `scouter.paths` and are never duplicated here."""
-    raw = "htc-" + case_id.replace("_", "-")
-    while True:
-        try:
-            return scouter_paths.validate_slug(raw)
-        except UsageError:
-            if len(raw) <= 1:
-                raise
-            raw = raw[:-1]
+class ImportIncomplete(RuntimeError):
+    """`library_import`'s own envelope did not account for every source
+    frame the harness staged (a partial import). The destination for the
+    missing frame(s) is genuinely unknown -- guessing the card path would
+    only surface downstream as a false `usage`/`not_in_darkroom` refusal on
+    a frame that was never the harness's fault. Raised, never swallowed:
+    `run_bulk_case` turns it into `obs.blocked`, so the case scores
+    `blocked`, honestly naming what's missing."""
 
 
 def _imported_frames(session, envelope: dict | None,
@@ -52,21 +41,31 @@ def _imported_frames(session, envelope: dict | None,
     `library_import` actually wrote them to, using ITS OWN envelope
     (`data.files[].source_name` -> `.dest`, relative to the job directory --
     spec section 6, `scouter.types.ImportResult`). Returns `None` when the
-    envelope carries nothing usable (the import did not run or errored);
-    callers keep the card paths rather than guess. Every later step
-    (`{job_frame:N}`, `{job_frames}`) must address these destination files:
-    the card copies are deleted at the end of the case and were never what
-    darktable's library, style/preset verbs or exports operate on."""
+    envelope carries nothing usable at all (the import did not run or
+    errored -- callers keep the card paths, since a downstream step will
+    honestly fail on its own terms). Raises `ImportIncomplete` when the
+    import DID run but its own `files[]` is missing one or more of the
+    frames the harness staged (a partial import): the destination for
+    those frames is unknown, not "the card path", and must never be
+    guessed. Every later step (`{job_frame:N}`, `{job_frames}`) must
+    address these destination files: the card copies are deleted at the
+    end of the case and were never what darktable's library, style/preset
+    verbs or exports operate on."""
     data = (envelope or {}).get("data") or {}
     files = data.get("files") or []
     job_slug, date = data.get("job_slug"), data.get("date")
     if not files or not job_slug or not date:
         return None
+    dest_by_source = {f.get("source_name"): f.get("dest") for f in files if f.get("source_name")}
+    missing = [src.name for src in source_frames if src.name not in dest_by_source]
+    if missing:
+        raise ImportIncomplete(
+            f"import_incomplete: library_import's files[] names none of {missing!r} "
+            f"({len(missing)} of {len(source_frames)} staged frames)"
+        )
     cfg = scouter_config.load(str(session.staged.config))
     job_path = scouter_config.job_dir(cfg, date, job_slug)
-    dest_by_source = {f.get("source_name"): f.get("dest") for f in files if f.get("source_name")}
-    return [(job_path / dest_by_source[src.name]) if src.name in dest_by_source else src
-            for src in source_frames]
+    return [job_path / dest_by_source[src.name] for src in source_frames]
 
 
 def reported_n(envelopes: list[dict]) -> int | None:
@@ -128,7 +127,12 @@ def run_bulk_case(session, case: Case) -> Observation:
                     obs.calls.append(rec)
                     obs.extra["journal_resumed"] = "resum" in json.dumps(rec.envelope or {})
                 if st.tool == "library_import" and not rec.error:
-                    resolved = _imported_frames(session, rec.envelope, frames)
+                    try:
+                        resolved = _imported_frames(session, rec.envelope, frames)
+                    except ImportIncomplete as e:
+                        obs.blocked = f"harness_error: {e}"
+                        obs.hang_evidence.append(str(e))
+                        break
                     if resolved is not None:
                         job_files = resolved
                         session.staged.job_frames = resolved

@@ -288,3 +288,25 @@ def test_close_quits_darktable_even_when_the_mcp_close_raises(corpus, tmp_path):
     with pytest.raises(BrokenPipeError):
         s.close()
     assert dt.terminated == [None] and s.mcp is None
+
+
+# -- n1-bulk fix: stage()'s default job_slug must be a valid slug too -------
+
+def test_stage_job_slug_is_valid_for_a_body_with_an_underscore(tmp_path):
+    """RED: the old `f"htc-{body}-{stamp}"[-40:]` kept `sony_a7`'s underscore
+    (`SLUG_RE` forbids it) and sliced from the LEFT; `library.import` would
+    refuse it with `usage: invalid job slug`, the same class-6 bug
+    `tests/gauntlet/exec_bulk.py` had. GREEN: `stage()` now builds it with
+    the shared `job_slug_for`, same as the bulk executor."""
+    from scouter import paths as scouter_paths
+
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "H.ORF").write_bytes(b"raw")
+    doc = {"frames": [{"rel": "H.ORF", "body": "sony_a7"}],
+           "roles": {"sony_a7": {"hero": "H.ORF", "dark": "H.ORF"}}}
+    corpus = Corpus(doc, trial)
+
+    staged = sess.stage(corpus, "sony_a7", tmp_path / "run")
+
+    assert scouter_paths.validate_slug(staged.vars["job_slug"]) == staged.vars["job_slug"]
