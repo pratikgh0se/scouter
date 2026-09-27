@@ -238,7 +238,8 @@ echo "git -C \"$SCRIPT_HOME\" merge --ff-only $BATCH"
 echo "git -C \"$SCRIPT_HOME\" push origin main"
 echo
 echo "# 3) host probes (quit any running darktable first; never run by this script)"
-echo "SCOUTER_HOST_TESTS=1 $PY -m pytest tests/test_host_phase3.py::ProbeCandidatePathsHostTest -q -s"
+echo "SCOUTER_HOST_TESTS=1 $PY -m pytest tests/test_host_phase3.py::ProbeCandidatePathsHostTest -q -s -m host"
+echo "SCOUTER_HOST_TESTS=1 $PY -m pytest tests/test_host_phase3.py::ProbeExposureBlackDefaultHostTest -q -s -m host"
 echo "SCOUTER_HOST_TESTS=1 $PY -m pytest tests/test_host_colorcal.py -q -s"
 echo
 echo "# 4) stale-history live check (never run by this script):"

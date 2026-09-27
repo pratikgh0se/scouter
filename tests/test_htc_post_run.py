@@ -160,6 +160,7 @@ class PreconditionGateTest(_FakeRepoCase):
         self.assertIn("push origin main", out)
         self.assertIn("SCOUTER_HOST_TESTS=1", out)
         self.assertIn("tests/test_host_phase3.py::ProbeCandidatePathsHostTest", out)
+        self.assertIn("tests/test_host_phase3.py::ProbeExposureBlackDefaultHostTest", out)
         self.assertIn("tests/test_host_colorcal.py", out)
         self.assertIn("darkroom_say", out)
         self.assertIn("view_bounce_action", out)
@@ -172,6 +173,54 @@ class PreconditionGateTest(_FakeRepoCase):
         self.assertIn("targeted GAUNTLET rerun", out)
         self.assertIn("gauntlet run --stamp", out)
         self.assertIn("--ids-file", out)
+
+    def test_probe_commands_carry_m_host_exactly_where_the_marker_is(self) -> None:
+        """Row 495/496: the two printed `tests/test_host_phase3.py` probe
+        classes carry `@pytest.mark.host` -- `pyproject.toml`'s
+        `addopts = "-m 'not host'"` deselects them by default, so their
+        printed command needs an explicit `-m host` or a copy-paste of the
+        runbook silently runs nothing (exit 5, deselected). `test_host_
+        colorcal.py` gates via `@unittest.skipUnless`, no pytest marker, so
+        `-m host` there would wrongly deselect IT instead. Verified two
+        ways (oracle 1: the real marker, read by collecting the repo's own
+        test files with `-m host`; oracle 2: the printed command text)."""
+        real_repo = Path(__file__).resolve().parent.parent
+        phase3 = real_repo / "tests" / "test_host_phase3.py"
+        colorcal = real_repo / "tests" / "test_host_colorcal.py"
+
+        def collected_under_host(node_id: str) -> set[str]:
+            p = subprocess.run(
+                [sys.executable, "-m", "pytest", "--collect-only", "-q", "-m", "host", node_id],
+                cwd=str(real_repo), capture_output=True, text=True,
+            )
+            return {line for line in p.stdout.splitlines() if "::" in line}
+
+        candidate_paths_host = collected_under_host(
+            f"{phase3}::ProbeCandidatePathsHostTest")
+        exposure_black_host = collected_under_host(
+            f"{phase3}::ProbeExposureBlackDefaultHostTest")
+        colorcal_host = collected_under_host(str(colorcal))
+
+        # Oracle 1: the real markers, as pytest itself resolves them.
+        self.assertTrue(candidate_paths_host, "ProbeCandidatePathsHostTest lost @pytest.mark.host")
+        self.assertTrue(exposure_black_host,
+                        "ProbeExposureBlackDefaultHostTest lost @pytest.mark.host")
+        self.assertFalse(colorcal_host,
+                         "test_host_colorcal.py unexpectedly gained @pytest.mark.host")
+
+        self.write_progress("done")
+        out = self.invoke().stdout
+
+        # Oracle 2: the printed command text matches what oracle 1 found.
+        candidate_paths_line = next(
+            l for l in out.splitlines() if "ProbeCandidatePathsHostTest" in l)  # noqa: E741
+        exposure_black_line = next(
+            l for l in out.splitlines() if "ProbeExposureBlackDefaultHostTest" in l)  # noqa: E741
+        colorcal_line = next(
+            l for l in out.splitlines() if "test_host_colorcal.py" in l)  # noqa: E741
+        self.assertIn("-m host", candidate_paths_line, candidate_paths_line)
+        self.assertIn("-m host", exposure_black_line, exposure_black_line)
+        self.assertNotIn("-m host", colorcal_line, colorcal_line)
 
     def test_idempotent_reruns_agree(self) -> None:
         self.write_progress("done")
