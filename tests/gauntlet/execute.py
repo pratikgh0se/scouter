@@ -13,7 +13,7 @@ from gauntlet.adapter import CallRecord, Observation, Park
 from gauntlet.case import Case
 from tests.gauntlet import observe
 from tests.gauntlet.corpus import guard
-from tests.gauntlet.session import SessionBlocked
+from tests.gauntlet.session import SessionBlocked, reset_journal
 
 _PH = re.compile(r"\{([a-z_0-9]+)(?::([^}]+))?\}")
 #: Virtual tools, registered by the layer executors (tests/gauntlet/exec_*.py):
@@ -95,6 +95,12 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
     obs = Observation()
     t0 = clock()
     role = case.frame_role or "hero"
+    #: Fix round 2 (review R1): per-case undo journal isolation -- see
+    #: session.reset_journal's own docstring. Must run before this case's
+    #: own steps (below), whatever its frame role, so no earlier case's
+    #: still-open journal entry can leak into this one's darkroom_undo_last.
+    if session.staged is not None:
+        reset_journal(session.staged)
     try:
         frame = session.ensure_frame(role)
         if isolate(session, frame, role):

@@ -66,6 +66,35 @@ def isolated_env(root: Path, *, job: str | None = None) -> dict[str, str]:
     return env
 
 
+def reset_journal(staged: Staged) -> None:
+    """Fix round 2 (review R1, triage section 5 item 1): `SCOUTER_JOB` is
+    pinned once per MCP server process for the whole session
+    (`isolated_env` above / phase 3 task 9's
+    `scouter/mcp/server.py::_pin_session_job`), so by default every case in
+    a session shares one job's undo journal. A case whose own write was
+    refused (nothing landed) must see an EMPTY journal so
+    `darkroom_undo_last` honestly answers `noop` (`scouter/core/darkroom.py`'s
+    "journal is empty" branch) -- not an earlier case's still-open entry
+    (e.g. a `darkroom_reset`, which `undo_last` then refuses as
+    `unsupported_undo`, or a plain param write it silently reverts,
+    changing THIS case's own sidecar and scoring `unexpected_edit`/
+    `half-applied`).
+
+    Truncating the job's journal file right before each case gives every
+    case its own effectively-fresh journal without paying for a new
+    darktable/MCP server session (spec 2.3's up-to-50-cases-per-session
+    budget). Pure file I/O against the session's own isolated
+    `SCOUTER_CACHE` -- never touches darktable, and never races a call in
+    flight (the harness is single-threaded and strictly sequential between
+    cases)."""
+    job = staged.env.get("SCOUTER_JOB")
+    if not job:
+        return
+    path = staged.cache / "journal" / f"{job}.jsonl"
+    if path.exists():
+        path.write_text("", encoding="utf-8")
+
+
 def write_config(root: Path) -> Path:
     """The run-level config, stage_body's pattern: library root and backup under the stamp."""
     cfg_dir = root / "config"

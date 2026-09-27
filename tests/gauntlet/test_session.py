@@ -288,3 +288,57 @@ def test_close_quits_darktable_even_when_the_mcp_close_raises(corpus, tmp_path):
     with pytest.raises(BrokenPipeError):
         s.close()
     assert dt.terminated == [None] and s.mcp is None
+
+
+# ---------------------------------------------------------------- fix round
+# 2 (review R1): per-case undo journal isolation.
+
+
+def test_reset_journal_truncates_the_real_journal_file(corpus, tmp_path, monkeypatch):
+    """Real `scouter.core.journal`, not a mock of the subject: an entry a
+    PRIOR case would have left open (a `darkroom_reset`, which `undo_last`
+    can never revert) must be gone before the NEXT case's own steps run, so
+    that case's `darkroom_undo_last` sees a genuinely empty journal and
+    honestly answers `noop`, never `unsupported_undo` for something it
+    never touched."""
+    from scouter import paths
+    from scouter.core import journal
+
+    s = _session(corpus, tmp_path).open()
+    job = s.staged.env["SCOUTER_JOB"]
+    monkeypatch.setenv("SCOUTER_CACHE", s.staged.env["SCOUTER_CACHE"])
+    journal.begin(job, verb="module.reset", image_id=1, path="x", module="temperature",
+                  param="", instance=0, before={})
+    assert journal.latest_open(job) is not None
+    assert paths.journal_path(job) == s.staged.cache / "journal" / f"{job}.jsonl"
+
+    sess.reset_journal(s.staged)
+
+    assert journal.read_all(job) == []
+    assert journal.latest_open(job) is None
+    assert journal.latest_failed(job) is None
+    # A no-op when there is no journal file yet at all (the very first case
+    # of a session) -- never raises.
+    (s.staged.cache / "journal" / f"{job}.jsonl").unlink()
+    sess.reset_journal(s.staged)
+
+
+def test_run_tool_case_resets_the_journal_before_its_own_steps(corpus, tmp_path):
+    """execute.run_tool_case must isolate the journal for every case, not
+    only ones with an explicit undo step -- an earlier case's leaked entry
+    must never survive into ANY later case."""
+    from gauntlet.case import Case, Expect, Step
+    from tests.gauntlet import execute, observe
+
+    s = _session(corpus, tmp_path).open()
+    job = s.staged.env["SCOUTER_JOB"]
+    journal_file = s.staged.cache / "journal" / f"{job}.jsonl"
+    journal_file.parent.mkdir(parents=True, exist_ok=True)
+    journal_file.write_text('{"seq": 1, "ts": "x", "verb": "module.reset", "image_id": 1, '
+                            '"path": "x", "module": "temperature", "param": "", '
+                            '"instance": 0, "before": {}}\n', encoding="utf-8")
+    case = Case(id="c", layer="coverage", tier="P0", mode="tool",
+               steps=[Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
+               expect=Expect("edit"), body="olympus", frame_role="hero")
+    execute.run_tool_case(s, case)
+    assert journal_file.read_text(encoding="utf-8") == ""
