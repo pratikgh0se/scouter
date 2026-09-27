@@ -55,11 +55,17 @@ NIGHT1_PIDFILE="$RUNS_ROOT/night1/runner.pid"
 if [[ -e "$NIGHT1_PIDFILE" ]] && kill -0 "$(cat "$NIGHT1_PIDFILE")" 2>/dev/null; then
   die "a night-1 runner is still running (pid $(cat "$NIGHT1_PIDFILE")); let it finish or stop it first"
 fi
-# N3 (review): the two pidfile checks above only catch this script's own
-# launchers -- a smoke run or a manual `gauntlet run --stamp ...` invoked
-# outside either launcher would still race darktable. Catch it directly.
-if pgrep -f "gauntlet(\.cli)? run --stamp" >/dev/null 2>&1; then
-  pgrep -fl "gauntlet(\.cli)? run --stamp" || true
+# N3 (review), fix round 2 (review R2): the two pidfile checks above only
+# catch this script's own launchers -- a smoke run or a manual `gauntlet
+# run --stamp ...` invoked outside either launcher would still race
+# darktable. Catch it directly. The real launcher's argv is
+# `python -c '...from gauntlet.cli import main; sys.exit(main(sys.argv[1:]))'
+# run --stamp ...` (run_pass below) -- "gauntlet" and "run --stamp" are NOT
+# adjacent, so the pattern must allow anything in between
+# (`gauntlet(\.cli)? run --stamp` cannot match it; live-tested against a
+# running night-1 runner's real argv).
+if pgrep -f "gauntlet.*run --stamp" >/dev/null 2>&1; then
+  pgrep -fl "gauntlet.*run --stamp" || true
   die "a gauntlet runner (smoke or manual) is already running outside this launcher"
 fi
 
