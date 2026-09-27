@@ -19,12 +19,14 @@ TRIAL="${HTC_TRIAL:-/Users/pratik/Pictures/EditingTrial}"
 NIGHT="$RUNS_ROOT/night2"
 mkdir -p "$NIGHT"
 
-# One stamp for the whole night, reused by every resume (even after midnight).
+# One stamp for the whole night, reused by every resume (even after
+# midnight). N3 (review): resolved in memory only -- NOT written to
+# CURRENT_STAMP yet, so a refused attempt (preconditions below) does not
+# pin that day's stamp for a later, successful start.
 if [[ -z "${STAMP:-}" ]]; then
   if [[ -s "$NIGHT/CURRENT_STAMP" ]]; then STAMP=$(cat "$NIGHT/CURRENT_STAMP")
   else STAMP="night2-$(date +%Y%m%d)"; fi
 fi
-echo "$STAMP" > "$NIGHT/CURRENT_STAMP"
 RUN_DIR="$RUNS_ROOT/$STAMP"
 LOG_DIR="$NIGHT/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$LOG_DIR"
@@ -53,6 +55,17 @@ NIGHT1_PIDFILE="$RUNS_ROOT/night1/runner.pid"
 if [[ -e "$NIGHT1_PIDFILE" ]] && kill -0 "$(cat "$NIGHT1_PIDFILE")" 2>/dev/null; then
   die "a night-1 runner is still running (pid $(cat "$NIGHT1_PIDFILE")); let it finish or stop it first"
 fi
+# N3 (review): the two pidfile checks above only catch this script's own
+# launchers -- a smoke run or a manual `gauntlet run --stamp ...` invoked
+# outside either launcher would still race darktable. Catch it directly.
+if pgrep -f "gauntlet(\.cli)? run --stamp" >/dev/null 2>&1; then
+  pgrep -fl "gauntlet(\.cli)? run --stamp" || true
+  die "a gauntlet runner (smoke or manual) is already running outside this launcher"
+fi
+
+# Preconditions hold -- now, and only now, pin today's stamp so a refused
+# attempt above never pins it (N3).
+echo "$STAMP" > "$NIGHT/CURRENT_STAMP"
 
 # -- (c) EditingTrial originals: read-only listing before/after ---------------
 snap() { find "$TRIAL" -type f -exec stat -f '%z %m %N' {} + 2>/dev/null | sort; }

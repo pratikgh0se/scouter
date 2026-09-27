@@ -138,5 +138,38 @@ class PidAliveRefusalTest(_FakeReposCase):
         self.assertNotIn("is already running", p.stdout)
 
 
+class GauntletRunnerRefusalTest(_FakeReposCase):
+    """N3 (review): the two pidfile checks above only catch this script's
+    OWN launchers -- a smoke run or a manual `gauntlet run --stamp ...`
+    started outside either launcher would still race darktable. A direct
+    pgrep for that command line catches it too, and the refusal must not
+    pin CURRENT_STAMP (a refused attempt should not steal the day's stamp
+    from the next, successful one)."""
+
+    def _fake_pgrep_matching_gauntlet_runner(self) -> None:
+        fake_pgrep = self.fake_bin / "pgrep"
+        fake_pgrep.write_text(
+            "#!/usr/bin/env bash\n"
+            "case \"$*\" in\n"
+            "  *gauntlet*'run --stamp'*) exit 0 ;;\n"
+            "  *) exit 1 ;;\n"
+            "esac\n",
+            encoding="utf-8")
+        fake_pgrep.chmod(0o755)
+
+    def test_refuses_when_a_gauntlet_runner_is_already_running(self) -> None:
+        self._fake_pgrep_matching_gauntlet_runner()
+        p = self.run_script()
+        self.assertEqual(p.returncode, 5, p.stdout + p.stderr)
+        self.assertIn("gauntlet runner", p.stdout)
+
+    def test_the_refusal_does_not_pin_current_stamp(self) -> None:
+        self._fake_pgrep_matching_gauntlet_runner()
+        p = self.run_script()
+        self.assertEqual(p.returncode, 5, p.stdout + p.stderr)
+        self.assertFalse((self.runs_root / "night2" / "CURRENT_STAMP").exists(),
+                         "a refused attempt must not pin today's stamp")
+
+
 if __name__ == "__main__":
     unittest.main()
