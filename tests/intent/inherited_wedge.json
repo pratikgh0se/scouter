@@ -5,13 +5,13 @@
     {
       "id": "hang-case-following-a-wedge-is-inherited-not-hang",
       "input": {"health": "unresponsive", "times_out": false},
-      "expect": {"blocked": "inherited_wedge", "is_hang": false},
+      "expect": {"blocked": "inherited_wedge", "is_hang": false, "blocked_kind": "inherited_wedge"},
       "why": "darktable is ALREADY unresponsive before this case's own steps run (rob-r12's exact shape: the previous case's darkroom_open left the Lua worker wedged, and ensure_frame/isolate silently skip their own calls when nothing needs re-sending, so they never notice) -- this case did not cause it and must not be scored as its own hang"
     },
     {
       "id": "standalone-hang-during-this-cases-own-step",
       "input": {"health": ["alive", "unresponsive"], "times_out": true},
-      "expect": {"blocked": "hang", "is_hang": true},
+      "expect": {"blocked": "hang", "is_hang": true, "blocked_kind": "hang"},
       "why": "darktable answers the pre-case ping (alive going in) and only stops answering on THIS case's own step (rob-r11's shape) -- a genuine hang, still counted as one by gauntlet.evaluate.is_hang"
     }
   ]

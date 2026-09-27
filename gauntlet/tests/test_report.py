@@ -128,6 +128,21 @@ def test_hard_cap_result_counts_as_a_hang_and_blocks_the_bar():
     assert fixes["a-0"]["hang"] is True
 
 
+def test_inherited_wedge_has_its_own_blocked_kind_never_a_hang():
+    """Fix round 1 review L1 (low): `inherited_wedge` gets its own row in
+    S8's blocked-kind breakdown (`_blocked_kind`), distinct from `hang` (it
+    is deliberately never one, `evaluate.is_hang`) AND from the `other`
+    catch-all a plain `report._blocked_kind` fall-through would have used."""
+    case = _case("a-0")
+    result = _result("a-0", outcome="blocked", blocked="inherited_wedge")
+    adapter = _StubAdapter([LayerSpec("l", 1, 1, True)])
+    rep = report.build(_StubRun(), adapter, [case], [result])
+    assert rep["S8_signoff"]["hangs"] == 0
+    assert rep["S8_signoff"]["blocked"]["inherited_wedge"] == 1
+    assert rep["S8_signoff"]["blocked"]["other"] == 0
+    assert report._blocked_kind("inherited_wedge") == "inherited_wedge"
+
+
 def test_run_level_crash_not_attributed_to_any_case_blocks_the_bar():
     case = _case("a-0")
     result = _result("a-0", score="pass", outcome="verified")
