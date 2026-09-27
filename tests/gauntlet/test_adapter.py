@@ -577,3 +577,69 @@ def test_an_abort_before_the_agent_exists_still_reaches_it(pinned_env, fake_corp
     routed.agent_factory = agent_factory
     routed.run_case(_case("scenarios_agent"))
     assert box["aborted_at_run"] is True
+
+
+# -- Fix B (night-1 triage rank 9, GD-job-not-staged) -----------------------
+
+
+class _ImportingFakeMcp(FakeMcp):
+    """A fake MCP whose `library_import` answers from the REAL staged card on
+    disk (like the real registry would), close enough to test that
+    `_stage_guide_job` (adapter.py) resolves `job_frames` from the import's
+    own envelope, never the card copies themselves."""
+
+    def call_tool(self, tool, args, timeout):
+        if tool == "library_import":
+            self.calls.append((tool, args))
+            files = sorted(Path(args["source"]).rglob("*.ORF"))
+            data = {"job_slug": args["job_slug"], "date": "2026-09-27",
+                    "files": [{"source_name": f.name, "dest": f.name} for f in files]}
+            return {"ok": True, "outcome": "ok", "data": data}
+        return super().call_tool(tool, args, timeout)
+
+
+def test_guide_session_open_stages_the_job_with_a_real_import(pinned_env, fake_corpus):
+    """Fix B (night-1 triage rank 9, GD-job-not-staged): opening a guide
+    session must import the staged card into the job slug the guide layer's
+    {job_slug}/{job_frame:N} placeholders point at -- stage() only ever
+    predicted the slug and copied card frames, it never ran library_import
+    (unlike bulk's own run_bulk_case)."""
+    a = ScouterAdapter(pinned_env / "runs")
+    a._corpus = fake_corpus
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+    holder: dict = {}
+
+    def factory(corpus, root, body, run_root):
+        mcp = _ImportingFakeMcp()
+        holder["mcp"] = mcp
+        return sess.ScouterSession(corpus, root, body, dt=FakeDt(), run_root=run_root,
+                                   mcp_factory=lambda env, cwd: mcp)
+
+    routed = adapter_mod.RoutedSession(a, "guide", run, session_factory=factory)
+    s = routed._session("olympus")
+
+    assert "library_import" in [t for t, _ in holder["mcp"].calls]
+    # The resolved job_frames are the import's own destinations (job_dir),
+    # never the harness's own card copies under session.root / "card".
+    assert s.staged.job_frames
+    assert all(s.staged.card not in p.parents for p in s.staged.job_frames)
+    assert all(p.name.endswith(".ORF") for p in s.staged.job_frames)
+
+
+def test_guide_stage_is_a_noop_when_the_import_errors(pinned_env, fake_corpus):
+    """A failed import must never crash session open -- a later guide step
+    fails honestly on its own terms, exactly as it did before this fix."""
+    a = ScouterAdapter(pinned_env / "runs")
+    a._corpus = fake_corpus
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+
+    def factory(corpus, root, body, run_root):
+        mcp = FakeMcp({"library_import": {"ok": False, "outcome": "error",
+                                          "error": {"code": "usage"}, "data": {}}})
+        return sess.ScouterSession(corpus, root, body, dt=FakeDt(), run_root=run_root,
+                                   mcp_factory=lambda env, cwd: mcp)
+
+    routed = adapter_mod.RoutedSession(a, "guide", run, session_factory=factory)
+    s = routed._session("olympus")
+    before = list(s.staged.job_frames)
+    assert before  # the card copies stage() made are still there, untouched

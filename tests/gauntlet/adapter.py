@@ -162,6 +162,38 @@ def look_gates(cases: list[Case]) -> tuple:
     return gates
 
 
+def _stage_guide_job(session) -> None:
+    """Fix B (night-1 triage rank 9, GD-job-not-staged): the guide layer's
+    `{job_slug}`/`{job_frame:N}` placeholders (layers/guide.py
+    session_preset_apply_job, guide_job_run(_dry)) point at a job
+    `session.py`'s own `stage()` only ever predicted the slug for and copied
+    card frames into -- it never ran `library_import`, so `job run` and
+    `preset apply-job` honestly (but wrongly, from the harness's own gap)
+    answer "no job with slug ...". Mirrors exec_bulk.run_bulk_case's own
+    import step: a real `library_import` of the staged card into that slug,
+    then `exec_bulk._imported_frames` resolves `job_frames` to the paths the
+    import actually wrote (never the card copies, which stay outside the
+    library the product's own job/preset verbs read from). A no-op when the
+    import itself fails or answers nothing usable: a later step then fails
+    honestly on its own terms, same as it always has."""
+    from tests.gauntlet.exec_bulk import ImportIncomplete, _imported_frames
+
+    staged = session.staged
+    if staged is None or not staged.job_frames:
+        return
+    rec = session.call("library_import", {"source": str(staged.card),
+                                          "job_slug": staged.vars["job_slug"],
+                                          "confirm": True}, 60.0, write=True)
+    if rec.error:
+        return
+    try:
+        resolved = _imported_frames(session, rec.envelope, staged.job_frames)
+    except ImportIncomplete:
+        return
+    if resolved is not None:
+        staged.job_frames = resolved
+
+
 class RoutedSession:
     """One ScouterSession per body, opened lazily; cases dispatch by layer."""
 
@@ -218,6 +250,8 @@ class RoutedSession:
         if self.aborted:
             s.abort()  # a repeat abort: kills only s's recorded pids
             raise SessionBlocked("routed session aborted during open")
+        if self.layer == "guide":
+            _stage_guide_job(s)
         return s
 
     def open_body(self, body: str):
