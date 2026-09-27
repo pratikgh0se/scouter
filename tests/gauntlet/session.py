@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import shutil
 import sys
@@ -24,10 +25,40 @@ REPO = Path(__file__).resolve().parents[2]
 PY = sys.executable
 LAUNCH_READY_S = 30.0
 EXPORT_PRESETS = ("client-proof", "preview")
+#: Night-1 triage rank 9 (SCA-no-lock-breaker): darktable's own "database
+#: lock file contains a pid that seems to be alive" and sqlite's "database
+#: is locked" are the two ways an orphaned darktable (one this runner no
+#: longer owns but never quit) makes every later launch against the SAME
+#: session's library fail identically. Left undetected, this cost 22 cases
+#: at ~40 s each on 2026-09-26 (each burning a full two-attempt launch
+#: retry before SessionBlocked).
+_LOCK_RE = re.compile(r"database lock file contains a pid|database is locked", re.I)
+_LOCK_PID_RE = re.compile(r"\bpid\D{0,10}(\d+)", re.I)
 
 
 class SessionBlocked(RuntimeError):
     """darktable could not be brought to gui_ready (twice)."""
+
+
+class LibraryLocked(SessionBlocked):
+    """(night-1 triage rank 9): the session's own darktable.log shows the
+    library db is wedged -- a launch that will fail identically every time
+    it is retried within this session. Fatal fast, instead of letting the
+    ordinary two-attempt launch retry (and every later case in the session)
+    burn its own ~40 s finding the same thing out."""
+
+
+def _check_library_lock(log_path: Path) -> int | None:
+    """The offending pid parsed from `log_path` (or -1 if the log names the
+    condition but no pid is found in it), or None when no lock line is
+    present. Pure file read; never touches darktable itself."""
+    if not log_path.exists():
+        return None
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+    if not _LOCK_RE.search(text):
+        return None
+    m = _LOCK_PID_RE.search(text)
+    return int(m.group(1)) if m else -1
 
 
 class ForeignDarktable(RefuseRun):
@@ -320,6 +351,9 @@ class ScouterSession:
                 self.abort()
                 self._check_aborted()
             ready = self.dt.ready(LAUNCH_READY_S)
+            pid = _check_library_lock(self.root / "darktable.log")
+            if pid is not None:
+                raise LibraryLocked(f"library_lock {pid if pid >= 0 else 'unknown'}")
             if ready.get("ready"):
                 self.current_frame = frame
                 return

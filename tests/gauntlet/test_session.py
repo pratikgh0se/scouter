@@ -138,6 +138,44 @@ def test_launch_error_is_a_failed_attempt(corpus, tmp_path):
     assert dt.launches == 2
 
 
+class LockedDt(FakeDt):
+    """launch() writes a darktable.log with the lock line, as darktable
+    itself would when the library db is wedged by an orphaned process."""
+
+    def __init__(self, line, **kw):
+        super().__init__(**kw)
+        self.line = line
+
+    def launch(self, frame, library, log):
+        super().launch(frame, library, log)
+        log.write_text(self.line)
+
+
+def test_library_lock_in_the_log_stops_the_session_fast(corpus, tmp_path):
+    """(row 501 item D, night-1 rank 9, SCA-no-lock-breaker): the session
+    fails fast on the first attempt (never burns a second doomed launch)
+    with a typed reason naming the offending pid."""
+    dt = LockedDt("2026-09-26 13:45:06 [dtprocess] the database lock file "
+                  "contains a pid 69648 that seems to be alive\n")
+    with pytest.raises(sess.LibraryLocked, match="library_lock 69648"):
+        _session(corpus, tmp_path, dt).open()
+    assert dt.launches == 1
+
+
+def test_sqlite_database_is_locked_line_is_also_caught(corpus, tmp_path):
+    dt = LockedDt("sqlite3_step: database is locked\n")
+    with pytest.raises(sess.LibraryLocked, match="library_lock unknown"):
+        _session(corpus, tmp_path, dt).open()
+
+
+def test_no_lock_line_launches_normally(corpus, tmp_path):
+    """Control: a plain log (or no log at all, FakeDt's default) never
+    trips the breaker."""
+    dt = LockedDt("darktable started fine\n")
+    _session(corpus, tmp_path, dt).open()
+    assert dt.launches == 1
+
+
 def test_refreshing_a_role_twice_never_reuses_a_contaminated_dir(corpus, tmp_path):
     s = _session(corpus, tmp_path).open()
     first = s.refresh_frame("dark")
