@@ -1,0 +1,24 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for PAR-cli-argparse-not-json (night-1 triage rank 3, scratchpad/night1-parity-install-guide-triage.md): argparse's own ArgumentParser.error() -- an unknown flag, a missing required argument, or the top parser's own leftover-arguments check -- printed plain text to stderr and exited 2, breaking scouter/cli/main.py's documented contract ('a plain invocation always gets JSON'). This affected 8 parity fails (2 P0: par-vocab.list-error, par-darkroom.undo_last-error). Run by tests/test_cli.py::ArgparseJsonErrorTest.",
+  "subject": "scouter/cli/main.py _JsonErrorParser (build_parser)",
+  "examples": [
+    {
+      "id": "unknown-flag-on-a-real-verb-is-json-usage",
+      "input": {"argv": ["vocab", "list", "--bogus"]},
+      "expect": {"exit_code": 2, "ok": false, "outcome": "error:usage", "error.code": "usage"},
+      "source": "night1-parity-install-guide-triage.md PAR-cli-argparse-not-json: 'seven error variants with an unknown argument ... The CLI's argparse printed plain-text usage and exited 2, with no JSON'"
+    },
+    {
+      "id": "unknown-flag-on-a-required-positional-verb-is-json-usage",
+      "input": {"argv": ["darkroom", "undo-last", "--bogus"]},
+      "expect": {"exit_code": 2, "ok": false, "outcome": "error:usage", "error.code": "usage"},
+      "source": "night1-parity-install-guide-triage.md: par-darkroom.undo_last-error is one of the 2 P0 cases this fixes"
+    },
+    {
+      "id": "a_typed_scouter_error_is_unaffected",
+      "input": {"note": "a REAL ScouterError (not an argparse usage error) keeps its own code/exit, e.g. wrong_view exits 4"},
+      "expect": {"unaffected": true},
+      "source": "scouter/cli/main.py main()'s except ScouterError branch, unchanged by this fix -- only argparse's own error() path changes"
+    }
+  ]
+}

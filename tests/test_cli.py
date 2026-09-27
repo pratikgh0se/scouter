@@ -67,6 +67,37 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
 
 
+class ArgparseJsonErrorTest(unittest.TestCase):
+    """PAR-cli-argparse-not-json: argparse's own `error()` (an unknown flag,
+    or the top parser's leftover-arguments check) must answer the same JSON
+    envelope shape as every other CLI failure -- not plain text on stderr
+    with a bare exit 2 (which broke the MCP/CLI parity check on
+    par-vocab.list-error and par-darkroom.undo_last-error, spec 3.6)."""
+
+    def _run(self, argv: list[str]) -> tuple[dict, int]:
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), self.assertRaises(SystemExit) as ctx:
+            main(argv)
+        return json.loads(buf.getvalue()), ctx.exception.code
+
+    def test_vocab_list_with_a_bad_argument_is_a_json_usage_envelope(self) -> None:
+        payload, code = self._run(["vocab", "list", "--bogus"])
+        self.assertEqual(code, 2)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["outcome"], "error:usage")
+        self.assertEqual(payload["error"]["code"], "usage")
+        self.assertIn("bogus", payload["error"]["message"])
+
+    def test_darkroom_undo_last_with_a_bad_argument_is_a_json_usage_envelope(self) -> None:
+        payload, code = self._run(["darkroom", "undo-last", "--bogus"])
+        self.assertEqual(code, 2)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["outcome"], "error:usage")
+        self.assertEqual(payload["error"]["code"], "usage")
+
+
 def _min_args(verb) -> list[str]:
     out: list[str] = []
     for spec in verb.args:

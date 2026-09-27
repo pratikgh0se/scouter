@@ -99,8 +99,41 @@ def _add_arg(parser: argparse.ArgumentParser, spec, verb_id: str | None = None) 
         )
 
 
+class _JsonErrorParser(argparse.ArgumentParser):
+    """PAR-cli-argparse-not-json (triage rank 3): argparse's OWN `error()` --
+    reached for an unknown flag, a missing required argument, or (the top
+    parser's own `parse_args`) leftover unrecognized arguments -- printed
+    plain text to stderr and exited 2, bypassing the one machine contract
+    `main()` otherwise guarantees ("a plain invocation always gets JSON").
+    The MCP side of the same mistake answers a typed `error:usage` envelope
+    (`scouter/mcp/server.py`'s TypeError branch), so the two disagreed on
+    shape (parity layer 6: par-vocab.list-error, par-darkroom.undo_last-error
+    and 6 more, `envelope, code` diffs).
+
+    Every subparser this module builds inherits this class: argparse's own
+    `add_subparsers` defaults `parser_class` to `type(self)`, so a bad flag
+    anywhere in the tree -- top-level, group (`scouter vocab ...`) or verb
+    (`scouter vocab list ...`) -- answers the same envelope."""
+
+    def error(self, message: str) -> None:
+        payload = {
+            "verb": self._defaults.get("_verb"),
+            "layer": "cli",
+            "ok": False,
+            "outcome": "error:usage",
+            "error": {
+                "code": "usage",
+                "message": message,
+                "fix": "fix the argument and re-run; `--help` lists the accepted values",
+                "detail": {},
+            },
+        }
+        print(json.dumps(payload, sort_keys=True))
+        self.exit(2)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _JsonErrorParser(
         prog="scouter",
         description="Live darktable editing core. Every command prints one JSON "
         "object on stdout; logs go to stderr.",
