@@ -170,9 +170,19 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
     #: reference the guide job placeholders must never run (and fail on the
     #: product's own terms) when the harness's own job import failed --
     #: block it honestly instead. Merge note (guide x fix/htc-hang-
-    #: recovery): this and any future pre_ping/inherited_wedge block both
-    #: belong here, at the very top, before the isolate/ensure_frame try;
-    #: whichever lands second in a merge keeps both, this one first.
+    #: recovery, re-review round 3 GR-4): the only real conflict is this
+    #: function's own signature line (hang-recovery adds `pre_ping: bool =
+    #: True`); the body auto-merges, walkthrough/stage_error/prefix blocks
+    #: first, pre_ping's own inherited_wedge early return after them. THAT
+    #: early return does not exist yet in this branch, so it cannot call
+    #: `_mark_walkthrough_broken` here today -- but it must, once merged:
+    #: an inherited wedge mid-walkthrough is exactly the kind of break
+    #: finding 9 (GA-1) exists to tag, and an untagged one would leave
+    #: every later walkthrough case scored as if the script's state were
+    #: intact. Whoever resolves that merge: add
+    #: `_mark_walkthrough_broken(session, case, obs, walkthrough)` right
+    #: before the inherited_wedge block's own `return obs`, the same way
+    #: the SessionBlocked except-branch below and the final return already do.
     stage_error = getattr(session, "guide_job_stage_error", None)
     if stage_error and _refs_job(case):
         obs.blocked = f"fixture: guide job import failed: {stage_error}"
