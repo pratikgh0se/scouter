@@ -32,7 +32,8 @@ def _outcome(r: dict) -> str:
 
 
 #: Kinds a `blocked` observation can fall into, in the fixed order S8 reports them.
-BLOCKED_KINDS = ("hard_cap", "hang", "session_open", "session", "harness_error", "other")
+BLOCKED_KINDS = ("hard_cap", "hang", "inherited_wedge", "session_open", "session",
+                 "harness_error", "other")
 
 
 def _blocked(r: dict) -> str | None:
@@ -46,6 +47,12 @@ def _blocked_kind(blocked: str | None) -> str | None:
         return "hard_cap"
     if blocked.startswith("hang"):
         return "hang"
+    #: (night1-robustness-triage.md item 2): its own kind, never lumped into
+    #: `hang` (it is not one, see `evaluate.is_hang`) nor into the `other`
+    #: catch-all -- a case blocked by an inherited wedge is worth seeing on
+    #: its own row of the S8 report, distinct from every other blocked case.
+    if blocked.startswith("inherited_wedge"):
+        return "inherited_wedge"
     if blocked.startswith("session_open"):
         return "session_open"
     if blocked.startswith("session"):

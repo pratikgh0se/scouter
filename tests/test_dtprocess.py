@@ -17,7 +17,7 @@ SLEEPER = [sys.executable, "-c", "import signal,time\n"
 
 @pytest.fixture
 def owner(tmp_path, monkeypatch):
-    monkeypatch.setattr(dtprocess, "owner_path", lambda: tmp_path / "darktable.owner.json")
+    monkeypatch.setattr(dtprocess, "owner_path", lambda cache_root=None: tmp_path / "darktable.owner.json")
     return tmp_path
 
 
@@ -92,6 +92,38 @@ def test_launch_forwards_env_to_popen(owner, monkeypatch, tmp_path):
     assert captured["env"] == custom_env
 
 
+def test_launch_writes_owner_record_under_envs_scouter_cache_not_ambient(monkeypatch, tmp_path):
+    """(fix round 1 review H3c): a mid-session relaunch can run while THIS
+    process's own ambient os.environ has drifted from the session's own
+    cache (an earlier session's late abort re-points it -- `tests/gauntlet/
+    adapter.py`'s own `point_cache` comment). The owner record must land
+    under THIS launch's own `env["SCOUTER_CACHE"]`, never the ambient
+    fallback `paths.cache_root()` would otherwise use -- the plausible
+    cause of night 1's r11/r12/r13/r15 falling through to the generic
+    `bridge_timeout` instead of `darktable_unresponsive` (H3 review)."""
+    class FakeProc:
+        pid = 424242
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            pass
+
+    monkeypatch.setattr(dtprocess.subprocess, "Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(dtprocess, "_lstart", lambda pid: "Mon Jan  1 00:00:00 2026")
+    ambient_wrong = tmp_path / "ambient-wrong-cache"
+    right = tmp_path / "session-cache"
+    monkeypatch.setattr(dtprocess.paths, "cache_root", lambda: ambient_wrong)
+    try:
+        dtprocess.launch(None, tmp_path / "lib" / "library.db",
+                         env={"SCOUTER_CACHE": str(right)})
+    finally:
+        dtprocess._children.pop(424242, None)
+    assert (right / "darktable.owner.json").exists()
+    assert not (ambient_wrong / "darktable.owner.json").exists()
+
+
 def test_foreign_pid_is_refused_and_never_signalled(owner):
     # A genuinely owned record (this test process: live pid, real lstart and
     # comm); `kill` is a recorder, so nothing is ever signalled.
@@ -116,7 +148,7 @@ def test_pid_reuse_is_not_ours(owner, monkeypatch):
 def test_ladder_escalates_to_sigkill_without_osascript(owner, monkeypatch):
     p = subprocess.Popen(SLEEPER)
     time.sleep(0.3)
-    monkeypatch.setattr(dtprocess, "owned_pid", lambda: p.pid)
+    monkeypatch.setattr(dtprocess, "owned_pid", lambda cache_root=None: p.pid)
     alive = lambda pid: p.poll() is None  # noqa: E731
     t0 = time.monotonic()
     res = dtprocess.terminate(p.pid, responsive=False, alive=alive)
@@ -165,8 +197,8 @@ def test_stale_lock_removed_only_for_dead_owner(owner, tmp_path):
 
 def test_osascript_skipped_when_a_foreign_darktable_runs(owner, monkeypatch):
     """osascript quits by app name, so it must not run beside a foreign darktable."""
-    monkeypatch.setattr(dtprocess, "owned_pid", lambda: 4242)
-    monkeypatch.setattr(dtprocess, "foreign_pids", lambda: [999])
+    monkeypatch.setattr(dtprocess, "owned_pid", lambda cache_root=None: 4242)
+    monkeypatch.setattr(dtprocess, "foreign_pids", lambda cache_root=None: [999])
 
     def no_osascript(*a, **k):
         raise AssertionError("osascript must not run")
@@ -186,7 +218,7 @@ def test_osascript_skipped_when_a_foreign_darktable_runs(owner, monkeypatch):
 def test_no_signal_when_ownership_lost_before_sigkill(owner, monkeypatch):
     """After SIGTERM's wait the pid may be reused: SIGKILL re-checks ownership."""
     owned = iter([4242, 4242, None])  # entry, before SIGTERM, before SIGKILL
-    monkeypatch.setattr(dtprocess, "owned_pid", lambda: next(owned))
+    monkeypatch.setattr(dtprocess, "owned_pid", lambda cache_root=None: next(owned))
     sent = []
     res = dtprocess.terminate(responsive=False, kill=lambda p, s: sent.append((p, s)),
                               alive=lambda p: True, sleep=lambda s: None)
@@ -195,7 +227,7 @@ def test_no_signal_when_ownership_lost_before_sigkill(owner, monkeypatch):
 
 
 def test_pgrep_timeout_fails_closed_no_osascript(owner, monkeypatch):
-    monkeypatch.setattr(dtprocess, "owned_pid", lambda: 4242)
+    monkeypatch.setattr(dtprocess, "owned_pid", lambda cache_root=None: 4242)
 
     def run(argv, *a, **k):
         if argv[0] == "pgrep":

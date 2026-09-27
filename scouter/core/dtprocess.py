@@ -44,8 +44,20 @@ class Launched:
     frame: str | None
 
 
-def owner_path() -> Path:
-    return paths.cache_root() / OWNER_FILE
+def owner_path(cache_root: Path | None = None) -> Path:
+    """(fix round 1 review H3c): `cache_root`, when given, is used instead of
+    `paths.cache_root()` (which reads `$SCOUTER_CACHE` from THIS process's
+    own ambient `os.environ`). A relaunch mid-session can run on a thread/
+    moment where the harness's own `os.environ["SCOUTER_CACHE"]` has drifted
+    from the session's (an earlier session's late abort re-points it --
+    `tests/gauntlet/adapter.py`'s own `point_cache` comment); the owner
+    record then lands in a cache root other than the one the MCP SERVER
+    subprocess reads, so its `owned_pid()` never matches the just-launched
+    pid (the plausible cause of rob-r11/r12/r13/r15 falling through to the
+    generic `bridge_timeout` instead of `darktable_unresponsive` -- H3
+    review). `launch` passes this explicitly from its own `env` argument
+    when given, closing the race outright."""
+    return (cache_root or paths.cache_root()) / OWNER_FILE
 
 
 def _lstart(pid: int) -> str | None:
@@ -89,16 +101,26 @@ def running_pids() -> list[int]:
     return [int(x) for x in out.stdout.split() if x.strip().isdigit()]
 
 
-def read_owner() -> Launched | None:
+def read_owner(cache_root: Path | None = None) -> Launched | None:
+    """(fix round 2 review N2): `cache_root`, same override as `owner_path`."""
     try:
-        return Launched(**json.loads(owner_path().read_text(encoding="utf-8")))
+        return Launched(**json.loads(owner_path(cache_root).read_text(encoding="utf-8")))
     except (OSError, ValueError, TypeError):
         return None
 
 
-def owned_pid() -> int | None:
-    """The pid of the darktable Scouter launched, if it is still that process."""
-    rec = read_owner()
+def owned_pid(cache_root: Path | None = None) -> int | None:
+    """The pid of the darktable Scouter launched, if it is still that process.
+
+    (fix round 2 review N2): `cache_root`, when given, is read instead of
+    this process's ambient `os.environ["SCOUTER_CACHE"]` -- see `owner_path`
+    and `DtControl.cache_root` (`tests/gauntlet/session.py`): a session's own
+    ownership checks must never depend on the ambient value, which another
+    session's late close/abort or a concurrent `point_cache` can drift out
+    from under this thread mid-session (N2's production shape, pid 69648:
+    a relaunch's `_quit` read the ambient cache, found no matching record
+    there, and orphaned the darktable it had just launched)."""
+    rec = read_owner(cache_root)
     if rec is None or not _alive(rec.pid):
         return None
     if _lstart(rec.pid) != rec.start_time:
@@ -109,8 +131,8 @@ def owned_pid() -> int | None:
     return rec.pid
 
 
-def foreign_pids() -> list[int]:
-    mine = owned_pid()
+def foreign_pids(cache_root: Path | None = None) -> list[int]:
+    mine = owned_pid(cache_root)
     return [p for p in running_pids() if p != mine]
 
 
@@ -150,8 +172,14 @@ def launch(frame: str | Path | None, library: str | Path, configdir: str | Path 
                           "stopped it rather than leave an unowned process")
     rec = Launched(proc.pid, start, exe, str(library),
                    str(configdir) if configdir else None, str(frame) if frame else None)
-    owner_path().parent.mkdir(parents=True, exist_ok=True)
-    owner_path().write_text(json.dumps(asdict(rec)) + "\n", encoding="utf-8")
+    #: (fix round 1 review H3c): the owner record's cache root comes from
+    #: THIS launch's own `env`, when given -- never just the ambient
+    #: `os.environ` `owner_path()` would otherwise fall back to. See
+    #: `owner_path`'s docstring.
+    cache_root = Path(env["SCOUTER_CACHE"]) if env and env.get("SCOUTER_CACHE") else None
+    op = owner_path(cache_root)
+    op.parent.mkdir(parents=True, exist_ok=True)
+    op.write_text(json.dumps(asdict(rec)) + "\n", encoding="utf-8")
     return rec
 
 
@@ -177,11 +205,15 @@ def wait_gui_ready(timeout_s: float = 30.0, *, poll_s: float = 0.5, call=None,
 
 
 def terminate(pid: int | None = None, *, responsive: bool | None = None,
-              kill=os.kill, alive=_alive, sleep=time.sleep) -> dict:
+              kill=os.kill, alive=_alive, sleep=time.sleep,
+              cache_root: Path | None = None) -> dict:
     """The quit ladder on an OWNED pid: osascript quit (skipped when the GUI is
     known not to answer), SIGTERM 10 s, SIGKILL. Refuses a pid Scouter did not
-    launch with `refused_not_ours` and sends no signal."""
-    mine = owned_pid()
+    launch with `refused_not_ours` and sends no signal.
+
+    `cache_root` (fix round 2 review N2): threaded through every ownership
+    check below (`owned_pid`, `foreign_pids`) -- see `owned_pid`'s docstring."""
+    mine = owned_pid(cache_root)
     target = pid if pid is not None else mine
     if target is None:
         return {"ok": True, "how": "not running"}
@@ -194,7 +226,7 @@ def terminate(pid: int | None = None, *, responsive: bool | None = None,
     # A pgrep that cannot answer is "unknown" and fails closed.
     if responsive is not False:
         try:
-            foreign = foreign_pids()
+            foreign = foreign_pids(cache_root)
         except (OSError, subprocess.TimeoutExpired):
             steps.append("osascript_skipped_unknown")
             responsive = False
@@ -216,7 +248,7 @@ def terminate(pid: int | None = None, *, responsive: bool | None = None,
     for sig, wait_s in ((signal.SIGTERM, 10.0), (signal.SIGKILL, 5.0)):
         # Re-check ownership before every signal: after the waits above the
         # pid may have exited and been reused by another process.
-        if owned_pid() != target:
+        if owned_pid(cache_root) != target:
             return {"ok": not alive(target), "how": "gone_or_reused", "pid": target,
                     "steps": steps}
         try:

@@ -13,7 +13,11 @@ class FakeDt:
         self._foreign = list(foreign)
         self._owned = owned
         self._ready = list(ready)
-        self._health = health
+        #: a list/tuple `health` (fix B, night1-robustness-triage.md item 2):
+        #: answers in order, then repeats its last value forever -- lets a
+        #: test tell "healthy going in, wedged during the step" (a genuine
+        #: hang) apart from "already wedged before the step" (inherited).
+        self._health = list(health) if isinstance(health, (list, tuple)) else health
         self.launches = 0
         self.launched = []
         self.terminated = []
@@ -26,7 +30,7 @@ class FakeDt:
     def owned(self):
         return self._owned
 
-    def launch(self, frame, library, log):
+    def launch(self, frame, library, log, env=None):
         self.launches += 1
         self.launched.append(frame)
 
@@ -34,6 +38,8 @@ class FakeDt:
         return {"ready": self._ready.pop(0) if self._ready else True}
 
     def health(self):
+        if isinstance(self._health, list):
+            return self._health.pop(0) if len(self._health) > 1 else self._health[0]
         return self._health
 
     def kill_launched(self, rec):
@@ -122,7 +128,7 @@ class LaunchFailDt(FakeDt):
         super().__init__(**kw)
         self.fails = fails
 
-    def launch(self, frame, library, log):
+    def launch(self, frame, library, log, env=None):
         self.launches += 1
         if self.launches <= self.fails:
             raise LaunchError(f"could not read the start time of darktable pid {self.launches}")

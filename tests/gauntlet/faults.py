@@ -15,7 +15,7 @@ from gauntlet.adapter import CallRecord, Observation
 from gauntlet.case import Case
 from tests.gauntlet import observe
 from tests.gauntlet.corpus import copy_readonly
-from tests.gauntlet.execute import VIRTUAL, substitute
+from tests.gauntlet.execute import VIRTUAL, isolate, substitute
 
 #: Seconds after the fault step's call STARTS before kill_during_call fires.
 KILL_DELAY_S = 1.0
@@ -25,13 +25,30 @@ _CHUNK = 1024 * 1024
 _statvfs = os.statvfs  # seam: tests pass a fake
 
 
-def _owned_kill(sig=signal.SIGKILL) -> None:
-    """Signal ONLY the darktable this session launched (dtprocess.owned_pid())."""
+def _owned_kill(sig=signal.SIGKILL, cache_root=None) -> None:
+    """Signal ONLY the darktable this session launched (dtprocess.owned_pid()).
+
+    `cache_root` (fix round 3 review R2): every call site below passes
+    `_cache_root(session)` -- without it, `owned_pid()` falls back to THIS
+    process's ambient `os.environ["SCOUTER_CACHE"]`, which another
+    session's late close/abort can drift out from under this thread (the
+    same N2 gap `DtControl`/`dtprocess.terminate` were bound against; this
+    was the one caller left reading ambient). Under drift, an unbound call
+    here silently signals nothing: a freeze fault's own SIGSTOP never
+    freezes anything, `kill_during_call`'s SIGKILL never lands, and the
+    watchdog cases' SIGSTOP/SIGCONT and N6's last-resort SIGCONT all miss."""
     from scouter.core import dtprocess
 
-    pid = dtprocess.owned_pid()
+    pid = dtprocess.owned_pid(cache_root)
     if pid:
         os.kill(pid, sig)
+
+
+def _cache_root(session):
+    """(fix round 3 review R2): the session's own bound cache root, when its
+    `dt` has one (a real `DtControl`; a minimal test double may not) --
+    never just ambient. See `_owned_kill`'s docstring."""
+    return getattr(getattr(session, "dt", None), "cache_root", None)
 
 
 def _snap(v: dict, path: Path) -> None:
@@ -104,13 +121,14 @@ def arm(session, fault: str, v: dict | None = None, *, step_tool: str | None = N
             raise ValueError("kill_during_call needs the fault step's tool (step_tool=)")
         v["_relaunch"] = True
         v["_kill_on_tool"] = step_tool
-        timer = threading.Timer(KILL_DELAY_S, _owned_kill)
+        timer = threading.Timer(KILL_DELAY_S, _owned_kill,
+                                kwargs={"cache_root": _cache_root(session)})
         timer.daemon = True
         v["_timer"] = timer
         _start_timer_on_call(session, v)
     elif fault in ("wedge_worker", "slow_bridge"):
         v["_resume_sigcont"] = True  # before the signal: a raise still resumes
-        _owned_kill(signal.SIGSTOP)  # frozen process: the bridge cannot answer
+        _owned_kill(signal.SIGSTOP, _cache_root(session))  # frozen: the bridge cannot answer
     elif fault == "relaunch_stale_job":
         v["_relaunch"] = True  # a failed relaunch is retried by disarm
         session.relaunch()
@@ -232,12 +250,26 @@ def disarm(session, v: dict) -> list[str]:
             else:
                 del session.call
         guard("restore session.call", restore_call)
-    if v.get("_resume_sigcont"):
-        guard("SIGCONT owned darktable", lambda: _owned_kill(signal.SIGCONT))
     for snap in reversed(v.get("_restore", [])):
         guard(f"restore {snap['path']}", lambda snap=snap: _restore(snap))
     if v.get("_relaunch") or v.get("_resume_sigcont"):
-        guard("relaunch", session.relaunch)
+        #: (fix round 1 review H2/L4): a freeze fault's own recovery had the
+        #: SAME ghost-edit risk hang recovery does -- disarm used to send a
+        #: bare SIGCONT then relaunch, with no MCP teardown or spool purge in
+        #: between (the triage's exact r17 sequence). One fenced helper,
+        #: never a separate SIGCONT step first (SIGKILL inside
+        #: `fence_and_recover`'s own quit step terminates a SIGSTOPped
+        #: process outright; no resume needed first) and never doubled up
+        #: with a hang's own recovery for the same case (run_fault_case
+        #: skips its own fence when either flag is set here).
+        #:
+        #: `resume_on_quit_failure` (fix round 2 review N6): only for
+        #: `_resume_sigcont` -- if the fenced quit itself never confirms ok
+        #: (the ladder's own eventual SIGKILL failing is not something this
+        #: harness has ever seen, but a freeze fault leaves darktable
+        #: SIGSTOPped, and leaving it stuck there FOREVER on that unlikely
+        #: path is strictly worse than one last-resort SIGCONT).
+        errors += fence_and_recover(session, resume_on_quit_failure=bool(v.get("_resume_sigcont")))
     if v.get("_detach"):
         guard("hdiutil detach", lambda: _hdiutil("detach", v["_detach"], "-force"))
     if v.get("_job_frames"):
@@ -328,9 +360,43 @@ def _small_disk(session, v: dict) -> None:
         raise
 
 
+#: (night1-robustness-triage.md item 3, rob-r3): these two freeze darktable
+#: with SIGSTOP the instant they arm. Isolation's own `darkroom_reset` calls
+#: (for a module the PREVIOUS case touched) must run before that freeze, on a
+#: still-responsive darktable, or they eat the case's hard cap retrying
+#: against a frozen process.
+_FREEZE_FAULTS = ("wedge_worker", "slow_bridge")
+
+
 def run_fault_case(session, case: Case) -> Observation:
     """Arm, run, disarm. Never raises: a failing arm or step is a typed
-    `blocked`; failing disarm steps land in obs.extra["disarm_errors"]."""
+    `blocked`; failing disarm steps land in obs.extra["disarm_errors"].
+
+    (fix round 2 review N1, blocker): the inherited-wedge ping runs HERE,
+    before `arm`, for EVERY fault -- not gated to non-freeze faults any
+    more. Round 1's `pre_ping=fault not in _FREEZE_FAULTS` missed rob-r1
+    (`quit_darktable`, also arms by making darktable stop answering on
+    purpose): its own `run_tool_case` pre-ping still saw that self-inflicted
+    unresponsiveness and blocked it as `inherited_wedge` with zero calls,
+    the exact B1 shape. Pinging before ANY fault's `arm()` runs means the
+    ping only ever sees a wedge an EARLIER case left behind, never one THIS
+    fault is about to cause on purpose. `run_tool_case` always gets
+    `pre_ping=False` from this call site now; `_FREEZE_FAULTS` is only
+    still consulted for the pre-arm isolate/restage below (item 3, M3).
+
+    (night1-robustness-triage.md item 3): for `_FREEZE_FAULTS`, isolation
+    runs BEFORE `arm` -- see `_FREEZE_FAULTS`'s docstring above. The normal
+    `run_tool_case` still runs its own `isolate()` afterwards; with
+    `session.touched` already cleared here, that second call is a cheap
+    local snapshot compare, never a bridge call.
+
+    (night1-robustness-triage.md item 1; fix round 2 review N3): when the
+    case ends `hang`, OR pings back `inherited_wedge` itself, darktable is
+    left wedged (or was already) with the MCP server's own queue possibly
+    backlogged -- nothing else relaunches it, so the NEXT case inherits the
+    same wedge (rob-r11 scored as six). `fence_and_recover` runs once,
+    right here, before that next case's isolate() has a chance to run
+    against the still-wedged darktable."""
     from tests.gauntlet.execute import run_tool_case
     from tests.gauntlet.session import SessionBlocked
 
@@ -343,26 +409,153 @@ def run_fault_case(session, case: Case) -> Observation:
     v: dict = {}
     obs: Observation | None = None
     try:
-        arm(session, fault, v, step_tool=case.steps[0].tool if case.steps else None)
-        session.staged.vars.update({k: val for k, val in v.items() if not k.startswith("_")})
-        if v.get("_skip"):
-            obs = Observation(blocked=f"skipped: {v['_skip']}")
-        elif case.id.startswith("rob-h"):
-            obs = _hang_case(session, case)
-        elif fault == "two_clients":
-            obs = _two_clients(session, case)
+        dt = getattr(session, "dt", None)
+        if dt is not None and dt.health() == "unresponsive":
+            obs = Observation(blocked="inherited_wedge")
+            obs.hang_evidence.append("darktable was already unresponsive before this case's "
+                                     "own arm/steps ran (inherited from an earlier case)")
         else:
-            obs = run_tool_case(session, case)
-            _post_facts(fault, obs, v)
+            if fault in _FREEZE_FAULTS:
+                role = case.frame_role or "hero"
+                frame = session.ensure_frame(role)
+                #: (fix round 1 review M3): a restage (`isolate` returning
+                #: True) leaves `current_frame = None` (`refresh_frame`'s own
+                #: docstring: launched, never current, until a real
+                #: follow-up `darkroom_open` succeeds). Left unopened here,
+                #: `arm`'s SIGSTOP freezes darktable BEFORE that open ever
+                #: happens; `run_tool_case`'s own `ensure_frame` then sends
+                #: it to the now-frozen process, times out, and relaunches --
+                #: which kills the fault this case exists to test and
+                #: silently drops `contaminated_restaged`. Mirror
+                #: `execute.run_tool_case`'s own pattern: re-open, record it.
+                if isolate(session, frame, role):
+                    session.ensure_frame(role)
+                    v["_contaminated_restaged"] = True
+            arm(session, fault, v, step_tool=case.steps[0].tool if case.steps else None)
+            session.staged.vars.update({k: val for k, val in v.items() if not k.startswith("_")})
+            if v.get("_skip"):
+                obs = Observation(blocked=f"skipped: {v['_skip']}")
+            elif case.id.startswith("rob-h"):
+                obs = _hang_case(session, case)
+            elif fault == "two_clients":
+                obs = _two_clients(session, case)
+            else:
+                obs = run_tool_case(session, case, pre_ping=False)
+                _post_facts(fault, obs, v)
     except SessionBlocked as e:
         obs = Observation(blocked=f"session: {e}"[:500])
     except Exception as e:  # noqa: BLE001 - a raise here is the harness's bug
         obs = Observation(blocked=f"harness_bug: {type(e).__name__}: {e}"[:500])
     finally:
         errors = disarm(session, v)
+        blocked = (obs.blocked or "") if obs is not None else ""
+        if blocked.startswith("hang") or blocked == "inherited_wedge":
+            #: (fix round 1 review L4): never doubles up with disarm's own
+            #: fenced recovery for a freeze-fault hang -- `disarm` above
+            #: already ran `fence_and_recover` for `_resume_sigcont`/
+            #: `_relaunch`; anything else (any other fault's hang, or a
+            #: ping that came back `inherited_wedge` before `arm` even ran,
+            #: so neither flag is set) has no fence yet, and this is it.
+            if not (v.get("_resume_sigcont") or v.get("_relaunch")):
+                errors = errors + fence_and_recover(session)
+    if obs is not None and v.get("_contaminated_restaged"):
+        obs.extra["contaminated_restaged"] = True
     if errors:
         obs.extra["disarm_errors"] = errors
     return obs
+
+
+def fence_and_recover(session, *, resume_on_quit_failure: bool = False) -> list[str]:
+    """(night1-robustness-triage.md item 1; fix round 1 review H2): the
+    ghost-edit fence. A hang -- or a freeze fault's own disarm -- leaves
+    darktable wedged (or frozen) and the MCP server's own queue backlogged
+    with an abandoned call. The bridge is a file spool: request files are
+    removed only in the MCP server's own `Bridge.call` `finally`, and the
+    plugin's stale-request sweep is 600s. A plain relaunch (quit + launch)
+    is not enough -- the OLD MCP server can keep talking to the NEW
+    darktable for as long as its own graceful close takes, and a request
+    file already written to the spool survives a relaunch untouched (the
+    triage's r17 sequence: relaunch resumed the old process's queued
+    `darkroom_say`, which then answered `ok` on the new darktable AFTER the
+    case that sent it had already ended).
+
+    Order, every step best-effort / independent of the others failing:
+    1. SIGKILL the OLD MCP server outright (never a graceful close, which
+       would let it keep talking). (fix round 2 review N4): marks
+       `session.mcp = None`/`mcp_dead = True` right after -- a DELIBERATE
+       kill, never left for `_check_mcp_alive` to discover on the next call
+       and record as `mcp_server_death`, which `RoutedSession.run_case`
+       would then score as a product crash (release bar 1) for a client
+       THIS fence itself just killed.
+    2. Quit darktable (never launch a second one if this does not confirm
+       ok -- same rule `_quit`'s own docstring states). (fix round 2 review
+       N6): `resume_on_quit_failure` -- only ever passed True for a freeze
+       fault's own disarm -- sends one last-resort SIGCONT if the quit
+       itself never confirms ok, so a SIGSTOPped darktable is not left
+       frozen forever with no recovery path left to try.
+    3. Purge the spool of `request-*.json`/`*.json.tmp`.
+    4. Launch darktable fresh. (fix round 2 review N5): sets
+       `current_frame = None` after, mirroring every other relaunch path
+       (`refresh_frame`) -- the next `ensure_frame` must re-open for real,
+       never trust `_launch`'s own "gui_ready with this frame" as proof the
+       JOB recorded it as opened (`_record_opened_image` only happens
+       inside a REAL `darkroom_open`).
+    5. Open a fresh MCP client (`reopen_mcp`).
+
+    `session` needs only what real `ScouterSession` exposes for this
+    (`mcp`, `_quit`, `purge_spool`, `_launch`, `reopen_mcp`); a minimal test
+    double that has none of `_quit`/`_launch` falls back to its own
+    `relaunch()` (which bundles quit+launch) plus `reopen_mcp` if it has
+    one -- never crashes a fault case over a fake missing plumbing."""
+    errors: list[str] = []
+
+    def guard(what: str, fn) -> bool:
+        try:
+            fn()
+            return True
+        except Exception as e:  # noqa: BLE001 - reported, never raised
+            errors.append(f"{what}: {type(e).__name__}: {e}"[:300])
+            return False
+
+    mcp = getattr(session, "mcp", None)
+    proc = getattr(mcp, "proc", None)
+    if proc is not None:
+        guard("fence: kill old mcp server", proc.kill)
+        #: (N4): deliberate; never scored as a product crash.
+        session.mcp = None
+        if hasattr(session, "mcp_dead"):
+            session.mcp_dead = True
+
+    quit_fn = getattr(session, "_quit", None)
+    launch_fn = getattr(session, "_launch", None)
+    reopen = getattr(session, "reopen_mcp", None)
+    if quit_fn is None or launch_fn is None:
+        if guard("relaunch", session.relaunch) and reopen is not None:
+            guard("reopen mcp", reopen)
+        return errors
+
+    if not guard("quit darktable", lambda: quit_fn("fence_and_recover")):
+        if resume_on_quit_failure:
+            #: (N6): last resort -- never leave a SIGSTOPped darktable
+            #: frozen forever just because the quit ladder itself did not
+            #: confirm ok (nothing else in this fence will ever un-stick it).
+            guard("fence: last-resort SIGCONT",
+                 lambda: _owned_kill(signal.SIGCONT, _cache_root(session)))
+        return errors  # never launch a second darktable when quit did not confirm ok
+    purge = getattr(session, "purge_spool", None)
+    if purge is not None:
+        guard("purge spool", purge)
+    frame = getattr(session, "current_frame", None) or \
+        (session.staged.frames["hero"] if getattr(session, "staged", None) else None)
+    if not guard("launch darktable", lambda: launch_fn(frame)):
+        return errors
+    #: (N5): never trust the launch's own "gui_ready" as proof the JOB
+    #: recorded this frame as opened -- the next ensure_frame must re-open.
+    if hasattr(session, "current_frame"):
+        session.current_frame = None
+    if reopen is not None:
+        guard("reopen mcp", reopen)
+    return errors
 
 
 def _post_facts(fault: str, obs: Observation, v: dict) -> None:
@@ -527,13 +720,14 @@ def watchdog_probe(session, case, step, obs) -> CallRecord:
 
     ok = False
     detail: dict = {}
+    cache_root = _cache_root(session)
     if scen == "ping_states":
         code_alive, rep_alive = doctor("--ping")
-        _owned_kill(signal.SIGSTOP)
+        _owned_kill(signal.SIGSTOP, cache_root)
         try:
             code_dead, rep_dead = doctor("--ping")
         finally:
-            _owned_kill(signal.SIGCONT)
+            _owned_kill(signal.SIGCONT, cache_root)
         ok = code_alive == 0 and code_dead == 1
         detail = {"alive": rep_alive.get("watchdog"), "unresponsive": rep_dead.get("watchdog")}
     elif scen in ("auto_heal_once", "heal_cap_reached"):
@@ -544,7 +738,7 @@ def watchdog_probe(session, case, step, obs) -> CallRecord:
             doc["watchdog"] = {"auto_heal": True, "max_heals_per_job": 1, "heal_budget_s": 60}
             cfg.parent.mkdir(parents=True, exist_ok=True)
             cfg.write_text(_json.dumps(doc))
-            _owned_kill(signal.SIGSTOP)
+            _owned_kill(signal.SIGSTOP, cache_root)
             first = session.call("darkroom_enable", {"module": "exposure"}, 90.0, write=True)
             detail["first"] = first.envelope
             if scen == "auto_heal_once":
@@ -552,7 +746,7 @@ def watchdog_probe(session, case, step, obs) -> CallRecord:
                 # retried verb) -- never at the envelope's top level.
                 ok = healed(first.envelope) and bool((first.envelope or {}).get("ok"))
             else:
-                _owned_kill(signal.SIGSTOP)
+                _owned_kill(signal.SIGSTOP, cache_root)
                 second = session.call("darkroom_enable", {"module": "exposure"}, 90.0,
                                       write=True)
                 detail["second"] = second.envelope
@@ -562,7 +756,7 @@ def watchdog_probe(session, case, step, obs) -> CallRecord:
             # auto_heal must never be left on, and the owned darktable never
             # left stopped: each undo runs even if the one before it raises.
             try:
-                _owned_kill(signal.SIGCONT)
+                _owned_kill(signal.SIGCONT, cache_root)
             finally:
                 try:
                     if original is None:

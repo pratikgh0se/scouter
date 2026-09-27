@@ -12,8 +12,12 @@ from gauntlet.evaluate import is_hang
 from gauntlet.store import RunDir, atomic_write_text
 
 SCHEMA = "gauntlet-progress/1"
-_COUNTERS = ("done", "pass", "partial", "fail", "silent", "crash", "hang", "blocked", "parked",
-             "p0_total", "p0_pass", "points")
+#: (fix round 1 review L1): `inherited_wedge` gets its own counter, not just
+#: the generic `blocked` -- it is deliberately excluded from `hang`
+#: (`evaluate.is_hang`), and folding it into `blocked` alone hid whether a
+#: layer's blocked cases were wedges it inherited or something else entirely.
+_COUNTERS = ("done", "pass", "partial", "fail", "silent", "crash", "hang", "inherited_wedge",
+             "blocked", "parked", "p0_total", "p0_pass", "points")
 
 
 def _now() -> str:
@@ -61,6 +65,8 @@ class Progress:
             lay["crash"] += sign
         if is_hang(outcome, blocked):
             lay["hang"] += sign
+        if (blocked or "") == "inherited_wedge":
+            lay["inherited_wedge"] += sign
         if blocked or outcome == "blocked":
             lay["blocked"] += sign
         if tier == "P0" and verdict["score"] == "pass":

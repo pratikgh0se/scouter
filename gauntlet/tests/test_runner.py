@@ -289,6 +289,26 @@ def test_progress_counts_hard_cap_as_a_hang_and_undoes_it_on_rerun(tmp_path):
     assert lay["hang"] == 0 and lay["blocked"] == 0 and lay["done"] == 4
 
 
+def test_progress_counts_inherited_wedge_in_its_own_bucket(tmp_path):
+    """Fix round 1 review L1 (low): `inherited_wedge` is deliberately not a
+    hang (`evaluate.is_hang`) and must not just vanish into the generic
+    `blocked` counter either -- it gets its own bucket, so a layer's blocked
+    cases can be told apart: an inherited wedge (nothing this case did) from
+    every other kind of block."""
+    from gauntlet.progress import Progress
+
+    run = RunDir(tmp_path, "stamp").ensure()
+    p = Progress(run, "adapter")
+    p.layer("alpha", 4, 1, True)
+    p.start_layer("alpha")
+    p.record("alpha", "alpha-0", "P1", {"score": "fail", "outcome": "blocked", "notes": []},
+             0.1, blocked="inherited_wedge")
+    lay = json.loads(run.progress_json.read_text())["layers"]["alpha"]
+    assert lay["inherited_wedge"] == 1
+    assert lay["blocked"] == 1
+    assert lay["hang"] == 0  # never counted as a hang
+
+
 def test_progress_page_shows_hangs_and_blocked(tmp_path):
     from gauntlet import html as html_page
 

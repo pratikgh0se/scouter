@@ -408,6 +408,284 @@ def test_mcp_death_reaches_the_observation_and_the_session_reopens(pinned_env, f
     assert routed.current is not first  # the dead session was replaced
 
 
+def test_a_hang_outside_robustness_still_recovers(pinned_env, fake_corpus, monkeypatch):
+    """Fix round 1 review M1 (medium): hang recovery lived only in
+    faults.run_fault_case (the robustness layer). A hang in scenarios/looks/
+    coverage/bulk left darktable wedged with nothing to recover it -- with
+    Fix B, every LATER case in that session then reads inherited_wedge
+    forever, and nothing ever clears it."""
+    from gauntlet.adapter import Observation
+    from tests.gauntlet import execute, faults
+
+    calls: list = []
+    monkeypatch.setattr(faults, "fence_and_recover", lambda s: calls.append(s) or [])
+    monkeypatch.setattr(execute, "run_tool_case", lambda s, c: Observation(blocked="hang"))
+    _, _, routed, _ = _routed(pinned_env, fake_corpus, layer="coverage")
+    obs = routed.run_case(_case("coverage"))
+    assert obs.blocked == "hang"
+    assert calls == [routed.current]
+
+
+def test_an_inherited_wedge_outside_robustness_also_recovers(pinned_env, fake_corpus,
+                                                              monkeypatch):
+    """(M1) inherited_wedge triggers the same recovery as a hang -- Fix B's
+    whole point is that the case that reads it never caused it, so nothing
+    else in that layer will ever clear it either."""
+    from gauntlet.adapter import Observation
+    from tests.gauntlet import execute, faults
+
+    calls: list = []
+    monkeypatch.setattr(faults, "fence_and_recover", lambda s: calls.append(s) or [])
+    monkeypatch.setattr(execute, "run_tool_case",
+                        lambda s, c: Observation(blocked="inherited_wedge"))
+    _, _, routed, _ = _routed(pinned_env, fake_corpus, layer="coverage")
+    obs = routed.run_case(_case("coverage"))
+    assert obs.blocked == "inherited_wedge"
+    assert calls == [routed.current]
+
+
+def test_owner_drift_survives_a_late_close_race(pinned_env, fake_corpus, monkeypatch):
+    """Fix round 2 review N2 (blocker): reviewer's six-step owner-drift
+    scenario, production shape (row 493, pid 69648). A late close of an
+    earlier session can re-point ambient SCOUTER_CACHE back to the process
+    cache AFTER a newer session has already pointed it at its own cache --
+    that must never happen (RoutedSession.close/abort's own guard), and
+    even where it does, a session's own DtControl must still find and quit
+    its own darktable, bound to ITS OWN cache, never the ambient one.
+    No darktable, no real signals: Popen/_lstart/_comm/_alive/running_pids/
+    os.kill are all faked; the real dtprocess.launch/terminate/
+    foreign_pids/owned_pid and the real ScouterSession/RoutedSession run
+    for real over those fakes."""
+    import os
+    import signal
+
+    from tests.gauntlet.session import DtControl
+
+    PID = 4242424
+    START = "Sun Sep 27 13:42:41 2026"
+    alive_state = {"value": False}
+    signalled: list = []
+
+    class FakeProc:
+        pid = PID
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            pass
+
+        def poll(self):
+            return None
+
+    def fake_popen(argv, **kw):
+        alive_state["value"] = True
+        return FakeProc()
+
+    def fake_kill(pid, sig):
+        signalled.append((pid, sig))
+        alive_state["value"] = False
+
+    fake_alive = lambda pid: pid == PID and alive_state["value"]  # noqa: E731
+
+    monkeypatch.setattr(dtprocess.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(dtprocess, "_lstart", lambda pid: START if pid == PID else None)
+    monkeypatch.setattr(dtprocess, "_comm", lambda pid: dtprocess.DARKTABLE if pid == PID
+                        else None)
+    monkeypatch.setattr(dtprocess, "running_pids", lambda: [PID] if alive_state["value"] else [])
+    monkeypatch.setattr(dtprocess, "_alive", fake_alive)
+    monkeypatch.setattr(dtprocess.os, "kill", fake_kill)
+    monkeypatch.setattr(dtprocess, "wait_gui_ready", lambda *a, **k: {"ready": True})
+    #: `terminate`'s own `kill`/`alive`/`sleep` parameters default to
+    #: `os.kill`/`_alive`/`time.sleep` bound ONCE at module-import time
+    #: (ordinary Python default-argument semantics) -- monkeypatching the
+    #: module attributes above does not reach a call that never overrides
+    #: them, which is exactly how `DtControl.terminate` calls it. Wrap the
+    #: real function so every call through this test gets the fakes, the
+    #: same way the existing dtprocess unit tests pass them explicitly.
+    real_terminate = dtprocess.terminate
+
+    def terminate_with_fakes(pid=None, *, responsive=None, cache_root=None, **kw):
+        return real_terminate(pid, responsive=responsive, cache_root=cache_root,
+                              kill=fake_kill, alive=fake_alive, sleep=lambda s: None)
+    monkeypatch.setattr(dtprocess, "terminate", terminate_with_fakes)
+
+    a = ScouterAdapter(pinned_env / "runs")
+    a._corpus = fake_corpus
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+
+    def factory(corpus, root, body, run_root):
+        return sess.ScouterSession(corpus, root, body, dt=DtControl(), run_root=run_root,
+                                   mcp_factory=lambda env, cwd: FakeMcp())
+
+    routed = adapter_mod.RoutedSession(a, "coverage", run, session_factory=factory)
+
+    # 1. Open session A -- launches pid P.
+    session_a = routed._session("olympus")
+    a_cache = session_a.root / "cache"
+    assert alive_state["value"] is True
+
+    # 2/3. Open session B: point_cache (ambient -> B's own cache) runs as
+    # part of _session()'s own bookkeeping; simulate A's late close
+    # finishing AFTER that -- re-point ambient back to the process cache
+    # via the same guarded helper close()/abort() use. The guard must
+    # refuse: ambient no longer names A's cache (it is B's now).
+    process_cache = a.runs_root / adapter_mod.PROCESS_DIR / "cache"
+    routed.n += 1
+    b_root = run.sessions_dir / "coverage" / f"{routed.n:03d}-sony_a7"
+    from tests.gauntlet.adapter import point_cache
+
+    point_cache(b_root / "cache", *routed._roots())
+    assert os.environ.get("SCOUTER_CACHE") == str(b_root / "cache")
+    routed._back_to_process_cache_if_mine(a_cache)  # the late close, simulated
+    assert os.environ.get("SCOUTER_CACHE") == str(b_root / "cache"), \
+        "the guard must refuse to stomp on B's own cache pointer"
+
+    session_b = factory(a.corpus(), b_root, "sony_a7", run.root)
+    routed.current = session_b
+    session_b.open()
+    assert os.environ.get("SCOUTER_CACHE") == str(b_root / "cache")
+
+    # 4. A relaunch must still quit P: session B's own DtControl is bound to
+    # B's own cache (`ScouterSession.open` binds it), never the ambient one.
+    session_b.relaunch()
+    assert (PID, signal.SIGTERM) in signalled or (PID, signal.SIGKILL) in signalled, \
+        f"relaunch's quit never signalled our own darktable: {signalled}"
+    alive_state["value"] = True  # the relaunch's own new darktable is up
+
+    # 5. Rotate to session C -- opened directly (not through the normal
+    # open_body path, whose own old.close() would itself quit P via the
+    # SAME fixed terminate() and make the foreign check moot: nothing
+    # "foreign" would even be running by the time C opens). P must still be
+    # ALIVE here, so foreign() genuinely has to tell "P is ours" (carried
+    # over into C's cache by point_cache) from "P is foreign" -- open()
+    # must not raise ForeignDarktable.
+    #
+    # (fix round 3 review R1): `_session()`'s own `point_cache(C's cache,
+    # ...)` re-points ambient correctly BEFORE `s.open()` runs -- setting
+    # the drift any earlier is overwritten by that call and never reaches
+    # `foreign()` at all (the review's own mutation finding: unbinding
+    # `DtControl.foreign` left the round-2 version of this test all green).
+    # Pin the drift to fire AT the exact call `foreign()` makes, by
+    # patching `DtControl.foreign` for this one call: ambient only drifts
+    # to the process cache the INSTANT the check runs -- the production
+    # race window (another session's late close finishing in between).
+    routed.n += 1
+    c_root = run.sessions_dir / "coverage" / f"{routed.n:03d}-olympus"
+    point_cache(c_root / "cache", *routed._roots())
+
+    real_foreign = DtControl.foreign
+
+    def foreign_under_drift(self_dt):
+        monkeypatch.setenv("SCOUTER_CACHE", str(process_cache))
+        return real_foreign(self_dt)
+    monkeypatch.setattr(DtControl, "foreign", foreign_under_drift)
+
+    session_c = factory(a.corpus(), c_root, "olympus", run.root)
+    routed.current = session_c
+    session_c.open()  # raises ForeignDarktable on failure
+
+    # 6. Repeat with the drift STILL in place (no re-point this time) -- the
+    # _launch retry / fence_and_recover path is covered by the SAME
+    # property: DtControl reads/writes through the session's own bound
+    # cache, so persisted ambient drift changes nothing for it.
+    monkeypatch.setenv("SCOUTER_CACHE", str(process_cache))
+    signalled.clear()
+    session_c = routed.current
+    session_c.relaunch()
+    assert (PID, signal.SIGTERM) in signalled or (PID, signal.SIGKILL) in signalled, \
+        "relaunch under persisted drift never signalled our own darktable"
+
+
+def test_recovery_is_never_doubled_up_in_the_robustness_layer(pinned_env, fake_corpus,
+                                                                monkeypatch):
+    """(M1) faults.run_fault_case already fence_and_recover's its own hangs
+    (Fix A/H2) -- run_case must never call it a second time for that layer."""
+    from gauntlet.adapter import Observation
+    from tests.gauntlet import faults
+
+    calls: list = []
+    monkeypatch.setattr(faults, "fence_and_recover", lambda s: calls.append(s) or [])
+    monkeypatch.setattr(faults, "run_fault_case",
+                        lambda s, c: Observation(blocked="hang"))
+    _, _, routed, _ = _routed(pinned_env, fake_corpus, layer="robustness")
+    obs = routed.run_case(_case("robustness"))
+    assert obs.blocked == "hang"
+    assert calls == []  # run_case itself never calls it for this layer
+
+
+class _KillableMcp(FakeMcp):
+    """(fix round 3 review N7): `FakeMcp` has no `.proc` at all, so
+    `fence_and_recover`'s own MCP-kill step (N4) never fires against it and
+    `mcp_dead` never gets set in the first place -- a test built on plain
+    `FakeMcp` would pass whether or not `reopen_mcp` clears the flag. A
+    tiny `.proc.kill()` seam makes the kill step (and so N4's `mcp_dead =
+    True`) actually happen, so the reopen path genuinely has something to
+    clear."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.proc = type("P", (), {"kill": lambda self: None})()
+
+
+def test_a_successful_fence_keeps_the_same_session(pinned_env, fake_corpus, monkeypatch):
+    """Fix round 3 review N7 (medium): fence_and_recover's own deliberate
+    SIGKILL of the old MCP client sets mcp_dead=True (N4), and reopen_mcp
+    installs a fresh client but (before this fix) never cleared it --
+    RoutedSession._session then discarded the healthy, just-fenced session
+    on the NEXT case and opened a brand new one: one more relaunch plus a
+    full open() (staging, launch, noise-floor renders) for every fenced
+    case, and one more chance for a ForeignDarktable refusal to stop the
+    whole layer. Uses the REAL fence_and_recover/reopen_mcp (not mocked),
+    unlike the M1/N3 tests above -- that mock is exactly how N7 got
+    through review round 2."""
+    from gauntlet.adapter import Observation
+    from tests.gauntlet import execute
+
+    a = ScouterAdapter(pinned_env / "runs")
+    a._corpus = fake_corpus
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+
+    def factory(corpus, root, body, run_root):
+        return sess.ScouterSession(corpus, root, body, dt=FakeDt(), run_root=run_root,
+                                   mcp_factory=lambda env, cwd: _KillableMcp())
+
+    routed = adapter_mod.RoutedSession(a, "coverage", run, session_factory=factory)
+    routed.run_case(_case("coverage"))
+    s = routed.current
+    monkeypatch.setattr(execute, "run_tool_case", lambda sess, c: Observation(blocked="hang"))
+    routed.run_case(_case("coverage"))  # this case's own hang fences and recovers
+    assert s.mcp_dead is False, "reopen_mcp succeeded but left mcp_dead set"
+    monkeypatch.setattr(execute, "run_tool_case", lambda sess, c: Observation())
+    routed.run_case(_case("coverage"))  # the NEXT case must reuse the SAME session
+    assert routed.current is s
+
+
+def test_a_fence_whose_quit_failed_still_gets_replaced(pinned_env, fake_corpus, monkeypatch):
+    """(N7, control) a fence whose quit never confirmed ok never reaches
+    reopen_mcp -- mcp_dead must stay set, so the next case still reopens
+    (there is no healthy session left to keep)."""
+    from gauntlet.adapter import Observation
+    from tests.gauntlet import execute
+
+    a = ScouterAdapter(pinned_env / "runs")
+    a._corpus = fake_corpus
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+
+    def factory(corpus, root, body, run_root):
+        return sess.ScouterSession(corpus, root, body, dt=FakeDt(terminate_ok=False),
+                                   run_root=run_root, mcp_factory=lambda env, cwd: _KillableMcp())
+
+    routed = adapter_mod.RoutedSession(a, "coverage", run, session_factory=factory)
+    routed.run_case(_case("coverage"))
+    s = routed.current
+    monkeypatch.setattr(execute, "run_tool_case", lambda sess, c: Observation(blocked="hang"))
+    routed.run_case(_case("coverage"))
+    assert s.mcp_dead is True
+    routed.run_case(_case("coverage"))
+    assert routed.current is not s
+
+
 # -- final fix I7: eager open + harness allowance ------------------------------
 
 def test_harness_allowance_is_a_base_plus_a_share_per_render(tmp_path):
@@ -500,7 +778,7 @@ def test_abort_open_kills_only_its_own_in_flight_session(pinned_env, fake_corpus
     run = _write_run(pinned_env, [_case("coverage")])
     entered, release = threading.Event(), threading.Event()
     dt = FakeDt()
-    dt.launch = lambda frame, library, log: "rec-777"
+    dt.launch = lambda frame, library, log, env=None: "rec-777"
     proc = _Proc(9001)
     box = {}
 

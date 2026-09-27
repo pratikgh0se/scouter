@@ -7,6 +7,7 @@ import contextvars
 import math
 import time
 from collections.abc import Callable, Iterator
+from pathlib import Path
 
 from scouter import metrics, paths
 from scouter.core import dtbridge, journal, vocab, xmp
@@ -872,11 +873,76 @@ def _current_image() -> dtbridge.ResolvedImage:
     )
 
 
+#: (night1-robustness-triage.md item 4, rob-r11; fix round 1 review H1):
+#: darktable 5.4's Lua `darkroom.open` handler ran `dt.database.import` on a
+#: path that does not exist and never answered -- the plugin's own worker
+#: thread wedged for ~5.8 minutes with no typed reply at all (`darktable.log`:
+#: "path lookup '...' fails with: 'No such file or directory'", then
+#: silence). Review round 1 found the FIRST version of this guard (a
+#: whitelist) refused the gauntlet's own PFM chart frame and darktable's own
+#: `.exr`/`.heic`/... formats -- about 235 looks-layer cases open
+#: `frames["chart"]` (`tests/gauntlet/session.py`). A DENYLIST of a few
+#: clearly-non-image suffixes is the safe direction: it can only ever refuse
+#: MORE cautiously than darktable would (never refuse a real image format,
+#: since the deny set is short and explicit), where a whitelist can refuse
+#: too aggressively (any format not yet added to it).
+_NON_IMAGE_EXTENSIONS = frozenset({
+    ".txt", ".md", ".json", ".py", ".sh", ".zip", ".tar", ".gz", ".pdf", ".log", ".db",
+})
+
+
+def _require_openable_path(path: str) -> None:
+    """Reject a path `darkroom.open` cannot possibly load, before it ever
+    reaches the bridge (see `_NON_IMAGE_EXTENSIONS`'s docstring above): a
+    missing path, a directory, or a file whose extension is plainly not an
+    image darktable reads. Never touches darktable -- a plain filesystem
+    check, and (fix round 1 review M4) never lets a raw `OSError` (e.g.
+    `ENAMETOOLONG` on an over-long path component) escape as an untyped
+    crash -- that is still just as much a path darkroom.open cannot load as
+    one that plainly does not exist.
+
+    The suffix is read from the RESOLVED path (fix round 1 review H1), so a
+    symlink with no extension of its own that points at a real raw is judged
+    on what it points AT, never refused for lacking a suffix itself."""
+    p = Path(path)
+    try:
+        exists = p.exists()
+        is_dir = exists and p.is_dir()
+        resolved = p.resolve() if exists else p
+    except OSError as e:
+        raise UsageError(
+            f"{path} could not be checked: {e}",
+            fix="check the path and re-run; darktable was never asked to open it",
+            detail={"path": path, "reason": "not_found", "os_error": str(e)[:200]},
+        ) from e
+    if not exists:
+        raise UsageError(
+            f"{path} does not exist",
+            fix="check the path and re-run; darktable was never asked to open it",
+            detail={"path": path, "reason": "not_found"},
+        )
+    if is_dir:
+        raise UsageError(
+            f"{path} is a directory, not an image",
+            fix="name the image file itself; darktable was never asked to open this path",
+            detail={"path": path, "reason": "is_directory"},
+        )
+    if resolved.suffix.lower() in _NON_IMAGE_EXTENSIONS:
+        raise UsageError(
+            f"{path} is not a recognised image format ({resolved.suffix})",
+            fix="open a raw or image file darktable reads; darktable was never asked to "
+                "open this one",
+            detail={"path": path, "reason": "unsupported_format", "extension": resolved.suffix},
+        )
+
+
 @metrics.instrumented("darkroom.open")
 def open_image(image: str | int, *, job: str | None = None) -> OpenResult:
     """Load `image` in the darkroom, importing it into the library if needed."""
     job = job or current_job()
     key = {"image_id": int(image)} if str(image).isdigit() else {"path": str(image)}
+    if "path" in key:
+        _require_openable_path(key["path"])
     result = dtbridge.call("darkroom.open", key)
     # Ruling 30: this job now owns that image. Every later write in the job
     # checks `darkroom.current` against it and refuses if they disagree.

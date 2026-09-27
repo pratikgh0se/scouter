@@ -12,6 +12,11 @@ from tests.gauntlet import execute, faults, taxonomy
 from tests.gauntlet.layers import robustness
 from tests.gauntlet.session import ScouterSession, SessionBlocked
 
+#: (fix round 3 review R2): captured at import time, before the autouse
+#: `kills` fixture below ever replaces `faults._owned_kill` for a test --
+#: the one way to exercise the REAL function's own body directly.
+_REAL_OWNED_KILL = faults._owned_kill
+
 
 @pytest.fixture(autouse=True)
 def kills(monkeypatch):
@@ -19,7 +24,7 @@ def kills(monkeypatch):
     or quits darktable. Signals are recorded instead."""
     sent: list = []
 
-    def fake_kill(sig=signal.SIGKILL):
+    def fake_kill(sig=signal.SIGKILL, cache_root=None):
         sent.append(sig)
 
     def forbidden(*a, **k):
@@ -64,12 +69,94 @@ def test_file_faults_arm_and_disarm(tmp_path):
     assert "no modal-dialog test hook" in v["_skip"]
 
 
+def test_owned_kill_finds_the_pid_under_the_given_cache_root_not_ambient(tmp_path, monkeypatch):
+    """Fix round 3 review R2 (low): `_owned_kill` must look the pid up under
+    the `cache_root` it is GIVEN, never just ambient
+    `os.environ["SCOUTER_CACHE"]` -- under drift (another session's late
+    close re-pointing ambient, the N2 shape), an unbound call would
+    silently signal nothing: a freeze fault's own SIGSTOP never freezes
+    anything, `kill_during_call`'s SIGKILL never lands, and the watchdog
+    cases' SIGSTOP/SIGCONT and N6's last-resort SIGCONT all miss too. Uses
+    the REAL function (`_REAL_OWNED_KILL`, captured before the autouse
+    `kills` fixture replaces it for every test in this file)."""
+    from scouter.core import dtprocess
+
+    monkeypatch.setattr(faults, "_owned_kill", _REAL_OWNED_KILL)
+    right = tmp_path / "session-cache"
+    wrong = tmp_path / "ambient-drifted-cache"
+    right.mkdir()
+    wrong.mkdir()
+    monkeypatch.setattr(dtprocess, "owned_pid",
+                        lambda cache_root=None: 4242424 if cache_root == right else None)
+    monkeypatch.setenv("SCOUTER_CACHE", str(wrong))  # ambient has drifted elsewhere
+    signalled: list = []
+    monkeypatch.setattr(faults.os, "kill", lambda pid, sig: signalled.append((pid, sig)))
+
+    faults._owned_kill(signal.SIGSTOP, right)
+    assert signalled == [(4242424, signal.SIGSTOP)]
+
+    signalled.clear()
+    faults._owned_kill(signal.SIGSTOP, wrong)  # control: the drifted cache finds nothing
+    assert signalled == []
+
+
+def test_arm_wedge_worker_signals_through_the_sessions_cache_root(tmp_path, monkeypatch):
+    """(R2) confirms the WIRING at this specific call site -- `arm`'s own
+    SIGSTOP for `wedge_worker`/`slow_bridge` -- passes the session's own
+    bound `dt.cache_root` through to `_owned_kill`, not ambient."""
+    seen: list = []
+    monkeypatch.setattr(faults, "_owned_kill", lambda sig, cache_root=None: seen.append(cache_root))
+
+    class Dt:
+        cache_root = "session-cache-token"
+
+    class S(FakeSession):
+        def __init__(self, tmp_path):
+            super().__init__(tmp_path)
+            self.dt = Dt()
+
+    faults.arm(S(tmp_path), "wedge_worker", {})
+    assert seen == ["session-cache-token"]
+
+
+def test_fence_and_recover_sigcont_signals_through_the_sessions_cache_root(tmp_path, monkeypatch):
+    """(R2, N6) the fence's own last-resort SIGCONT must also go through the
+    session's bound cache_root."""
+    seen: list = []
+    monkeypatch.setattr(faults, "_owned_kill", lambda sig, cache_root=None: seen.append(cache_root))
+
+    class Dt:
+        cache_root = "session-cache-token"
+
+        def foreign(self):
+            return []
+
+    class S:
+        dt = Dt()
+        mcp = None
+        current_frame = None
+        staged = SimpleNamespace(frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            raise RuntimeError("did not confirm ok")
+
+        def _launch(self, frame):
+            raise AssertionError("must never launch a second darktable")
+
+    faults.fence_and_recover(S(), resume_on_quit_failure=True)
+    assert seen == ["session-cache-token"]
+
+
 def _cases():
     return {c.source["id"]: c for c in robustness.generate(taxonomy.load())}
 
 
 class FakeSession:
-    """Just enough ScouterSession for faults: records calls and relaunches."""
+    """Just enough ScouterSession for faults: records calls and relaunches.
+
+    `touched`/`baselines` + `ensure_frame` (fix C): enough for a real
+    `execute.isolate()` call to run against this fake, since `run_fault_case`
+    now calls it directly for the freeze faults, before `arm`."""
 
     def __init__(self, tmp_path, relaunch_error=None):
         base = _session(tmp_path)
@@ -77,11 +164,20 @@ class FakeSession:
         self.relaunches = 0
         self.tools: list[str] = []
         self.relaunch_error = relaunch_error
+        self.touched: set[str] = set()
+        self.baselines: dict = {}
+        self.mcp_reopened = 0
 
     def relaunch(self, frame=None):
         self.relaunches += 1
         if self.relaunch_error:
             raise self.relaunch_error
+
+    def reopen_mcp(self) -> None:
+        self.mcp_reopened += 1
+
+    def ensure_frame(self, role):
+        return self.staged.frames[role]
 
     def call(self, tool, args, budget_s, *, write=False):
         self.tools.append(tool)
@@ -129,7 +225,7 @@ def test_r18_mount_detached_when_a_later_arm_step_fails(tmp_path, monkeypatch):
 
 
 def test_arm_raising_is_typed_blocked_and_partial_disarm_ran(tmp_path, monkeypatch, kills):
-    def stuck(sig=signal.SIGKILL):
+    def stuck(sig=signal.SIGKILL, cache_root=None):
         kills.append(sig)
         if sig == signal.SIGSTOP:
             raise ProcessLookupError("gone")
@@ -137,11 +233,16 @@ def test_arm_raising_is_typed_blocked_and_partial_disarm_ran(tmp_path, monkeypat
     s = FakeSession(tmp_path)
     obs = faults.run_fault_case(s, _cases()["R3"])  # wedge_worker
     assert obs.blocked == "harness_bug: ProcessLookupError: gone"
-    assert kills == [signal.SIGSTOP, signal.SIGCONT] and s.relaunches == 1
+    # (fix round 1 review H2): disarm's SIGCONT-then-relaunch is now the one
+    # fence_and_recover helper -- no bare SIGCONT any more (a SIGSTOPped
+    # process is terminated outright by the quit ladder's eventual SIGKILL,
+    # never resumed first); FakeSession has no _quit/_launch, so it falls
+    # back to its own relaunch().
+    assert kills == [signal.SIGSTOP] and s.relaunches == 1
 
 
 def test_disarm_step_raising_is_recorded_not_raised(tmp_path, monkeypatch):
-    monkeypatch.setattr(execute, "run_tool_case", lambda session, case: Observation())
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case, **kw: Observation())
     s = FakeSession(tmp_path, relaunch_error=SessionBlocked("relaunch: did not quit"))
     obs = faults.run_fault_case(s, _cases()["R17"])  # slow_bridge: SIGCONT + relaunch
     assert obs.blocked is None
@@ -155,6 +256,51 @@ def test_disarm_step_raising_is_recorded_not_raised(tmp_path, monkeypatch):
     errors = faults.disarm(s, v)
     assert len(errors) == 1 and errors[0].startswith("relaunch: SessionBlocked")
     assert side.read_bytes() == before
+
+
+def test_hang_triggers_relaunch_and_mcp_reopen(tmp_path, monkeypatch):
+    """Fix A (night1-robustness-triage.md item 1): a case that ends `hang`
+    must relaunch darktable and reopen the MCP client before returning, so
+    the NEXT case starts clean instead of inheriting the wedge (rob-r11's one
+    true hang scored as six, r12-r15/r17 all queued behind it)."""
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case, **kw: Observation(blocked="hang"))
+    s = FakeSession(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R12"])
+    assert obs.blocked == "hang"
+    assert s.relaunches == 1
+    assert s.mcp_reopened == 1
+
+
+def test_a_typed_hang_reason_also_triggers_recovery(tmp_path, monkeypatch):
+    """`obs.blocked` from a real hang is never the bare string "hang" alone
+    (`execute.run_tool_case` writes "hang" exactly, but a virtual tool's own
+    subprocess timeout writes "hang: <tool> exceeded budget") -- recovery
+    must fire on the whole `hang*` family, matching `evaluate.is_hang`."""
+    monkeypatch.setattr(execute, "run_tool_case",
+                        lambda session, case, **kw: Observation(blocked="hang: scouter cli exceeded "
+                                                                "budget"))
+    s = FakeSession(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R12"])
+    assert obs.blocked.startswith("hang")
+    assert s.relaunches == 1 and s.mcp_reopened == 1
+
+
+def test_non_hang_case_never_triggers_recovery(tmp_path, monkeypatch):
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case, **kw: Observation())
+    s = FakeSession(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R12"])
+    assert obs.blocked is None
+    assert s.relaunches == 0 and s.mcp_reopened == 0
+
+
+def test_hang_recovery_failure_is_reported_not_raised(tmp_path, monkeypatch):
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case, **kw: Observation(blocked="hang"))
+    s = FakeSession(tmp_path, relaunch_error=SessionBlocked("relaunch: did not quit"))
+    obs = faults.run_fault_case(s, _cases()["R12"])
+    assert obs.blocked == "hang"
+    # (fix round 1 review H2): fence_and_recover, same helper disarm uses.
+    assert obs.extra["disarm_errors"] == ["relaunch: SessionBlocked: relaunch: did not quit"]
+    assert s.mcp_reopened == 0  # relaunch failed; reopen was never attempted
 
 
 def test_r21_fake_version_returns_without_raising(tmp_path):
@@ -172,10 +318,13 @@ def test_broken_luarc_never_launches_when_quit_fails(tmp_path, kills):
     launched: list = []
 
     class Dt:
+        def health(self):
+            return "alive"
+
         def terminate(self, *, responsive=None):
             return {"ok": False, "how": "still running"}
 
-        def launch(self, *a):
+        def launch(self, *a, **kw):
             launched.append(a)
 
     s = ScouterSession(None, tmp_path, "olympus", dt=Dt(), mcp_factory=lambda *a: None)
@@ -183,7 +332,10 @@ def test_broken_luarc_never_launches_when_quit_fails(tmp_path, kills):
     obs = faults.run_fault_case(s, _cases()["R23"])  # dtprocess.launch raises if called
     assert obs.blocked.startswith("session: broken_luarc: darktable did not quit")
     assert launched == [] and kills == []
-    assert obs.extra["disarm_errors"][0].startswith("relaunch: SessionBlocked")
+    # (fix round 1 review H2): a real ScouterSession's fence_and_recover
+    # quits and launches as two separate guarded steps -- never launches a
+    # second darktable when quit itself did not confirm ok.
+    assert obs.extra["disarm_errors"][0].startswith("quit darktable: SessionBlocked")
 
 
 def test_kill_timer_starts_at_the_step_and_is_cancelled_in_disarm(tmp_path, monkeypatch,
@@ -221,7 +373,7 @@ def test_watchdog_probe_restores_config_exactly_even_when_kill_raises(tmp_path, 
     original = '{ "watchdog": {"auto_heal": false},\n  "x": 1 }\n'
     s, cfg, step = _wd(tmp_path, original)
 
-    def boom(sig=signal.SIGKILL):
+    def boom(sig=signal.SIGKILL, cache_root=None):
         raise ProcessLookupError("no owned darktable")
     monkeypatch.setattr(faults, "_owned_kill", boom)
     with pytest.raises(ProcessLookupError):
@@ -289,7 +441,7 @@ def test_r2_timer_starts_on_the_fault_step_not_on_isolate_resets(tmp_path, monke
     started_after: list = []
 
     class FakeTimer:
-        def __init__(self, delay, fn):
+        def __init__(self, delay, fn, kwargs=None):
             self.alive = False
 
         def start(self):
@@ -327,6 +479,418 @@ def test_r2_timer_starts_on_the_fault_step_not_on_isolate_resets(tmp_path, monke
     # started exactly as darkroom_say began: every reset had already run
     assert started_after[0] == s.tools[:-1] and "darkroom_say" not in started_after[0]
     assert "call" not in vars(s) and s.relaunches == 1
+
+
+def test_r3_isolate_runs_before_the_freeze_signal(tmp_path, monkeypatch, kills):
+    """Fix C (night1-robustness-triage.md item 3): rob-r3's own isolate()
+    resets ran against a darktable the fault had already SIGSTOPped -- 6
+    resets x ~20s each blew the whole 132s hard cap. isolate must run while
+    darktable is still responsive, before arm's SIGSTOP freezes it."""
+    from tests.gauntlet import observe
+
+    order: list[str] = []
+
+    class ToolSession(FakeSession):
+        def __init__(self, tmp_path):
+            super().__init__(tmp_path)
+            self.touched = {"exposure"}
+
+        def call(self, tool, args, budget_s, *, write=False):
+            order.append(tool)
+            return super().call(tool, args, budget_s, write=write)
+
+    def recording_kill(sig=signal.SIGKILL, cache_root=None):
+        order.append({signal.SIGSTOP: "SIGSTOP", signal.SIGCONT: "SIGCONT"}.get(sig, "kill"))
+
+    monkeypatch.setattr(faults, "_owned_kill", recording_kill)
+    monkeypatch.setattr(observe, "snapshot", lambda *a, **k: {"params": {}, "units": {}})
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case, **kw: Observation())
+    s = ToolSession(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R3"])  # wedge_worker
+    assert obs.blocked is None
+    # the reset ran, and answered, BEFORE the freeze signal -- never after
+    assert order == ["darkroom_reset", "SIGSTOP"]  # (H2) no bare SIGCONT any more
+    assert s.touched == set()  # isolate cleared it before arm ever ran
+
+
+def test_r3_real_run_tool_case_runs_its_step_after_the_freeze(tmp_path, monkeypatch, kills):
+    """Fix round 1 review B1 (blocker): the reviewer's repro. Fix B's pre-case
+    ping and Fix C's pre-arm isolate combined to block r3/r17 as
+    `inherited_wedge` with zero calls -- `run_tool_case`'s OWN ping (unlike
+    the pre-arm isolate) ran AFTER `arm`'s SIGSTOP, against the darktable the
+    fault had just frozen ON PURPOSE. Uses the real `run_fault_case` +
+    `run_tool_case` (not monkeypatched away, unlike every Fix A/C test above --
+    that mock is exactly how this got through review round 1)."""
+    from tests.gauntlet import observe
+
+    state = {"stopped": False}
+
+    class Dt:
+        def health(self):
+            return "unresponsive" if state["stopped"] else "alive"
+
+    def recording_kill(sig=signal.SIGKILL, cache_root=None):
+        if sig == signal.SIGSTOP:
+            state["stopped"] = True
+        if sig == signal.SIGCONT:
+            state["stopped"] = False
+
+    class S(FakeSession):
+        def __init__(self, tmp_path):
+            super().__init__(tmp_path)
+            self.dt = Dt()
+
+        def call(self, tool, args, budget_s, *, write=False):
+            self.tools.append(tool)
+            if state["stopped"]:
+                rec = CallRecord(tool, args, {"ok": False,
+                                              "error": {"code": "darktable_unresponsive"}})
+                rec.error = "darktable_unresponsive"
+                return rec
+            return CallRecord(tool, args, {"ok": True})
+
+    monkeypatch.setattr(faults, "_owned_kill", recording_kill)
+    monkeypatch.setattr(observe, "snapshot", lambda *a, **kw: {"params": {}, "units": {}})
+    s = S(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R3"])  # wedge_worker
+    assert "darkroom_say" in s.tools, f"step never ran: blocked={obs.blocked!r} tools={s.tools!r}"
+
+
+def test_r1_real_run_tool_case_runs_its_step_after_quit_darktable(tmp_path, monkeypatch):
+    """Fix round 2 review N1 (blocker): rob-r1 (P0, `quit_darktable`) has the
+    same shape as B1 and was missed in round 1 -- `arm("quit_darktable")`
+    terminates darktable ON PURPOSE, and (before this fix) the pre-ping,
+    gated only for `_FREEZE_FAULTS`, still ran for this fault (not a freeze
+    fault) INSIDE `run_tool_case`, AFTER `arm`, and saw that self-inflicted
+    unresponsiveness -- blocking R1 as `inherited_wedge` with zero calls.
+    The ping now runs in `run_fault_case`, before `arm`, for every fault, so
+    it only ever sees darktable BEFORE this fault touches it."""
+    from tests.gauntlet import observe
+
+    state = {"closed": False}
+
+    class Dt:
+        def health(self):
+            return "unresponsive" if state["closed"] else "alive"
+
+        def terminate(self, *a, **k):
+            state["closed"] = True
+            return {"ok": True}
+
+    class S(FakeSession):
+        def __init__(self, tmp_path):
+            super().__init__(tmp_path)
+            self.dt = Dt()
+
+        def call(self, tool, args, budget_s, *, write=False):
+            self.tools.append(tool)
+            if state["closed"]:
+                rec = CallRecord(tool, args, {"ok": False, "error": {"code": "bridge_timeout"}})
+                rec.error = "bridge_timeout"
+                return rec
+            return CallRecord(tool, args, {"ok": True})
+
+    monkeypatch.setattr(observe, "snapshot", lambda *a, **kw: {"params": {}, "units": {}})
+    s = S(tmp_path)
+    case = _cases()["R1"]  # quit_darktable
+    obs = faults.run_fault_case(s, case)
+    assert obs.blocked != "inherited_wedge", f"R1 step never ran: {obs.blocked!r} {s.tools!r}"
+
+
+def test_r2_kill_during_call_is_unaffected_by_the_pre_arm_ping(tmp_path, monkeypatch):
+    """(N1, control) `kill_during_call` only kills darktable AFTER the fault
+    step's own call starts, so the pre-arm ping (running before `arm`, thus
+    well before the step) must always see it healthy -- this must keep
+    working exactly as before."""
+    from tests.gauntlet import observe
+
+    class Dt:
+        def health(self):
+            return "alive"
+
+    class S(FakeSession):
+        def __init__(self, tmp_path):
+            super().__init__(tmp_path)
+            self.dt = Dt()
+
+    monkeypatch.setattr(observe, "snapshot", lambda *a, **kw: {"params": {}, "units": {}})
+    monkeypatch.setattr(faults, "_owned_kill", lambda sig=signal.SIGKILL, cache_root=None: None)
+    monkeypatch.setattr(faults.threading, "Timer",
+                        lambda delay, fn, kwargs=None: type("T", (), {"start": lambda self: None,
+                                                         "cancel": lambda self: None,
+                                                         "join": lambda self, t=None: None,
+                                                         "is_alive": lambda self: False})())
+    s = S(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R2"])  # kill_during_call
+    assert obs.blocked != "inherited_wedge"
+    assert "darkroom_say" in s.tools
+
+
+def test_r3_restage_is_reopened_before_the_freeze(tmp_path, monkeypatch, kills):
+    """Fix round 1 review M3 (medium): when the pre-arm isolate restages
+    (returns True), the fresh frame must be re-opened BEFORE arm's SIGSTOP
+    freezes it -- `refresh_frame` leaves `current_frame = None` until a real
+    follow-up open succeeds (`session.py`'s own docstring). Skip that
+    re-open and arm's freeze lands on a session that is not actually
+    current; `run_tool_case`'s own `ensure_frame` then sends the real open
+    to the now-frozen process, times out, and relaunches -- silently
+    dropping BOTH the fault and `contaminated_restaged`."""
+    order: list[str] = []
+
+    class ToolSession(FakeSession):
+        def ensure_frame(self, role):
+            order.append("ensure_frame")
+            return self.staged.frames[role]
+
+    def recording_kill(sig=signal.SIGKILL, cache_root=None):
+        order.append({signal.SIGSTOP: "SIGSTOP", signal.SIGCONT: "SIGCONT"}.get(sig, "kill"))
+
+    monkeypatch.setattr(faults, "isolate", lambda session, frame, role: True)
+    monkeypatch.setattr(faults, "_owned_kill", recording_kill)
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case, **kw: Observation())
+    s = ToolSession(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R3"])  # wedge_worker
+    assert order == ["ensure_frame", "ensure_frame", "SIGSTOP"]  # (H2) no bare SIGCONT
+    assert obs.extra.get("contaminated_restaged") is True
+
+
+def test_fence_and_recover_runs_in_the_fenced_order(tmp_path):
+    """Fix round 1 review H2 (high): one fenced helper, always in this exact
+    order: SIGKILL the old MCP server, quit darktable, purge the spool,
+    launch fresh, open a fresh client. A swapped order (e.g. purge before
+    quit, or launch before purge) fails this test -- the previous branch's
+    Fix A tests only asserted `relaunches == 1`/`mcp_reopened == 1`, which a
+    swapped order still satisfies (review finding: "swapping the order
+    leaves 3 of the 4 Fix A tests green")."""
+    order: list[str] = []
+
+    class Proc:
+        def kill(self):
+            order.append("mcp_kill")
+
+    class Mcp:
+        proc = Proc()
+
+    class S:
+        mcp = Mcp()
+        current_frame = None
+        staged = SimpleNamespace(frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            order.append("dt_quit")
+
+        def purge_spool(self):
+            order.append("spool_purge")
+
+        def _launch(self, frame):
+            order.append("dt_launch")
+
+        def reopen_mcp(self):
+            order.append("mcp_open")
+
+    errors = faults.fence_and_recover(S())
+    assert errors == []
+    assert order == ["mcp_kill", "dt_quit", "spool_purge", "dt_launch", "mcp_open"]
+
+
+def test_fence_and_recover_purges_a_stale_request_before_launch(tmp_path):
+    """Fix round 1 review H2 (high): a `request-*.json` the killed MCP server
+    left behind must be gone before the fresh darktable launches, not merely
+    eventually swept by the plugin's own 600s stale-request sweep -- the
+    triage's r17 ghost edit is exactly this file surviving a relaunch."""
+    from tests.gauntlet.session import ScouterSession
+
+    cache = tmp_path / "cache"
+    spool = cache / "darktable-mcp"
+    spool.mkdir(parents=True)
+    stale_request = spool / "request-42.json"
+    stale_request.write_text("{}")
+    stale_tmp = spool / "response-42.json.tmp"
+    stale_tmp.write_text("{}")
+    order: list[str] = []
+
+    class S:
+        mcp = None
+        current_frame = None
+        staged = SimpleNamespace(env={"XDG_CACHE_HOME": str(cache)},
+                                 frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            order.append("dt_quit")
+
+        def purge_spool(self):
+            order.append("spool_purge")
+            ScouterSession.purge_spool(self)
+
+        def _launch(self, frame):
+            order.append("dt_launch")
+            # the purge must already have run by the time darktable launches
+            assert not stale_request.exists() and not stale_tmp.exists()
+
+    errors = faults.fence_and_recover(S())
+    assert errors == []
+    assert order == ["dt_quit", "spool_purge", "dt_launch"]
+    assert not stale_request.exists() and not stale_tmp.exists()
+
+
+def test_fence_and_recover_marks_the_killed_mcp_dead_without_a_death_report(tmp_path):
+    """Fix round 2 review N4 (medium): the SIGKILL in step 1 is deliberate --
+    without this, the next call's transport error would let
+    `ScouterSession._check_mcp_alive` record `mcp_server_death: exit -9` and
+    `RoutedSession.run_case` would score THIS fence's own kill as a product
+    crash (release bar 1)."""
+
+    class Proc:
+        def kill(self):
+            pass
+
+    class Mcp:
+        proc = Proc()
+
+    class S:
+        mcp = Mcp()
+        mcp_dead = False
+        current_frame = None
+        staged = SimpleNamespace(frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            pass
+
+        def _launch(self, frame):
+            pass
+
+    s = S()
+    errors = faults.fence_and_recover(s)
+    assert errors == []
+    assert s.mcp is None
+    assert s.mcp_dead is True
+
+
+def test_fence_and_recover_marks_mcp_dead_even_when_the_quit_fails(tmp_path):
+    """(N4) the mark happens right after the kill, unconditional on whether
+    the rest of the fence (quit/launch) goes on to fail -- the client is
+    gone either way, and the caller of run_fault_case must never see a
+    death report it did not ask for."""
+
+    class Proc:
+        def kill(self):
+            pass
+
+    class Mcp:
+        proc = Proc()
+
+    class S:
+        mcp = Mcp()
+        mcp_dead = False
+        current_frame = None
+        staged = SimpleNamespace(frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            raise RuntimeError("quit ladder never confirmed ok")
+
+        def _launch(self, frame):
+            raise AssertionError("must never launch a second darktable")
+
+    s = S()
+    errors = faults.fence_and_recover(s)
+    assert any("quit darktable" in e for e in errors)
+    assert s.mcp is None
+    assert s.mcp_dead is True
+
+
+def test_fence_and_recover_clears_current_frame_after_launch(tmp_path):
+    """Fix round 2 review N5 (low): mirror every other relaunch path
+    (`refresh_frame`) -- the next `ensure_frame` must re-open for real,
+    never trust `_launch`'s own "gui_ready" as proof the job recorded this
+    frame as its own opened image."""
+
+    class S:
+        mcp = None
+        current_frame = Path("/hero.ORF")
+        staged = SimpleNamespace(frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            pass
+
+        def _launch(self, frame):
+            pass
+
+        def reopen_mcp(self):
+            pass
+
+    s = S()
+    errors = faults.fence_and_recover(s)
+    assert errors == []
+    assert s.current_frame is None
+
+
+def test_fence_and_recover_sigconts_as_a_last_resort_when_the_quit_fails(tmp_path, monkeypatch):
+    """Fix round 2 review N6 (low): a freeze fault's own disarm passes
+    `resume_on_quit_failure=True`. If the fenced quit itself never confirms
+    ok, nothing else in the fence will ever un-stick a SIGSTOPped darktable
+    -- one last-resort SIGCONT, never launching a second darktable."""
+    sent: list = []
+    monkeypatch.setattr(faults, "_owned_kill", lambda sig=signal.SIGKILL, cache_root=None: sent.append(sig))
+
+    class S:
+        mcp = None
+        current_frame = None
+        staged = SimpleNamespace(frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            raise RuntimeError("did not confirm ok")
+
+        def _launch(self, frame):
+            raise AssertionError("must never launch a second darktable")
+
+    errors = faults.fence_and_recover(S(), resume_on_quit_failure=True)
+    assert any("quit darktable" in e for e in errors)
+    assert sent == [signal.SIGCONT]
+
+
+def test_fence_and_recover_never_sigconts_without_resume_on_quit_failure(tmp_path, monkeypatch):
+    """(N6, control) every non-freeze relaunch fault (e.g. plain
+    `_relaunch`) must never SIGCONT -- there was nothing frozen to resume."""
+    sent: list = []
+    monkeypatch.setattr(faults, "_owned_kill", lambda sig=signal.SIGKILL, cache_root=None: sent.append(sig))
+
+    class S:
+        mcp = None
+        current_frame = None
+        staged = SimpleNamespace(frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            raise RuntimeError("did not confirm ok")
+
+        def _launch(self, frame):
+            raise AssertionError("must never launch a second darktable")
+
+    faults.fence_and_recover(S())  # resume_on_quit_failure defaults False
+    assert sent == []
+
+
+def test_inherited_wedge_ping_also_fences_and_recovers(tmp_path, monkeypatch):
+    """Fix round 2 review N3 (medium): `run_case`'s own layer-wide fence
+    (fix round 1 M1) explicitly excludes the robustness layer (never doubled
+    up with a fault case's own recovery) -- so an `inherited_wedge` ping
+    inside `run_fault_case` must fence itself, or nothing in that layer ever
+    recovers it."""
+    from tests.gauntlet import observe
+
+    class Dt:
+        def health(self):
+            return "unresponsive"
+
+    class S(FakeSession):
+        def __init__(self, tmp_path):
+            super().__init__(tmp_path)
+            self.dt = Dt()
+
+    monkeypatch.setattr(observe, "snapshot", lambda *a, **kw: {"params": {}, "units": {}})
+    s = S(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R12"])  # fault="none", not a freeze fault
+    assert obs.blocked == "inherited_wedge"
+    assert s.relaunches == 1 and s.mcp_reopened == 1
 
 
 def test_r18_attach_timeout_detaches_the_image(tmp_path, monkeypatch):

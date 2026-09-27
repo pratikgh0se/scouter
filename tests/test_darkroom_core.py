@@ -741,6 +741,117 @@ class NonFiniteValueTest(_DarkroomFixture):
             )
 
 
+class OpenPathGuardTest(_DarkroomFixture):
+    """(night1-robustness-triage.md item 4, rob-r11): `darktable.log` showed a
+    `darkroom.open` on a path that does not exist reach `dt.database.import`
+    and never answer -- the Lua worker wedged for ~5.8 minutes with no typed
+    reply at all, and 4 later cases (r12/r13/r14/r15) queued behind it and
+    inherited the same wedge. A path `open_image` cannot possibly load is
+    refused before it ever reaches the bridge."""
+
+    def test_a_missing_path_is_refused_before_the_bridge(self) -> None:
+        missing = str(self.raw.parent / "does-not-exist.ORF")
+        before = len(self.bridge.calls)
+        with self.assertRaises(UsageError) as ctx:
+            darkroom.open_image(image=missing)
+        self.assertEqual(ctx.exception.detail["reason"], "not_found")
+        self.assertEqual(self.bridge.calls[before:], [])
+
+    def test_an_unsupported_extension_is_refused_before_the_bridge(self) -> None:
+        notes = self.raw.parent / "notes.txt"
+        notes.write_text("not an image")
+        before = len(self.bridge.calls)
+        with self.assertRaises(UsageError) as ctx:
+            darkroom.open_image(image=str(notes))
+        self.assertEqual(ctx.exception.detail["reason"], "unsupported_format")
+        self.assertEqual(self.bridge.calls[before:], [])
+
+    def test_a_real_raw_path_still_opens_normally(self) -> None:
+        self.bridge.responses["darkroom.open"] = {
+            "image_id": 12,
+            "path": str(self.raw),
+            "view": "darkroom",
+            "opened": True,
+            "already_open": False,
+        }
+        result = darkroom.open_image(image=str(self.raw))
+        self.assertEqual(result.image_id, 12)
+
+    def test_an_image_id_is_never_filesystem_checked(self) -> None:
+        self.bridge.responses["darkroom.open"] = {
+            "image_id": 12,
+            "path": str(self.raw),
+            "view": "darkroom",
+            "opened": True,
+            "already_open": False,
+        }
+        result = darkroom.open_image(image=12)
+        self.assertEqual(result.image_id, 12)
+
+    def test_a_directory_is_refused_before_the_bridge(self) -> None:
+        """(fix round 1 review H1/L3): a directory passing the old guard
+        still reached `dt.database.import` -- an untested wedge candidate."""
+        d = self.raw.parent / "a-directory"
+        d.mkdir()
+        before = len(self.bridge.calls)
+        with self.assertRaises(UsageError) as ctx:
+            darkroom.open_image(image=str(d))
+        self.assertEqual(ctx.exception.detail["reason"], "is_directory")
+        self.assertEqual(self.bridge.calls[before:], [])
+
+    def test_a_pfm_chart_frame_reaches_the_bridge(self) -> None:
+        """(fix round 1 review H1, blocker): the gauntlet's own looks-layer
+        chart frame is `chart-v1.pfm` (`tests/gauntlet/session.py`) -- about
+        235 night-1 cases open it. A whitelist that does not name `.pfm` (or
+        any other format darktable reads that the whitelist never listed)
+        blocks the whole layer; the denylist never refuses a format it does
+        not explicitly name."""
+        pfm = self.raw.parent / "chart-v1.pfm"
+        pfm.write_bytes(b"PF\n1 1\n-1.0\n\x00\x00\x80?\x00\x00\x80?\x00\x00\x80?")
+        self.bridge.responses["darkroom.open"] = {
+            "image_id": 99,
+            "path": str(pfm),
+            "view": "darkroom",
+            "opened": True,
+            "already_open": False,
+        }
+        before = len(self.bridge.calls)
+        result = darkroom.open_image(image=str(pfm))
+        self.assertEqual(result.image_id, 99)
+        self.assertGreater(len(self.bridge.calls), before)
+
+    def test_a_symlink_with_no_extension_to_a_raw_reaches_the_bridge(self) -> None:
+        """(fix round 1 review H1): the suffix is read from the RESOLVED
+        path, so a symlink with no extension of its own is judged on the
+        raw it points at, not refused for lacking a suffix itself."""
+        link = self.raw.parent / "no-extension-link"
+        link.symlink_to(self.raw)
+        self.bridge.responses["darkroom.open"] = {
+            "image_id": 12,
+            "path": str(self.raw),
+            "view": "darkroom",
+            "opened": True,
+            "already_open": False,
+        }
+        before = len(self.bridge.calls)
+        result = darkroom.open_image(image=str(link))
+        self.assertEqual(result.image_id, 12)
+        self.assertGreater(len(self.bridge.calls), before)
+
+    def test_an_over_long_path_component_is_a_typed_usage_error(self) -> None:
+        """(fix round 1 review M4): `Path.exists()` re-raises `ENAMETOOLONG`
+        for a component over `NAME_MAX` (the r11 shape, exactly 255 'x', is
+        fine -- this is one character further). A raw `OSError` escaping
+        here would crash the case with an untyped harness error instead of
+        the typed refusal every other unopenable path gets."""
+        too_long = str(self.raw.parent / ("x" * 256 + ".ORF"))
+        before = len(self.bridge.calls)
+        with self.assertRaises(UsageError) as ctx:
+            darkroom.open_image(image=too_long)
+        self.assertEqual(ctx.exception.detail["reason"], "not_found")
+        self.assertEqual(self.bridge.calls[before:], [])
+
+
 class JobImageGuardTest(_DarkroomFixture):
     """Ruling 30: a write refuses when the darkroom shows a different image.
 

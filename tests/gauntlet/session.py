@@ -176,22 +176,33 @@ def stage(corpus: Corpus, body: str, root: Path, *, job_size: int = 7,
 
 
 class DtControl:
-    """The seam over scouter.core.dtprocess + dtbridge (a fake in unit tests)."""
+    """The seam over scouter.core.dtprocess + dtbridge (a fake in unit tests).
+
+    `cache_root` (fix round 2 review N2): bound by `ScouterSession.open`
+    (before anything else runs, to `self.root / "cache"` -- known from
+    construction, never waits on `staged`) to THIS session's own cache.
+    Every ownership check below then reads/writes through it, never through
+    this process's ambient `os.environ["SCOUTER_CACHE"]`, which another
+    session's late close/abort or a concurrent `point_cache` can drift out
+    from under this thread mid-session (N2's production shape, pid 69648)."""
+
+    def __init__(self, cache_root: Path | None = None) -> None:
+        self.cache_root = cache_root
 
     def foreign(self) -> list[int]:
         from scouter.core import dtprocess
 
-        return dtprocess.foreign_pids()
+        return dtprocess.foreign_pids(self.cache_root)
 
     def owned(self) -> int | None:
         from scouter.core import dtprocess
 
-        return dtprocess.owned_pid()
+        return dtprocess.owned_pid(self.cache_root)
 
-    def launch(self, frame: Path, library: Path, log: Path):
+    def launch(self, frame: Path, library: Path, log: Path, env: dict[str, str] | None = None):
         from scouter.core import dtprocess
 
-        return dtprocess.launch(frame, library, log_path=log)
+        return dtprocess.launch(frame, library, log_path=log, env=env)
 
     def ready(self, timeout_s: float) -> dict:
         from scouter.core import dtprocess
@@ -206,7 +217,7 @@ class DtControl:
     def terminate(self, *, responsive: bool | None = None) -> dict:
         from scouter.core import dtprocess
 
-        return dtprocess.terminate(responsive=responsive)
+        return dtprocess.terminate(responsive=responsive, cache_root=self.cache_root)
 
     def kill_launched(self, rec) -> bool:
         """(pre-night-1 N1): SIGKILL the exact darktable `rec` recorded at
@@ -267,6 +278,15 @@ class ScouterSession:
         return client
 
     def open(self) -> ScouterSession:
+        #: (fix round 2 review N2): bind ownership checks to THIS session's
+        #: own cache before anything else -- `self.root` is known from
+        #: construction, never waits on `self.staged`. `foreign()`/`owned()`
+        #: below must never read the ambient `os.environ["SCOUTER_CACHE"]`,
+        #: which a concurrent session's late close/abort can drift out from
+        #: under this thread mid-open. Only touches a real `DtControl`; a
+        #: test double without `cache_root` is left alone.
+        if hasattr(self.dt, "cache_root"):
+            self.dt.cache_root = self.root / "cache"
         foreign = self.dt.foreign()
         if foreign:
             raise ForeignDarktable(f"darktable pids {foreign} were not launched by the "
@@ -311,7 +331,13 @@ class ScouterSession:
         for _attempt in (1, 2):
             self._check_aborted()
             try:
-                rec = self.dt.launch(frame, self.staged.library, self.root / "darktable.log")
+                #: (fix round 1 review H3c): `env=self.staged.env` so the
+                #: owner record's cache root comes from THIS session, never
+                #: whatever `os.environ["SCOUTER_CACHE"]` happens to be on
+                #: this thread when a mid-session relaunch fires -- see
+                #: `dtprocess.owner_path`'s docstring.
+                rec = self.dt.launch(frame, self.staged.library, self.root / "darktable.log",
+                                     env=self.staged.env)
             except LaunchError as e:  # dtprocess already stopped the unowned process
                 failures.append(f"LaunchError: {e}")
                 continue
@@ -330,6 +356,52 @@ class ScouterSession:
     def relaunch(self, frame: Path | None = None) -> None:
         self._quit("relaunch")
         self._launch(frame or self.current_frame or self.staged.frames["hero"])  # type: ignore[union-attr]
+
+    def reopen_mcp(self) -> None:
+        """(night1-robustness-triage.md item 1): a hang can leave the MCP
+        server's own queue backlogged with the abandoned call, so a fresh
+        `relaunch()` of darktable alone is not enough -- the next case's
+        first call would still queue behind it. Close the old client (best
+        effort) and open a fresh one.
+
+        (fix round 3 review N7): clears `mcp_dead` -- `fence_and_recover`
+        (`tests/gauntlet/faults.py`) sets it right after its own deliberate
+        SIGKILL of the OLD client, before this method ever runs, and left
+        uncleared here it survives the fresh client this method just
+        installed. `RoutedSession._session` reads `mcp_dead` to decide
+        whether to reopen (`final fix I3`); left set, it would throw away
+        this healthy, just-fenced session and open a brand new one -- one
+        more relaunch and a full `open()` (staging, launch, noise-floor
+        renders) for every fenced case, and one more chance for a
+        `ForeignDarktable` refusal to stop the whole layer."""
+        old, self.mcp = self.mcp, None
+        if old is not None:
+            try:
+                old.close()
+            except Exception:  # noqa: BLE001 - best effort; a fresh client follows anyway
+                pass
+        self.mcp = self.mcp_factory(self.staged.env, self.root)
+        self.mcp_dead = False
+
+    def purge_spool(self) -> None:
+        """(fix round 1 review H2): delete every `request-*.json`/`*.json.tmp`
+        the just-fenced (SIGKILLed) MCP server may have left in the bridge
+        spool. The plugin's own stale-request sweep is 600s, far slower than
+        a fenced recovery -- without this, a fresh darktable can still poll
+        up a request file meant for the darktable that is gone (the r17
+        ghost-edit shape: an abandoned call's request survives its own
+        client and lands on whichever darktable reads it next). The spool
+        location honours THIS session's own env (`SCOUTER_CACHE`/`HOME`),
+        mirroring `darktable_mcp.bridge.client._cache_dir()`, never just the
+        harness process's own ambient `os.environ` (same reasoning as
+        `dtprocess.owner_path`'s `cache_root` override)."""
+        env = self.staged.env
+        base = env.get("XDG_CACHE_HOME") or str(Path(env.get("HOME", str(Path.home()))) /
+                                                 ".cache")
+        spool = Path(base) / "darktable-mcp"
+        for pattern in ("request-*.json", "*.json.tmp"):
+            for f in spool.glob(pattern):
+                f.unlink(missing_ok=True)
 
     def refresh_frame(self, role: str) -> Path:
         """Contaminated: re-stage this role from a fresh copy and relaunch on it.
