@@ -26,7 +26,10 @@ class FakeDt:
     def owned(self):
         return self._owned
 
-    def launch(self, frame, library, log):
+    def launch(self, frame, library, log, **kw):
+        #: (fix round 1, Opus finding 2): **kw for forward compatibility
+        #: with fix/htc-hang-recovery's DtControl.launch(..., env=...) --
+        #: a future merge must not break this fake over an unrelated kwarg.
         self.launches += 1
         self.launched.append(frame)
 
@@ -122,7 +125,7 @@ class LaunchFailDt(FakeDt):
         super().__init__(**kw)
         self.fails = fails
 
-    def launch(self, frame, library, log):
+    def launch(self, frame, library, log, **kw):
         self.launches += 1
         if self.launches <= self.fails:
             raise LaunchError(f"could not read the start time of darktable pid {self.launches}")
@@ -166,27 +169,56 @@ def test_stage_frames_under_role_blind_directories(tmp_path):
 
 
 class LockedDt(FakeDt):
-    """launch() writes a darktable.log with the lock line, as darktable
-    itself would when the library db is wedged by an orphaned process."""
+    """launch() APPENDS a line to darktable.log on every call, as
+    `dtprocess.launch` genuinely does (`open(log_path, "ab")`) -- across the
+    whole session, not one log per launch. (Fix round 1, Opus finding 2:
+    the first cut of this fake used `write_text`, which OVERWRITES on every
+    call and so could never reproduce the sticky-log bug it was meant to
+    catch.) `lines` is one string per call, in order; the last one repeats
+    once exhausted. `**kw` for forward compatibility with
+    fix/htc-hang-recovery's `DtControl.launch(..., env=...)`."""
 
-    def __init__(self, line, **kw):
+    def __init__(self, *lines, **kw):
         super().__init__(**kw)
-        self.line = line
+        self.lines = list(lines)
 
-    def launch(self, frame, library, log):
-        super().launch(frame, library, log)
-        log.write_text(self.line)
+    def launch(self, frame, library, log, **kw):
+        super().launch(frame, library, log, **kw)
+        line = self.lines.pop(0) if len(self.lines) > 1 else (self.lines[0] if self.lines else "")
+        if line:
+            with log.open("a", encoding="utf-8") as f:
+                f.write(line)
+
+
+#: darktable's own real wording (fix round 1, Opus finding 2): "[init] the
+#: database lock file contains a pid that seems to be alive in your
+#: system: 69648". The first cut's test used invented wording ("contains a
+#: pid 69648 that seems...") that happened to satisfy the old, too-narrow
+#: regex -- never the real one.
+REAL_LOCK_LINE = ("2026-09-26 13:45:06 [init] the database lock file contains a pid "
+                  "that seems to be alive in your system: 69648\n")
 
 
 def test_library_lock_in_the_log_stops_the_session_fast(corpus, tmp_path):
-    """(row 501 item D, night-1 rank 9, SCA-no-lock-breaker): the session
-    fails fast on the first attempt (never burns a second doomed launch)
-    with a typed reason naming the offending pid."""
-    dt = LockedDt("2026-09-26 13:45:06 [dtprocess] the database lock file "
-                  "contains a pid 69648 that seems to be alive\n")
+    """(row 501 item D, night-1 rank 9, SCA-no-lock-breaker; fix round 1):
+    the session fails fast on the first attempt (never burns a second
+    doomed launch, never waits out the 30 s ready poll) with a typed reason
+    naming the offending pid, parsed from darktable's REAL wording."""
+    dt = LockedDt(REAL_LOCK_LINE)
     with pytest.raises(sess.LibraryLocked, match="library_lock 69648"):
         _session(corpus, tmp_path, dt).open()
     assert dt.launches == 1
+    assert dt._ready == [True]  # ready() was never called -- fatal before the 30 s wait
+
+
+def test_locked_launch_quits_before_raising_no_orphan(corpus, tmp_path):
+    """(fix round 1, Opus finding 2): a locked launch must not leave an
+    owned darktable running -- the open() path used to drop the session
+    without calling abort()/terminate at all."""
+    dt = LockedDt(REAL_LOCK_LINE)
+    with pytest.raises(sess.LibraryLocked):
+        _session(corpus, tmp_path, dt).open()
+    assert dt.terminated == [False]  # terminate(responsive=False), same as abort()'s own path
 
 
 def test_sqlite_database_is_locked_line_is_also_caught(corpus, tmp_path):
@@ -194,6 +226,24 @@ def test_sqlite_database_is_locked_line_is_also_caught(corpus, tmp_path):
     with pytest.raises(sess.LibraryLocked, match="library_lock unknown") as exc_info:
         _session(corpus, tmp_path, dt).open()
     assert "library_lock unknown" in str(exc_info.value)
+
+
+def test_lock_is_not_sticky_a_clean_relaunch_after_a_locked_one_succeeds(corpus, tmp_path):
+    """(fix round 1, Opus finding 2, the sticky-log bug, reproduced then
+    fixed): darktable.log is append-mode across the whole session. A first
+    launch that logs the real lock line must not poison a LATER, clean
+    launch that reached gui_ready and appended nothing more -- only the
+    bytes THIS launch appended are ever in scope. Probe: a first session
+    logs the real lock line and fails; a second session against the SAME
+    log file (append mode -- the old line is still sitting there) launches
+    cleanly and must succeed, not inherit the first session's own lock."""
+    dt = LockedDt(REAL_LOCK_LINE, "")  # session 1: locked; session 2: a clean launch
+    s1 = _session(corpus, tmp_path, dt)
+    with pytest.raises(sess.LibraryLocked):
+        s1.open()
+    s2 = _session(corpus, tmp_path, dt)  # same tmp_path -> same root -> same darktable.log
+    s2.open()
+    assert dt.launches == 2
 
 
 def test_no_lock_line_launches_normally(corpus, tmp_path):

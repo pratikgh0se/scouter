@@ -33,8 +33,13 @@ EXPORT_PRESETS = ("client-proof", "preview")
 #: session's library fail identically. Left undetected, this cost 22 cases
 #: at ~40 s each on 2026-09-26 (each burning a full two-attempt launch
 #: retry before SessionBlocked).
+#: Fix round 1 (Opus finding 2): darktable's real wording is "the database
+#: lock file contains a pid that seems to be alive in your system: 69648" --
+#: the gap between "pid" and the digits is far more than 10 non-digit
+#: characters, so the original `\bpid\D{0,10}(\d+)` never matched it and the
+#: reason always read "library_lock unknown" on real text.
 _LOCK_RE = re.compile(r"database lock file contains a pid|database is locked", re.I)
-_LOCK_PID_RE = re.compile(r"\bpid\D{0,10}(\d+)", re.I)
+_LOCK_PID_RE = re.compile(r"alive in your system:\s*(\d+)", re.I)
 
 
 class SessionBlocked(RuntimeError):
@@ -49,13 +54,33 @@ class LibraryLocked(SessionBlocked):
     burn its own ~40 s finding the same thing out."""
 
 
-def _check_library_lock(log_path: Path) -> int | None:
-    """The offending pid parsed from `log_path` (or -1 if the log names the
-    condition but no pid is found in it), or None when no lock line is
-    present. Pure file read; never touches darktable itself."""
+def _log_size(log_path: Path) -> int:
+    """The log's current byte size, or 0 if it does not exist yet -- the
+    offset to scan FROM after the next launch, so an old lock line already
+    on disk (a previous case, or a previous session's leftover) is never
+    re-attributed to a launch that never repeated it."""
+    try:
+        return log_path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _check_library_lock(log_path: Path, since: int = 0) -> int | None:
+    """The offending pid parsed from the bytes of `log_path` written AT OR
+    AFTER `since` (or -1 if the log names the condition but no pid is found
+    in it), or None when no lock line is present in that range.
+
+    Fix round 1 (Opus finding 2, sticky log): `dtprocess.launch` opens
+    darktable.log in append mode, so the file accumulates across every
+    launch in a session. Scanning the WHOLE file (as the first cut did)
+    means one real lock line, once written, marks every LATER launch in the
+    session as locked too -- including a clean one that reached gui_ready.
+    Only the bytes this specific launch appended are ever in scope."""
     if not log_path.exists():
         return None
-    text = log_path.read_text(encoding="utf-8", errors="replace")
+    with log_path.open("rb") as f:
+        f.seek(since)
+        text = f.read().decode("utf-8", errors="replace")
     if not _LOCK_RE.search(text):
         return None
     m = _LOCK_PID_RE.search(text)
@@ -360,13 +385,30 @@ class ScouterSession:
     def relative(self, path: Path) -> str:
         return str(Path(path).relative_to(self.run_root))
 
+    def _raise_library_locked(self, pid: int) -> None:
+        """(fix round 1, Opus finding 2): quit -- or, mid-session, abort --
+        whatever THIS launch started before raising, so a locked library
+        never leaves an owned darktable orphaned behind a fatal case."""
+        try:
+            self.abort()
+        except Exception:  # noqa: BLE001 - best effort; the raise below is what matters
+            pass
+        raise LibraryLocked(f"library_lock {pid if pid >= 0 else 'unknown'}")
+
     def _launch(self, frame: Path) -> None:
         assert self.staged is not None
+        log_path = self.root / "darktable.log"
         failures: list[str] = []
         for _attempt in (1, 2):
             self._check_aborted()
+            #: Fix round 1 (Opus finding 2): the offset this launch's own
+            #: bytes start at -- darktable.log is opened in append mode, so
+            #: an old lock line already on disk from an earlier launch (or a
+            #: previous session's leftover) must never be re-attributed to
+            #: a later, clean one.
+            since = _log_size(log_path)
             try:
-                rec = self.dt.launch(frame, self.staged.library, self.root / "darktable.log")
+                rec = self.dt.launch(frame, self.staged.library, log_path)
             except LaunchError as e:  # dtprocess already stopped the unowned process
                 failures.append(f"LaunchError: {e}")
                 continue
@@ -374,10 +416,20 @@ class ScouterSession:
             if self.aborted:  # (N1): the abort landed during the launch
                 self.abort()
                 self._check_aborted()
-            ready = self.dt.ready(LAUNCH_READY_S)
-            pid = _check_library_lock(self.root / "darktable.log")
+            #: Fatal fast, WITHOUT the full 30 s gui_ready wait: darktable
+            #: writes its own lock-file error at startup, well before any
+            #: window could ever reach gui_ready, so checking here first
+            #: never has to wait for the ready poll to find out this launch
+            #: is doomed.
+            pid = _check_library_lock(log_path, since=since)
             if pid is not None:
-                raise LibraryLocked(f"library_lock {pid if pid >= 0 else 'unknown'}")
+                self._raise_library_locked(pid)
+            ready = self.dt.ready(LAUNCH_READY_S)
+            #: Defense in depth: a lock line that only lands during the
+            #: ready wait (a slow write) is still caught, same offset.
+            pid = _check_library_lock(log_path, since=since)
+            if pid is not None:
+                self._raise_library_locked(pid)
             if ready.get("ready"):
                 self.current_frame = frame
                 return
