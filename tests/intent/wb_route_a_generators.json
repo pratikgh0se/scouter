@@ -29,9 +29,9 @@
     },
     {
       "id": "guide-touch-warmer-refuses",
-      "input": {"generator": "guide", "case_id": "gd-06-session_touch_warmer"},
+      "input": {"generator": "guide", "case_id": "gd-12-guide_touch_warmer"},
       "expect": {"kind": "typed_error", "codes": ["module_unavailable"]},
-      "why": "night-1 triage rank 7 (GD-WB-preset4): the README/user-guide 'a touch warmer' example is a warmth move on the same corpus hero (preset 4) coverage/scenarios already route through wb_route_a; before this fix the walkthrough case expected a landed +150 K move that the guard refuses on every corpus frame, masking 8 cases (gd-06, gd-12, and 6 edu warmer/cooler) as failures once fix/n1-session-reopen lets the walkthrough actually reach them"
+      "why": "night-1 triage rank 7 (GD-WB-preset4): a warmth move on the corpus hero (preset 4) is a warmth move coverage/scenarios already route through wb_route_a; before this fix the walkthrough case expected a landed +150 K move that the guard refuses on every corpus frame, masking 8 cases (gd-06, gd-12, and 6 edu warmer/cooler) as failures once fix/n1-session-reopen lets the walkthrough actually reach them. Pratik's ruling, row 496 item 8: the README/user-guide hero session now teaches 'a touch brighter' FIRST (gd-06, an ordinary live move, no longer part of this example); gd-12 keeps demonstrating the documented refusal."
     },
     {
       "id": "guide-edu-cooler-refuses",

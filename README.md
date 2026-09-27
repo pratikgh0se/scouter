@@ -749,7 +749,7 @@ end to end — is Pratik's own run**, not something CI can assert.
 ## Scouter phase 3 (conversation: say it, see it, save it)
 
 Phase 3 adds a plain-English layer over the phase 1/2 core: relative moves
-("a touch warmer"), an educative mode that explains what a move does and
+("a touch brighter"), an educative mode that explains what a move does and
 why, and named presets that round-trip through darktable's own styles. 44
 verbs total (9 new).
 
@@ -757,11 +757,22 @@ verbs total (9 new).
 
 ```sh
 export SCOUTER_JOB=teach-harbour
-scouter --pretty darkroom say "a touch warmer"
+scouter --pretty darkroom say "a touch brighter"
 scouter --pretty darkroom say "less contrast" --educative full
 scouter darkroom undo-last
 scouter preset save harbour-warm && scouter preset apply-job harbour-warm --job-slug harbour-wedding --yes
 ```
+
+**Warmer/cooler can refuse.** On a frame whose white balance is in
+darktable's "camera reference (late)" mode (the scene-referred default),
+moving warmth through the white balance module would switch off that
+correction. Once color calibration's own action path is host-pinned,
+Scouter routes warmer/cooler and Kelvin sets there instead; until then
+(and for tint or `darkroom nudge` on temperature, always, pinned or not —
+they have no color-calibration reroute) it refuses with `module_unavailable`,
+naming the module and the reason in `error.message` — never a silent no-op.
+`scouter vocab list` shows whether `warmer`/`cooler` are pinned right now.
+See "`26` `module_unavailable`" below for the full explanation.
 
 Setting `SCOUTER_JOB` pins one journal/session for the whole conversation —
 without it, every CLI call is its own session, and the MCP server pins its

@@ -66,7 +66,12 @@ WALKTHROUGH: tuple[tuple[str, str, object, dict], ...] = (
      {"exit": 0}),
     ("readme_undo", "cli", ["darkroom", "undo-last"], {"ok": True}),
     ("readme_history", "cli", ["--pretty", "history", "read", "{frame:hero}"], {"exit": 0}),
-    ("session_touch_warmer", "cli", ["--pretty", "darkroom", "say", "a touch warmer"],
+    #: Pratik's ruling, row 496 item 8 (triage rank 7's "needs Pratik"
+    #: item 4): the README's hero session now teaches "a touch brighter"
+    #: first (always live, never hits the WB guard); the guard-refusal case
+    #: is documented separately (README's new "Warmer/cooler can refuse"
+    #: note) and still exercised below by guide_touch_warmer (gd-12).
+    ("session_touch_brighter", "cli", ["--pretty", "darkroom", "say", "a touch brighter"],
      {"exit": 0}),
     ("session_less_contrast_full", "cli",
      ["--pretty", "darkroom", "say", "less contrast", "--educative", "full"], {"exit": 0}),

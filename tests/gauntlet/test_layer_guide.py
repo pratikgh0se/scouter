@@ -43,14 +43,23 @@ def test_touch_warmer_expects_the_wb_route_a_refusal():
     """The corpus hero is darktable's temperature preset 4 (check_map.json's
     wb_route_a block, rows 458/461): every warmth move there honestly
     refuses module_unavailable until channelmixerrgb.temperature is pinned.
-    gd-06/gd-12 ("a touch warmer") must expect that refusal, not a landed
-    +150 K move that never happens on the real corpus."""
+    gd-12 ("a touch warmer") must expect that refusal, not a landed +150 K
+    move that never happens on the real corpus."""
     cases = guide.generate()
-    for cid in ("gd-06-session_touch_warmer", "gd-12-guide_touch_warmer"):
-        c = _by_id(cases, cid)
-        assert c.expect.kind == "typed_error"
-        assert c.expect.codes == ["module_unavailable"]
-        assert c.expect.checks == []  # no M1/param checks: the write never lands
+    c = _by_id(cases, "gd-12-guide_touch_warmer")
+    assert c.expect.kind == "typed_error"
+    assert c.expect.codes == ["module_unavailable"]
+    assert c.expect.checks == []  # no M1/param checks: the write never lands
+
+
+def test_session_touch_brighter_is_an_ordinary_live_move():
+    """Pratik's ruling, row 496 item 8: the README's hero session now
+    teaches "a touch brighter" first (gd-06) -- an ordinary exposure move
+    that never hits the WB guard, unlike gd-12's "a touch warmer" above."""
+    cases = guide.generate()
+    c = _by_id(cases, "gd-06-session_touch_brighter")
+    assert c.expect.kind == "workflow"
+    assert c.steps[0].args["argv"][-1] == "a touch brighter"
 
 
 def test_edu_warmer_and_cooler_expect_the_wb_route_a_refusal():
