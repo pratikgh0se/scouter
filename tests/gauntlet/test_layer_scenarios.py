@@ -29,29 +29,58 @@ def test_out_impossible_partial_carry_roadmap_key():
 def test_wb_only_request_becomes_a_typed_error_tool_and_agent_case():
     """Rows 458/461 (COV-WB-preset4-expectation, wired into scenarios):
     r0089's only capability is "warmer" -- on the corpus hero's preset 4
-    that refuses (module_unavailable, candidate until pinned), so neither
-    the tool nor the agent case should assert a stat change that cannot
-    happen."""
+    that refuses (module_unavailable, candidate until pinned), so the tool
+    case should assert a refusal, not a stat change that cannot happen.
+
+    Fix round 1 (review I7): the agent case uses `Expect("refuse")`, not
+    `typed_error` -- `typed_error` looks only at the agent's last tool
+    call, the wrong oracle for a multi-turn agent conversation (an agent
+    that retries, or that claims success while its last call happened to
+    be refused, would wrongly pass). The refused codes are kept in meta."""
     tool, agent = scenarios.generate(taxonomy.load())
     t = next(c for c in tool if c.id.startswith("scn-r0089-") and c.id.endswith("-tool"))
     assert t.expect.kind == "typed_error"
     assert t.expect.codes == ["module_unavailable"]
     a = next(c for c in agent if c.id == "sca-r0089-olympus-agent")
-    assert a.expect.kind == "typed_error"
-    assert a.expect.codes == ["module_unavailable"]
+    assert a.expect.kind == "refuse"
+    assert a.meta["codes"] == ["module_unavailable"]
 
 
 def test_mixed_wb_and_other_capability_drops_only_the_wb_stat_check():
     """r0005 combines "brighter" (unaffected) with "warmer" (refused on the
     corpus hero's preset 4): the case stays an edit (brighter still moves),
     but must not carry a stat check for the rb/temperature concept, since
-    that sub-move never lands."""
+    that sub-move never lands.
+
+    Fix round 1 (review I5): dropping the check silently is not enough --
+    a request combining a WB-refused capability with a working one must
+    also assert the refused sub-move's own envelope (ok == false) and error
+    code on its own step, so a live rerun cannot silently score `verified`
+    while the requested warmth did nothing. It is a declared gap
+    (meta["roadmap_key"])."""
     tool, _ = scenarios.generate(taxonomy.load())
     t = next(c for c in tool if c.id.startswith("scn-r0005-") and c.id.endswith("-tool"))
     assert t.expect.kind == "edit"
     stats = {(c.metric, c.stat) for c in t.expect.checks}
     assert ("M4", "rb") not in stats
     assert any(c.metric == "M2" for c in t.expect.checks)  # brighter's own check survives
+    env_checks = [c for c in t.expect.checks if c.metric == "envelope"]
+    assert any(c.target == {"path": "ok", "op": "eq", "value": False} for c in env_checks)
+    assert any(c.target.get("path") == "error.code" for c in env_checks)
+    assert t.meta["roadmap_key"] == "wb_route_a"
+
+
+def test_mixed_wb_agent_case_requires_the_refusal_named_in_the_agent_text():
+    """Fix round 1 (review I5): r0372's agent case mixes a WB-refused
+    capability with a working one -- the agent must name the refusal in its
+    own reply text (a "text" check against the refusal-marker regex),
+    otherwise an agent that silently drops the WB half still scores
+    verified."""
+    _, agent = scenarios.generate(taxonomy.load())
+    a = next(c for c in agent if c.id == "sca-r0372-olympus-agent")
+    assert a.expect.kind == "edit"
+    assert any(c.metric == "text" for c in a.expect.checks)
+    assert a.meta["roadmap_key"] == "wb_route_a"
 
 
 def test_agent_cases_get_a_real_cap():

@@ -3,6 +3,8 @@ other body), agent mode 160 (100 P0 + 60 impossible, olympus)."""
 
 from __future__ import annotations
 
+import re
+
 from gauntlet.case import Case, Check, Expect, Step, case_id
 from tests.gauntlet import checkmap
 from tests.gauntlet.checkmap import RequestPlan, plan_request
@@ -154,7 +156,12 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
             meta["roadmap_key"] = (un or [{"id": "unknown"}])[0]["id"]
         else:
             un = []
-        steps = [cap_step(c, req, cmap) for c in plan.capabilities]
+        steps: list[Step] = []
+        refused_steps: list[tuple[int, dict]] = []
+        for c in plan.capabilities:
+            steps.append(cap_step(c, req, cmap))
+            if c in wb_refusals:
+                refused_steps.append((len(steps) - 1, wb_refusals[c]))
         if wb_refusals and len(wb_refusals) == len(plan.capabilities):
             codes = sorted({code for r in wb_refusals.values() for code in r["codes"]})
             return Case(id=case_id(PREFIX, req["id"], body, "tool"), layer=LAYER, tier=tier,
@@ -164,8 +171,7 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
                                 "cluster": req["cluster_id"]}, meta=meta)
         # Mixed (some capabilities WB-refused, some not) or none refused:
         # keep the case as an edit, but never assert a stat check for a
-        # capability that will not actually move (still an accepted gap --
-        # the refused sub-move's own step is unchecked here).
+        # capability that will not actually move.
         checks = [stat_check(p) for p in plan.parts
                  if p.capability and p.capability not in wb_refusals]
         undo_follow = False
@@ -174,7 +180,10 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
                 steps.append(step("darkroom_undo_last", 3.5))
                 undo_follow = True
             else:
-                steps.extend(cap_step(c, req, cmap, bit=True) for c in plan.capabilities)
+                for c in plan.capabilities:
+                    steps.append(cap_step(c, req, cmap, bit=True))
+                    if c in wb_refusals:
+                        refused_steps.append((len(steps) - 1, wb_refusals[c]))
         if un:
             steps.append(step("darkroom_say", BUDGET_SAY, phrase=un[0]["phrases"][0]))
             checks.append(Check("envelope", step=len(steps) - 1, target={
@@ -182,6 +191,24 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
         if undo_follow:
             expect = Expect("workflow", [m1_restored([], {})])
         else:
+            #: Fix round 1 (review I5): a mixed request that never asserts
+            #: the refused sub-move's own step is a silent failure waiting
+            #: to happen -- the M2 check for the working capability passes,
+            #: no reported key is unmoved, so nothing catches the refused
+            #: warmth silently doing nothing. Assert it explicitly, on
+            #: every step this capability was exercised (the initial call
+            #: and any "a bit" follow-up), and declare it a roadmap gap
+            #: like the `un` (unserved-module) case above.
+            if wb_refusals:
+                for idx, r in refused_steps:
+                    codes = list(r["codes"])
+                    code_target = ({"path": "error.code", "op": "eq", "value": codes[0]} if
+                                   len(codes) == 1 else
+                                   {"path": "error.code", "op": "in", "value": codes})
+                    checks.append(Check("envelope", step=idx, target={
+                        "path": "ok", "op": "eq", "value": False}))
+                    checks.append(Check("envelope", step=idx, target=code_target))
+                meta["roadmap_key"] = meta.get("roadmap_key", "wb_route_a")
             expect = Expect("edit", checks, {"changed": True})
     return Case(id=case_id(PREFIX, req["id"], body, "tool"), layer=LAYER, tier=tier,
                 mode="tool", steps=steps, expect=expect, body=body, frame_role=role,
@@ -213,12 +240,30 @@ def agent_case(req: dict, plan: RequestPlan, tax: Taxonomy, tier: str) -> Case:
                       if (r := _wb_capability_expect(c, cmap)) is not None
                       and r["expect"] == "typed_error"}
         if wb_refusals and len(wb_refusals) == len(plan.capabilities):
+            #: Fix round 1 (review I7): `typed_error` looks only at the
+            #: agent's LAST tool call (evaluate.py), which is the wrong
+            #: oracle for an agent conversation -- an agent that retries,
+            #: reads state after the refusal, or tries tint via a say
+            #: fails wrongly; worse, one that CLAIMS success while its last
+            #: tool call happened to be refused still PASSES. `Expect
+            #: ("refuse")` checks the refusal marker and no claim marker
+            #: instead, and requires the sidecar unchanged. The codes stay
+            #: recorded in meta for documentation.
             codes = sorted({code for r in wb_refusals.values() for code in r["codes"]})
-            expect = Expect("typed_error", codes=codes)
+            meta["codes"] = codes
+            expect = Expect("refuse")
         else:
-            expect = Expect("edit", [stat_check(p) for p in plan.parts
-                                     if p.capability and p.capability not in wb_refusals],
-                            {"changed": True})
+            checks = [stat_check(p) for p in plan.parts
+                     if p.capability and p.capability not in wb_refusals]
+            if wb_refusals:
+                #: Fix round 1 (review I5): a mixed agent request must also
+                #: name the refusal in its own text -- otherwise "brighter
+                #: and warmer" with warmer silently dropped still scores
+                #: verified.
+                pattern = "|".join(re.escape(m) for m in cmap["refusal_markers"])
+                checks.append(Check("text", target={"regex": pattern, "present": True}))
+                meta["roadmap_key"] = meta.get("roadmap_key", "wb_route_a")
+            expect = Expect("edit", checks, {"changed": True})
         if plan.klass == "partial":
             meta["roadmap_key"] = (_unserved_modules(req, tax) or [{"id": "unknown"}])[0]["id"]
     return Case(id=case_id(PREFIX_AGENT, req["id"], "olympus", "agent"), layer=LAYER_AGENT,

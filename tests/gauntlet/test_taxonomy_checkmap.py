@@ -101,19 +101,51 @@ def test_wb_route_a_tint_always_refuses_on_preset_4(tax):
 
 def test_wb_route_a_undo_mirrors_a_refused_antecedent(tax):
     """An undo right after a WB route-A move that was itself refused has
-    nothing to restore, so it must refuse too, not report an m1_restored
-    workflow check."""
+    nothing to restore -- the journal is empty for this job, because
+    refuse_wb_late runs before journal.begin -- so it must answer its own
+    fixed code, darkroom_undo_last's "noop" outcome (fix round 1, review
+    I2), never the antecedent's own module_unavailable (the undo call never
+    reaches refuse_wb_late itself)."""
     cmap = tax.check_map
     refused = checkmap.wb_route_a_expect(cmap, "warmer", 4, pinned=False)
     undo = checkmap.wb_route_a_undo_expect(cmap, refused)
-    assert undo == {"expect": "typed_error", "codes": ["module_unavailable"]}
+    assert undo == {"expect": "typed_error", "codes": ["noop"]}
 
     tint_refused = checkmap.wb_route_a_tint_expect(cmap, 4)
     undo_tint = checkmap.wb_route_a_undo_expect(cmap, tint_refused)
-    assert undo_tint == {"expect": "typed_error", "codes": ["module_unavailable"]}
+    assert undo_tint == {"expect": "typed_error", "codes": ["noop"]}
 
     # a live (pinned) route did write, so the ordinary undo check applies --
     # wb_route_a_undo_expect defers by returning None.
     live = checkmap.wb_route_a_expect(cmap, "temperature.temperature", 4, pinned=True)
     assert checkmap.wb_route_a_undo_expect(cmap, live) is None
     assert checkmap.wb_route_a_undo_expect(cmap, None) is None
+
+
+def test_wb_route_a_nudge_always_refuses_pinned_or_not(tax):
+    """Fix round 1 (review I4): darkroom.nudge never re-routes onto color
+    calibration at all -- unlike set/adjust, pinning
+    channelmixerrgb.temperature makes no difference to it, the same shape
+    as tint."""
+    cmap = tax.check_map
+    always = checkmap.wb_route_a_nudge_expect(cmap, 4)
+    assert always == {"expect": "typed_error", "codes": ["module_unavailable"]}
+    assert checkmap.wb_route_a_nudge_expect(cmap, 2) is None
+    assert checkmap.wb_route_a_nudge_expect_for_hero(cmap) == always
+
+
+def test_wb_route_a_xmp_offsets_and_tolerance_match_the_product(tax):
+    """N2 (review): the check-map's copied XMP byte offsets and verify
+    tolerance must not rot silently against the product they describe
+    (Zenkai: an always-on detector, not a one-time transcription)."""
+    from scouter.core import moves, xmp
+
+    r = tax.check_map["wb_route_a"]
+    layout = xmp.LAYOUTS[("channelmixerrgb", 3)]
+    fields = {name: off for name, _fmt, off in layout["fields"]}
+    o = r["xmp_offsets"]
+    assert o["modversion"] == 3
+    assert (o["illuminant"], o["adaptation"], o["x"], o["y"], o["temperature"]) == (
+        fields["illuminant"], fields["adaptation"], fields["x"], fields["y"],
+        fields["temperature"])
+    assert r["wb_verify_tolerance"]["value"] == pytest.approx(moves._WB_VERIFY_TOLERANCE)

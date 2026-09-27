@@ -210,17 +210,42 @@ def wb_route_a_tint_expect(cmap: dict, preset: int | None) -> dict | None:
     return {"expect": "typed_error", "codes": list(u["accept_codes"])}
 
 
+def wb_route_a_nudge_expect(cmap: dict, preset: int | None) -> dict | None:
+    """What a `darkroom_nudge` on `temperature.temperature` must verify on a
+    preset-4 frame (fix round 1, review I4): unlike `darkroom_set`/`adjust`,
+    `darkroom.nudge` never re-routes onto color calibration at all -- it
+    always calls `refuse_wb_late` unconditionally -- so it refuses
+    `module_unavailable` whether or not `channelmixerrgb.temperature` is
+    pinned. Like `wb_route_a_tint_expect`, pin status is irrelevant, so this
+    does not take one. None when the block does not apply (another preset)."""
+    r = cmap["wb_route_a"]
+    if preset != r["applies_when"]["equals"]:
+        return None
+    u = r["until_pinned"]
+    return {"expect": "typed_error", "codes": list(u["accept_codes"])}
+
+
+def wb_route_a_nudge_expect_for_hero(cmap: dict) -> dict | None:
+    return wb_route_a_nudge_expect(cmap, HERO_WB_PRESET)
+
+
 def wb_route_a_undo_expect(cmap: dict, antecedent: dict | None) -> dict | None:
     """What `darkroom_undo_last` must verify right after a WB route-A case
     (a set/adjust/nudge on `temperature.temperature`, or any `temperature.tint`
     move) that was itself refused: `antecedent` is that move's own
-    `wb_route_a_expect`/`wb_route_a_tint_expect` result. When it was a refusal,
-    no write ever reached the XMP, so the undo has nothing to restore and
-    must itself refuse (check_map.json's `wb_route_a.undo_after_refused_expect`)
-    rather than an `m1_restored` check. None when the antecedent was not a
+    `wb_route_a_expect`/`wb_route_a_tint_expect` result. When it was a
+    refusal, no write ever reached the journal (`refuse_wb_late` runs before
+    `journal.begin`), so the undo sees an EMPTY journal and answers its own
+    fixed code -- `darkroom_undo_last`'s "noop" outcome (fix round 1, review
+    I2; NOT the antecedent's own code -- the undo call never reaches
+    `refuse_wb_late` itself, so it cannot answer `module_unavailable`), from
+    check_map.json's `wb_route_a.undo_after_refused_codes`. The antecedent's
+    refused call must still run as a real step first (it is what leaves the
+    journal empty for the undo to find) -- this only decides the Expect, not
+    whether the case keeps that step. None when the antecedent was not a
     refusal (route A pinned and live) or was not itself a WB route-A case --
     the ordinary `m1_restored` undo check applies there."""
     if antecedent is None or antecedent.get("expect") != "typed_error":
         return None
-    return {"expect": cmap["wb_route_a"]["undo_after_refused_expect"],
-            "codes": list(antecedent.get("codes", []))}
+    r = cmap["wb_route_a"]
+    return {"expect": r["undo_after_refused_expect"], "codes": list(r["undo_after_refused_codes"])}

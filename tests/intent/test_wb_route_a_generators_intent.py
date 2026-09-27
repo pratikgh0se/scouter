@@ -34,6 +34,11 @@ def run_example(ex: dict) -> None:
         stats = {(chk.metric, chk.stat) for chk in c.expect.checks}
         assert tuple(want["wb_stat_absent"]) not in stats, ex["id"]
         assert any(chk.metric == want["other_stat_present"] for chk in c.expect.checks), ex["id"]
+        if want.get("envelope_refusal_present"):
+            env = [chk for chk in c.expect.checks if chk.metric == "envelope"]
+            assert any(chk.target == {"path": "ok", "op": "eq", "value": False} for chk in env), \
+                ex["id"]
+            assert any(chk.target.get("path") == "error.code" for chk in env), ex["id"]
 
 
 def _make(ex: dict):
