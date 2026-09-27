@@ -4,15 +4,33 @@
 # tests/mutation_check.py so a merge step needs no Python argument-plumbing:
 # just the base and head shas of the range being merged.
 #
-#   scripts/mutation_check.sh <base-sha> <head-sha> [repo-root]
+#   scripts/mutation_check.sh <base-sha> <head-sha> [repo-root] [--allow-dirty]
 #
 # Exit 0 with a clean markdown table when every new/changed test in the
 # range can fail; exit 1 with the table naming what could not otherwise -
-# that non-zero is what the merge step should treat as a block.
+# that non-zero is what the merge step should treat as a block. Exit 2,
+# "environment error", when the environment isn't even fit to run the check
+# (pytest unavailable, or --repo has uncommitted changes to gate-critical
+# paths) - --allow-dirty forwards straight through to tests/mutation_check.py
+# for the latter, a local-experiment escape hatch only.
 set -euo pipefail
 
+ALLOW_DIRTY=""
+POSITIONAL=()
+for arg in "$@"; do
+  case "$arg" in
+    --allow-dirty)
+      ALLOW_DIRTY="--allow-dirty"
+      ;;
+    *)
+      POSITIONAL+=("$arg")
+      ;;
+  esac
+done
+set -- "${POSITIONAL[@]}"
+
 if [[ $# -lt 2 ]]; then
-  echo "usage: $0 <base-sha> <head-sha> [repo-root]" >&2
+  echo "usage: $0 <base-sha> <head-sha> [repo-root] [--allow-dirty]" >&2
   exit 2
 fi
 
@@ -38,4 +56,4 @@ ROOT="${3:-$SCRIPT_HOME}"
 PYTHON="$SCRIPT_HOME/.venv/bin/python3"
 [[ -x "$PYTHON" ]] || PYTHON="python3"
 
-exec "$PYTHON" "$SCRIPT_HOME/tests/mutation_check.py" --base "$BASE" --head "$HEAD" --repo "$ROOT"
+exec "$PYTHON" "$SCRIPT_HOME/tests/mutation_check.py" --base "$BASE" --head "$HEAD" --repo "$ROOT" $ALLOW_DIRTY

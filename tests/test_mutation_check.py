@@ -1407,5 +1407,94 @@ class DarktableOnlyTestsAreNotAFailure(unittest.TestCase):
             self.assertEqual(weak_cell, "n/a")
 
 
+class DirtyTreeRefusal(unittest.TestCase):
+    """The incident this closes: the gate's own wiring (Makefile's `gate`
+    target, `scripts/merge_gate.sh`, `tests/mutation_check.py` itself) sat
+    UNCOMMITTED for several merge-gate rounds while a run exercised it by
+    file path only - a "clean" gate run said nothing about the fact that the
+    thing being run, or the production code (`scouter/`) it exists to
+    protect, was not actually what HEAD said it was. Both `tests/
+    mutation_check.py`'s own entry point and `scripts/merge_gate.sh` (a
+    second, independent oracle, Z2) must refuse outright - exit 2,
+    "environment error", every dirty tracked path named - unless the caller
+    passes `--allow-dirty` for a local experiment, which must still print a
+    loud warning naming the same paths."""
+
+    REPO_ROOT = Path(__file__).resolve().parents[1]
+
+    @staticmethod
+    def _fixture_with_dirty_path(root, dirty_relpath):
+        """A repo with `production.py`/`tests/` (mutation_check.py's own
+        check_range needs a real base/head range) PLUS a tracked file at
+        `dirty_relpath` under one of the watched directories, committed
+        clean at HEAD and then modified WITHOUT committing."""
+        init_repo(root)
+        (root / "production.py").write_text(PROD_BUGGY)
+        write_test(root, PLACEHOLDER_TEST)
+        watched = root / dirty_relpath
+        watched.parent.mkdir(parents=True, exist_ok=True)
+        watched.write_text("# committed, clean\n")
+        base = commit_all(root, "base")
+        (root / "production.py").write_text(PROD_FIXED)
+        write_test(root, DISCRIMINATING_TEST)
+        head = commit_all(root, "fix + a real, discriminating test")
+        # The dirty part: a tracked-file change that is never committed.
+        watched.write_text("# uncommitted change\n")
+        return base, head
+
+    def test_mutation_check_py_refuses_on_an_uncommitted_scouter_change(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            base, head = self._fixture_with_dirty_path(root, "scouter/core/foo.py")
+
+            p = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
+                 "--base", base, "--head", head, "--repo", str(root)],
+                capture_output=True, text=True)
+            self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+            self.assertIn("environment error", p.stdout)
+            self.assertIn("scouter/core/foo.py", p.stdout)
+            self.assertNotIn("| test file |", p.stdout)
+
+    def test_mutation_check_py_allow_dirty_bypasses_the_refusal_with_a_loud_warning(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            base, head = self._fixture_with_dirty_path(root, "scouter/core/foo.py")
+
+            p = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
+                 "--base", base, "--head", head, "--repo", str(root), "--allow-dirty"],
+                capture_output=True, text=True)
+            self.assertNotEqual(p.returncode, 2, p.stdout + p.stderr)
+            self.assertIn("WARN", p.stderr)
+            self.assertIn("scouter/core/foo.py", p.stderr)
+            self.assertIn("| test file |", p.stdout)
+
+    def test_scripts_merge_gate_sh_refuses_on_an_uncommitted_scripts_change(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            base, head = self._fixture_with_dirty_path(root, "scripts/helper.sh")
+
+            p = subprocess.run(
+                [str(self.REPO_ROOT / "scripts" / "merge_gate.sh"), base, head, str(root)],
+                capture_output=True, text=True, env=env_with_this_interpreter_on_path())
+            self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+            self.assertIn("environment error", p.stdout + p.stderr)
+            self.assertIn("scripts/helper.sh", p.stdout + p.stderr)
+
+    def test_scripts_merge_gate_sh_allow_dirty_bypasses_the_refusal_with_a_loud_warning(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            base, head = self._fixture_with_dirty_path(root, "scripts/helper.sh")
+
+            p = subprocess.run(
+                [str(self.REPO_ROOT / "scripts" / "merge_gate.sh"), base, head, str(root),
+                 "--allow-dirty"],
+                capture_output=True, text=True, env=env_with_this_interpreter_on_path())
+            self.assertNotEqual(p.returncode, 2, p.stdout + p.stderr)
+            self.assertIn("WARN", p.stdout + p.stderr)
+            self.assertIn("scripts/helper.sh", p.stdout + p.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
