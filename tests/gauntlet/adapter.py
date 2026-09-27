@@ -282,6 +282,21 @@ class RoutedSession:
         deaths = take() if take is not None else []
         if deaths and isinstance(obs, Observation):
             obs.crash_reports.extend(deaths)
+        #: (fix round 1 review M1): hang recovery lived only in the
+        #: robustness layer (`faults.run_fault_case`'s own finally/disarm
+        #: already fence_and_recover there -- never doubled up here). A hang
+        #: in ANY other layer (scenarios, looks, coverage, bulk, ...) left
+        #: darktable wedged with nothing to recover it; with Fix B, every
+        #: later case in that session then reads `inherited_wedge` forever.
+        #: Recover once, right here, on the SAME two conditions
+        #: `evaluate.is_hang`/Fix B key on: a `hang*` blocked reason, or an
+        #: `inherited_wedge` this session already carries into the next case.
+        if self.layer != "robustness" and isinstance(obs, Observation):
+            blocked = obs.blocked or ""
+            if blocked.startswith("hang") or blocked == "inherited_wedge":
+                recover_errors = faults.fence_and_recover(s)
+                if recover_errors:
+                    obs.extra.setdefault("disarm_errors", []).extend(recover_errors)
         return obs
 
     def _stop_agent(self) -> None:

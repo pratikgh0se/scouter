@@ -408,6 +408,59 @@ def test_mcp_death_reaches_the_observation_and_the_session_reopens(pinned_env, f
     assert routed.current is not first  # the dead session was replaced
 
 
+def test_a_hang_outside_robustness_still_recovers(pinned_env, fake_corpus, monkeypatch):
+    """Fix round 1 review M1 (medium): hang recovery lived only in
+    faults.run_fault_case (the robustness layer). A hang in scenarios/looks/
+    coverage/bulk left darktable wedged with nothing to recover it -- with
+    Fix B, every LATER case in that session then reads inherited_wedge
+    forever, and nothing ever clears it."""
+    from gauntlet.adapter import Observation
+    from tests.gauntlet import execute, faults
+
+    calls: list = []
+    monkeypatch.setattr(faults, "fence_and_recover", lambda s: calls.append(s) or [])
+    monkeypatch.setattr(execute, "run_tool_case", lambda s, c: Observation(blocked="hang"))
+    _, _, routed, _ = _routed(pinned_env, fake_corpus, layer="coverage")
+    obs = routed.run_case(_case("coverage"))
+    assert obs.blocked == "hang"
+    assert calls == [routed.current]
+
+
+def test_an_inherited_wedge_outside_robustness_also_recovers(pinned_env, fake_corpus,
+                                                              monkeypatch):
+    """(M1) inherited_wedge triggers the same recovery as a hang -- Fix B's
+    whole point is that the case that reads it never caused it, so nothing
+    else in that layer will ever clear it either."""
+    from gauntlet.adapter import Observation
+    from tests.gauntlet import execute, faults
+
+    calls: list = []
+    monkeypatch.setattr(faults, "fence_and_recover", lambda s: calls.append(s) or [])
+    monkeypatch.setattr(execute, "run_tool_case",
+                        lambda s, c: Observation(blocked="inherited_wedge"))
+    _, _, routed, _ = _routed(pinned_env, fake_corpus, layer="coverage")
+    obs = routed.run_case(_case("coverage"))
+    assert obs.blocked == "inherited_wedge"
+    assert calls == [routed.current]
+
+
+def test_recovery_is_never_doubled_up_in_the_robustness_layer(pinned_env, fake_corpus,
+                                                                monkeypatch):
+    """(M1) faults.run_fault_case already fence_and_recover's its own hangs
+    (Fix A/H2) -- run_case must never call it a second time for that layer."""
+    from gauntlet.adapter import Observation
+    from tests.gauntlet import faults
+
+    calls: list = []
+    monkeypatch.setattr(faults, "fence_and_recover", lambda s: calls.append(s) or [])
+    monkeypatch.setattr(faults, "run_fault_case",
+                        lambda s, c: Observation(blocked="hang"))
+    _, _, routed, _ = _routed(pinned_env, fake_corpus, layer="robustness")
+    obs = routed.run_case(_case("robustness"))
+    assert obs.blocked == "hang"
+    assert calls == []  # run_case itself never calls it for this layer
+
+
 # -- final fix I7: eager open + harness allowance ------------------------------
 
 def test_harness_allowance_is_a_base_plus_a_share_per_render(tmp_path):
