@@ -185,6 +185,36 @@ class PreconditionGateTest(_FakeRepoCase):
         self.assertEqual(strip(first.stdout), strip(second.stdout))
 
 
+class RunOverWhenBlockedTest(_FakeRepoCase):
+    """Row 493/495: night 1 can end with progress.json status
+    'blocked: <reason>' (the loop refused a precondition rather than
+    finishing every layer) -- the run is nonetheless OVER once the runner
+    pid is gone and no live process matches the stamp (preconditions 2 and
+    3, unchanged). A live runner still refuses, exactly as for 'done'."""
+
+    BLOCKED_STATUS = ("blocked: darktable pids [69648] were not launched by "
+                       "the gauntlet; quit them first")
+
+    def test_blocked_with_runner_gone_is_accepted_and_prints_run_over(self) -> None:
+        self.write_progress(self.BLOCKED_STATUS)
+        # no pidfile at all -- precondition 2 passes ("runner pid gone")
+        p = self.invoke()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(f"RUN OVER (ended blocked): {self.BLOCKED_STATUS}", p.stdout)
+        self.assertNotIn("BLOCKED", p.stdout)
+        # the rest of the batch still prints, same as the 'done' case
+        self.assertIn("ff-merge", p.stdout.lower())
+
+    def test_blocked_with_live_runner_pid_still_refuses(self) -> None:
+        self.write_progress(self.BLOCKED_STATUS)
+        self.write_pidfile(os.getpid())  # a genuinely live pid
+        p = self.invoke()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("BLOCKED", p.stdout)
+        self.assertIn("still running", p.stdout)
+        self.assertNotIn("RUN OVER", p.stdout)
+
+
 class MergeBaseGateTest(_FakeRepoCase):
     """Review I6: BASE is merge-base(main, BATCH), captured before any
     merge -- HEAD is BATCH itself, never a post-merge `git rev-parse HEAD`

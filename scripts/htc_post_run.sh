@@ -89,6 +89,15 @@ PROGRESS_JSON="$RUN_DIR/progress.json"
 #: Default matches htc-night1.sh/htc-night2.sh's own pass-1 + pass-2 order.
 EXPECTED_LAYERS="${HTC_EXPECTED_LAYERS:-offline,coverage,scenarios,bulk,looks,robustness,parity,install,guide,scenarios_agent}"
 ok=1
+# status_kind: "done" (precondition 1 fully satisfied on its own), "blocked"
+# (row 493/495 -- the loop refused a precondition and stamped
+# "blocked: <reason>" rather than ever reaching "done"; whether the RUN
+# itself is over is decided below, after preconditions 2 and 3 have run,
+# by whether the runner pid is gone AND no live process matches the
+# stamp), or "other" (missing file, bad layers, any other status string --
+# always BLOCKED here, same as before this change).
+status_kind="other"
+blocked_status_text=""
 if [[ ! -f "$PROGRESS_JSON" ]]; then
   say "BLOCKED: no progress.json under $RUN_DIR"
   ok=0
@@ -113,14 +122,21 @@ print(",".join(bad))
 ' "$PROGRESS_JSON" "$EXPECTED_LAYERS" 2>/dev/null)"
   doc_status="$(sed -n '1p' <<<"$status_out")"
   bad_layers="$(sed -n '2p' <<<"$status_out")"
-  if [[ "$doc_status" != "done" ]]; then
+  if [[ "$doc_status" == "done" ]]; then
+    if [[ -n "$bad_layers" ]]; then
+      say "BLOCKED: not every expected layer is done ($bad_layers)"
+      ok=0
+    else
+      say "progress.json status: done, every expected layer done ($EXPECTED_LAYERS)"
+      status_kind="done"
+    fi
+  elif [[ "$doc_status" == blocked:* ]]; then
+    status_kind="blocked"
+    blocked_status_text="$doc_status"
+    say "progress.json status: '$doc_status' -- checking whether the run is actually over (preconditions 2/3)"
+  else
     say "BLOCKED: progress.json status is '$doc_status', not done"
     ok=0
-  elif [[ -n "$bad_layers" ]]; then
-    say "BLOCKED: not every expected layer is done ($bad_layers)"
-    ok=0
-  else
-    say "progress.json status: done, every expected layer done ($EXPECTED_LAYERS)"
   fi
 fi
 
@@ -159,6 +175,15 @@ if pgrep -f "run --stamp $STAMP_NAME" >/dev/null 2>&1; then
   ok=0
 else
   say "no live runner for stamp $STAMP_NAME"
+fi
+
+# Row 493/495: a "blocked: <reason>" status (never "done") counts as the
+# run being OVER once preconditions 2 and 3 -- checked above -- both held
+# (runner pid gone AND no live process matches the stamp); a runner or
+# matching process still alive already set ok=0 above with its own BLOCKED
+# message, so this only fires once the run has genuinely ended.
+if [[ "$status_kind" == "blocked" && "$ok" -eq 1 ]]; then
+  say "RUN OVER (ended blocked): $blocked_status_text"
 fi
 
 if [[ "$ok" -ne 1 ]]; then

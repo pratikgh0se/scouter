@@ -19,6 +19,12 @@
       "input": {"progress_status": "done", "pidfile": "self"},
       "expect": {"exit_code": 1, "stdout_contains": ["BLOCKED", "still running"]},
       "why": "progress.json can say done while the runner process itself has not exited yet (e.g. mid-report); the pid check is the second, independent oracle for that"
+    },
+    {
+      "id": "blocked-with-runner-gone-is-run-over",
+      "input": {"progress_status": "blocked: darktable pids [69648] were not launched by the gauntlet; quit them first", "pidfile": null},
+      "expect": {"exit_code": 0, "stdout_contains": ["RUN OVER (ended blocked):", "ff-merge"]},
+      "why": "row 493/495: the loop can stamp progress.json 'blocked: <reason>' instead of ever reaching done -- the run still counts as OVER once preconditions 2 and 3 (runner pid gone, no live process for the stamp) hold, same two independent oracles as the done case, so the post-run batch is not stuck refusing a run that has genuinely ended"
     }
   ]
 }
