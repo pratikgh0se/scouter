@@ -650,6 +650,142 @@ def test_fence_and_recover_purges_a_stale_request_before_launch(tmp_path):
     assert not stale_request.exists() and not stale_tmp.exists()
 
 
+def test_fence_and_recover_marks_the_killed_mcp_dead_without_a_death_report(tmp_path):
+    """Fix round 2 review N4 (medium): the SIGKILL in step 1 is deliberate --
+    without this, the next call's transport error would let
+    `ScouterSession._check_mcp_alive` record `mcp_server_death: exit -9` and
+    `RoutedSession.run_case` would score THIS fence's own kill as a product
+    crash (release bar 1)."""
+
+    class Proc:
+        def kill(self):
+            pass
+
+    class Mcp:
+        proc = Proc()
+
+    class S:
+        mcp = Mcp()
+        mcp_dead = False
+        current_frame = None
+        staged = SimpleNamespace(frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            pass
+
+        def _launch(self, frame):
+            pass
+
+    s = S()
+    errors = faults.fence_and_recover(s)
+    assert errors == []
+    assert s.mcp is None
+    assert s.mcp_dead is True
+
+
+def test_fence_and_recover_marks_mcp_dead_even_when_the_quit_fails(tmp_path):
+    """(N4) the mark happens right after the kill, unconditional on whether
+    the rest of the fence (quit/launch) goes on to fail -- the client is
+    gone either way, and the caller of run_fault_case must never see a
+    death report it did not ask for."""
+
+    class Proc:
+        def kill(self):
+            pass
+
+    class Mcp:
+        proc = Proc()
+
+    class S:
+        mcp = Mcp()
+        mcp_dead = False
+        current_frame = None
+        staged = SimpleNamespace(frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            raise RuntimeError("quit ladder never confirmed ok")
+
+        def _launch(self, frame):
+            raise AssertionError("must never launch a second darktable")
+
+    s = S()
+    errors = faults.fence_and_recover(s)
+    assert any("quit darktable" in e for e in errors)
+    assert s.mcp is None
+    assert s.mcp_dead is True
+
+
+def test_fence_and_recover_clears_current_frame_after_launch(tmp_path):
+    """Fix round 2 review N5 (low): mirror every other relaunch path
+    (`refresh_frame`) -- the next `ensure_frame` must re-open for real,
+    never trust `_launch`'s own "gui_ready" as proof the job recorded this
+    frame as its own opened image."""
+
+    class S:
+        mcp = None
+        current_frame = Path("/hero.ORF")
+        staged = SimpleNamespace(frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            pass
+
+        def _launch(self, frame):
+            pass
+
+        def reopen_mcp(self):
+            pass
+
+    s = S()
+    errors = faults.fence_and_recover(s)
+    assert errors == []
+    assert s.current_frame is None
+
+
+def test_fence_and_recover_sigconts_as_a_last_resort_when_the_quit_fails(tmp_path, monkeypatch):
+    """Fix round 2 review N6 (low): a freeze fault's own disarm passes
+    `resume_on_quit_failure=True`. If the fenced quit itself never confirms
+    ok, nothing else in the fence will ever un-stick a SIGSTOPped darktable
+    -- one last-resort SIGCONT, never launching a second darktable."""
+    sent: list = []
+    monkeypatch.setattr(faults, "_owned_kill", lambda sig=signal.SIGKILL: sent.append(sig))
+
+    class S:
+        mcp = None
+        current_frame = None
+        staged = SimpleNamespace(frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            raise RuntimeError("did not confirm ok")
+
+        def _launch(self, frame):
+            raise AssertionError("must never launch a second darktable")
+
+    errors = faults.fence_and_recover(S(), resume_on_quit_failure=True)
+    assert any("quit darktable" in e for e in errors)
+    assert sent == [signal.SIGCONT]
+
+
+def test_fence_and_recover_never_sigconts_without_resume_on_quit_failure(tmp_path, monkeypatch):
+    """(N6, control) every non-freeze relaunch fault (e.g. plain
+    `_relaunch`) must never SIGCONT -- there was nothing frozen to resume."""
+    sent: list = []
+    monkeypatch.setattr(faults, "_owned_kill", lambda sig=signal.SIGKILL: sent.append(sig))
+
+    class S:
+        mcp = None
+        current_frame = None
+        staged = SimpleNamespace(frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            raise RuntimeError("did not confirm ok")
+
+        def _launch(self, frame):
+            raise AssertionError("must never launch a second darktable")
+
+    faults.fence_and_recover(S())  # resume_on_quit_failure defaults False
+    assert sent == []
+
+
 def test_inherited_wedge_ping_also_fences_and_recovers(tmp_path, monkeypatch):
     """Fix round 2 review N3 (medium): `run_case`'s own layer-wide fence
     (fix round 1 M1) explicitly excludes the robustness layer (never doubled

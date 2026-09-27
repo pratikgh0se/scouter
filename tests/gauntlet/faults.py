@@ -239,12 +239,19 @@ def disarm(session, v: dict) -> list[str]:
         #: SAME ghost-edit risk hang recovery does -- disarm used to send a
         #: bare SIGCONT then relaunch, with no MCP teardown or spool purge in
         #: between (the triage's exact r17 sequence). One fenced helper,
-        #: never a separate SIGCONT step (SIGKILL inside `fence_and_recover`'s
-        #: own quit step terminates a SIGSTOPped process outright; no resume
-        #: needed first) and never doubled up with a hang's own recovery for
-        #: the same case (run_fault_case skips its own fence when either flag
-        #: is set here).
-        errors += fence_and_recover(session)
+        #: never a separate SIGCONT step first (SIGKILL inside
+        #: `fence_and_recover`'s own quit step terminates a SIGSTOPped
+        #: process outright; no resume needed first) and never doubled up
+        #: with a hang's own recovery for the same case (run_fault_case
+        #: skips its own fence when either flag is set here).
+        #:
+        #: `resume_on_quit_failure` (fix round 2 review N6): only for
+        #: `_resume_sigcont` -- if the fenced quit itself never confirms ok
+        #: (the ladder's own eventual SIGKILL failing is not something this
+        #: harness has ever seen, but a freeze fault leaves darktable
+        #: SIGSTOPped, and leaving it stuck there FOREVER on that unlikely
+        #: path is strictly worse than one last-resort SIGCONT).
+        errors += fence_and_recover(session, resume_on_quit_failure=bool(v.get("_resume_sigcont")))
     if v.get("_detach"):
         guard("hdiutil detach", lambda: _hdiutil("detach", v["_detach"], "-force"))
     if v.get("_job_frames"):
@@ -365,12 +372,13 @@ def run_fault_case(session, case: Case) -> Observation:
     `session.touched` already cleared here, that second call is a cheap
     local snapshot compare, never a bridge call.
 
-    (night1-robustness-triage.md item 1): when the case ends `hang`,
-    darktable is left wedged and the MCP server's own queue backlogged with
-    the abandoned call -- nothing else relaunches it, so the NEXT case
-    inherits the same wedge and is scored as its own hang (rob-r11 scored as
-    six). `fence_and_recover` runs once, right here, before that next
-    case's isolate() has a chance to run against the still-wedged darktable."""
+    (night1-robustness-triage.md item 1; fix round 2 review N3): when the
+    case ends `hang`, OR pings back `inherited_wedge` itself, darktable is
+    left wedged (or was already) with the MCP server's own queue possibly
+    backlogged -- nothing else relaunches it, so the NEXT case inherits the
+    same wedge (rob-r11 scored as six). `fence_and_recover` runs once,
+    right here, before that next case's isolate() has a chance to run
+    against the still-wedged darktable."""
     from tests.gauntlet.execute import run_tool_case
     from tests.gauntlet.session import SessionBlocked
 
@@ -424,16 +432,12 @@ def run_fault_case(session, case: Case) -> Observation:
         errors = disarm(session, v)
         blocked = (obs.blocked or "") if obs is not None else ""
         if blocked.startswith("hang") or blocked == "inherited_wedge":
-            #: (fix round 1 review L4; fix round 2 review N3): never doubles
-            #: up with disarm's own fenced recovery for a freeze-fault hang
-            #: -- `disarm` above already ran `fence_and_recover` for
-            #: `_resume_sigcont`/`_relaunch`. Anything else (any other
-            #: fault's hang, or a ping that came back `inherited_wedge`
-            #: before `arm` even ran, so neither flag is set) has no fence
-            #: yet, and this is it -- `RoutedSession.run_case`'s own
-            #: layer-wide fence (fix round 1 M1) explicitly excludes the
-            #: robustness layer, so nothing else would ever clear an
-            #: `inherited_wedge` ping here.
+            #: (fix round 1 review L4): never doubles up with disarm's own
+            #: fenced recovery for a freeze-fault hang -- `disarm` above
+            #: already ran `fence_and_recover` for `_resume_sigcont`/
+            #: `_relaunch`; anything else (any other fault's hang, or a
+            #: ping that came back `inherited_wedge` before `arm` even ran,
+            #: so neither flag is set) has no fence yet, and this is it.
             if not (v.get("_resume_sigcont") or v.get("_relaunch")):
                 errors = errors + fence_and_recover(session)
     if obs is not None and v.get("_contaminated_restaged"):
@@ -443,7 +447,7 @@ def run_fault_case(session, case: Case) -> Observation:
     return obs
 
 
-def fence_and_recover(session) -> list[str]:
+def fence_and_recover(session, *, resume_on_quit_failure: bool = False) -> list[str]:
     """(night1-robustness-triage.md item 1; fix round 1 review H2): the
     ghost-edit fence. A hang -- or a freeze fault's own disarm -- leaves
     darktable wedged (or frozen) and the MCP server's own queue backlogged
@@ -459,11 +463,25 @@ def fence_and_recover(session) -> list[str]:
 
     Order, every step best-effort / independent of the others failing:
     1. SIGKILL the OLD MCP server outright (never a graceful close, which
-       would let it keep talking).
+       would let it keep talking). (fix round 2 review N4): marks
+       `session.mcp = None`/`mcp_dead = True` right after -- a DELIBERATE
+       kill, never left for `_check_mcp_alive` to discover on the next call
+       and record as `mcp_server_death`, which `RoutedSession.run_case`
+       would then score as a product crash (release bar 1) for a client
+       THIS fence itself just killed.
     2. Quit darktable (never launch a second one if this does not confirm
-       ok -- same rule `_quit`'s own docstring states).
+       ok -- same rule `_quit`'s own docstring states). (fix round 2 review
+       N6): `resume_on_quit_failure` -- only ever passed True for a freeze
+       fault's own disarm -- sends one last-resort SIGCONT if the quit
+       itself never confirms ok, so a SIGSTOPped darktable is not left
+       frozen forever with no recovery path left to try.
     3. Purge the spool of `request-*.json`/`*.json.tmp`.
-    4. Launch darktable fresh.
+    4. Launch darktable fresh. (fix round 2 review N5): sets
+       `current_frame = None` after, mirroring every other relaunch path
+       (`refresh_frame`) -- the next `ensure_frame` must re-open for real,
+       never trust `_launch`'s own "gui_ready with this frame" as proof the
+       JOB recorded it as opened (`_record_opened_image` only happens
+       inside a REAL `darkroom_open`).
     5. Open a fresh MCP client (`reopen_mcp`).
 
     `session` needs only what real `ScouterSession` exposes for this
@@ -485,6 +503,10 @@ def fence_and_recover(session) -> list[str]:
     proc = getattr(mcp, "proc", None)
     if proc is not None:
         guard("fence: kill old mcp server", proc.kill)
+        #: (N4): deliberate; never scored as a product crash.
+        session.mcp = None
+        if hasattr(session, "mcp_dead"):
+            session.mcp_dead = True
 
     quit_fn = getattr(session, "_quit", None)
     launch_fn = getattr(session, "_launch", None)
@@ -495,6 +517,11 @@ def fence_and_recover(session) -> list[str]:
         return errors
 
     if not guard("quit darktable", lambda: quit_fn("fence_and_recover")):
+        if resume_on_quit_failure:
+            #: (N6): last resort -- never leave a SIGSTOPped darktable
+            #: frozen forever just because the quit ladder itself did not
+            #: confirm ok (nothing else in this fence will ever un-stick it).
+            guard("fence: last-resort SIGCONT", lambda: _owned_kill(signal.SIGCONT))
         return errors  # never launch a second darktable when quit did not confirm ok
     purge = getattr(session, "purge_spool", None)
     if purge is not None:
@@ -503,6 +530,10 @@ def fence_and_recover(session) -> list[str]:
         (session.staged.frames["hero"] if getattr(session, "staged", None) else None)
     if not guard("launch darktable", lambda: launch_fn(frame)):
         return errors
+    #: (N5): never trust the launch's own "gui_ready" as proof the JOB
+    #: recorded this frame as opened -- the next ensure_frame must re-open.
+    if hasattr(session, "current_frame"):
+        session.current_frame = None
     if reopen is not None:
         guard("reopen mcp", reopen)
     return errors
