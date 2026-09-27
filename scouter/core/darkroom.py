@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 from scouter import metrics, paths
 from scouter.core import dtbridge, journal, vocab, xmp
@@ -13,6 +14,7 @@ from scouter.errors import (
     CommitTimeout,
     ModuleUnavailable,
     NotInDarkroom,
+    RerouteNested,
     ScouterError,
     UsageError,
     WriteUnverified,
@@ -351,8 +353,53 @@ WB_LATE_EXEMPT: contextvars.ContextVar[bool] = contextvars.ContextVar(
 #: to color calibration (that would land a WB-table Kelvin, read before a
 #: bounce revealed preset 4, as an absolute illuminant temperature). With it
 #: set, a preset-4 write the caller did not route is refused instead.
+#:
+#: Entered ONLY through `no_wb_reroute_scope` below, never with a bare
+#: `.set`/`.reset` -- see that function's docstring for the nested
+#: cross-image case (htc-colorcal-rereview follow-up) this guards against.
 NO_WB_REROUTE: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "scouter_no_wb_reroute", default=False)
+
+
+@contextlib.contextmanager
+def no_wb_reroute_scope() -> Iterator[None]:
+    """The only way to enter `NO_WB_REROUTE`'s critical section.
+
+    htc-colorcal-rereview follow-up (non-blocking theoretical gap): "a
+    nested cross-image reroute (a reroute triggered while another image's
+    reroute context is active) could inherit or clobber the flag."
+
+    It cannot, by construction, for a genuinely NESTED call on one thread:
+    `contextvars.Token.reset` always restores the exact value the matching
+    `.set` overwrote, in strict LIFO order, however deep the nesting --
+    that is the whole point of the token API (verified directly: two nested
+    `set`/`reset` pairs on the same var restore the outer's value exactly,
+    never the default). Two concurrent calls never share a flag either: a
+    new OS thread starts with a fresh default context, and `asyncio.to_thread`
+    /`asyncio.Task` each run on their own COPY of the calling context, so a
+    write in one is invisible to the other.
+
+    What IS unsafe is a caller that stops nesting properly -- stores a token
+    and resets it from somewhere other than the matching `finally`, so a
+    later, unrelated `.set` gets silently overwritten out of order (Python
+    lets you do this; it does not raise). No caller in this codebase does
+    that today (`moves.adjust`/`moves.say` are the only two call sites, and
+    each keeps its token local to one `try`/`finally`), but nothing stops a
+    future caller from getting it wrong. Refusing reentry here is cheaper
+    than re-auditing every future call site for that discipline: a reroute
+    already in progress on this context refuses instead of silently nesting,
+    typed so the caller sees exactly why (`RerouteNested`).
+    """
+    if NO_WB_REROUTE.get():
+        raise RerouteNested(
+            "a white-balance reroute is already active on this context; "
+            "moves.adjust/moves.say do not nest",
+        )
+    token = NO_WB_REROUTE.set(True)
+    try:
+        yield
+    finally:
+        NO_WB_REROUTE.reset(token)
 
 
 def wb_preset(path: str, instance: int = 0) -> int | None:

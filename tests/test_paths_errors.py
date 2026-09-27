@@ -356,6 +356,7 @@ class ErrorsTest(unittest.TestCase):
             "darktable_unresponsive",
             "write_unverified",
             "module_unavailable",
+            "reroute_nested",
         }
         codes = {cls.code for cls in errors.ERROR_CLASSES}
         self.assertEqual(codes, expected)
