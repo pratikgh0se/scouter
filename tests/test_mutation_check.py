@@ -1161,7 +1161,520 @@ class B1RevertedSymbolImportError(unittest.TestCase):
             self.assertIsNone(note)
             self.assertFalse(ok, rows)
             f, names, rev_cell, weak_cell, flags_cell = rows[0]
-            self.assertEqual(rev_cell, "ERROR (not discriminating)")
+            # Card t_918ede52 (mirroring capsule-corp's t_285a8851 review
+            # round 2, finding 4): the error cell now folds in the
+            # collapsed (last-line) output tail via `_collapse_for_cell`,
+            # rather than staying a bare unlabelled string.
+            self.assertTrue(rev_cell.startswith("ERROR (not discriminating)"), rev_cell)
+            self.assertNotIn("FAIL (good)", rev_cell)
+
+
+class TwoModuleImportChainKeepsBothAndReruns(unittest.TestCase):
+    """Card t_918ede52 (Scouter mirror of capsule-corp's t_285a8851): round
+    10's B1 single-hop keep-and-rerun handles ONE missing new name at
+    collection - when the kept module itself imports a SECOND new name from
+    a still-reverted module, the single rerun used to fail collection again
+    and score a plain ERROR. This is the exact real shape hit on Scouter's
+    own fix/n1-parity-harness: `tests/gauntlet/policy.py` imported
+    `KNOWN_FLAGS` from the reverted `gauntlet/evaluate.py`. The gate now
+    repeats keep-and-rerun until nothing more resolves (bounded by
+    `CHAIN_ITERATION_LIMIT`)."""
+
+    def test_a_two_hop_chain_resolves_and_the_range_still_discriminates(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "evaluate.py").write_text("def evaluate():\n    return True\n")
+            (root / "policy.py").write_text(
+                "from evaluate import evaluate\n\n\n"
+                "def check():\n    return evaluate()\n")
+            (root / "production.py").write_text(PROD_BUGGY)
+            (root / "tests").mkdir()
+            (root / "tests" / "test_chain.py").write_text(
+                "from production import add\nfrom policy import check\n\n\n"
+                "def test_placeholder():\n"
+                "    assert callable(add) and callable(check)\n")
+            base = commit_all(root, "base: policy.py has no POLICY_TAG, evaluate.py has no KNOWN_FLAGS")
+
+            (root / "evaluate.py").write_text(
+                "KNOWN_FLAGS = {'a', 'b'}\n\n\ndef evaluate():\n    return True\n")
+            (root / "policy.py").write_text(
+                "from evaluate import evaluate, KNOWN_FLAGS\n\n\n"
+                "POLICY_TAG = 'n1-parity'\n\n\n"
+                "def check():\n    return evaluate() and bool(KNOWN_FLAGS)\n")
+            (root / "production.py").write_text(PROD_FIXED)
+            (root / "tests" / "test_chain.py").write_text(
+                "from production import add\n"
+                "from policy import POLICY_TAG, check\n\n\n"
+                "def test_add_and_policy_tag():\n"
+                "    assert add(2, 3) == 5\n"
+                "    assert POLICY_TAG == 'n1-parity'\n"
+                "    assert check()\n")
+            head = commit_all(root, "fix add(); add policy.POLICY_TAG chained through evaluate.KNOWN_FLAGS")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertTrue(ok, rows)
+            row = next(r for r in rows if r[0] == "tests/test_chain.py")
+            f, names, rev_cell, weak_cell, flags_cell = row
+            self.assertNotIn("ERROR (not discriminating)", rev_cell)
+            self.assertNotIn("error (runner)", rev_cell)
+            self.assertIn("policy.py kept at head for import of POLICY_TAG", rev_cell)
+            self.assertIn("evaluate.py kept at head for import of KNOWN_FLAGS", rev_cell)
+            self.assertIn("FAIL (good)", rev_cell)
+
+
+class ImportChainExceedingTheLimitIsUnresolved(unittest.TestCase):
+    """Card t_918ede52: a chain longer than `CHAIN_ITERATION_LIMIT` (5) must
+    never loop forever or silently pass - it reports a clear
+    `error_runner: unresolved chain <names>` and fails the gate. The message
+    must carry MODULE PATHS (not just symbol names) for every hop actually
+    kept, plus the Nth name that could not be kept."""
+
+    def test_a_six_module_chain_exceeds_the_limit_and_reports_unresolved(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            n = 6
+            for k in range(n):
+                (root / f"mod{k}.py").write_text(f"OWN_{k} = {k}\n")
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: mod0..mod5 exist, no chained imports yet")
+
+            for k in range(n - 1):
+                (root / f"mod{k}.py").write_text(
+                    f"from mod{k + 1} import NEXT{k + 1}\n\n\n"
+                    f"OWN_{k} = {k}\nNEXT{k} = {k}\n")
+            (root / f"mod{n - 1}.py").write_text(f"OWN_{n - 1} = {n - 1}\nNEXT{n - 1} = {n - 1}\n")
+            write_test(root,
+                       "from mod0 import NEXT0\n\n\n"
+                       "def test_next0():\n"
+                       "    assert NEXT0 == 0\n")
+            head = commit_all(root, "chain mod0 -> mod1 -> ... -> mod5, 5 hops deep")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("error_runner: unresolved chain", rev_cell)
+            for k in range(n - 1):
+                self.assertIn(f"mod{k}.py:NEXT{k}", rev_cell)
+            self.assertIn(f"next unresolved: mod{n - 1}.py:NEXT{n - 1}", rev_cell)
+
+
+class RuntimeAttributeErrorOnANewNameIsTreatedLikeCollection(unittest.TestCase):
+    """Card t_918ede52: an `AttributeError` raised on a newly added name
+    INSIDE a test body (the workaround pattern - `module.NEW_NAME` instead
+    of `from module import NEW_NAME`) fails at test-execution time, not at
+    collection, so `is_collection_error` never sees it. Treated exactly like
+    the collection case: keep the module, rerun, never counted as a genuine
+    discriminating failure."""
+
+    def test_an_attribute_style_access_of_a_new_name_is_kept_and_rerun_not_scored_good(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text("def add(a, b):\n    return a + b\n")
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: production.py has no NEW_FLAG yet")
+
+            (root / "production.py").write_text(
+                "def add(a, b):\n    return a + b\n\n\nNEW_FLAG = True\n")
+            write_test(root,
+                       "import production\n\n\n"
+                       "def test_new_flag_is_true():\n"
+                       "    assert production.NEW_FLAG\n")
+            head = commit_all(root, "add production.NEW_FLAG, accessed via attribute not import")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)  # nothing else in production.py changed - not discriminating
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("production.py kept at head for import of NEW_FLAG", rev_cell)
+            self.assertIn("did not fail (BAD)", rev_cell)
+            self.assertNotEqual(rev_cell, "FAIL (good)")
+
+
+class BareStemModuleResolvesAnAttributeError(unittest.TestCase):
+    """Review round 1, finding 1 (E1): a test that `sys.path.insert`s a
+    tools directory and does `import prod` (a bare-stem import - exactly
+    what this repo's own `tests/test_mutation_check.py` does for
+    `mutation_check` itself) reports `module 'prod' has no attribute
+    'NEW_FLAG'` - the bare stem, never the dotted path. Before this fix,
+    `_module_path_for_dotted` only matched the exact dotted path, so this
+    NEVER resolved and the range scored a false `FAIL (good)`."""
+
+    def test_bare_stem_sys_path_import_resolves_the_new_attribute(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "tools").mkdir(parents=True, exist_ok=True)
+            (root / "tools" / "prod.py").write_text("def add(a, b):\n    return a + b\n")
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: tools/prod.py has no NEW_FLAG yet")
+
+            (root / "tools" / "prod.py").write_text(
+                "def add(a, b):\n    return a + b\n\nNEW_FLAG = True\n")
+            write_test(root,
+                       "import sys\nfrom pathlib import Path\n"
+                       "sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))\n"
+                       "import prod\n\n\n"
+                       "def test_new_flag():\n"
+                       "    assert prod.NEW_FLAG\n")
+            head = commit_all(root, "add tools/prod.NEW_FLAG, imported by bare stem")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)  # nothing else changed - not discriminating
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("tools/prod.py kept at head for import of NEW_FLAG", rev_cell)
+            self.assertIn("did not fail (BAD)", rev_cell)
+
+
+class TopLevelNameScanCoversTuplesReexportsAndIfTry(unittest.TestCase):
+    """Review round 1, finding 3 (E2/E2b): `_top_level_names` used to see
+    only simple `NAME = ...` assignments and defs - a name bound by tuple
+    unpacking (`A, B = ...`) or re-exported via a top-level `from x import
+    NEW` was invisible, so `analyze_symbol_import_error` could never resolve
+    an attribute access to it and the range scored a false `FAIL (good)`."""
+
+    def test_a_tuple_bound_new_name_resolves(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: no NEW_A/NEW_B yet")
+
+            (root / "production.py").write_text(PROD_FIXED + "\nNEW_A, NEW_B = True, True\n")
+            write_test(root,
+                       "import production\n\n\n"
+                       "def test_new_a():\n"
+                       "    assert production.NEW_A\n")
+            head = commit_all(root, "add NEW_A, NEW_B via tuple assignment")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("production.py kept at head for import of NEW_A", rev_cell)
+            self.assertIn("did not fail (BAD)", rev_cell)
+
+    def test_a_reexported_new_name_resolves(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            (root / "helpers.py").write_text("X = 1\n")
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: helpers.py has no NEW_FLAG yet")
+
+            (root / "production.py").write_text("from helpers import NEW_FLAG\n" + PROD_FIXED)
+            (root / "helpers.py").write_text("X = 1\nNEW_FLAG = True\n")
+            write_test(root,
+                       "import production\n\n\n"
+                       "def test_new_flag():\n"
+                       "    assert production.NEW_FLAG\n")
+            head = commit_all(root, "re-export helpers.NEW_FLAG through production's top-level import")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("kept at head for import of NEW_FLAG", rev_cell)
+            self.assertIn("did not fail (BAD)", rev_cell)
+
+    def test_a_name_bound_under_a_top_level_try_resolves(self):
+        """Review round 2, finding P3/M2d: the `if`/`try` fixtures added in
+        round 1 only ever exercised the `if` arm - mutant M2d (delete the
+        `ast.Try` visit arm) left the whole suite green. This fixture binds
+        `NEW_FLAG` ONLY inside a top-level `try`/`except` body."""
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: no NEW_FLAG yet")
+
+            (root / "production.py").write_text(
+                PROD_FIXED + "\ntry:\n    NEW_FLAG = True\nexcept Exception:\n    NEW_FLAG = False\n")
+            write_test(root,
+                       "import production\n\n\n"
+                       "def test_new_flag():\n"
+                       "    assert production.NEW_FLAG\n")
+            head = commit_all(root, "add NEW_FLAG, bound only inside a top-level try/except")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("kept at head for import of NEW_FLAG", rev_cell)
+            self.assertIn("did not fail (BAD)", rev_cell)
+
+
+class PureAdditionCheckIgnoresImportChurn(unittest.TestCase):
+    """Review round 2, finding 1 (E9): round 1's E2b fix made `_top_level_names`
+    count `import`/`from` aliases, and `additions_only` reused that SAME set.
+    So a range that adds a genuine new name AND drops an unrelated, unused
+    import (e.g. `import os` no longer needed) became napt and read a quiet
+    `n/a`, exit 0, instead of `did not fail (BAD)`. `additions_only` is now
+    computed from `_top_level_names(..., include_imports=False)`."""
+
+    def test_dropping_an_unused_import_alongside_a_new_name_still_fails_the_gate(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text("import os\n" + PROD_FIXED)
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: production.py has an unused `import os`, no NEW_FLAG yet")
+
+            (root / "production.py").write_text(PROD_FIXED + "\nNEW_FLAG = True\n")
+            write_test(root,
+                       "from production import add, NEW_FLAG\n\n\n"
+                       "def test_x():\n"
+                       "    assert NEW_FLAG\n")
+            head = commit_all(root, "drop the unused `import os`; add NEW_FLAG")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertNotIn("n/a", rev_cell)
+            self.assertIn("kept at head for import of NEW_FLAG", rev_cell)
+            self.assertIn("did not fail (BAD)", rev_cell)
+
+
+class BareStemBackstopCoversAmbiguousCandidates(unittest.TestCase):
+    """Review round 2, finding 5 (E1c): `_module_path_for_dotted` correctly
+    refuses to guess which of two same-stem modules (`a/prod.py` and
+    `b/prod.py`, both changed) an ambiguous bare-stem error actually names -
+    but the fail-closed backstop used to reuse that same lookup and go blind
+    right along with it, so an ambiguous-stem range with a genuinely
+    undetected new name still scored a false `FAIL (good)`. The backstop now
+    falls back to checking EVERY bare-stem candidate when the unique lookup
+    fails, and fails closed if the symbol is absent from all of their
+    `--base` sources."""
+
+    def test_an_ambiguous_bare_stem_still_fails_closed(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "a").mkdir(parents=True, exist_ok=True)
+            (root / "a" / "prod.py").write_text("X = 1\n")
+            (root / "b").mkdir(parents=True, exist_ok=True)
+            (root / "b" / "prod.py").write_text("Y = 1\n")
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: a/prod.py and b/prod.py both exist, no NEW_FLAG anywhere")
+
+            (root / "a" / "prod.py").write_text("X = 1\nNEW_FLAG = True\n")
+            (root / "b" / "prod.py").write_text("Y = 2\n")  # also changes, so BOTH are prod_files
+            write_test(root,
+                       "import sys\nfrom pathlib import Path\n"
+                       "sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'a'))\n"
+                       "import prod\n\n\n"
+                       "def test_x():\n"
+                       "    assert prod.NEW_FLAG\n")
+            head = commit_all(root, "a/prod.py gains NEW_FLAG; b/prod.py also changes (ambiguous bare stem)")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertTrue(rev_cell.startswith("ERROR (not discriminating)"), rev_cell)
+            self.assertNotIn("FAIL (good)", rev_cell)
+
+
+class FirstMatchMaskingResolvesLaterOccurrences(unittest.TestCase):
+    """Review round 1/round 2 (E3, then E3r): the OLD `analyze_symbol_import_error`
+    took only `.search()`'s single first regex hit in the whole test run's
+    output. When the alphabetically/definition-order-first failing test hits
+    an unresolvable name while a LATER test in the same run hits a
+    genuinely resolvable new name, the unresolvable first match used to mask
+    the resolvable one entirely and the whole file fell through to a plain,
+    unlabelled `FAIL (good)`. `analyze_symbol_import_error` now tries every
+    occurrence, in order, and returns the first that actually resolves.
+
+    `test_a_loop` reads a name bound ONLY by a top-level `for` (a shape
+    `_top_level_names` still doesn't track, so it genuinely never resolves
+    and the backstop would otherwise catch it as `"error"`), `test_z_flag`
+    reads a plain, resolvable `NEW_FLAG` - defined after `test_a_loop`, so
+    its AttributeError is genuinely the SECOND occurrence in the combined
+    output."""
+
+    def test_an_unresolvable_first_match_does_not_hide_a_resolvable_second_one(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: no NEW_LOOP, no NEW_FLAG yet")
+
+            (root / "production.py").write_text(
+                PROD_FIXED + "\nfor NEW_LOOP in [True]:\n    pass\nNEW_FLAG = True\n")
+            write_test(root,
+                       "import production\n\n\n"
+                       "def test_a_loop():\n"
+                       "    assert production.NEW_LOOP\n\n\n"
+                       "def test_z_flag():\n"
+                       "    assert production.NEW_FLAG\n")
+            head = commit_all(root, "add NEW_LOOP (for-bound, untracked) and NEW_FLAG (plain, resolvable)")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            # The resolvable NEW_FLAG match must have been found and acted
+            # on despite the genuinely unresolvable NEW_LOOP match coming
+            # first in the combined output.
+            self.assertIn("kept at head for import of NEW_FLAG", rev_cell)
+
+
+class FailClosedBackstopCatchesAnUndetectedBinding(unittest.TestCase):
+    """Review round 2, finding 3 (E2c): the fail-closed backstop
+    (`_mentions_missing_prod_symbol`) had no regression test at all. `NEW_LOOP`
+    here is bound ONLY by a top-level `for` (still untracked by
+    `_top_level_names`), so `analyze_symbol_import_error` can never resolve
+    it and, with NOTHING else in `production.py` to fall back to, the
+    backstop is the ONLY thing standing between this range and a false
+    `FAIL (good)`."""
+
+    def test_a_for_bound_name_with_nothing_else_to_resolve_fails_closed(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: no NEW_LOOP yet")
+
+            (root / "production.py").write_text(PROD_FIXED + "\nfor NEW_LOOP in [True]:\n    pass\n")
+            write_test(root,
+                       "import production\n\n\n"
+                       "def test_x():\n"
+                       "    assert production.NEW_LOOP\n")
+            head = commit_all(root, "add NEW_LOOP, bound only by a top-level for loop")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertTrue(rev_cell.startswith("ERROR (not discriminating)"), rev_cell)
+            self.assertNotIn("FAIL (good)", rev_cell)
+
+
+class NaptPartwayDownAChainIsAnErrorNotAQuietNA(unittest.TestCase):
+    """Review round 1, finding 5 (E6): a napt (not-a-pure-addition) hit
+    found AFTER one or more modules have already been kept used to read as
+    a quiet `n/a (reverted symbol ... imported at collection)`, and the gate
+    passed - a QUIETER version of round 10's plain, gate-failing ERROR. A
+    napt found partway down a non-empty chain is now `"error"`, carrying the
+    whole chain in its message, never a silent n/a."""
+
+    def test_a_napt_hit_after_one_kept_module_fails_the_gate(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_BUGGY)
+            (root / "m1.py").write_text("A = 1\n")
+            (root / "m2.py").write_text("OLD = 1\nB = 1\n")
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: m1 has no X yet, m2 has OLD (removed later) + B")
+
+            (root / "production.py").write_text(PROD_FIXED)
+            (root / "m1.py").write_text("from m2 import Y\nA = 1\nX = 1\n")
+            (root / "m2.py").write_text("B = 1\nY = 1\n")  # OLD removed: NOT a pure addition
+            write_test(root,
+                       "from production import add\nfrom m1 import X\n\n\n"
+                       "def test_add_and_x():\n"
+                       "    assert add(2, 3) == 5\n"
+                       "    assert X == 1\n")
+            head = commit_all(root, "fix add(); m1 gains X (pure addition) but imports m2.Y; "
+                                     "m2 loses OLD while gaining Y (not a pure addition)")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("ERROR (not discriminating)", rev_cell)
+            self.assertNotIn("n/a", rev_cell)
+            self.assertIn("m1.py kept at head for import of X", rev_cell)
+            self.assertIn("m2.py", rev_cell)
+            self.assertIn("Y", rev_cell)
+
+
+class SameModuleSymbolRepeatingStopsTheChainEarly(unittest.TestCase):
+    """Review round 1, finding 6: if the EXACT SAME `(module, symbol)`
+    resolution recurs (a cycle - here, an `if False:` dead branch that
+    `_top_level_names` correctly sees as a bound top-level name but that
+    never actually executes, so keeping the module never actually fixes the
+    attribute access), the chain must stop immediately rather than burn
+    through all `CHAIN_ITERATION_LIMIT` iterations making no progress."""
+
+    def test_a_dead_branch_name_repeats_and_stops_after_one_extra_iteration(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text("OK = 1\n")
+            write_test(root, PLACEHOLDER_TEST)
+            base = commit_all(root, "base: no NEW_DEAD, no dead branch")
+
+            (root / "production.py").write_text("if False:\n    NEW_DEAD = 1\n\nOK = 1\n")
+            write_test(root,
+                       "import production\n\n\n"
+                       "def test_dead_branch():\n"
+                       "    assert production.NEW_DEAD\n")
+            head = commit_all(root, "add NEW_DEAD only inside an `if False:` dead branch")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            f, names, rev_cell, weak_cell, flags_cell = rows[0]
+            self.assertIn("error_runner: unresolved chain", rev_cell)
+            self.assertIn("production.py:NEW_DEAD", rev_cell)
+            self.assertIn("next unresolved: production.py:NEW_DEAD", rev_cell)
+            # Exactly ONE hop in the kept chain plus the "next unresolved"
+            # mention (2 total) - stopped after the FIRST repeat, not after
+            # burning all CHAIN_ITERATION_LIMIT (5) iterations re-adding the
+            # same (module, symbol) pair each time.
+            self.assertEqual(rev_cell.count("production.py:NEW_DEAD"), 2, rev_cell)
+
+
+class KeptModuleRestoreDoesNotLeakBetweenTestFiles(unittest.TestCase):
+    """Review round 1, finding 4 (E7): the per-module restore-to-base in
+    `_resolve_import_chain`'s `finally` was a surviving mutant - deleting it
+    left all existing tests green. Two test files in the same range both
+    access `production.NEW_FLAG`; if the first file's run leaves
+    `production.py` kept at HEAD in the shared worktree, the second file's
+    own revert-mutation run would never even see a failure, and its cell
+    would read a bare, unlabelled `did not fail (BAD)` with no `[revert:
+    ...]` label at all. Both files must carry the label independently."""
+
+    def test_the_kept_label_appears_independently_in_both_files(self):
+        with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
+            root = Path(tmp)
+            init_repo(root)
+            (root / "production.py").write_text(PROD_FIXED)
+            (root / "tests").mkdir()
+            (root / "tests" / "test_production.py").write_text(PLACEHOLDER_TEST)
+            (root / "tests" / "test_second.py").write_text(PLACEHOLDER_TEST)
+            base = commit_all(root, "base: no NEW_FLAG yet, two placeholder test files")
+
+            (root / "production.py").write_text(PROD_FIXED + "\nNEW_FLAG = True\n")
+            (root / "tests" / "test_production.py").write_text(
+                "import production\n\n\n"
+                "def test_a():\n"
+                "    assert production.NEW_FLAG\n")
+            (root / "tests" / "test_second.py").write_text(
+                "import production\n\n\n"
+                "def test_b():\n"
+                "    assert production.NEW_FLAG\n")
+            head = commit_all(root, "add production.NEW_FLAG; two test files both use it via attribute")
+
+            ok, rows, note = mc.check_range(root, base, head)
+            self.assertIsNone(note)
+            self.assertFalse(ok, rows)
+            self.assertEqual(len(rows), 2)
+            for f, names, rev_cell, weak_cell, flags_cell in rows:
+                self.assertIn("production.py kept at head for import of NEW_FLAG", rev_cell,
+                              f"{f} lost its kept-module label - the restore leaked across files")
 
 
 class B3OnlyRealCollectedItemsAreSelected(unittest.TestCase):

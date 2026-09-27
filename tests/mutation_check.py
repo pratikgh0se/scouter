@@ -529,64 +529,169 @@ def new_module_import_error(out, new_prod_files):
 ATTRIBUTE_ERROR_RE = re.compile(r"AttributeError: module '([\w.]+)' has no attribute '(\w+)'")
 
 
+def _bare_stem_candidates(dotted, candidate_files):
+    """Every file in `candidate_files` whose bare stem (the last dotted
+    component - `_prod_module_candidates`' `attr`) equals `dotted`, in the
+    order given. Shared by `_module_path_for_dotted` (which only trusts a
+    UNIQUE match) and `_mentions_missing_prod_symbol` (which - unlike
+    resolving WHICH module to keep - can safely check every ambiguous
+    candidate at once, since it only needs to know whether ANY of them might
+    still define the missing symbol). Ported from capsule-corp's mutation
+    gate (card t_918ede52, mirroring capsule-corp's t_285a8851 review
+    round 2, finding E1c)."""
+    return [f for f in candidate_files if _prod_module_candidates(f)[1] == dotted]
+
+
 def _module_path_for_dotted(dotted, candidate_files):
     for f in candidate_files:
         d, _, _ = _prod_module_candidates(f)
         if d == dotted:
             return f
+    # E1 (ported from capsule-corp's t_285a8851 review round 1): a test that
+    # hacks `sys.path.insert(...)` and imports a submodule by its bare stem
+    # (exactly what this file's own test file does for `mutation_check`
+    # itself, and what many of this repo's own test files do for their own
+    # subject) gets `module 'prod' has no attribute 'X'` / `cannot import
+    # name 'X' from 'prod'`, naming the bare stem, not the dotted path - the
+    # exact same shape `new_module_import_error` already handles at its
+    # `m1.group(1) == attr` check. Only a UNIQUE bare-stem match among the
+    # candidates counts; an ambiguous one (two reverted files sharing a stem,
+    # e.g. `a/prod.py` and `b/prod.py`) must never guess which one the error
+    # actually names - that ambiguity is exactly what
+    # `_mentions_missing_prod_symbol`'s own, separate bare-stem handling
+    # (E1c) exists to still catch, fail-closed, without guessing.
+    bare_matches = _bare_stem_candidates(dotted, candidate_files)
+    if len(bare_matches) == 1:
+        return bare_matches[0]
     return None
 
 
-def _top_level_names(source):
-    """Set of names bound at module top level: function/class defs and
-    simple `NAME = ...` / `NAME: T = ...` assignments. Enough to recognize
-    "the range added a new class/function/constant to this module"."""
+def _top_level_names(source, include_imports=True):
+    """Set of names bound at module top level: function/class defs, simple
+    `NAME = ...` / `NAME: T = ...` assignments, tuple/list-unpacking targets
+    (`A, B = ...`, E2), and any of the above nested ONE level inside a
+    top-level `if`/`try` block (`try: NEW = compute() except Exception: NEW =
+    None`, or a version-gated `if ...: NEW = ...`) - never inside a nested
+    function or class body, which are not module-level names. When
+    `include_imports` is True (the default), also names re-exported via a
+    top-level `from x import NEW` (E2b - the module's own top-level
+    `ImportFrom` aliases; `import x` similarly binds `x`).
+
+    E9: `include_imports=False` is used for the `additions_only` safety
+    check ONLY - an unrelated import dropped or added alongside a genuine
+    new definition (e.g. an unused `import os` removed in the same range)
+    must never turn a pure addition into a napt. `include_imports=True` (the
+    default) is still used for the "is X new at HEAD" test itself, so a name
+    that only ever arrives via a re-export (E2b's exact shape) is still
+    recognized as newly added.
+
+    Ported from capsule-corp's mutation gate (card t_918ede52, mirroring
+    capsule-corp's t_285a8851 fix rounds 1 and 2)."""
     names = set()
     try:
         tree = ast.parse(source or "")
     except SyntaxError:
         return names
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.add(node.name)
-        elif isinstance(node, ast.Assign):
-            for t in node.targets:
-                if isinstance(t, ast.Name):
-                    names.add(t.id)
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            names.add(node.target.id)
+
+    def add_target(t):
+        if isinstance(t, ast.Name):
+            names.add(t.id)
+        elif isinstance(t, (ast.Tuple, ast.List)):
+            for elt in t.elts:
+                add_target(elt)
+
+    def visit(stmts):
+        for node in stmts:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, ast.Assign):
+                for t in node.targets:
+                    add_target(t)
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                names.add(node.target.id)
+            elif isinstance(node, ast.ImportFrom):
+                if include_imports:
+                    for alias in node.names:
+                        names.add(alias.asname or alias.name)
+            elif isinstance(node, ast.Import):
+                if include_imports:
+                    for alias in node.names:
+                        names.add((alias.asname or alias.name).split(".")[0])
+            elif isinstance(node, ast.If):
+                visit(node.body)
+                visit(node.orelse)
+            elif isinstance(node, ast.Try):
+                visit(node.body)
+                for handler in node.handlers:
+                    visit(handler.body)
+                visit(node.orelse)
+                visit(node.finalbody)
+
+    visit(tree.body)
     return names
+
+
+def _symbol_error_candidates(out):
+    """Every `cannot import name 'X' from 'M'` / `AttributeError: module 'M'
+    has no attribute 'X'` occurrence in `out`, as `(start_offset,
+    module_dotted, symbol)`, in the order they appear in the text - E3: the
+    OLD code took only the single first regex `.search()` hit in the whole
+    output; when a test file selects several tests and the FIRST one to fail
+    hits an unresolvable name (e.g. one `_top_level_names` still can't see)
+    while a LATER one hits a genuinely resolvable one, that first,
+    unresolvable match used to mask the resolvable one entirely - the whole
+    file fell through to a plain "resolved" (a false good). Returning every
+    candidate, in order, lets the caller try each in turn.
+
+    Ported from capsule-corp's mutation gate (card t_918ede52, mirroring
+    capsule-corp's t_285a8851 fix round 1/2)."""
+    out = out or ""
+    candidates = [(m.start(), m.group(2), m.group(1)) for m in CANNOT_IMPORT_RE.finditer(out)]
+    candidates += [(m.start(), m.group(1), m.group(2)) for m in ATTRIBUTE_ERROR_RE.finditer(out)]
+    candidates.sort(key=lambda c: c[0])
+    return candidates
 
 
 def analyze_symbol_import_error(out, repo, base, head, reverted_prod_files):
     """None (not this shape - stays a plain "error"), or
-    `(state, module_path, symbol, additions_only)` for the B1 shape: the
-    collection error names a symbol `X` missing from module `M`, `M` is one
-    of `reverted_prod_files` (so IT exists at base, just not with `X` yet),
-    and `X` is a name HEAD's `M` defines but base's `M` does not - i.e. the
-    range itself added `X` to `M`. `additions_only` is True when every one of
-    base's top-level names is still present in HEAD's `M` (a pure addition,
-    safe to restore in full) - the caller reruns with `M` kept at HEAD in
-    that case; otherwise the caller reads it as an unresolvable n/a."""
-    out = out or ""
-    m = CANNOT_IMPORT_RE.search(out) or ATTRIBUTE_ERROR_RE.search(out)
-    if not m:
-        return None
-    if m.re is ATTRIBUTE_ERROR_RE:
-        module_dotted, symbol = m.group(1), m.group(2)
-    else:
-        symbol, module_dotted = m.group(1), m.group(2)
-    module_path = _module_path_for_dotted(module_dotted, reverted_prod_files)
-    if module_path is None:
-        return None
-    base_src = show_file(repo, base, module_path) or ""
-    head_src = show_file(repo, head, module_path) or ""
-    base_names = _top_level_names(base_src)
-    head_names = _top_level_names(head_src)
-    if symbol not in head_names or symbol in base_names:
-        return None  # not something the range added to this module
-    additions_only = base_names <= head_names
-    return module_path, symbol, additions_only
+    `(module_path, symbol, additions_only)` for the B1 shape: the collection
+    error names a symbol `X` missing from module `M`, `M` is one of
+    `reverted_prod_files` (so IT exists at base, just not with `X` yet), and
+    `X` is a name HEAD's `M` defines but base's `M` does not. `additions_only`
+    is True when every one of base's top-level names is still present in
+    HEAD's `M` (a pure addition, safe to restore in full) - the caller
+    reruns with `M` kept at HEAD in that case; otherwise n/a.
+
+    E3: tries every `cannot import name`/`AttributeError` occurrence in
+    `out`, in the order they appear, and returns the FIRST one that actually
+    resolves (a candidate whose module isn't a reverted production file, or
+    whose symbol doesn't qualify, is skipped rather than giving up on the
+    whole output).
+
+    E9: `additions_only` is computed from `_top_level_names(...,
+    include_imports=False)` - definitions and assignments only. The plain
+    "is `symbol` new at HEAD" test above still uses the default (imports
+    included), so a re-exported name (E2b) still qualifies as new; only the
+    SAFETY check for "is it fine to restore this module whole" ignores
+    import-statement churn, so an unrelated dropped/added import alongside a
+    genuine new definition can never turn a pure addition into a napt.
+
+    Ported from capsule-corp's mutation gate (card t_918ede52, mirroring
+    capsule-corp's t_285a8851 fix rounds 1 and 2)."""
+    for _, module_dotted, symbol in _symbol_error_candidates(out):
+        module_path = _module_path_for_dotted(module_dotted, reverted_prod_files)
+        if module_path is None:
+            continue
+        base_source = show_file(repo, base, module_path) or ""
+        head_source = show_file(repo, head, module_path) or ""
+        base_names = _top_level_names(base_source)
+        head_names = _top_level_names(head_source)
+        if symbol not in head_names or symbol in base_names:
+            continue
+        base_defs = _top_level_names(base_source, include_imports=False)
+        head_defs = _top_level_names(head_source, include_imports=False)
+        return module_path, symbol, base_defs <= head_defs
+    return None
 
 
 def _import_names(source):
@@ -930,7 +1035,12 @@ def _cell(state, why=None):
     if state == "helper_bad":
         return f"did not fail (BAD) [{why}]"
     if state == "error":
-        return "ERROR (not discriminating)"
+        # Ported from capsule-corp's t_285a8851 review round 1, finding 6:
+        # the caller now folds the kept-chain (module paths + symbols) and
+        # the unresolvable name into `why` - show it, rather than the bare
+        # label alone, so a reviewer can see exactly what didn't resolve
+        # without digging into the raw output.
+        return f"ERROR (not discriminating): {why}" if why else "ERROR (not discriminating)"
     if state == "error_runner":
         return f"error (runner): {why}" if why else "error (runner)"
     if state == "reverted_symbol_napt":
@@ -939,6 +1049,11 @@ def _cell(state, why=None):
         return f"FAIL (good) [revert: {why}]"
     if state == "symbol_kept_bad":
         return f"did not fail (BAD) [revert: {why}]"
+    if state == "unresolved_chain":
+        # Card t_918ede52 (mirroring capsule-corp's t_285a8851): a chain of
+        # missing new names longer than CHAIN_ITERATION_LIMIT never resolved
+        # - always a BAD/error-runner-shaped result, never a quiet n/a.
+        return f"error_runner: unresolved chain {why}"
     return "FAIL (good)" if state else "did not fail (BAD)"
 
 
@@ -1006,6 +1121,166 @@ def render_revert_cell(entries, ids):
             state, why = entries[tid]
             parts.append(f"{tid}: {_cell(state, why)}")
     return "; ".join(parts) if parts else _cell(None, "-")
+
+
+# Card t_918ede52 (Scouter mirror of capsule-corp's honesty gate; source
+# card capsule-corp t_285a8851): round 10's B1 single-hop keep-and-rerun
+# resolved ONE missing new name at test collection by keeping that module's
+# revert at HEAD and rerunning once. When the kept module itself imports a
+# SECOND new name from a still-reverted module, that single rerun fails
+# collection again - seen for real on Scouter's own fix/n1-parity-harness,
+# `tests/gauntlet/policy.py` importing `KNOWN_FLAGS` from the reverted
+# `gauntlet/evaluate.py`. `_resolve_import_chain` repeats keep-and-rerun
+# until nothing more resolves, bounded by this limit so a genuinely broken
+# or unrelated failure can never spin forever.
+CHAIN_ITERATION_LIMIT = 5
+
+_SYMBOL_WORD_RE_CACHE = {}
+
+
+def _collapse_for_cell(out):
+    """Ported from capsule-corp's t_285a8851 review round 2, finding 4: an
+    "error" state's `why` now renders straight into a markdown table row
+    (`render_table`'s `| ... |`), but the raw pytest output can be a
+    multi-line traceback that breaks the table (and `merge_gate.sh` keeps
+    only the tail of gate output, so a long `why` can push the row's own
+    file name out of what a reviewer even sees). Keep just the last
+    NON-EMPTY line of `out`, with any embedded newline collapsed to a space
+    (defensive - a single line should never contain one, but never trust
+    that) and `|` escaped so it can never be mistaken for a new table
+    cell."""
+    out = out or ""
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    last = lines[-1] if lines else ""
+    last = last.replace("\n", " ").replace("\r", " ")
+    return last.replace("|", "\\|")
+
+
+def _mentions_missing_prod_symbol(out, repo, base, prod_files):
+    """Fail-closed backstop (ported from capsule-corp's t_285a8851 review
+    round 1, finding 3): `_top_level_names` is a best-effort AST scan and
+    can still miss a binding shape (a `for`/`with` target, a name computed
+    by a decorator, a star-import re-export, ...). Rather than let
+    `analyze_symbol_import_error` finding "no candidate resolves" silently
+    fall through to `_resolve_import_chain`'s plain "resolved" (the same
+    false-good shape E1/E2/E2b exploited before their own fixes), treat ANY
+    cannot-import/AttributeError occurrence that names a `prod_files` module
+    and a symbol that is textually absent from that module's `--base`
+    source AT ALL (not merely absent from the AST scan - an even weaker,
+    more conservative check) as "still unresolved": the caller returns
+    `"error"`, never `"resolved"`.
+
+    E1c: `_module_path_for_dotted` correctly REFUSES to guess which module
+    an ambiguous bare-stem name (e.g. `a/prod.py` and `b/prod.py` both
+    changed, error names the bare `prod`) actually refers to - but that same
+    refusal used to make this backstop blind to the ambiguous case too
+    (`module_path is None` skipped it entirely). This backstop doesn't need
+    to pick ONE module, only to know whether the symbol might be missing
+    from any of them: when the unique/exact lookup fails, it falls back to
+    every bare-stem candidate and fails closed if the symbol is absent from
+    ALL of their `--base` sources."""
+    for _, module_dotted, symbol in _symbol_error_candidates(out):
+        module_path = _module_path_for_dotted(module_dotted, prod_files)
+        candidates = [module_path] if module_path is not None else _bare_stem_candidates(module_dotted, prod_files)
+        if not candidates:
+            continue
+        pattern = _SYMBOL_WORD_RE_CACHE.get(symbol)
+        if pattern is None:
+            pattern = re.compile(r"\b" + re.escape(symbol) + r"\b")
+            _SYMBOL_WORD_RE_CACHE[symbol] = pattern
+        if not any(pattern.search(show_file(repo, base, c) or "") for c in candidates):
+            return True
+    return False
+
+
+def _resolve_import_chain(repo, base, head, wt, test_path, prod_files, ids, python):
+    """Keep-and-rerun `test_path`'s `ids` selection inside worktree `wt`
+    until collection/execution stops failing on a resolvable missing-new-name
+    shape, a genuinely different failure surfaces, `CHAIN_ITERATION_LIMIT`
+    modules have been kept without resolving, or the exact same `(module,
+    symbol)` resolution repeats (a cycle - no point burning the remaining
+    iterations' timeouts on a repeat).
+
+    Handles both shapes card t_285a8851 covers:
+      - a collection-time `cannot import name 'X' from 'M'` (M's own
+        top-level `from ... import X` failing, or the test file's own import
+        of X failing), AND
+      - a plain `AttributeError: module 'M' has no attribute 'X'` raised
+        INSIDE a test body at RUN time (the `module.X` workaround for `from
+        module import X`) - `is_collection_error` never sees this (the
+        module imported fine; only the attribute access failed), so it is
+        tried before falling back to the collection-error branch, not
+        instead of it.
+
+    Returns `(state, extra, out, kept)`:
+      - state="resolved": `extra` is the final `rc`, `out` the final output,
+        `kept` the (possibly empty) list of `(module_path, symbol)`
+        restored. A genuine pass/fail (or an unrelated failure that reached
+        test execution) is scored normally by the caller via
+        `classify_pytest_outcome(extra, out)`.
+      - state="no_tests": `rc == NO_TESTS_COLLECTED_RC` (every selected test
+        was filtered out by `-k "not host"`) - distinct from a real pass or
+        fail.
+      - state="napt": the resolvable module's diff is not additions-only AND
+        no module has been kept yet (`kept` is empty); `extra` is the symbol
+        name (n/a, weaken carries the requirement).
+      - state="new_module": the collection error is explained by a
+        production file that is new in this range; `extra` is None.
+      - state="error": a genuinely unrelated/broken collection error
+        (`extra` is None); the fail-closed backstop (`extra` is None); OR a
+        napt hit found PARTWAY down an already non-empty chain (`extra` is
+        the `(module_path, symbol)` that wasn't a pure addition, `kept`
+        still carries every module resolved before it, so the caller's
+        label shows the whole chain).
+      - state="unresolved": `CHAIN_ITERATION_LIMIT` modules were kept, or the
+        same `(module_path, symbol)` resolution repeated, and it still
+        doesn't resolve; `extra` is the `(module_path, symbol)` that could
+        not be kept, `kept` names every module/symbol actually resolved
+        before it.
+
+    Every module written into `wt` to "keep" it is restored back to its
+    `--base` content before this function returns, on every exit path - the
+    caller sees `wt` exactly as it found it.
+
+    Ported from capsule-corp's mutation gate (card t_918ede52, mirroring
+    capsule-corp's t_285a8851)."""
+    kept = []
+    seen = set()
+    new_prod_files = [pf for pf in prod_files if file_status(repo, base, head, pf) == "A"]
+    try:
+        while True:
+            rc, out = run_pytest(wt, ids, python)
+            if rc == 0:
+                return "resolved", rc, out, list(kept)
+            symbol_hit = analyze_symbol_import_error(out, repo, base, head, prod_files)
+            if symbol_hit is not None:
+                module_path, symbol, additions_only = symbol_hit
+                if not additions_only:
+                    if kept:
+                        return "error", (module_path, symbol), out, list(kept)
+                    return "napt", symbol, out, list(kept)
+                if (module_path, symbol) in seen or len(kept) >= CHAIN_ITERATION_LIMIT:
+                    return "unresolved", (module_path, symbol), out, list(kept)
+                (wt / module_path).write_text(show_file(repo, head, module_path), encoding="utf-8")
+                kept.append((module_path, symbol))
+                seen.add((module_path, symbol))
+                continue
+            if is_collection_error(out):
+                if new_module_import_error(out, new_prod_files):
+                    return "new_module", None, out, list(kept)
+                return "error", None, out, list(kept)
+            if _mentions_missing_prod_symbol(out, repo, base, prod_files):
+                return "error", None, out, list(kept)
+            if rc == NO_TESTS_COLLECTED_RC:
+                return "no_tests", rc, out, list(kept)
+            # rc != 0, not a resolvable missing-new-name shape, not a
+            # collection error, not the -k filter shape: a genuine failure
+            # (or a genuinely unrelated run-time error) that reached test
+            # execution.
+            return "resolved", rc, out, list(kept)
+    finally:
+        for module_path, _ in kept:
+            revert_to_base(repo, base, wt, module_path, file_status(repo, base, head, module_path))
 
 
 def check_range(repo, base, head):
@@ -1163,7 +1438,6 @@ def _check_range_impl(repo, base, head):
         remaining[f] = (status, funcs)
 
     if prod_files and remaining:
-        new_prod_files = [f for f in prod_files if file_status(repo, base, head, f) == "A"]
         with tempfile.TemporaryDirectory(prefix="mutation-check-revert-") as tmp:
             wt = make_worktree(repo, head, Path(tmp))
             try:
@@ -1199,66 +1473,87 @@ def _check_range_impl(repo, base, head):
                                              "no production file changed in this range is imported by this test file")
                         continue
                     ids = sorted({node_id(f, cls, name) for cls, name, _, _ in funcs})
-                    rc, out = run_pytest(wt, ids, python)
-                    if is_collection_error(out):
-                        symbol_hit = analyze_symbol_import_error(out, repo, base, head, prod_files)
-                        if symbol_hit is not None:
-                            module_path, symbol, additions_only = symbol_hit
-                            if not additions_only:
-                                # B1 fallback: M's diff is not a pure
-                                # addition (removed/changed existing names
-                                # too) - restoring it whole is not safe to
-                                # call a clean revert. n/a; the weaken column
-                                # carries the requirement, as with new_module.
-                                _assign_revert_state(revert_by_file, f, funcs, "reverted_symbol_napt", symbol)
-                                continue
-                            # B1 (row 459 audit, HTC gate-rows): `M` exists at
-                            # base, it just doesn't define `X` yet - the range
-                            # ADDED `X` to `M`. Keep M at HEAD (restoring only
-                            # what the range purely added) and rerun once -
-                            # this measures the test's OWN discrimination
-                            # without also blaming it for a collection error
-                            # that isn't its fault.
-                            head_module_src = show_file(repo, head, module_path)
-                            (wt / module_path).write_text(head_module_src, encoding="utf-8")
-                            try:
-                                rc2, out2 = run_pytest(wt, ids, python)
-                            finally:
-                                revert_to_base(repo, base, wt, module_path,
-                                               file_status(repo, base, head, module_path))
-                            outcome2 = classify_pytest_outcome(rc2, out2)
-                            label = f"{module_path} kept at head for import of {symbol}"
-                            if outcome2 == "error_runner":
-                                _assign_revert_state(revert_by_file, f, funcs, "error_runner", out2[-400:])
-                                ok = False
-                            elif outcome2 == "failed":
-                                _assign_revert_state(revert_by_file, f, funcs, "symbol_kept_ok", label)
-                            else:
-                                _assign_revert_state(revert_by_file, f, funcs, "symbol_kept_bad", label)
-                                ok = False
-                            continue
-                        if new_module_import_error(out, new_prod_files):
-                            # n/a, not a fail: the module the test imports
-                            # simply doesn't exist yet at base - the weaken
-                            # column (below) carries the requirement.
-                            _assign_revert_state(revert_by_file, f, funcs, "new_module", out[-800:])
-                        else:
-                            _assign_revert_state(revert_by_file, f, funcs, "error", out[-800:])
-                            ok = False
+                    # Card t_918ede52 (mirroring capsule-corp's t_285a8851):
+                    # keep-and-rerun repeats through a whole import CHAIN of
+                    # missing new names (not just one hop), and also catches
+                    # a run-time `AttributeError` on a newly added name, not
+                    # only a collection-time import error.
+                    state, extra, out, chain_kept = _resolve_import_chain(
+                        repo, base, head, wt, f, prod_files, ids, python)
+                    if state == "napt":
+                        # B1 fallback: M's diff is not a pure addition
+                        # (removed/changed existing names too) - restoring
+                        # it whole is not safe to call a clean revert. n/a;
+                        # the weaken column carries the requirement, as with
+                        # new_module.
+                        _assign_revert_state(revert_by_file, f, funcs, "reverted_symbol_napt", extra)
                         continue
-                    if rc == NO_TESTS_COLLECTED_RC:
+                    if state == "new_module":
+                        # n/a, not a fail: the module the test imports
+                        # simply doesn't exist yet at base - the weaken
+                        # column (below) carries the requirement.
+                        _assign_revert_state(revert_by_file, f, funcs, "new_module", out[-800:])
+                        continue
+                    if state == "error":
+                        # `extra` is a `(module_path, symbol)` pair when this
+                        # "error" is a napt hit found partway down an
+                        # already non-empty chain - show the whole chain
+                        # plus the offending hop. Otherwise (a genuinely
+                        # unrelated collection error, or the fail-closed
+                        # backstop) `extra` is None and the message is just
+                        # the collapsed output tail.
+                        parts = []
+                        if chain_kept:
+                            parts.append("; ".join(f"{mp} kept at head for import of {sym}"
+                                                    for mp, sym in chain_kept))
+                        if isinstance(extra, tuple):
+                            mp, sym = extra
+                            parts.append(f"then {mp}'s change for {sym} is not a pure addition")
+                        parts.append(_collapse_for_cell(out))
+                        _assign_revert_state(revert_by_file, f, funcs, "error", " | ".join(p for p in parts if p))
+                        ok = False
+                        continue
+                    if state == "unresolved":
+                        # CHAIN_ITERATION_LIMIT modules were kept (or the
+                        # same module/symbol repeated) and it still doesn't
+                        # resolve - never counted as a pass or a plain
+                        # error_runner; a clear, distinct verdict naming
+                        # every module path kept along the way plus the one
+                        # that couldn't be.
+                        chain_desc = ", ".join(f"{mp}:{sym}" for mp, sym in chain_kept)
+                        if isinstance(extra, tuple):
+                            next_mp, next_sym = extra
+                            chain_desc += f"; next unresolved: {next_mp}:{next_sym}"
+                        _assign_revert_state(revert_by_file, f, funcs, "unresolved_chain", chain_desc)
+                        ok = False
+                        continue
+                    if state == "no_tests":
                         _assign_revert_state(revert_by_file, f, funcs, None,
                                              "n/a - only host-only tests changed (filtered by -k 'not host')")
                         continue
+                    # state == "resolved": extra is the final rc.
+                    rc = extra
                     outcome = classify_pytest_outcome(rc, out)
                     if outcome == "error_runner":
                         _assign_revert_state(revert_by_file, f, funcs, "error_runner", out[-400:])
                         ok = False
                     else:
                         failed = outcome == "failed"
-                        _assign_revert_state(revert_by_file, f, funcs, failed, out[-800:])
-                        if not failed:
-                            ok = False
+                        if chain_kept:
+                            # One or more modules (and/or a run-time
+                            # `module.NEW_NAME` attribute access) had to be
+                            # kept at HEAD to get past collection/execution -
+                            # never scored as a plain, unlabelled pass/fail;
+                            # always shows what was kept.
+                            label = "; ".join(f"{mp} kept at head for import of {sym}" for mp, sym in chain_kept)
+                            _assign_revert_state(
+                                revert_by_file, f, funcs, "symbol_kept_ok" if failed else "symbol_kept_bad", label)
+                            if not failed:
+                                ok = False
+                        else:
+                            _assign_revert_state(revert_by_file, f, funcs, failed, out[-800:])
+                            if not failed:
+                                ok = False
             finally:
                 remove_worktree(repo, wt)
     else:
