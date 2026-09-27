@@ -20,20 +20,22 @@ ACTIONS = (
     ("09_setup_idempotent", "setup_again", "a second scouter setup changes nothing"),
     ("10_leak_check", "leak_check", "no file newer than the stamp outside the root; mcpServers hash unchanged"),  # noqa: E501
 )
-#: Fix D (night-1 triage rank 8, INS-config-version-assert): `setup` and
-#: `setup_again` run `scouter config init --yes` (row 496 item 7), so
-#: `config.json` should carry a version field -- still a disputed
-#: assertion (spec 3.7 vs scouter/cli/setup.py's own report-only config
-#: item), not a product bug the rehearsal can silently keep failing on. A
-#: second check against exec_install.Rehearsal's own
-#: `detail.config_has_version` (never folded into `action_ok`) keeps that
-#: fact visible without either forcing a pass or a plain fail while it is
-#: undecided (needs Pratik). Review round 3, GR-1: the tag KEY is
-#: `disputed`, never `needs_review` -- that string already means something
-#: else on checkmap.wb_route_a_pinned_edit's own move check
-#: (`sign_unverified`), and gauntlet/evaluate.py's new typed needs_review
-#: path reads only `disputed`.
-_CONFIG_VERSION_ACTIONS = {"setup", "setup_again"}
+#: Fix D (night-1 triage rank 8, INS-config-version-assert): only `setup`
+#: (ins-04) runs `scouter config init --yes` (row 496 item 7; review round
+#: 3, GR-2), so only its `config.json` is expected to carry a version
+#: field -- still a disputed assertion (spec 3.7 vs scouter/cli/setup.py's
+#: own report-only config item), not a product bug the rehearsal can
+#: silently keep failing on. A second check against exec_install.Rehearsal's
+#: own `detail.config_has_version` (never folded into `action_ok`) keeps
+#: that fact visible without forcing a pass or a plain fail while it is
+#: undecided (needs Pratik). The tag KEY is `disputed` (review round 3,
+#: GR-1), the only key gauntlet/evaluate.py's typed needs_review path reads.
+#: Review round 4, GR3-1: `setup_again` (ins-09) does NOT carry this check.
+#: It runs after 07 teardown (rmtree of home/config/cache) and 08's `{}`
+#: seed and never runs `config init`, so the check could never pass there;
+#: ins-09's intent (idempotency) is covered by `action_ok`, which includes
+#: exec_install's `tree_unchanged`.
+_CONFIG_VERSION_ACTIONS = {"setup"}
 _CONFIG_VERSION_TAG = {"disputed": "spec 3.7 vs scouter/cli/setup.py's own report-only "
                        "config item (setup writes it via `config init`, not `setup`) -- "
                        "night1-parity-install-guide-triage.md rank 8, needs Pratik"}
@@ -64,7 +66,11 @@ def generate(tax: Taxonomy) -> list[Case]:
                  steps=[Step("rehearsal", {"action": action}, 120.0, False)],
                  expect=Expect("workflow", _checks(action)),
                  source={"file": "measurement-and-robustness.json", "step": i + 1},
-                 meta={"action": action, "asserts": what, "order": i})
+                 #: Review round 4, GR3-2: every install check is a hard
+                 #: gate (the disputed one routes through evaluate's own
+                 #: needs_review path first), so any failing untagged check
+                 #: scores `failed` -- never the generic 2-check half credit.
+                 meta={"action": action, "asserts": what, "order": i, "partial_min": 1.0})
             for i, (label, action, what) in enumerate(ACTIONS)]
 
 

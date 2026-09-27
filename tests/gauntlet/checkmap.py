@@ -195,16 +195,16 @@ def wb_route_a_pinned_edit(route: dict, *, sign: int | None = None,
     import: `layers/common.py` itself imports from here).
 
     Review round 3, GR-1 (P1 blocker): the tag key here is `sign_unverified`,
-    deliberately never `needs_review` -- gauntlet/evaluate.py's typed
-    needs_review path (added review round 2, GD-2) reads a Check's
-    `needs_review`-named... no: its OWN key is `disputed` for exactly this
-    reason. Before that evaluator change, this tag was read by nothing (a
-    comment only); sharing the key with install's `disputed` tag would have
-    opted every pinned Route-A `equals` case (an explicit `value=`, no sign
-    involved at all) into the same "never hard-fail" path -- a wrong
-    Kelvin value from a real product bug would have silently scored
-    `needs_review` instead of `failed`. So the tag applies ONLY to the
-    `changed`-kind branch below, never to `equals`."""
+    deliberately never `needs_review` or `disputed`. gauntlet/evaluate.py's
+    typed needs_review path (added review round 2, GD-2) reads only the
+    `disputed` key, which the install layer uses. Before that evaluator
+    change, this tag was read by nothing (a comment only); had it shared the
+    evaluator's key, every pinned Route-A `equals` case (an explicit
+    `value=`, no sign involved at all) would have been opted into the same
+    "never hard-fail" path -- a wrong Kelvin value from a real product bug
+    would have silently scored `needs_review` instead of `failed`. So the
+    tag is inert to the evaluator and applies ONLY to the `changed`-kind
+    branch below, never to `equals`."""
     to_key = route["m1_key"]
     to_module, to_param = to_key.split(".", 1)
     unit = route["unit"]

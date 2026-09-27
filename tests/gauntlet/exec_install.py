@@ -110,11 +110,12 @@ class Rehearsal:
             #: machine case). `rerun_existing` (ins-08) snapshots the
             #: config bytes before `setup` and asserts they are byte-
             #: identical after (`detail["config_unchanged"]`) -- so a
-            #: clobber is caught, not hidden. `setup_again` (ins-09) drops
-            #: init too: by the time it runs, ins-04 already wrote a real
-            #: config in this same Rehearsal instance (carry 4, one
-            #: Rehearsal in step order), so a second init would be
-            #: byte-identical and redundant.
+            #: clobber is caught, not hidden. `setup_again` (ins-09) never
+            #: runs init either, and it runs after 07 teardown (rmtree) and
+            #: 08's `{}` seed, so its config carries no version field; the
+            #: layer asserts only its idempotency there (`tree_unchanged`
+            #: folded into `ok`), never config_has_version (review round 4,
+            #: GR3-1).
             config_before = None
             if name == "rerun_existing":
                 (self.config / "scouter").mkdir(parents=True, exist_ok=True)
