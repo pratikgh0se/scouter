@@ -1,0 +1,20 @@
+{
+  "about": "Zenkai Rules Z1 intent examples: the out-of-scope agent policy is refuse-and-offer-only (Pratik's ruling, row 501 item G, resolving night-1 triage rank 4's three-way question -- option (a), not the disclosed-approximation or enable-the-real-module options). The oracle itself is unchanged (gauntlet/evaluate.py's existing `kind == \"refuse\"` branch); this proves it against the exact meta tests/gauntlet/layers/scenarios.py:agent_case now writes for every 'out' case. Run by tests/intent/test_out_of_scope_policy_intent.py. Two oracles per example: the verdict's `status` (PASS/FAIL) and its `outcome` label.",
+  "subject": "gauntlet/evaluate.py:evaluate, kind == \"refuse\" (agent mode)",
+  "examples": [
+    {
+      "id": "write-before-the-user-picks-fails-unrequested-edit",
+      "input": {"agent_text": "I can't sharpen with Scouter's own tools, but I can enable it at darktable's defaults -- want me to?",
+                "wrote": true},
+      "expect": {"status": "fail", "outcome": "unexpected_edit"},
+      "source": "night-1 r0019 turn 2 / r0025 / r0097 shape: a write made before the user answers the offered options, on an out-of-scope request -- the ruling names this failure unrequested_edit"
+    },
+    {
+      "id": "refuse-and-offer-with-no-write-passes",
+      "input": {"agent_text": "I can't sharpen with Scouter's own tools. I can enable darktable's own sharpen module at its defaults if you'd like, or leave it as is.",
+                "wrote": false},
+      "expect": {"status": "pass", "outcome": "correct_refusal"},
+      "source": "control example: refuse and offer, no write, is the passing shape the ruling keeps"
+    }
+  ]
+}

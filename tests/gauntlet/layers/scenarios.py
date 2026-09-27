@@ -272,6 +272,19 @@ def agent_case(req: dict, plan: RequestPlan, tax: Taxonomy, tier: str) -> Case:
     if plan.klass in ("impossible", "out"):
         meta["roadmap_key"] = nearest_phrase(req, tax)[1]
         expect = Expect("refuse")
+        if plan.klass == "out":
+            #: (row 501 item G, Pratik's ruling): the out-of-scope policy is
+            #: "refuse and offer only" -- option (a) of triage rank 4's
+            #: three-way question. The oracle itself is unchanged
+            #: (evaluate.py's existing `kind == "refuse"` branch already
+            #: fails any write with no substitute_ok as `unexpected_edit`);
+            #: this only makes the ruling explicit and machine-readable on
+            #: the case, so a write before the user picks between offered
+            #: options is a documented policy failure
+            #: (`unrequested_edit`), not an accident of the default.
+            meta["out_of_scope_policy"] = "refuse_and_offer_only"
+            meta["substitute_ok"] = False
+            meta["unrequested_write_reason"] = "unrequested_edit"
     elif plan.klass == "workflow":
         expect = _workflow_agent_expect(plan.workflow_verb)
     else:

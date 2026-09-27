@@ -118,6 +118,20 @@ def test_workflow_agent_expect_fails_generation_for_an_unknown_verb():
         scenarios._workflow_agent_expect("no-such-verb")
 
 
+def test_out_of_scope_agent_cases_carry_the_refuse_and_offer_policy():
+    """(row 501 item G, Pratik's ruling row 501): every "out" agent case
+    documents the refuse-and-offer-only policy explicitly, so a write
+    before the user picks is a named policy failure (unrequested_edit),
+    not an accident of an unset default."""
+    _, agent = scenarios.generate(taxonomy.load())
+    out_cases = [c for c in agent if c.meta["class"] == "out"]
+    assert out_cases
+    for c in out_cases:
+        assert c.meta["out_of_scope_policy"] == "refuse_and_offer_only", c.id
+        assert c.meta["substitute_ok"] is False, c.id
+        assert c.meta["unrequested_write_reason"] == "unrequested_edit", c.id
+
+
 def test_no_followup_turn_after_an_out_or_impossible_agent_case():
     """(row 501 item C, night-1 rank 3, SCA-refuse-case-followup-
     presupposes-edit, r0019): a scripted follow-up after an honest, no-write
