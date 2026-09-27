@@ -586,6 +586,78 @@ def test_recovery_is_never_doubled_up_in_the_robustness_layer(pinned_env, fake_c
     assert calls == []  # run_case itself never calls it for this layer
 
 
+class _KillableMcp(FakeMcp):
+    """(fix round 3 review N7): `FakeMcp` has no `.proc` at all, so
+    `fence_and_recover`'s own MCP-kill step (N4) never fires against it and
+    `mcp_dead` never gets set in the first place -- a test built on plain
+    `FakeMcp` would pass whether or not `reopen_mcp` clears the flag. A
+    tiny `.proc.kill()` seam makes the kill step (and so N4's `mcp_dead =
+    True`) actually happen, so the reopen path genuinely has something to
+    clear."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.proc = type("P", (), {"kill": lambda self: None})()
+
+
+def test_a_successful_fence_keeps_the_same_session(pinned_env, fake_corpus, monkeypatch):
+    """Fix round 3 review N7 (medium): fence_and_recover's own deliberate
+    SIGKILL of the old MCP client sets mcp_dead=True (N4), and reopen_mcp
+    installs a fresh client but (before this fix) never cleared it --
+    RoutedSession._session then discarded the healthy, just-fenced session
+    on the NEXT case and opened a brand new one: one more relaunch plus a
+    full open() (staging, launch, noise-floor renders) for every fenced
+    case, and one more chance for a ForeignDarktable refusal to stop the
+    whole layer. Uses the REAL fence_and_recover/reopen_mcp (not mocked),
+    unlike the M1/N3 tests above -- that mock is exactly how N7 got
+    through review round 2."""
+    from gauntlet.adapter import Observation
+    from tests.gauntlet import execute
+
+    a = ScouterAdapter(pinned_env / "runs")
+    a._corpus = fake_corpus
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+
+    def factory(corpus, root, body, run_root):
+        return sess.ScouterSession(corpus, root, body, dt=FakeDt(), run_root=run_root,
+                                   mcp_factory=lambda env, cwd: _KillableMcp())
+
+    routed = adapter_mod.RoutedSession(a, "coverage", run, session_factory=factory)
+    routed.run_case(_case("coverage"))
+    s = routed.current
+    monkeypatch.setattr(execute, "run_tool_case", lambda sess, c: Observation(blocked="hang"))
+    routed.run_case(_case("coverage"))  # this case's own hang fences and recovers
+    assert s.mcp_dead is False, "reopen_mcp succeeded but left mcp_dead set"
+    monkeypatch.setattr(execute, "run_tool_case", lambda sess, c: Observation())
+    routed.run_case(_case("coverage"))  # the NEXT case must reuse the SAME session
+    assert routed.current is s
+
+
+def test_a_fence_whose_quit_failed_still_gets_replaced(pinned_env, fake_corpus, monkeypatch):
+    """(N7, control) a fence whose quit never confirmed ok never reaches
+    reopen_mcp -- mcp_dead must stay set, so the next case still reopens
+    (there is no healthy session left to keep)."""
+    from gauntlet.adapter import Observation
+    from tests.gauntlet import execute
+
+    a = ScouterAdapter(pinned_env / "runs")
+    a._corpus = fake_corpus
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+
+    def factory(corpus, root, body, run_root):
+        return sess.ScouterSession(corpus, root, body, dt=FakeDt(terminate_ok=False),
+                                   run_root=run_root, mcp_factory=lambda env, cwd: _KillableMcp())
+
+    routed = adapter_mod.RoutedSession(a, "coverage", run, session_factory=factory)
+    routed.run_case(_case("coverage"))
+    s = routed.current
+    monkeypatch.setattr(execute, "run_tool_case", lambda sess, c: Observation(blocked="hang"))
+    routed.run_case(_case("coverage"))
+    assert s.mcp_dead is True
+    routed.run_case(_case("coverage"))
+    assert routed.current is not s
+
+
 # -- final fix I7: eager open + harness allowance ------------------------------
 
 def test_harness_allowance_is_a_base_plus_a_share_per_render(tmp_path):

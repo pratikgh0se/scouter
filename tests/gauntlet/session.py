@@ -362,7 +362,18 @@ class ScouterSession:
         server's own queue backlogged with the abandoned call, so a fresh
         `relaunch()` of darktable alone is not enough -- the next case's
         first call would still queue behind it. Close the old client (best
-        effort) and open a fresh one."""
+        effort) and open a fresh one.
+
+        (fix round 3 review N7): clears `mcp_dead` -- `fence_and_recover`
+        (`tests/gauntlet/faults.py`) sets it right after its own deliberate
+        SIGKILL of the OLD client, before this method ever runs, and left
+        uncleared here it survives the fresh client this method just
+        installed. `RoutedSession._session` reads `mcp_dead` to decide
+        whether to reopen (`final fix I3`); left set, it would throw away
+        this healthy, just-fenced session and open a brand new one -- one
+        more relaunch and a full `open()` (staging, launch, noise-floor
+        renders) for every fenced case, and one more chance for a
+        `ForeignDarktable` refusal to stop the whole layer."""
         old, self.mcp = self.mcp, None
         if old is not None:
             try:
@@ -370,6 +381,7 @@ class ScouterSession:
             except Exception:  # noqa: BLE001 - best effort; a fresh client follows anyway
                 pass
         self.mcp = self.mcp_factory(self.staged.env, self.root)
+        self.mcp_dead = False
 
     def purge_spool(self) -> None:
         """(fix round 1 review H2): delete every `request-*.json`/`*.json.tmp`
