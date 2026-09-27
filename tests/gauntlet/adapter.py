@@ -239,6 +239,18 @@ class RoutedSession:
     def _back_to_process_cache(self) -> None:
         point_cache(self.adapter.runs_root / PROCESS_DIR / "cache", *self._roots())
 
+    def _back_to_process_cache_if_mine(self, old_cache: Path) -> None:
+        """(fix round 2 review N2): re-point ambient SCOUTER_CACHE to the
+        process cache only when it STILL names `old_cache` -- the JUST-
+        CLOSED session's own cache. A close/abort that finishes late (its
+        own darktable quit/MCP teardown can take a while) must never stomp
+        on a NEWER session's cache pointer that already replaced it in the
+        meantime: that orphans whatever the newer session just launched
+        (`point_cache`'s own carry step then reads the wrong "old" owner
+        record) -- the production shape, pid 69648 (N2)."""
+        if os.environ.get("SCOUTER_CACHE") == str(old_cache):
+            self._back_to_process_cache()
+
     def run_case(self, case: Case):
         from gauntlet.adapter import Observation
         from tests.gauntlet import exec_bulk, faults
@@ -314,20 +326,22 @@ class RoutedSession:
         finally:
             if self.current is not None:
                 old, self.current = self.current, None
+                old_cache = old.root / "cache"
                 try:
                     res = old.abort() or res
                 finally:
-                    self._back_to_process_cache()
+                    self._back_to_process_cache_if_mine(old_cache)
         return res
 
     def close(self) -> None:
         self._stop_agent()
         if self.current is not None:
             old, self.current = self.current, None
+            old_cache = old.root / "cache"
             try:
                 old.close()
             finally:
-                self._back_to_process_cache()
+                self._back_to_process_cache_if_mine(old_cache)
 
 
 class ScouterAdapter:

@@ -148,7 +148,7 @@ def test_pid_reuse_is_not_ours(owner, monkeypatch):
 def test_ladder_escalates_to_sigkill_without_osascript(owner, monkeypatch):
     p = subprocess.Popen(SLEEPER)
     time.sleep(0.3)
-    monkeypatch.setattr(dtprocess, "owned_pid", lambda: p.pid)
+    monkeypatch.setattr(dtprocess, "owned_pid", lambda cache_root=None: p.pid)
     alive = lambda pid: p.poll() is None  # noqa: E731
     t0 = time.monotonic()
     res = dtprocess.terminate(p.pid, responsive=False, alive=alive)
@@ -197,8 +197,8 @@ def test_stale_lock_removed_only_for_dead_owner(owner, tmp_path):
 
 def test_osascript_skipped_when_a_foreign_darktable_runs(owner, monkeypatch):
     """osascript quits by app name, so it must not run beside a foreign darktable."""
-    monkeypatch.setattr(dtprocess, "owned_pid", lambda: 4242)
-    monkeypatch.setattr(dtprocess, "foreign_pids", lambda: [999])
+    monkeypatch.setattr(dtprocess, "owned_pid", lambda cache_root=None: 4242)
+    monkeypatch.setattr(dtprocess, "foreign_pids", lambda cache_root=None: [999])
 
     def no_osascript(*a, **k):
         raise AssertionError("osascript must not run")
@@ -218,7 +218,7 @@ def test_osascript_skipped_when_a_foreign_darktable_runs(owner, monkeypatch):
 def test_no_signal_when_ownership_lost_before_sigkill(owner, monkeypatch):
     """After SIGTERM's wait the pid may be reused: SIGKILL re-checks ownership."""
     owned = iter([4242, 4242, None])  # entry, before SIGTERM, before SIGKILL
-    monkeypatch.setattr(dtprocess, "owned_pid", lambda: next(owned))
+    monkeypatch.setattr(dtprocess, "owned_pid", lambda cache_root=None: next(owned))
     sent = []
     res = dtprocess.terminate(responsive=False, kill=lambda p, s: sent.append((p, s)),
                               alive=lambda p: True, sleep=lambda s: None)
@@ -227,7 +227,7 @@ def test_no_signal_when_ownership_lost_before_sigkill(owner, monkeypatch):
 
 
 def test_pgrep_timeout_fails_closed_no_osascript(owner, monkeypatch):
-    monkeypatch.setattr(dtprocess, "owned_pid", lambda: 4242)
+    monkeypatch.setattr(dtprocess, "owned_pid", lambda cache_root=None: 4242)
 
     def run(argv, *a, **k):
         if argv[0] == "pgrep":

@@ -444,6 +444,131 @@ def test_an_inherited_wedge_outside_robustness_also_recovers(pinned_env, fake_co
     assert calls == [routed.current]
 
 
+def test_owner_drift_survives_a_late_close_race(pinned_env, fake_corpus, monkeypatch):
+    """Fix round 2 review N2 (blocker): reviewer's six-step owner-drift
+    scenario, production shape (row 493, pid 69648). A late close of an
+    earlier session can re-point ambient SCOUTER_CACHE back to the process
+    cache AFTER a newer session has already pointed it at its own cache --
+    that must never happen (RoutedSession.close/abort's own guard), and
+    even where it does, a session's own DtControl must still find and quit
+    its own darktable, bound to ITS OWN cache, never the ambient one.
+    No darktable, no real signals: Popen/_lstart/_comm/_alive/running_pids/
+    os.kill are all faked; the real dtprocess.launch/terminate/
+    foreign_pids/owned_pid and the real ScouterSession/RoutedSession run
+    for real over those fakes."""
+    import os
+    import signal
+
+    from tests.gauntlet.session import DtControl
+
+    PID = 4242424
+    START = "Sun Sep 27 13:42:41 2026"
+    alive_state = {"value": False}
+    signalled: list = []
+
+    class FakeProc:
+        pid = PID
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            pass
+
+        def poll(self):
+            return None
+
+    def fake_popen(argv, **kw):
+        alive_state["value"] = True
+        return FakeProc()
+
+    def fake_kill(pid, sig):
+        signalled.append((pid, sig))
+        alive_state["value"] = False
+
+    fake_alive = lambda pid: pid == PID and alive_state["value"]  # noqa: E731
+
+    monkeypatch.setattr(dtprocess.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(dtprocess, "_lstart", lambda pid: START if pid == PID else None)
+    monkeypatch.setattr(dtprocess, "_comm", lambda pid: dtprocess.DARKTABLE if pid == PID
+                        else None)
+    monkeypatch.setattr(dtprocess, "running_pids", lambda: [PID] if alive_state["value"] else [])
+    monkeypatch.setattr(dtprocess, "_alive", fake_alive)
+    monkeypatch.setattr(dtprocess.os, "kill", fake_kill)
+    monkeypatch.setattr(dtprocess, "wait_gui_ready", lambda *a, **k: {"ready": True})
+    #: `terminate`'s own `kill`/`alive`/`sleep` parameters default to
+    #: `os.kill`/`_alive`/`time.sleep` bound ONCE at module-import time
+    #: (ordinary Python default-argument semantics) -- monkeypatching the
+    #: module attributes above does not reach a call that never overrides
+    #: them, which is exactly how `DtControl.terminate` calls it. Wrap the
+    #: real function so every call through this test gets the fakes, the
+    #: same way the existing dtprocess unit tests pass them explicitly.
+    real_terminate = dtprocess.terminate
+
+    def terminate_with_fakes(pid=None, *, responsive=None, cache_root=None, **kw):
+        return real_terminate(pid, responsive=responsive, cache_root=cache_root,
+                              kill=fake_kill, alive=fake_alive, sleep=lambda s: None)
+    monkeypatch.setattr(dtprocess, "terminate", terminate_with_fakes)
+
+    a = ScouterAdapter(pinned_env / "runs")
+    a._corpus = fake_corpus
+    run = RunDir(pinned_env / "runs", "stamp").ensure()
+
+    def factory(corpus, root, body, run_root):
+        return sess.ScouterSession(corpus, root, body, dt=DtControl(), run_root=run_root,
+                                   mcp_factory=lambda env, cwd: FakeMcp())
+
+    routed = adapter_mod.RoutedSession(a, "coverage", run, session_factory=factory)
+
+    # 1. Open session A -- launches pid P.
+    session_a = routed._session("olympus")
+    a_cache = session_a.root / "cache"
+    assert alive_state["value"] is True
+
+    # 2/3. Open session B: point_cache (ambient -> B's own cache) runs as
+    # part of _session()'s own bookkeeping; simulate A's late close
+    # finishing AFTER that -- re-point ambient back to the process cache
+    # via the same guarded helper close()/abort() use. The guard must
+    # refuse: ambient no longer names A's cache (it is B's now).
+    process_cache = a.runs_root / adapter_mod.PROCESS_DIR / "cache"
+    routed.n += 1
+    b_root = run.sessions_dir / "coverage" / f"{routed.n:03d}-sony_a7"
+    from tests.gauntlet.adapter import point_cache
+
+    point_cache(b_root / "cache", *routed._roots())
+    assert os.environ.get("SCOUTER_CACHE") == str(b_root / "cache")
+    routed._back_to_process_cache_if_mine(a_cache)  # the late close, simulated
+    assert os.environ.get("SCOUTER_CACHE") == str(b_root / "cache"), \
+        "the guard must refuse to stomp on B's own cache pointer"
+
+    session_b = factory(a.corpus(), b_root, "sony_a7", run.root)
+    routed.current = session_b
+    session_b.open()
+    assert os.environ.get("SCOUTER_CACHE") == str(b_root / "cache")
+
+    # 4. A relaunch must still quit P: session B's own DtControl is bound to
+    # B's own cache (`ScouterSession.open` binds it), never the ambient one.
+    session_b.relaunch()
+    assert (PID, signal.SIGTERM) in signalled or (PID, signal.SIGKILL) in signalled, \
+        f"relaunch's quit never signalled our own darktable: {signalled}"
+    alive_state["value"] = True  # the relaunch's own new darktable is up
+
+    # 5. Rotate to session C (through the normal open_body path, which
+    # closes B first): open() must not raise ForeignDarktable.
+    routed.open_body("olympus")  # raises ForeignDarktable on failure
+
+    # 6. Repeat with the drift STILL in place (no re-point this time) -- the
+    # _launch retry / fence_and_recover path is covered by the SAME
+    # property: DtControl reads/writes through the session's own bound
+    # cache, so persisted ambient drift changes nothing for it.
+    monkeypatch.setenv("SCOUTER_CACHE", str(process_cache))
+    signalled.clear()
+    session_c = routed.current
+    session_c.relaunch()
+    assert (PID, signal.SIGTERM) in signalled or (PID, signal.SIGKILL) in signalled, \
+        "relaunch under persisted drift never signalled our own darktable"
+
+
 def test_recovery_is_never_doubled_up_in_the_robustness_layer(pinned_env, fake_corpus,
                                                                 monkeypatch):
     """(M1) faults.run_fault_case already fence_and_recover's its own hangs

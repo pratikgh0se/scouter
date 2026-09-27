@@ -176,17 +176,28 @@ def stage(corpus: Corpus, body: str, root: Path, *, job_size: int = 7,
 
 
 class DtControl:
-    """The seam over scouter.core.dtprocess + dtbridge (a fake in unit tests)."""
+    """The seam over scouter.core.dtprocess + dtbridge (a fake in unit tests).
+
+    `cache_root` (fix round 2 review N2): bound by `ScouterSession.open`
+    (before anything else runs, to `self.root / "cache"` -- known from
+    construction, never waits on `staged`) to THIS session's own cache.
+    Every ownership check below then reads/writes through it, never through
+    this process's ambient `os.environ["SCOUTER_CACHE"]`, which another
+    session's late close/abort or a concurrent `point_cache` can drift out
+    from under this thread mid-session (N2's production shape, pid 69648)."""
+
+    def __init__(self, cache_root: Path | None = None) -> None:
+        self.cache_root = cache_root
 
     def foreign(self) -> list[int]:
         from scouter.core import dtprocess
 
-        return dtprocess.foreign_pids()
+        return dtprocess.foreign_pids(self.cache_root)
 
     def owned(self) -> int | None:
         from scouter.core import dtprocess
 
-        return dtprocess.owned_pid()
+        return dtprocess.owned_pid(self.cache_root)
 
     def launch(self, frame: Path, library: Path, log: Path, env: dict[str, str] | None = None):
         from scouter.core import dtprocess
@@ -206,7 +217,7 @@ class DtControl:
     def terminate(self, *, responsive: bool | None = None) -> dict:
         from scouter.core import dtprocess
 
-        return dtprocess.terminate(responsive=responsive)
+        return dtprocess.terminate(responsive=responsive, cache_root=self.cache_root)
 
     def kill_launched(self, rec) -> bool:
         """(pre-night-1 N1): SIGKILL the exact darktable `rec` recorded at
@@ -267,6 +278,15 @@ class ScouterSession:
         return client
 
     def open(self) -> ScouterSession:
+        #: (fix round 2 review N2): bind ownership checks to THIS session's
+        #: own cache before anything else -- `self.root` is known from
+        #: construction, never waits on `self.staged`. `foreign()`/`owned()`
+        #: below must never read the ambient `os.environ["SCOUTER_CACHE"]`,
+        #: which a concurrent session's late close/abort can drift out from
+        #: under this thread mid-open. Only touches a real `DtControl`; a
+        #: test double without `cache_root` is left alone.
+        if hasattr(self.dt, "cache_root"):
+            self.dt.cache_root = self.root / "cache"
         foreign = self.dt.foreign()
         if foreign:
             raise ForeignDarktable(f"darktable pids {foreign} were not launched by the "
