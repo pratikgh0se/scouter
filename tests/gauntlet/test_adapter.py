@@ -553,9 +553,37 @@ def test_owner_drift_survives_a_late_close_race(pinned_env, fake_corpus, monkeyp
         f"relaunch's quit never signalled our own darktable: {signalled}"
     alive_state["value"] = True  # the relaunch's own new darktable is up
 
-    # 5. Rotate to session C (through the normal open_body path, which
-    # closes B first): open() must not raise ForeignDarktable.
-    routed.open_body("olympus")  # raises ForeignDarktable on failure
+    # 5. Rotate to session C -- opened directly (not through the normal
+    # open_body path, whose own old.close() would itself quit P via the
+    # SAME fixed terminate() and make the foreign check moot: nothing
+    # "foreign" would even be running by the time C opens). P must still be
+    # ALIVE here, so foreign() genuinely has to tell "P is ours" (carried
+    # over into C's cache by point_cache) from "P is foreign" -- open()
+    # must not raise ForeignDarktable.
+    #
+    # (fix round 3 review R1): `_session()`'s own `point_cache(C's cache,
+    # ...)` re-points ambient correctly BEFORE `s.open()` runs -- setting
+    # the drift any earlier is overwritten by that call and never reaches
+    # `foreign()` at all (the review's own mutation finding: unbinding
+    # `DtControl.foreign` left the round-2 version of this test all green).
+    # Pin the drift to fire AT the exact call `foreign()` makes, by
+    # patching `DtControl.foreign` for this one call: ambient only drifts
+    # to the process cache the INSTANT the check runs -- the production
+    # race window (another session's late close finishing in between).
+    routed.n += 1
+    c_root = run.sessions_dir / "coverage" / f"{routed.n:03d}-olympus"
+    point_cache(c_root / "cache", *routed._roots())
+
+    real_foreign = DtControl.foreign
+
+    def foreign_under_drift(self_dt):
+        monkeypatch.setenv("SCOUTER_CACHE", str(process_cache))
+        return real_foreign(self_dt)
+    monkeypatch.setattr(DtControl, "foreign", foreign_under_drift)
+
+    session_c = factory(a.corpus(), c_root, "olympus", run.root)
+    routed.current = session_c
+    session_c.open()  # raises ForeignDarktable on failure
 
     # 6. Repeat with the drift STILL in place (no re-point this time) -- the
     # _launch retry / fence_and_recover path is covered by the SAME
