@@ -117,6 +117,31 @@ def _mid(s: vocab.ParamSpec) -> float:
     return m
 
 
+#: COV-weaker-at-zero (night-1 row 471, cov-colorzones.strength-sony_a7-
+#: nudge_dn1): `colorzones.strength` declares no `default`/`neutral` (its
+#: row's `_at_baseline` can never see darktable's own default for it), and
+#: `nudge` moves the slider by DARKTABLE'S OWN gui step (scouter/core/
+#: darkroom.py `nudge`'s docstring), not `s.step` -- coarse enough here that
+#: a single `nudge_dn1` from `_mid(s)` (1.0) lands exactly back on the
+#: frame's own baseline reading (0.0): a real, correctly-signed decrease
+#: that reads identically to "nothing happened" once only the sidecar is
+#: compared. Only DOWN is at risk (a param can't nudge UP past `_mid(s)`
+#: back onto a baseline at `s.lo`), so only the down-direction precondition
+#: moves, to `s.hi` -- the farthest point a single native step down could
+#: still not reach zero from.
+NUDGE_PRECONDITION_OVERRIDE_DN: dict[tuple[str, str], str] = {
+    ("colorzones", "strength"): "hi",
+}
+
+
+def _nudge_precondition(s: vocab.ParamSpec, n: int) -> float:
+    if n < 0:
+        which = NUDGE_PRECONDITION_OVERRIDE_DN.get((s.module, s.param))
+        if which:
+            return getattr(s, which)
+    return _mid(s)
+
+
 def _neutral(s: vocab.ParamSpec) -> float:
     if s.neutral is not None:
         return s.neutral
@@ -240,7 +265,7 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
             chg = Check("M1", kind="changed", sign=n,
                        target={"key": k, "unit": s.unit, "from": 1 + o})
             out.append(_case(cid(_signed("nudge", n)), body, "P1",
-                             [*pre, _set(s, _mid(s)),
+                             [*pre, _set(s, _nudge_precondition(s, n)),
                               step("darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param,
                                    steps=n)],
                              Expect("edit", [chg], _side(s))))
@@ -334,7 +359,7 @@ def unreachable_cases(body: str) -> list[Case]:
     ]
 
 
-def _phrase_expect(p: phrases.Phrase, sign: float = 1.0) -> Expect:
+def _phrase_expect(p: phrases.Phrase, sign: float = 1.0, from_step: int = 0) -> Expect:
     if p.key in TINT_KEYS:
         return Expect("typed_error", codes=["value_unknown"])
     checks: list[Check] = []
@@ -352,11 +377,35 @@ def _phrase_expect(p: phrases.Phrase, sign: float = 1.0) -> Expect:
             continue
         else:
             checks.append(Check("M1", kind="changed", sign=int(sign * (1 if mv.notches > 0 else -1)),  # noqa: E501
-                                target={"key": key(row.module, row.param), "unit": row.unit}))
+                                target={"key": key(row.module, row.param), "unit": row.unit,
+                                        "from": from_step}))
     metric, stat, region, sgn = PHRASE_STAT.get(p.key, (None, None, None, 0))
     if metric:
         checks.append(Check(metric, stat=stat, region=region, sign=sgn))
     return Expect("edit", checks, {"changed": True})
+
+
+#: COV-weaker-at-zero (night-1 row 471, cov-phrase-weaker_grade-*-bare/
+#: touch/lot/synonym): the hero frame's colour-balance chroma rows all
+#: start at their declared neutral (0%, no grade applied yet) -- every
+#: "weaker colour grade" case asked to weaken a grade that was never
+#: there. `scouter/core/moves.py:_adjust_core`'s own "already at the
+#: limit" early return (correctly) answers noop for each of the three
+#: chroma moves, clamped straight back to 0%: an honest noop, but the
+#: case's own `Expect("edit", ..., {"changed": True})` still asked for a
+#: change, so it was scored a silent failure (rule a) instead of the noop
+#: it is. Precede weaker_grade with a `stronger_grade` step so it has a
+#: real grade to weaken, and check "changed" from the snapshot AFTER that
+#: precondition (`from_step`), not from the frame's own start -- otherwise
+#: a same-sized weaken cancels the grade step exactly and looks unchanged
+#: from step 0 again.
+GRADED_PRECONDITION_KEYS = frozenset({"weaker_grade"})
+
+
+def _graded_precondition(p: phrases.Phrase) -> list:
+    if p.key not in GRADED_PRECONDITION_KEYS:
+        return []
+    return [step("darkroom_say", BUDGET_SAY, phrase="stronger colour grade a lot")]
 
 
 #: Item 4a: these two phrases' only move is a Kelvin-relative temperature
@@ -379,12 +428,13 @@ def phrase_cases(body: str) -> list[Case]:
         forms = [("bare", syn, "P0"), ("touch", f"{syn} a touch", "P1"),
                  ("lot", f"{syn} a lot", "P1")]
         wb_meta = _wb_phrase_meta(p, body)
+        pre = _graded_precondition(p)
         for label, text, tier in forms:
-            exp = Expect("edit", []) if wb_meta else _phrase_expect(p)
+            exp = Expect("edit", []) if wb_meta else _phrase_expect(p, from_step=len(pre))
             role = "hero_bright" if (label == "touch" and body == "olympus" and
                                       p.key in BRIGHT_HERO_TOUCH_KEYS) else "hero"
             out.append(_case(case_id(PREFIX, "phrase", p.key, body, label), body, tier,
-                             [step("darkroom_say", BUDGET_SAY, phrase=text)], exp,
+                             [*pre, step("darkroom_say", BUDGET_SAY, phrase=text)], exp,
                              meta=wb_meta, frame_role=role))
         row = _row(p.moves[0])
         by, amount = EXPLICIT_BY_UNIT.get(row.unit, ("0.2", 0.2))
@@ -407,10 +457,12 @@ def phrase_cases(body: str) -> list[Case]:
                          [step("darkroom_say", BUDGET_SAY, phrase=text)], exp, meta=wb_meta))
     for p in phrases.PHRASES:
         wb_meta = _wb_phrase_meta(p, body)
+        pre = _graded_precondition(p)
         for syn in p.synonyms:
-            exp = Expect("edit", []) if wb_meta else _phrase_expect(p)
+            exp = Expect("edit", []) if wb_meta else _phrase_expect(p, from_step=len(pre))
             out.append(_case(case_id(PREFIX, "synonym", p.key, syn, body), body, "P1",
-                             [step("darkroom_say", BUDGET_SAY, phrase=syn)], exp, meta=wb_meta))
+                             [*pre, step("darkroom_say", BUDGET_SAY, phrase=syn)], exp,
+                             meta=wb_meta))
     return out
 
 

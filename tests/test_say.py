@@ -115,6 +115,31 @@ class SayTest(_MovesFixture):
         self.assertEqual(len(r.moves), 1)
         self.assertEqual(r.refused[0]["code"], "not_in_darkroom")
 
+    def test_weaker_grade_on_an_ungraded_frame_is_a_typed_noop(self) -> None:
+        """COV-weaker-at-zero (night-1, row 471): the hero frame's colour
+        balance rgb chroma rows all start at 0% (no grade applied yet).
+        "weaker colour grade" asks to weaken a grade that was never there --
+        every one of its three moves clamps straight back to 0%, a real
+        no-op (`_adjust_core`'s own "already at the limit" path). The
+        phrase's own answer must say so at the top level (row-432 shape:
+        `noop=True`, `outcome` stays "ok"), not the plain `ok` the gauntlet's
+        `_env_ok` would otherwise call "reported"."""
+        r = moves.say.__wrapped__("weaker colour grade", commit=False, job="job-test")
+        self.assertEqual(r.outcome, "ok")
+        self.assertTrue(r.noop, "every move was a no-op; the phrase itself must say so")
+        self.assertTrue(all(m["noop"] for m in r.moves))
+        self.assertEqual(self.sets(), [], "an all-noop phrase must send nothing")
+        self.assertTrue(any("nothing to change" in w for w in r.warnings))
+
+    def test_weaker_grade_after_a_real_grade_is_not_a_noop(self) -> None:
+        """The same phrase, with something to weaken, is a genuine edit --
+        the noop flag must not fire just because SOME earlier call in the
+        job graded the image."""
+        moves.say.__wrapped__("stronger colour grade a lot", commit=False, job="job-test")
+        r = moves.say.__wrapped__("weaker colour grade", commit=False, job="job-test")
+        self.assertFalse(r.noop)
+        self.assertFalse(any(m["noop"] for m in r.moves))
+
 
 class SetMoveBeforeTest(_MovesFixture):
     """Final review #1a ruling: a `set` move (the hue rows of warm_highlights,

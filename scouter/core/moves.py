@@ -815,13 +815,30 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
     finally:
         darkroom.NO_WB_REROUTE.reset(no_reroute)
         journal.GROUP.reset(token)
+    # COV-weaker-at-zero (night-1, row 471): every planned move landed but
+    # each one, on its own, changed nothing (already at its limit, or the
+    # value it already held) -- "weaker colour grade" on a frame with no
+    # grade to weaken is the recorded case. Never answer a plain `ok` for
+    # that: it reads as a claimed edit with nothing to show for it. `noop`
+    # is the row-432 shape (`CommitResult.noop`) -- `outcome` stays "ok"
+    # (nothing raised, nothing half-applied), but the flag says the phrase
+    # itself did nothing, which is what `_env_ok`/`_is_noop` (gauntlet
+    # evaluate.py) check before calling a write "reported".
+    all_moves_noop = bool(landed) and not failures and all(m.get("noop") for m in landed)
+    noop_warning = (
+        [f"nothing to change: every move of {phrase!r} was already at its target "
+         "(nothing sent to darktable)"]
+        if all_moves_noop else []
+    )
     return SayResult(
         outcome="partial" if failures else "ok",
+        noop=all_moves_noop,
         image_id=resolved.image_id, path=resolved.path, phrase=phrase, key=res.key,
         intensity=res.intensity, group=group, moves=landed, refused=failures,
         summary="; ".join(m.get("summary", "") for m in landed),
         explain=explain.lines(notes, level=level, job=job),
-        warnings=[w for w in [warning, wb_routed and darkroom.wb_routed_note(wb_routed)] if w],
+        warnings=[w for w in [warning, wb_routed and darkroom.wb_routed_note(wb_routed)] if w]
+        + noop_warning,
         plan=[pre],
     )
 

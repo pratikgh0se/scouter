@@ -607,6 +607,16 @@ class SayResult(Payload):
     refused: list[dict] = field(default_factory=list)
     summary: str = ""
     explain: list[str] = field(default_factory=list)
+    # Row 432 shape (CommitResult.noop): True when every landed move of the
+    # phrase was itself a no-op (a zero-net move: already at its limit, or
+    # asked for the value it already held) -- COV-weaker-at-zero (night-1,
+    # row 471): "weaker colour grade" on a frame with no grade to weaken
+    # must not answer a plain `ok` that the gauntlet's own `reported`/
+    # `_env_ok` checks (which look at this field, not just `outcome`) would
+    # score as a claimed-but-unverifiable edit. `outcome` stays "ok" -- this
+    # is a fact about the phrase's OWN moves, not a raised error -- exactly
+    # how `darkroom.history_commit`'s `noop` field works.
+    noop: bool = False
 
 
 @dataclass

@@ -1,0 +1,18 @@
+{
+  "about": "Zenkai Rules Z1 intent examples: 'weaker colour grade' with nothing to weaken must answer a typed noop, never a plain ok (night-1 row 471, COV-weaker-at-zero). Each example runs against the phase 3 _MovesFixture (tests/test_moves.py: P6281348.ORF.xmp, no colour-balance-rgb history yet -- every chroma row starts at its declared neutral, 0%). Run by tests/intent/test_weaker_grade_noop_intent.py. Two oracles per example: the phrase's own top-level `noop` field (scouter/core/moves.py:say, scouter/types.py:SayResult) and the FakeBridge's own recorded `darkroom.action` call count (an honest noop sends nothing).",
+  "subject": "scouter/core/moves.py:say (the colorbalancergb {shadows,midtones,highlights}_chroma moves of the weaker_grade phrase)",
+  "examples": [
+    {
+      "id": "weaker-grade-bare-nothing-to-weaken",
+      "input": {"phrase": "weaker colour grade", "precondition": null},
+      "expect": {"outcome": "ok", "noop": true, "sends": 0, "every_move_noop": true},
+      "source": "night-1 gauntlet triage row 471 (COV-weaker-at-zero, cov-phrase-weaker_grade-olympus-bare): every chroma move '+0% (0% -> 0%)', history_end 65 -> 65 -- the recorded run (5501801) answered ok with noop false; the fix types it noop (row-432 shape) instead"
+    },
+    {
+      "id": "weaker-grade-after-a-real-grade-is-an-edit",
+      "input": {"phrase": "weaker colour grade", "precondition": "stronger colour grade a lot"},
+      "expect": {"outcome": "ok", "noop": false, "sends": 3, "every_move_noop": false},
+      "source": "control example: the same phrase, with something to weaken (the gauntlet fix's own graded precondition, tests/gauntlet/layers/coverage.py:_graded_precondition), must not be flattened to a noop just because the field now exists"
+    }
+  ]
+}
