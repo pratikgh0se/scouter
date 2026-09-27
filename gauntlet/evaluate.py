@@ -84,7 +84,13 @@ class Verdict:
 def is_hang(outcome: str | None, blocked: str | None) -> bool:
     """(final fix I6): the ONE definition of a hang, shared by the report and
     the progress page: a failed_hang verdict, the runner's own hard_cap, or an
-    adapter's "hang..." blocked reason."""
+    adapter's "hang..." blocked reason.
+
+    (night1-robustness-triage.md item 2): `inherited_wedge` is deliberately
+    NOT a hang -- it is a case that started after darktable was already
+    wedged by an EARLIER case's own hang (rob-r12..r15's shape, all inherited
+    from rob-r11's single true hang). It falls through to `blocked` below
+    (still a FAIL) without ever matching `b.startswith("hang")`."""
     b = blocked or ""
     return canonical_outcome(outcome or "") == "failed_hang" or b == "hard_cap" \
         or b.startswith("hang")

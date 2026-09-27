@@ -19,8 +19,11 @@ def corpus(tmp_path):
 
 
 def test_timeout_with_unresponsive_ping_blocks_as_hang(corpus, tmp_path, monkeypatch):
+    """darktable is healthy going INTO this case (fix B's pre-case ping passes)
+    and only goes unresponsive on the case's OWN step -- a genuine hang, not
+    an inherited wedge (see test_inherited_wedge_is_not_scored_as_a_hang)."""
     mcp = FakeMcp({"darkroom_say": TimeoutError("no answer")})
-    s = _session(corpus, tmp_path, FakeDt(health="unresponsive"), mcp).open()
+    s = _session(corpus, tmp_path, FakeDt(health=["alive", "unresponsive"]), mcp).open()
     monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
                                                                  "params": {}, "units": {}})
     case = Case(id="c", layer="scenarios", tier="P0", mode="tool",
@@ -28,6 +31,26 @@ def test_timeout_with_unresponsive_ping_blocks_as_hang(corpus, tmp_path, monkeyp
                 expect=Expect("edit"), body="olympus", frame_role="hero")
     obs = execute.run_tool_case(s, case)
     assert obs.blocked == "hang" and obs.calls[0].health == "unresponsive"
+
+
+def test_inherited_wedge_is_not_scored_as_a_hang(corpus, tmp_path, monkeypatch):
+    """Fix B (night1-robustness-triage.md item 2): darktable is ALREADY
+    unresponsive before this case's own steps ever run (rob-r12's shape,
+    inherited from rob-r11's hang) -- `blocked` must be `inherited_wedge`,
+    never `hang` (evaluate.is_hang must not count it), and the case's own
+    steps must never even be attempted."""
+    dt = FakeDt(health="unresponsive")
+    s = _session(corpus, tmp_path, dt).open()
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
+                                                                 "params": {}, "units": {}})
+    case = Case(id="c", layer="scenarios", tier="P0", mode="tool",
+                steps=[Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
+                expect=Expect("edit"), body="olympus", frame_role="hero")
+    obs = execute.run_tool_case(s, case)
+    assert obs.blocked == "inherited_wedge"
+    assert obs.calls == []
+    from gauntlet.evaluate import is_hang
+    assert not is_hang("blocked", obs.blocked)
 
 
 def test_placeholders_and_originals_guard(corpus, tmp_path, monkeypatch):

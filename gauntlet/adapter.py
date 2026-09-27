@@ -47,7 +47,7 @@ class Observation:
     stats_after: dict = field(default_factory=dict)
     floors: dict = field(default_factory=dict)  # {stat: floor}
     agent_text: str | None = None
-    blocked: str | None = None  # launch | hang | hard_cap | transient | ...
+    blocked: str | None = None  # launch | hang | hard_cap | inherited_wedge | transient | ...
     crash_reports: list[str] = field(default_factory=list)
     hang_evidence: list[str] = field(default_factory=list)
     healed: bool = False
