@@ -13,7 +13,8 @@ def load_policy() -> Policy:
     return Policy(refusal_codes=frozenset(cm["refusal_codes"]),
                   transient_codes=frozenset(cm["transient_codes"]),
                   refusal_markers=tuple(cm["refusal_markers"]),
-                  claim_markers=tuple(cm["claim_markers"]))
+                  claim_markers=tuple(cm["claim_markers"]),
+                  offer_markers=tuple(cm.get("offer_markers", ())))
 
 
 POLICY = load_policy()

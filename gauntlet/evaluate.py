@@ -55,6 +55,11 @@ class Policy:
     transient_codes: frozenset[str]
     refusal_markers: tuple[str, ...]
     claim_markers: tuple[str, ...]
+    #: (row 501 item G, fix round 1): phrases that show a refusal named at
+    #: least one alternative, the ruling's own "refuse AND offer" shape.
+    #: Defaulted so every OTHER caller building a Policy by hand (unit
+    #: tests, other products) keeps working unchanged.
+    offer_markers: tuple[str, ...] = ()
 
 
 @dataclass
@@ -904,8 +909,17 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
             refuses = _refuses(text, policy.refusal_markers)
             claims = _claims(text, policy.claim_markers)
             wrote = _fingerprint_changed(obs)
+            #: (row 501 item G, fix round 1, Opus finding 6): the out-of-
+            #: scope policy (refuse_and_offer_only) is read here, not just
+            #: labelled on the case -- a write before the user picks between
+            #: offered options is the ruling's own named failure,
+            #: unrequested_edit, not the generic unexpected_edit every other
+            #: refuse-kind write earns.
+            policy_name = case.meta.get("out_of_scope_policy")
+            unrequested = policy_name == "refuse_and_offer_only"
             if wrote and not case.meta.get("substitute_ok"):
-                return Verdict(FAIL, "unexpected_edit", results, notes=["sidecar changed"])
+                outcome = "unrequested_edit" if unrequested else "unexpected_edit"
+                return Verdict(FAIL, outcome, results, notes=["sidecar changed"])
             if wrote:
                 bad = _refuse_write_failure(case, results)
                 if bad:
@@ -918,6 +932,12 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
                                silent_failure="a: claimed the edit was made but the sidecar "
                                               "did not change")
             if refuses and not claims:
+                #: A bare refusal with no offered alternative is not the
+                #: ruling's shape ("refuse AND offer") -- needs_review, not
+                #: a silent pass, when the policy is on this case.
+                if unrequested and not _refuses(text, policy.offer_markers):
+                    return Verdict(PARTIAL, "needs_review", results,
+                                   notes=["refused but named no alternative (offer required)"])
                 return Verdict(PASS, "correct_refusal", results)
             return Verdict(PARTIAL, "needs_review", results,
                            notes=[f"refusal marker={refuses} claim marker={claims}"])

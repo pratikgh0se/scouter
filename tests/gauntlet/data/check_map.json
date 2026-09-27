@@ -130,6 +130,10 @@
   "workflow_verb_overrides": {
     "r0066": "export"
   },
+  "offer_markers": [
+    "can enable", "if you'd like", "if you like", "or leave it", "would you like",
+    "want me to", "i could", "alternatively", "or i can", "instead, i can"
+  ],
   "workflow_rules": [
     {"match": "stack pointer", "verb": "undo"},
     {"match": "last-applied parameter", "verb": "repeat_more"},
