@@ -12,7 +12,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+import uuid
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "htc_post_run.sh"
@@ -72,7 +74,17 @@ class _FakeRepoCase(unittest.TestCase):
         # repo; --execute's GATE_CMD/PYTEST_CMD are always overridden below.
 
         self.runs_root = root / "gauntlet"
-        self.run_dir = self.runs_root / "night1-20260927"
+        # Row 495/496: a unique, per-test stamp (uuid), not a fixed
+        # "night1-20260927" shared by every test in this class -- the
+        # precondition check does a HOST-WIDE `pgrep -f "run --stamp
+        # <stamp>"` (unfaked in this class, unlike LiveRunnerRefusalTest),
+        # so a fixed, date-shaped stamp can collide with a real, unrelated
+        # gauntlet runner actually live on a busy shared machine (observed:
+        # keeper-log.md, three separate transient pgrep hits on
+        # night1-20260927 across three reruns). A uuid-suffixed stamp is
+        # never a real run's stamp.
+        self.stamp = f"night1-test-{uuid.uuid4().hex[:12]}"
+        self.run_dir = self.runs_root / self.stamp
         self.run_dir.mkdir(parents=True)
 
     def write_progress(self, status: str, layers: dict[str, str] | None = None) -> None:
@@ -148,6 +160,42 @@ class PreconditionGateTest(_FakeRepoCase):
         p = self.invoke()
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("runner pid gone", p.stdout)
+
+    def test_a_foreign_process_whose_argv_contains_another_runs_stamp_text_is_not_matched(
+            self) -> None:
+        """Row 495/496: `pgrep -f` does a plain substring/regex search, so
+        an UNANCHORED `run --stamp $STAMP_NAME` would false-positive when
+        this run's own stamp is a textual PREFIX of a different, unrelated
+        run's (longer) stamp -- exactly the shape a uuid-suffixed test
+        stamp (`self.stamp`) and a copy of it with extra text tacked on
+        recreate. Spawns a REAL foreign process (same pattern as
+        `tests/test_htc_night2.py::GauntletRunnerRefusalTest`) whose argv
+        is `... run --stamp <self.stamp>-OTHERRUN --resume ...` -- text
+        that trivially CONTAINS `self.stamp` -- and proves the precondition
+        for `self.stamp` itself does NOT block on it."""
+        self.write_progress("done")
+        foreign_stamp = f"{self.stamp}-OTHERRUN"
+        proc = subprocess.Popen(
+            ["python3", "-c",
+             f"import time  # stand-in for the gauntlet launcher's own argv\n"
+             f"# run --stamp {foreign_stamp} --resume --wait-on-park\n"
+             "time.sleep(20)"])
+        self.addCleanup(proc.kill)
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            found = subprocess.run(
+                ["pgrep", "-f", f"run --stamp {foreign_stamp}"],
+                capture_output=True).returncode == 0
+            if found:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("dummy foreign process never became visible to pgrep")
+
+        p = self.invoke()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("no live runner", p.stdout)
+        self.assertNotIn("BLOCKED", p.stdout)
 
     def test_passes_and_prints_the_batch_when_both_hold(self) -> None:
         self.write_progress("done")
