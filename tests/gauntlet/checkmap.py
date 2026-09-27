@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from gauntlet.case import Check, Expect
+
 
 @dataclass(frozen=True)
 class PartCheck:
@@ -167,6 +169,58 @@ def wb_route_a_expect(cmap: dict, case_key: str, preset: int | None, *,
             "unit": r["m1_key"]["unit"], "allowed": list(r["derived_keys"]),
             "unchanged": list(r["unchanged_keys"]),
             "direction_verified": bool(r["direction_verified"])}
+
+
+def wb_route_a_pinned_edit(route: dict, *, sign: int | None = None,
+                           value: float | None = None) -> Expect:
+    """Review round 2, finding 10 (GC-1): shared with `coverage.py` (its own
+    `_wb_route_a_pinned_edit`, fix round 1 review I4) so every generator
+    that wires `wb_route_a_expect`/`_expect_for_hero` scores the SAME way
+    once `channelmixerrgb.temperature` is pinned, not just coverage's. Once
+    pinned, a warmth write actually lands there, not on
+    `temperature.temperature` -- build the Expect from the dict
+    `wb_route_a_expect`/`_expect_for_hero` returns (`m1_key`, `derived_keys`,
+    `unchanged_keys`), rather than falling through to the ordinary
+    `temperature.temperature` checks (which the write never touches once
+    pinned) or a permissive `Expect("edit", [])` placeholder.
+    `direction_verified` is False in check_map.json until the host probe,
+    so a sign is asserted only when it is True; otherwise the case still
+    verifies that the value changed (never a specific value: an unverified
+    sign means "moved, direction unknown") plus the derived keys and the
+    untouched WB preset, with a `sign_unverified` tag on the `changed`
+    check instead of guessing a sign. `route["unit"]` is always
+    check_map.json's own canonical unit string (wb_route_a.m1_key.unit is
+    "K") -- no further unit-name normalization needed here, unlike
+    layers/common.py's generic `sidecar()` (which this module cannot
+    import: `layers/common.py` itself imports from here).
+
+    Review round 3, GR-1 (P1 blocker): the tag key here is `sign_unverified`,
+    deliberately never `needs_review` or `disputed`. gauntlet/evaluate.py's
+    typed needs_review path (added review round 2, GD-2) reads only the
+    `disputed` key, which the install layer uses. Before that evaluator
+    change, this tag was read by nothing (a comment only); had it shared the
+    evaluator's key, every pinned Route-A `equals` case (an explicit
+    `value=`, no sign involved at all) would have been opted into the same
+    "never hard-fail" path -- a wrong Kelvin value from a real product bug
+    would have silently scored `needs_review` instead of `failed`. So the
+    tag is inert to the evaluator and applies ONLY to the `changed`-kind
+    branch below, never to `equals`."""
+    to_key = route["m1_key"]
+    to_module, to_param = to_key.split(".", 1)
+    unit = route["unit"]
+    if value is not None:
+        move = Check("M1", kind="equals", target={"key": to_key, "value": value, "unit": unit})
+    else:
+        tags = {} if route["direction_verified"] else {
+            "sign_unverified": "route A pinned but direction_verified is False in "
+                               "check_map.json -- sign unverified until the host probe"}
+        s = sign if route["direction_verified"] else 0
+        move = Check("M1", kind="changed", sign=s or 0, target={"key": to_key, "unit": unit},
+                     tags=tags)
+    unchanged = Check("M1", kind="unchanged", target={"keys": list(route["unchanged"])})
+    side = {"changed": True, "key": to_key, "units": {to_key: unit},
+           "allowed": list(route["allowed"])}
+    return Expect("edit", [move, unchanged], side)
 
 
 def route_a_pinned(cmap: dict) -> bool:

@@ -4,6 +4,7 @@ import shutil
 
 import pytest
 
+from gauntlet.case import Case, Step
 from tests.gauntlet import checkmap, p0, taxonomy
 
 
@@ -84,6 +85,65 @@ def test_wb_route_a_block_loads_and_resolves(tax):
     assert checkmap.wb_route_a_expect(cmap, "brighter", 4, pinned=True) is None
     from scouter.core import vocab
     assert vocab.spec("channelmixerrgb", "temperature") is not None
+
+
+def test_wb_route_a_pinned_edit_builds_the_pinned_expect(tax):
+    """Review round 2, finding 10 (GC-1): shared through checkmap.py so
+    every generator (coverage.py, and now layers/guide.py) scores a pinned
+    Route A move the same way -- the channelmixerrgb.temperature key, its
+    derived x/y keys, the untouched WB preset, and (review round 3, GR-1) a
+    `sign_unverified` tag -- never `needs_review`, which collides with
+    install's own evaluator-reactive tag key -- on the move check while
+    direction_verified is still False."""
+    cmap = tax.check_map
+    route = checkmap.wb_route_a_expect(cmap, "temperature.temperature", 4, pinned=True)
+    exp = checkmap.wb_route_a_pinned_edit(route, sign=1)
+    assert exp.kind == "edit"
+    move, unchanged = exp.checks
+    assert move.target["key"] == "channelmixerrgb.temperature"
+    assert move.kind == "changed" and move.sign == 0  # direction_verified False: no guessed sign
+    assert move.tags.get("sign_unverified")
+    assert "needs_review" not in move.tags
+    assert unchanged.target["keys"] == ["temperature.preset"]
+    assert exp.sidecar == {"changed": True, "key": "channelmixerrgb.temperature",
+                           "units": {"channelmixerrgb.temperature": "K"},
+                           "allowed": ["channelmixerrgb.x", "channelmixerrgb.y"]}
+    # an explicit value skips the sign branch entirely -- and (GR-1) is
+    # NEVER tagged: a wrong landed value there is a real product failure.
+    exp_val = checkmap.wb_route_a_pinned_edit(route, value=6500.0)
+    assert exp_val.checks[0].target == {"key": "channelmixerrgb.temperature", "value": 6500.0,
+                                        "unit": "K"}
+    assert exp_val.checks[0].tags == {}
+
+
+def test_wb_route_a_pinned_equals_miss_never_scores_needs_review(tax):
+    """GR-1's own probe, made a test: Route A pinned, wanted 3300 K, the
+    product lands 5800 K. Before this fix, `equals` checks still carried
+    the (then-shared) tag, so this scored `partial needs_review` with the
+    note "sign unverified" -- a wrong value, a genuine product failure,
+    relabelled as a pending decision with a false reason. It must score a
+    real failure/partial, and never `needs_review`."""
+    from gauntlet.adapter import CallRecord, Observation
+    from gauntlet.evaluate import Policy, evaluate
+
+    cmap = tax.check_map
+    route = checkmap.wb_route_a_expect(cmap, "temperature.temperature", 4, pinned=True)
+    exp = checkmap.wb_route_a_pinned_edit(route, value=3300.0)
+    case = Case(id="c", layer="coverage", tier="P0", mode="tool",
+               steps=[Step("darkroom_set", {}, budget_s=3.5, write=True)],
+               expect=exp, body="olympus", frame_role="hero")
+    policy = Policy(refusal_codes=frozenset(), transient_codes=frozenset(),
+                    refusal_markers=(), claim_markers=())
+    before = {"fingerprint": "a", "params": {"channelmixerrgb.temperature": 6500.0,
+                                             "temperature.preset": 4}}
+    after = {"fingerprint": "b", "params": {"channelmixerrgb.temperature": 5800.0,  # wanted 3300
+                                            "temperature.preset": 4}}
+    obs = Observation(calls=[CallRecord("darkroom_set", {}, {"ok": True, "outcome": "ok",
+                                                              "data": {}}, write=True)],
+                      before=before, after=after)
+    v = evaluate(case, obs, policy)
+    assert v.outcome != "needs_review", v
+    assert v.score in ("fail", "partial"), v
 
 
 def test_wb_route_a_tint_always_refuses_on_preset_4(tax):

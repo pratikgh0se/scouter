@@ -99,19 +99,72 @@ class Rehearsal:
             ok = (cfg / "darktablerc").exists() and (cfg / "library.db").exists()
             return ok, {"terminate": res}
         if name in ("setup", "setup_again", "rerun_existing"):
+            #: Review round 3, GR-2 (P1 blocker): `config init --yes`
+            #: unconditionally replaces an existing config.json
+            #: (scouter/config.py init: `os.replace`). Running it after
+            #: EVERY setup-shaped action clobbered ins-08's own pre-seeded
+            #: `{}` -- a product bug where `setup` itself overwrites a
+            #: user's config would have become invisible, and
+            #: config_has_version would have passed trivially either way.
+            #: `config init` now runs ONLY for `setup` (ins-04, the fresh-
+            #: machine case). `rerun_existing` (ins-08) snapshots the
+            #: config bytes before `setup` and asserts they are byte-
+            #: identical after (`detail["config_unchanged"]`) -- so a
+            #: clobber is caught, not hidden. `setup_again` (ins-09) never
+            #: runs init either, and it runs after 07 teardown (rmtree) and
+            #: 08's `{}` seed, so its config carries no version field; the
+            #: layer asserts only its idempotency there (`tree_unchanged`
+            #: folded into `ok`), never config_has_version (review round 4,
+            #: GR3-1).
+            config_before = None
             if name == "rerun_existing":
                 (self.config / "scouter").mkdir(parents=True, exist_ok=True)
                 (self.config / "scouter" / "config.json").write_text("{}\n")
+                config_before = self._config_bytes()
             before = self._tree_hash()
             code, rep = self._scouter("setup")
-            ok = code == 0 and json.loads((self.config / "scouter" / "config.json")
-                                          .read_text()).get("version") is not None
+            detail = dict(rep)
+            if name == "setup":
+                #: Pratik's ruling, row 496 item 7 (triage rank 8's
+                #: recommended option 1): `scouter/cli/setup.py`
+                #: deliberately never writes config.json itself (its own
+                #: config item is `required: False`, reported only) -- the
+                #: REHEARSAL runs `scouter config init --yes` right after
+                #: `scouter setup`, so the rehearsal as a whole still
+                #: leaves a valid config behind. Note for the report: spec
+                #: 3.7's wording ("setup writes a valid config") is to be
+                #: amended to say the REHEARSAL is responsible for the
+                #: config, not the `setup` verb alone.
+                init_code, init_rep = self._scouter("config", "init", "--yes")
+                detail["config_init"] = init_rep
+                ok = code == 0 and init_code == 0
+            else:
+                ok = code == 0
+            tree_unchanged = self._tree_hash() == before
             if name == "setup_again":
-                ok = ok and self._tree_hash() == before
-            return ok, rep
+                ok = ok and tree_unchanged
+            if name == "rerun_existing":
+                detail["config_unchanged"] = self._config_bytes() == config_before
+            detail["config_has_version"] = self._config_has_version()
+            if not detail["config_has_version"]:
+                detail["needs_review_reason"] = (
+                    "spec 3.7 expects setup to leave config.json with a version field; "
+                    "the rehearsal now runs `scouter config init --yes` itself right after "
+                    "`scouter setup` (row 496 item 7, ins-04 only -- GR-2), which should make "
+                    "this always true there -- still reported so a regression in `config init` "
+                    "itself is never silently folded into the doctor-down 'blocked' path")
+            #: Review round 2, finding 2 (GD-1): setup_again's own
+            #: idempotency break must never be masked by the doctor marker
+            #: below (blocked short-circuits every check in evaluate()).
+            self._mark_needs_darktable(code, rep, detail,
+                                       extra_ok=tree_unchanged if name == "setup_again" else True)
+            return ok, detail
         if name == "setup_check":
             code, rep = self._scouter("setup", "--check")
-            return code == 0 and bool(rep.get("ok")), rep
+            ok = code == 0 and bool(rep.get("ok"))
+            detail = dict(rep)
+            self._mark_needs_darktable(code, rep, detail)
+            return ok, detail
         if name == "mcp_register":
             server = f"{sys.executable} -m scouter.mcp.server"
             self.run(["claude", "mcp", "add", "scouter", "--scope", "user", "--",
@@ -132,6 +185,56 @@ class Rehearsal:
             same = self.facts.get("hash_after", mcp_servers_hash()) == self.hash_before
             return not leaks and same, {"leaks": leaks[:50], "mcp_servers_unchanged": same}
         raise ValueError(f"unknown rehearsal action {name!r}")
+
+    def _config_has_version(self) -> bool:
+        path = self.config / "scouter" / "config.json"
+        if not path.is_file():
+            return False
+        try:
+            return json.loads(path.read_text()).get("version") is not None
+        except ValueError:
+            return False
+
+    def _config_bytes(self) -> bytes | None:
+        """Review round 3, GR-2: the raw bytes of config.json, or None when
+        it does not exist -- `rerun_existing`'s own before/after comparison
+        (ins-08 must be able to catch a `setup` that clobbers a user's
+        config, never trivially pass because `config init` overwrote it)."""
+        path = self.config / "scouter" / "config.json"
+        return path.read_bytes() if path.is_file() else None
+
+    @staticmethod
+    def _mark_needs_darktable(code: int, rep: dict, detail: dict, *, extra_ok: bool = True
+                              ) -> None:
+        """Fix D (night-1 triage rank 5/8's doctor half, INS-doctor-needs-
+        darktable): `scouter setup`/`setup --check`'s own `doctor` item is
+        `required` (setup.py's default) and answers unavailable/bridge_timeout
+        when no darktable with the plugin loaded is running -- exactly the
+        rehearsal's own state right after ins-03 quits it (spec 3.7 never
+        launches one again before ins-04/05/08/09). That is an ENVIRONMENT
+        gap the harness itself created, not a product regression; marking it
+        lets InstallSession.run_case set Observation.blocked = "needs_darktable"
+        (evaluate()'s own "blocked" outcome, honestly distinct from a bare
+        "failed") instead of the numbers silently reading as a product bug.
+
+        Review round 2, finding 2 (GD-1, P0 blocker): doctor being down must
+        be the ONLY reason the action did not fully succeed, never a blanket
+        excuse. `extra_ok` is the caller's own check of everything the
+        doctor marker does not cover by itself (setup_again's tree-hash
+        idempotency; the caller passes False when that broke). And every
+        OTHER `required` item (plugin, luarc, wb_tables) must itself be
+        `ok`/`installed`/`updated` -- a broken plugin install, with doctor
+        also down, must still read as a real "failed", not "blocked"."""
+        if code == 0 or not extra_ok:
+            return
+        items = rep.get("items") or []
+        doctor = next((i for i in items if i.get("item") == "doctor"), None)
+        if doctor is None or doctor.get("status") == "ok":
+            return
+        others_ok = all(i.get("status") in ("ok", "installed", "updated")
+                        for i in items if i.get("item") != "doctor" and i.get("required", True))
+        if others_ok:
+            detail["_needs_darktable"] = True
 
     def _tree_hash(self) -> str:
         h = hashlib.sha256()
@@ -161,8 +264,19 @@ class InstallSession:
                                wall_s=time.monotonic() - t0)
         except Exception as e:  # noqa: BLE001 - a failed action is a result
             ok, detail = False, {"error": f"{type(e).__name__}: {e}"[:300]}
+        #: Fix D (night-1 triage rank 5, INS-doctor-needs-darktable): the
+        #: rehearsal's own `_mark_needs_darktable` leaves a `_needs_darktable`
+        #: marker in `detail` when the ONLY reason `ok` is False is the
+        #: doctor item requiring a running darktable -- an environment gap,
+        #: not a product regression. Observation.blocked makes evaluate()
+        #: score it "blocked" (still not a pass, but honestly distinct from
+        #: "failed"), and the reason travels with the case's own result.
+        blocked = None
+        if isinstance(detail, dict) and detail.pop("_needs_darktable", False):
+            blocked = "needs_darktable"
         return Observation(calls=[CallRecord("rehearsal", {"action": name},
                                              {"ok": ok, "outcome": "ok", "data": detail})],
+                           blocked=blocked,
                            extra={"action_ok": ok, "detail": detail},
                            wall_s=time.monotonic() - t0)
 

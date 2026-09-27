@@ -65,6 +65,24 @@ def needs_stats(case: Case) -> bool:
     return any(c.metric in STAT_METRICS for c in case.expect.checks)
 
 
+_JOB_PLACEHOLDERS = {"job_slug", "job_frame", "job_frames"}
+
+
+def _refs_job(case: Case) -> bool:
+    """True when any step's args reference {job_slug}/{job_frame:N}/
+    {job_frames} -- review round 2, finding 6 (GB-1)."""
+    def walk(v) -> bool:
+        if isinstance(v, str):
+            return any(m.group(1) in _JOB_PLACEHOLDERS for m in _PH.finditer(v))
+        if isinstance(v, list):
+            return any(walk(x) for x in v)
+        if isinstance(v, dict):
+            return any(walk(x) for x in v.values())
+        return False
+
+    return any(walk(st.args) for st in case.steps)
+
+
 def isolate(session, frame: Path, role: str) -> bool:
     """Spec 2.3 case isolation: reset what the previous case touched; then the
     snapshot must equal this frame's session baseline, else the session is
@@ -104,9 +122,81 @@ def isolate(session, frame: Path, role: str) -> bool:
     return False
 
 
+def _mark_walkthrough_broken(session, case: Case, obs: Observation, walkthrough: bool) -> None:
+    """Review round 2, finding 9 (GA-1): record the FIRST walkthrough case
+    that ends the script's own intended state -- blocked, or a write step
+    that landed !ok when the case's own expectation was not a typed_error
+    (a refusal it was not scripted to produce). Never overwrites an
+    earlier break: the root cause, not the latest symptom."""
+    if not walkthrough or getattr(session, "walkthrough_broken", None) is not None:
+        return
+    broke = bool(obs.blocked)
+    if not broke and case.expect.kind != "typed_error":
+        broke = any(c.write and not (c.envelope or {}).get("ok") for c in obs.calls)
+    if broke:
+        session.walkthrough_broken = case.id
+
+
 def run_tool_case(session, case: Case, *, clock=time.monotonic, pre_ping: bool = True) -> Observation:
     obs = Observation()
     t0 = clock()
+    #: Fix A (night-1 triage rank 6, GD-walkthrough-state); review round 2
+    #: finding 14 (GA-3): the user-guide walkthrough (layers/guide.py
+    #: WALKTHROUGH, meta["session"] == "walkthrough") is one stateful
+    #: session in document order -- gd-02's "set contrast" runs on top of
+    #: gd-01's "set exposure", gd-04's undo expects gd-02/03's history to
+    #: still be there, gd-09's preset save needs the frame the earlier
+    #: steps actually left. Isolating every case (the ordinary rule) or
+    #: resetting its undo journal would erase exactly the state the next
+    #: scripted step depends on. An ordinary case (any other
+    #: meta["session"], or none) keeps the ordinary per-case isolation.
+    #: `getattr` (not a direct attribute read) for consistency with other
+    #: minimal session doubles elsewhere in this function.
+    #: Z1 intent example: tests/intent/walkthrough_state.json.
+    walkthrough = case.meta.get("session") == "walkthrough"
+    continuing = walkthrough and getattr(session, "walkthrough_started", False)
+    #: Review round 2, finding 9 (GA-2, P2): a targeted rerun (--only-failed,
+    #: case_ids, a resume mid-layer) that lands on a walkthrough case with
+    #: order > 0 as the FIRST walkthrough case THIS session ever runs would
+    #: otherwise get the ordinary "first case" isolate/fresh-journal
+    #: treatment -- gd-04 or gd-08 run alone then fails for harness reasons
+    #: (an empty journal), not a real product answer. Block it honestly
+    #: instead of letting it run isolated and fail dishonestly.
+    if walkthrough and not continuing and case.meta.get("order", 0) > 0:
+        obs.blocked = "walkthrough_prefix_not_run"
+        obs.wall_s = clock() - t0
+        return obs
+    #: Review round 2, finding 6 (GB-1, P1): a case whose own steps
+    #: reference the guide job placeholders must never run (and fail on the
+    #: product's own terms) when the harness's own job import failed --
+    #: block it honestly instead. Merge note (guide x fix/htc-hang-
+    #: recovery, re-review round 3 GR-4): the only real conflict is this
+    #: function's own signature line (hang-recovery adds `pre_ping: bool =
+    #: True`); the body auto-merges, walkthrough/stage_error/prefix blocks
+    #: first, pre_ping's own inherited_wedge early return after them. THAT
+    #: early return does not exist yet in this branch, so it cannot call
+    #: `_mark_walkthrough_broken` here today -- but it must, once merged:
+    #: an inherited wedge mid-walkthrough is exactly the kind of break
+    #: finding 9 (GA-1) exists to tag, and an untagged one would leave
+    #: every later walkthrough case scored as if the script's state were
+    #: intact. Whoever resolves that merge: add
+    #: `_mark_walkthrough_broken(session, case, obs, walkthrough)` right
+    #: before the inherited_wedge block's own `return obs`, the same way
+    #: the SessionBlocked except-branch below and the final return already do.
+    stage_error = getattr(session, "guide_job_stage_error", None)
+    if stage_error and _refs_job(case):
+        obs.blocked = f"fixture: guide job import failed: {stage_error}"
+        obs.wall_s = clock() - t0
+        return obs
+    #: Review round 2, finding 9 (GA-1, P2): once a walkthrough case fails
+    #: for real (blocked, or a write step landed !ok when the case's own
+    #: expectation was NOT a typed_error -- i.e. it was not scripted to
+    #: refuse), every LATER case in the same walkthrough is scored against
+    #: state the script never intended. Tag every case after the break so
+    #: triage can tell a cascade from the root cause; never re-tag the
+    #: breaking case itself with its own id.
+    if walkthrough and getattr(session, "walkthrough_broken", None) is not None:
+        obs.extra["walkthrough_prefix_broken"] = session.walkthrough_broken
     role = case.frame_role or "hero"
     #: (night1-robustness-triage.md item 2; fix round 1 review M2): ping
     #: BEFORE ensure_frame/isolate, not after. `isolate` alone can send one
@@ -125,18 +215,22 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic, pre_ping: bool =
             obs.blocked = "inherited_wedge"
             obs.hang_evidence.append("darktable was already unresponsive before this case's "
                                      "own steps ran (inherited from an earlier case)")
+            _mark_walkthrough_broken(session, case, obs, walkthrough)
             obs.wall_s = clock() - t0
             return obs
     try:
         frame = session.ensure_frame(role)
-        if isolate(session, frame, role):
+        if not continuing and isolate(session, frame, role):
             frame = session.ensure_frame(role)
             obs.extra["contaminated_restaged"] = True
     except SessionBlocked as e:
         obs.blocked = f"session: {e}"
         obs.hang_evidence.append(f"session: {e}")
+        _mark_walkthrough_broken(session, case, obs, walkthrough)
         obs.wall_s = clock() - t0
         return obs
+    if walkthrough:
+        session.walkthrough_started = True
     #: Fix round 2 (review R1); fix round 3 (re-review R1, ordering): per-case
     #: undo journal isolation -- see session.reset_journal's own docstring.
     #: Must run AFTER isolate() (whose own darkroom_reset calls, for a
@@ -145,7 +239,10 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic, pre_ping: bool =
     #: steps below, so no earlier entry -- isolate's own or an earlier
     #: case's -- can leak into THIS case's darkroom_undo_last. The count is
     #: kept in obs.extra so a leak stays visible rather than disappearing.
-    if session.staged is not None:
+    #: A continuing walkthrough case (fix A above) skips this too: gd-04's
+    #: and gd-08's own undo steps must see the REAL journal the walkthrough
+    #: built up, not an empty one.
+    if session.staged is not None and not continuing:
         obs.extra["journal_reset_entries"] = reset_journal(session.staged)
     kelvin = observe.kelvin_for(CAMERA.get(case.body or ""))
     obs.before = observe.snapshot(frame, kelvin)
@@ -201,5 +298,6 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic, pre_ping: bool =
         previews["after"] = observe.render_preview(frame, session.previews_dir / case.id /
                                                    "after.png")
         obs.extra["previews"] = {k: session.relative(v) for k, v in previews.items()}
+    _mark_walkthrough_broken(session, case, obs, walkthrough)
     obs.wall_s = clock() - t0
     return obs

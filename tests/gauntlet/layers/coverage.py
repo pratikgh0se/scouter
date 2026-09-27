@@ -59,36 +59,11 @@ def _wb_refusal_expect(route: dict) -> Expect:
     return Expect("typed_error", codes=list(route["codes"]))
 
 
-def _wb_route_a_pinned_edit(route: dict, *, sign: int | None = None,
-                            value: float | None = None) -> Expect:
-    """Fix round 1 (review I4): once `channelmixerrgb.temperature` is
-    pinned, a warmth write actually lands there, not on
-    `temperature.temperature` -- build the Expect from the dict
-    `wb_route_a_expect`/`_expect_for_hero` already returns (`m1_key`,
-    `derived_keys`, `unchanged_keys`), rather than falling through to the
-    ordinary `temperature.temperature` checks (which the write never
-    touches once pinned) or a permissive `Expect("edit", [])` placeholder.
-    `direction_verified` is False in check_map.json until the host probe,
-    so a sign is asserted only when it is True; otherwise the case still
-    verifies the value (or that it changed) plus the derived keys and the
-    untouched WB preset, with a `needs_review` tag on the move check
-    instead of guessing a sign."""
-    to_key = route["m1_key"]
-    to_module, to_param = to_key.split(".", 1)
-    unit = route["unit"]
-    tags = {} if route["direction_verified"] else {
-        "needs_review": "route A pinned but direction_verified is False in "
-                         "check_map.json -- sign unverified until the host probe"}
-    if value is not None:
-        move = Check("M1", kind="equals", target={"key": to_key, "value": value, "unit": unit},
-                     tags=tags)
-    else:
-        s = sign if route["direction_verified"] else 0
-        move = Check("M1", kind="changed", sign=s or 0, target={"key": to_key, "unit": unit},
-                     tags=tags)
-    unchanged = Check("M1", kind="unchanged", target={"keys": list(route["unchanged"])})
-    side = sidecar(to_module, to_param, unit, allowed=list(route["allowed"]))
-    return Expect("edit", [move, unchanged], side)
+#: Review round 2, finding 10 (GC-1): shared through checkmap.py so every
+#: generator that wires wb_route_a_expect scores a pinned Route A the same
+#: way, not only coverage's own cases (layers/guide.py's gd-12 now uses it
+#: too).
+_wb_route_a_pinned_edit = checkmap.wb_route_a_pinned_edit
 
 
 def _wb_route_a_pinned_restore(route: dict) -> Expect:

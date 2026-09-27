@@ -229,6 +229,177 @@ def test_isolate_still_restages_an_absent_module_leaked_at_a_non_default_value(
     assert dt.launches == 2  # a real move: restaged
 
 
+def test_a_job_referencing_case_is_blocked_when_the_guide_job_import_failed(
+        corpus, tmp_path, monkeypatch):
+    """Review round 2, finding 6 (GB-1): gd-19-shaped -- a case whose step
+    args reference {job_slug} must be blocked with a typed fixture reason,
+    never left to fail on the product's own "no job with slug ..." terms."""
+    s = _session(corpus, tmp_path).open()
+    s.walkthrough_started = True  # as if the earlier walkthrough steps already ran
+    s.guide_job_stage_error = "import_incomplete: library_import's files[] names none of [...]"
+    case = Case(id="gd-19", layer="guide", tier="P0", mode="cli",
+               steps=[Step("cli", {"argv": ["job", "run", "--job-slug", "{job_slug}",
+                                            "--preset", "harbour-warm", "--hero",
+                                            "{job_frame:1}", "--yes"]}, 60.0, True)],
+               expect=Expect("workflow"), body="olympus", frame_role="hero",
+               meta={"session": "walkthrough", "order": 19})
+    obs = execute.run_tool_case(s, case)
+    assert obs.blocked == ("fixture: guide job import failed: import_incomplete: "
+                           "library_import's files[] names none of [...]")
+    assert obs.calls == []  # the step never ran
+
+
+def test_a_non_job_case_is_unaffected_by_a_guide_job_stage_error(corpus, tmp_path, monkeypatch):
+    s = _session(corpus, tmp_path).open()
+    s.guide_job_stage_error = "some failure"
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {
+        "fingerprint": "a", "params": {}, "units": {}})
+    case = Case(id="gd-01", layer="guide", tier="P0", mode="tool",
+               steps=[Step("darkroom_set", {"module": "exposure"}, 3.5, True)],
+               expect=Expect("workflow"), body="olympus", frame_role="hero")
+    obs = execute.run_tool_case(s, case)
+    assert obs.blocked is None
+
+
+def test_walkthrough_case_with_order_gt_0_as_the_session_first_is_blocked(
+        corpus, tmp_path, monkeypatch):
+    """Review round 2, finding 9 (GA-2): a targeted rerun landing on gd-04
+    (order 4) as the FIRST walkthrough case this session ever runs must be
+    blocked walkthrough_prefix_not_run, never isolated and run dishonestly."""
+    s = _session(corpus, tmp_path).open()
+    case = Case(id="gd-04", layer="guide", tier="P0", mode="cli",
+               steps=[Step("cli", {"argv": ["darkroom", "undo-last"]}, 60.0, True)],
+               expect=Expect("workflow"), body="olympus", frame_role="hero",
+               meta={"session": "walkthrough", "order": 4})
+    obs = execute.run_tool_case(s, case)
+    assert obs.blocked == "walkthrough_prefix_not_run"
+    assert obs.calls == []
+
+
+def test_walkthrough_order_0_is_never_blocked_as_prefix_not_run(corpus, tmp_path, monkeypatch):
+    s = _session(corpus, tmp_path).open()
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {
+        "fingerprint": "a", "params": {}, "units": {}})
+    case = Case(id="gd-00", layer="guide", tier="P0", mode="tool",
+               steps=[], expect=Expect("workflow"), body="olympus", frame_role="hero",
+               meta={"session": "walkthrough", "order": 0})
+    obs = execute.run_tool_case(s, case)
+    assert obs.blocked != "walkthrough_prefix_not_run"
+
+
+def test_a_failed_write_step_marks_walkthrough_broken_and_tags_later_cases(
+        corpus, tmp_path, monkeypatch):
+    """Review round 2, finding 9 (GA-1): gd-02 (set contrast) refuses
+    unexpectedly (its own Expect is "workflow", not "typed_error" -- it was
+    never scripted to refuse); gd-04 (a later walkthrough case) must be
+    tagged so triage can tell the cascade from a root cause, not scored as
+    if the script's own state was intact."""
+    mcp = FakeMcp({"darkroom_set": {"ok": False, "outcome": "error",
+                                    "error": {"code": "not_pinned"}, "data": {}}})
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    s.walkthrough_started = True  # as if gd-00/gd-01 already ran earlier this session
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {
+        "fingerprint": "a", "params": {}, "units": {}})
+    case1 = Case(id="gd-02", layer="guide", tier="P0", mode="tool",
+                steps=[Step("darkroom_set", {"module": "sigmoid"}, 3.5, True)],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"session": "walkthrough", "order": 2})
+    obs1 = execute.run_tool_case(s, case1)
+    assert obs1.extra.get("walkthrough_prefix_broken") is None  # the root cause is not tagged
+    assert s.walkthrough_broken == "gd-02"
+
+    case2 = Case(id="gd-04", layer="guide", tier="P0", mode="tool",
+                steps=[Step("darkroom_undo_last", {}, 3.5, True)],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"session": "walkthrough", "order": 4})
+    obs2 = execute.run_tool_case(s, case2)
+    assert obs2.extra["walkthrough_prefix_broken"] == "gd-02"
+
+
+def test_a_scripted_refusal_does_not_mark_walkthrough_broken(corpus, tmp_path, monkeypatch):
+    """gd-17 ("more magenta") is EXPECTED to refuse (typed_error) -- that
+    must never be mistaken for a broken walkthrough."""
+    mcp = FakeMcp({"darkroom_say": {"ok": False, "outcome": "error",
+                                    "error": {"code": "value_unknown"}, "data": {}}})
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    s.walkthrough_started = True  # as if the earlier walkthrough steps already ran
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {
+        "fingerprint": "a", "params": {}, "units": {}})
+    case = Case(id="gd-17", layer="guide", tier="P0", mode="tool",
+               steps=[Step("darkroom_say", {"phrase": "more magenta"}, 8.0, True)],
+               expect=Expect("typed_error", codes=["value_unknown"]), body="olympus",
+               frame_role="hero", meta={"session": "walkthrough", "order": 17})
+    execute.run_tool_case(s, case)
+    assert s.walkthrough_broken is None
+
+
+def test_walkthrough_continuation_skips_isolate_and_journal_reset(corpus, tmp_path, monkeypatch):
+    """Fix A (night-1 triage rank 6, GD-walkthrough-state): a walkthrough case
+    (meta["session"] == "walkthrough") after the walkthrough's own first case
+    must not be isolate()'d or journal-reset -- that would erase the state
+    the next scripted step depends on (gd-04's undo would find nothing)."""
+    from tests.gauntlet.session import reset_journal
+
+    mcp = FakeMcp()
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {
+        "fingerprint": "a", "params": {}, "units": {}})
+    job = s.staged.env["SCOUTER_JOB"]
+    journal_file = s.staged.cache / "journal" / f"{job}.jsonl"
+    journal_file.parent.mkdir(parents=True, exist_ok=True)
+    journal_file.write_text('{"seq": 1}\n', encoding="utf-8")
+
+    case1 = Case(id="gd-01", layer="guide", tier="P0", mode="tool",
+                steps=[Step("darkroom_set", {"module": "exposure", "exposure": 1.2}, 3.5,
+                            True)],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"session": "walkthrough", "order": 0})
+    obs1 = execute.run_tool_case(s, case1)
+    assert s.walkthrough_started is True
+    assert s.touched == {"exposure"}  # a real write: isolate() would reset it next case
+    assert obs1.extra.get("journal_reset_entries") == 1  # the first case IS reset (control)
+
+    # gd-01's own write left a journal entry (simulated: the real MCP fake
+    # here does not touch the journal file itself). gd-02 must see it, not
+    # a wiped one -- gd-04/gd-08's own undo later depends on it.
+    journal_file.write_text('{"seq": 2, "verb": "param.set"}\n', encoding="utf-8")
+    mcp.calls.clear()
+    case2 = Case(id="gd-02", layer="guide", tier="P0", mode="tool",
+                steps=[Step("darkroom_say", {"phrase": "less contrast"}, 8.0, True)],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"session": "walkthrough", "order": 1})
+    obs2 = execute.run_tool_case(s, case2)
+
+    assert "darkroom_reset" not in [t for t, _ in mcp.calls]  # isolate() skipped
+    assert "journal_reset_entries" not in obs2.extra  # reset_journal() skipped
+    assert journal_file.read_text(encoding="utf-8") == '{"seq": 2, "verb": "param.set"}\n'
+
+
+def test_ordinary_case_after_a_walkthrough_is_still_isolated_and_journal_reset(
+        corpus, tmp_path, monkeypatch):
+    """Z1 contrast case: a non-walkthrough case (no meta["session"], or any
+    other value) never inherits the walkthrough's shared-state exemption,
+    even in the same session right after one."""
+    mcp = FakeMcp()
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    s.walkthrough_started = True  # as if a walkthrough case already ran
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {
+        "fingerprint": "a", "params": {}, "units": {}})
+    s.touched = {"exposure"}
+    job = s.staged.env["SCOUTER_JOB"]
+    journal_file = s.staged.cache / "journal" / f"{job}.jsonl"
+    journal_file.parent.mkdir(parents=True, exist_ok=True)
+    journal_file.write_text('{"seq": 1}\n', encoding="utf-8")
+
+    case = Case(id="cov-1", layer="coverage", tier="P1", mode="tool",
+               steps=[Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
+               expect=Expect("edit"), body="olympus", frame_role="hero")
+    obs = execute.run_tool_case(s, case)
+
+    assert "darkroom_reset" in [t for t, _ in mcp.calls]  # isolate() ran
+    assert obs.extra["journal_reset_entries"] == 1  # reset_journal() ran
+
+
 def test_a_virtual_tool_that_blocks_stops_the_later_steps(corpus, tmp_path, monkeypatch):
     """(final fix M3): a virtual tool setting obs.blocked itself ends the case."""
     from gauntlet.adapter import CallRecord

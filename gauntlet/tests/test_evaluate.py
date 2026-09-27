@@ -1187,3 +1187,80 @@ def test_parity_same_failure_is_pass_flag_restores_the_old_scoring():
     lenient = Policy(**{**vars(POLICY), "flags": frozenset({"parity.same_failure_is_pass"})})
     v = evaluate(case, obs, lenient)
     assert (v.score, v.outcome) == ("pass", "verified"), v
+
+
+# -- Review round 2, finding 3 (GD-2); review round 3, GR-1: a typed
+# needs_review path for a Check tagged {"disputed": "<reason>"}, so it can
+# never lift a real failure to partial and never drag a genuine pass below
+# needs_review. The tag key is `disputed`, never `needs_review` -- that
+# string is already checkmap.wb_route_a_pinned_edit's own tag key
+# (`sign_unverified`, GR-1), and the two must never collide. -----------------
+
+
+ACTION_CHECK = Check("extra", target={"path": "action_ok", "op": "truthy"})
+VERSION_CHECK = Check("extra", target={"path": "detail.config_has_version", "op": "truthy"},
+                      tags={"disputed": "spec 3.7 vs setup.py design, needs Pratik"})
+
+
+def _install_case(checks):
+    return Case(id="ins-x", layer="install", tier="P0", mode="cli",
+               steps=[Step("rehearsal", {"action": "setup"}, 120.0, False)],
+               expect=Expect("workflow", checks))
+
+
+def _install_obs(*, action_ok, config_has_version):
+    return Observation(calls=[CallRecord("rehearsal", {"action": "setup"},
+                                         {"ok": action_ok, "outcome": "ok", "data": {}})],
+                       extra={"action_ok": action_ok,
+                              "detail": {"config_has_version": config_has_version}})
+
+
+def test_tagged_check_alone_failing_gives_needs_review():
+    v = evaluate(_install_case([ACTION_CHECK, VERSION_CHECK]),
+                 _install_obs(action_ok=True, config_has_version=False), POLICY)
+    assert (v.score, v.outcome) == ("partial", "needs_review")
+    assert v.notes == ["spec 3.7 vs setup.py design, needs Pratik"]
+
+
+def test_untagged_check_failing_alongside_a_passing_tagged_check_gives_failed():
+    """A real product failure (the untagged check) must never be lifted to
+    partial by a passing-or-failing tagged check sitting next to it."""
+    v = evaluate(_install_case([ACTION_CHECK, VERSION_CHECK]),
+                 _install_obs(action_ok=False, config_has_version=True), POLICY)
+    assert (v.score, v.outcome) == ("fail", "failed")
+    assert v.notes and v.notes[0].startswith("check 0:")
+
+
+def test_both_checks_passing_gives_verified():
+    v = evaluate(_install_case([ACTION_CHECK, VERSION_CHECK]),
+                 _install_obs(action_ok=True, config_has_version=True), POLICY)
+    assert (v.score, v.outcome) == ("pass", "verified")
+
+
+def test_a_differently_keyed_tag_is_never_read_as_disputed():
+    """GR-1: only the tag key `disputed` opts a check out of hard failure --
+    any other key (checkmap.wb_route_a_pinned_edit's own `sign_unverified`,
+    or anything else) is inert here, so a real value mismatch under some
+    OTHER tag key still scores as a genuine failure/partial, never
+    needs_review."""
+    checks = [ACTION_CHECK, Check("extra", target={"path": "detail.config_has_version",
+                                                    "op": "truthy"},
+                                  tags={"sign_unverified": "unrelated to this evaluator path"})]
+    v = evaluate(_install_case(checks),
+                 _install_obs(action_ok=True, config_has_version=False), POLICY)
+    assert v.outcome != "needs_review"
+
+
+def test_an_untagged_two_check_workflow_case_keeps_todays_partial():
+    """The new path only ever activates when at least one Check carries a
+    "needs_review" tag; an ordinary untagged multi-check case must keep its
+    existing partial-credit scoring exactly as before."""
+    checks = [Check("extra", target={"path": "a", "op": "truthy"}),
+             Check("extra", target={"path": "b", "op": "truthy"})]
+    case = Case(id="c", layer="coverage", tier="P1", mode="tool",
+               steps=[Step("darkroom_set", {}, budget_s=3.5, write=True)],
+               expect=Expect("workflow", checks))
+    obs = Observation(calls=[CallRecord("darkroom_set", {}, _ok(), write=True)],
+                      extra={"a": True, "b": False})
+    v = evaluate(case, obs, POLICY)
+    assert (v.score, v.outcome) == ("partial", "partial")

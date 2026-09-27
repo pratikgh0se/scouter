@@ -1019,6 +1019,35 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     sf = silent_failure(case, obs, results, policy)
     if sf:
         return Verdict(FAIL, "silent_failure", results, silent_failure=sf)
+    #: Review round 2, finding 3 (GD-2, install config-version-assert);
+    #: review round 3, GR-1: a Check tagged {"disputed": "<reason>"} opts a
+    #: case's disputed assertion out of the ordinary partial-credit
+    #: threshold below, which would otherwise score a genuine product
+    #: failure elsewhere in the same case 0.5 and label it the same as an
+    #: assertion still awaiting a decision. An untagged check failing is
+    #: still a real failure -- "failed", never softened. A tagged check
+    #: failing, with every untagged ("hard") check passing, is
+    #: "needs_review" (the OUTCOME string) with the tag's own reason text as
+    #: the note. All checks passing falls through unchanged (usually
+    #: "verified" below) -- the tag can neither lift a failure nor drag a
+    #: pass down. The tag KEY is deliberately `disputed`, never
+    #: `needs_review`: `checkmap.wb_route_a_pinned_edit` already uses the
+    #: key `sign_unverified` for an unrelated purpose (a comment-only tag
+    #: before this evaluator change existed, now read by nothing) -- a
+    #: shared key would have opted every Route-A move check with an
+    #: unverified sign into this path too, including `equals` checks where
+    #: a real wrong value is a genuine product failure, not a disputed spec
+    #: question (GR-1's own probe: a pinned `equals` miss silently scored
+    #: `needs_review` instead of `failed`).
+    review = [(r, ch) for r, ch in zip(results, case.expect.checks) if ch.tags.get("disputed")]
+    if review:
+        hard = [r for r, ch in zip(results, case.expect.checks) if not ch.tags.get("disputed")]
+        if not all(r.ok for r in hard):
+            return Verdict(FAIL, "failed", results,
+                           notes=[f"check {r.index}: {r.note}" for r in hard if not r.ok])
+        pending = [ch.tags["disputed"] for r, ch in review if not r.ok]
+        if pending:
+            return Verdict(PARTIAL, "needs_review", results, notes=pending)
     miss = _sidecar_miss(case, obs) if kind != "noop" else None
     if not miss and not blocked:
         residual = _moved_to_limit_residual(case, results, obs)

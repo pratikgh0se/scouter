@@ -161,10 +161,11 @@ Add the MCP server to your client's config alongside (or instead of) `darktable`
 
 ```sh
 uv sync --extra dev                 # or: python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m scouter setup   # installs the Lua plugin (persistently), checks doctor,
-                                    # prints the `claude mcp add` line
-# restart darktable, open a photo in the darkroom, then:
-scouter setup --check               # every item ok? exit 0; anything missing? exit 1, changes nothing
+.venv/bin/python -m scouter setup   # installs the Lua plugin (persistently), reports doctor,
+                                    # prints the `claude mcp add` line -- exits 0 even with no
+                                    # darktable running yet (doctor is not required here)
+# restart darktable (it loads the plugin at launch), open a photo in the darkroom, then:
+scouter setup --check               # every item ok, doctor included? exit 0; anything missing? exit 1, changes nothing
 ```
 
 `scouter setup` is idempotent and does, in order:
@@ -174,15 +175,19 @@ scouter setup --check               # every item ok? exit 0; anything missing? e
 | `plugin` | writes the packaged `darktable_mcp.lua` where the bridge reads it (`~/.config/darktable/lua/`, or `$DARKTABLE_MCP_PLUGIN_PATH`) and **leaves it installed** -- no uninstall on exit, unlike the host tests | `ok` / `missing` / `stale` (an older plugin) |
 | `luarc` | adds `require "darktable_mcp"` to `~/.config/darktable/luarc` once, keeping every other line | `ok` / `missing` |
 | `wb_tables` | copies the measured white-balance tables shipped in `scouter/data/wb/` (today: `em10iii`) into `<config_dir>/wb/` when that camera has none; never overwrites one | `ok` / `missing`, plus any other calibrated bodies |
-| `config` | reported only: `scouter config init` writes it, because the backup gate is yours to arm. Single-frame editing works without it | `ok` / `missing` (not required) |
-| `doctor` | the bridge half of `scouter doctor`: darktable running, plugin loaded, answering | `ok` / `bridge_timeout` / ... |
+| `config` | reported only: `scouter config init` writes it, because the backup gate is yours to arm. Single-frame editing works without it | `ok` / `missing` (not required, either way) |
+| `doctor` | the bridge half of `scouter doctor`: darktable running, plugin loaded, answering | `ok` / `bridge_timeout` / ... -- **required only under `--check`** |
 
 It then prints the exact `claude mcp add` command and the equivalent JSON
 (see "Editing with Scouter from Claude Code" below). It never reads or writes
 Claude Code's own config; registering is one command you run yourself.
-The exit code is `0` when every required item is ok. Right after a fresh
-install `doctor` is not ok until darktable is restarted -- the `next` list in
-the output says so.
+The exit code is `0` when every *required* item is ok -- and on a plain
+`scouter setup` (no `--check`), `doctor` is not required: a fresh install
+with no darktable running yet still exits `0`, installing the plugin and
+printing a `next` hint that explains what `doctor` verifies and how to
+confirm it (restart darktable, then `scouter setup --check`). `--check` is
+the explicit "is this healthy right now" ask, and keeps `doctor` required,
+so it still exits `1` until darktable answers.
 
 `darktable-mcp install-plugin` still exists and writes the same two files.
 
@@ -749,7 +754,7 @@ end to end — is Pratik's own run**, not something CI can assert.
 ## Scouter phase 3 (conversation: say it, see it, save it)
 
 Phase 3 adds a plain-English layer over the phase 1/2 core: relative moves
-("a touch warmer"), an educative mode that explains what a move does and
+("a touch brighter"), an educative mode that explains what a move does and
 why, and named presets that round-trip through darktable's own styles. 44
 verbs total (9 new).
 
@@ -757,11 +762,22 @@ verbs total (9 new).
 
 ```sh
 export SCOUTER_JOB=teach-harbour
-scouter --pretty darkroom say "a touch warmer"
+scouter --pretty darkroom say "a touch brighter"
 scouter --pretty darkroom say "less contrast" --educative full
 scouter darkroom undo-last
 scouter preset save harbour-warm && scouter preset apply-job harbour-warm --job-slug harbour-wedding --yes
 ```
+
+**Warmer/cooler can refuse.** On a frame whose white balance is in
+darktable's "camera reference (late)" mode (the scene-referred default),
+moving warmth through the white balance module would switch off that
+correction. Once color calibration's own action path is host-pinned,
+Scouter routes warmer/cooler and Kelvin sets there instead; until then
+(and for tint or `darkroom nudge` on temperature, always, pinned or not —
+they have no color-calibration reroute) it refuses with `module_unavailable`,
+naming the module and the reason in `error.message` — never a silent no-op.
+`scouter vocab list` shows whether `warmer`/`cooler` are pinned right now.
+See "`26` `module_unavailable`" below for the full explanation.
 
 Setting `SCOUTER_JOB` pins one journal/session for the whole conversation —
 without it, every CLI call is its own session, and the MCP server pins its

@@ -7,9 +7,53 @@ commands and fails when the README drifts from this list."""
 
 from __future__ import annotations
 
+import json
+import re
+
 from gauntlet.case import Case, Check, Expect, Step, case_id
+from tests.gauntlet import checkmap
+from tests.gauntlet.taxonomy import DATA
 
 LAYER, PREFIX = "guide", "gd"
+#: Rows 458/461 (night-1 triage rank 7, GD-WB-preset4), wired the same way
+#: coverage.py/scenarios.py already do: the corpus hero is darktable's
+#: temperature preset 4, and check_map.json's `wb_route_a` block says a
+#: warmth move there refuses (module_unavailable) until
+#: channelmixerrgb.temperature is pinned. The README/user-guide "a touch
+#: warmer" example and the edu warmer/cooler phrases hit the same guard --
+#: this only fixes the EXPECTATION, never the guard itself, and never the
+#: README/user-guide wording (Pratik decides that, night1 triage rank 7
+#: "needs Pratik").
+_CMAP = json.loads((DATA / "check_map.json").read_text(encoding="utf-8"))
+_WB_WORD = re.compile(r"\bwarmer\b|\bcooler\b")
+
+
+def _wb_phrase_key(text: str) -> str | None:
+    m = _WB_WORD.search(text)
+    return m.group(0) if m else None
+
+
+#: Review round 2, finding 10 (GC-1): the pinned-Route-A direction, for the
+#: same phrases _wb_expect matches below. Warmer raises the illuminant
+#: temperature (+); cooler lowers it (-) -- checkmap.wb_route_a_pinned_edit
+#: only asserts a sign when check_map.json's own direction_verified is True.
+_WB_SIGN = {"warmer": 1, "cooler": -1}
+
+
+def _wb_expect(text: str, fallback: Expect) -> Expect:
+    """checkmap.wb_route_a_expect_for_hero's typed_error shape while Route A
+    is a candidate, its pinned-edit shape (shared with coverage.py via
+    checkmap.wb_route_a_pinned_edit, GC-1) once it is pinned, or `fallback`
+    when the phrase is not a warmer/cooler move at all."""
+    key = _wb_phrase_key(text)
+    if key is None:
+        return fallback
+    wb = checkmap.wb_route_a_expect_for_hero(_CMAP, key)
+    if wb is None:
+        return fallback
+    if wb["expect"] == "typed_error":
+        return Expect("typed_error", codes=list(wb["codes"]))
+    return checkmap.wb_route_a_pinned_edit(wb, sign=_WB_SIGN[key])
 #: (label, kind, payload, expected). kind "cli": argv after `scouter`; kind
 #: "say": an MCP darkroom_say phrase from the guide's phrase table.
 WALKTHROUGH: tuple[tuple[str, str, object, dict], ...] = (
@@ -22,7 +66,12 @@ WALKTHROUGH: tuple[tuple[str, str, object, dict], ...] = (
      {"exit": 0}),
     ("readme_undo", "cli", ["darkroom", "undo-last"], {"ok": True}),
     ("readme_history", "cli", ["--pretty", "history", "read", "{frame:hero}"], {"exit": 0}),
-    ("session_touch_warmer", "cli", ["--pretty", "darkroom", "say", "a touch warmer"],
+    #: Pratik's ruling, row 496 item 8 (triage rank 7's "needs Pratik"
+    #: item 4): the README's hero session now teaches "a touch brighter"
+    #: first (always live, never hits the WB guard); the guard-refusal case
+    #: is documented separately (README's new "Warmer/cooler can refuse"
+    #: note) and still exercised below by guide_touch_warmer (gd-12).
+    ("session_touch_brighter", "cli", ["--pretty", "darkroom", "say", "a touch brighter"],
      {"exit": 0}),
     ("session_less_contrast_full", "cli",
      ["--pretty", "darkroom", "say", "less contrast", "--educative", "full"], {"exit": 0}),
@@ -72,6 +121,8 @@ def _walk_case(i: int, label: str, kind: str, payload, want: dict) -> Case:
                                                         "tol": abs(d) * 0.1}))
     exp = Expect("typed_error", checks, codes=[want["code"]]) if "code" in want else \
         Expect("workflow", checks)
+    text = payload[-1] if kind == "cli" else payload
+    exp = _wb_expect(text, exp)
     return Case(id=case_id(PREFIX, f"{i:02d}", label), layer=LAYER, tier="P0",
                 mode="cli" if kind == "cli" else "tool", steps=[step], expect=exp,
                 body="olympus", frame_role="hero", source={"file": "README/user guide",
@@ -94,10 +145,11 @@ def _edu_case(level: str, j: int, phrase: str, concept: str) -> Case:
     if level == "brief":
         checks.append(Check("envelope", step=0, target={"path": "data.explain.0",
                                                         "op": "regex", "value": r"\d.*\d"}))
+    exp = _wb_expect(phrase, Expect("workflow", checks))
     return Case(id=case_id(PREFIX, "edu", level, f"{j}", phrase), layer=LAYER, tier="P0",
                 mode="tool", steps=[Step("darkroom_say", {"phrase": phrase, "educative": level},
                                          8.0, True)],
-                expect=Expect("workflow", checks), body="olympus", frame_role="hero",
+                expect=exp, body="olympus", frame_role="hero",
                 source={"file": "README", "section": "Educative mode"},
                 meta={"session": f"edu-{level}", "order": j, "concept": concept})
 

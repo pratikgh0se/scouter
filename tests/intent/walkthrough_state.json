@@ -1,0 +1,19 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for the night-1 fix (triage class GD-walkthrough-state, scratchpad/night1-parity-install-guide-triage.md rank 6: root of gd-02's own restage, and the class fix/n1-session-reopen would otherwise make WORSE by resetting the undo journal per case -- gd-04/gd-08's own undo steps would then find an empty journal). The user-guide walkthrough (tests/gauntlet/layers/guide.py WALKTHROUGH, meta[\"session\"] == \"walkthrough\") is one scripted session in document order; every other case stays isolated per case, exactly as before. Run by tests/intent/test_walkthrough_state_intent.py against the harness's own execute/session seam, no darktable and no MCP server.",
+  "subject": "tests/gauntlet/execute.py run_tool_case + tests/gauntlet/session.py ScouterSession.walkthrough_started",
+  "examples": [
+    {
+      "id": "walkthrough-case-after-an-earlier-step-shares-state",
+      "input": {"case_1": {"meta.session": "walkthrough", "meta.order": 0},
+               "case_2": {"meta.session": "walkthrough", "meta.order": 1}},
+      "expect": {"case_2_isolate_ran": false, "case_2_journal_reset_ran": false},
+      "source": "night1-20260926 triage rank 6: 'the walkthrough is one stateful session... the runner treats each step as an isolated case: isolate() resets the modules touched by the previous step and re-stages on any diff'; fix: 'skip isolate, refresh and reset_journal for walkthrough cases after the first one'"
+    },
+    {
+      "id": "ordinary-case-stays-isolated",
+      "input": {"case": {"meta.session": null}},
+      "expect": {"isolate_ran": true, "journal_reset_ran": true},
+      "source": "the fix must not weaken isolation for anything but the scripted walkthrough -- every other layer (coverage, scenarios, looks, bulk-via-run_tool_case paths) still depends on per-case isolation and the round-2/round-3 journal fix (tests/gauntlet/test_session.py test_run_tool_case_resets_the_journal_before_its_own_steps)"
+    }
+  ]
+}
