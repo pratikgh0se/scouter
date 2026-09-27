@@ -340,5 +340,84 @@ def test_run_tool_case_resets_the_journal_before_its_own_steps(corpus, tmp_path)
     case = Case(id="c", layer="coverage", tier="P0", mode="tool",
                steps=[Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
                expect=Expect("edit"), body="olympus", frame_role="hero")
-    execute.run_tool_case(s, case)
+    obs = execute.run_tool_case(s, case)
     assert journal_file.read_text(encoding="utf-8") == ""
+    assert obs.extra["journal_reset_entries"] == 1
+
+
+class JournalAwareFakeMcp(FakeMcp):
+    """Fix round 3 (re-review R1): a fake MCP whose `darkroom_reset` calls
+    ALSO write a real `module.reset` journal entry -- close enough to the
+    real registry's behavior to test the ORDER `execute.run_tool_case` runs
+    `isolate()` and `session.reset_journal` in, without any darktable.
+    `darkroom_undo_last` answers from the REAL journal file's own state at
+    call time (`noop` when empty, `unsupported_undo` when an open
+    `module.reset` entry is still there) -- exactly the two outcomes the
+    ordering bug/fix actually distinguish."""
+
+    def __init__(self, job: str, cache, answers=None):
+        super().__init__(answers)
+        self.job = job
+        self.cache = cache
+
+    def _journal_path(self):
+        return self.cache / "journal" / f"{self.job}.jsonl"
+
+    def call_tool(self, tool, args, timeout):
+        if tool == "darkroom_reset":
+            import json as _json
+
+            path = self._journal_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            entry = {"seq": 1, "ts": "x", "verb": "module.reset", "image_id": 1, "path": "x",
+                    "module": args.get("module", "temperature"), "param": "", "instance": 0,
+                    "before": {}, "after": None, "undone": False, "outcome": None,
+                    "commit": True, "note": None, "group": None}
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(_json.dumps(entry) + "\n")
+            return {"ok": True, "outcome": "ok", "data": {}}
+        if tool == "darkroom_undo_last":
+            path = self._journal_path()
+            open_entries = [ln for ln in (path.read_text(encoding="utf-8").splitlines()
+                                          if path.exists() else []) if ln.strip()]
+            if open_entries:
+                return {"ok": False, "outcome": "unsupported_undo", "error": {
+                    "code": "unsupported_undo",
+                    "message": "cannot undo the reset of temperature: its parameters were "
+                              "discarded", "fix": "darktable's own Ctrl-Z is the only way back"}}
+            return {"ok": False, "outcome": "noop", "error": {
+                "code": "noop", "message": "nothing to undo: journal is empty", "fix": ""}}
+        return super().call_tool(tool, args, timeout)
+
+
+def test_undo_after_the_previous_case_left_a_module_reset_answers_noop_not_unsupported_undo(
+        corpus, tmp_path, monkeypatch):
+    """Fix round 3 (re-review R1): reset_journal must run AFTER isolate(),
+    not before it. `isolate()` resets every module a PREVIOUS case touched
+    (`session.touched`), and that reset itself writes a `module.reset`
+    journal entry -- if the journal were cleared BEFORE isolate() runs (the
+    round-2 ordering), that fresh entry would still be sitting there when
+    THIS case's own `darkroom_undo_last` runs, wrongly answering
+    `unsupported_undo` for a reset this case never asked for. RED on
+    cd0cb5b (round-2's ordering): this test fails there because
+    reset_journal ran before isolate()."""
+    from gauntlet.case import Case, Expect, Step
+    from tests.gauntlet import execute, observe
+
+    mcp = JournalAwareFakeMcp(job="", cache=tmp_path)  # patched below, post-open
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    mcp.job = s.staged.env["SCOUTER_JOB"]
+    mcp.cache = s.staged.cache
+    # Simulate: the PREVIOUS case touched (wrote to) the temperature module,
+    # so this case's isolate() call resets it first.
+    s.touched = {"temperature"}
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {
+        "fingerprint": "a", "params": {}, "units": {}})
+
+    case = Case(id="c", layer="coverage", tier="P0", mode="tool",
+               steps=[Step("darkroom_undo_last", {}, 3.5, True)],
+               expect=Expect("typed_error", codes=["noop"]), body="olympus", frame_role="hero")
+    obs = execute.run_tool_case(s, case)
+
+    assert obs.calls[-1].envelope["outcome"] == "noop", obs.calls[-1].envelope
+    assert obs.extra["journal_reset_entries"] == 1  # isolate's own module.reset entry, cleared

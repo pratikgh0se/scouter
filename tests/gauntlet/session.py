@@ -66,10 +66,10 @@ def isolated_env(root: Path, *, job: str | None = None) -> dict[str, str]:
     return env
 
 
-def reset_journal(staged: Staged) -> None:
-    """Fix round 2 (review R1, triage section 5 item 1): `SCOUTER_JOB` is
-    pinned once per MCP server process for the whole session
-    (`isolated_env` above / phase 3 task 9's
+def reset_journal(staged: Staged) -> int:
+    """Fix round 2 (review R1, triage section 5 item 1); fix round 3
+    (re-review R1: ordering): `SCOUTER_JOB` is pinned once per MCP server
+    process for the whole session (`isolated_env` above / phase 3 task 9's
     `scouter/mcp/server.py::_pin_session_job`), so by default every case in
     a session shares one job's undo journal. A case whose own write was
     refused (nothing landed) must see an EMPTY journal so
@@ -80,19 +80,41 @@ def reset_journal(staged: Staged) -> None:
     changing THIS case's own sidecar and scoring `unexpected_edit`/
     `half-applied`).
 
-    Truncating the job's journal file right before each case gives every
-    case its own effectively-fresh journal without paying for a new
-    darktable/MCP server session (spec 2.3's up-to-50-cases-per-session
+    The CALLER must run this AFTER `execute.isolate()` (and any re-stage it
+    triggers), not before: `isolate()` itself calls `darkroom_reset` for
+    every module the PREVIOUS case touched, and that reset writes its own
+    `module.reset` journal entry -- resetting the journal before `isolate()`
+    runs would leave that entry in place for THIS case's own
+    `darkroom_undo_last` to wrongly find (an `unsupported_undo` that has
+    nothing to do with anything this case itself attempted).
+
+    Truncating the job's journal file right before each case's own steps
+    gives every case its own effectively-fresh journal without paying for a
+    new darktable/MCP server session (spec 2.3's up-to-50-cases-per-session
     budget). Pure file I/O against the session's own isolated
     `SCOUTER_CACHE` -- never touches darktable, and never races a call in
     flight (the harness is single-threaded and strictly sequential between
-    cases)."""
+    cases). Returns the number of entries found (and discarded) -- callers
+    keep it in `obs.extra` so a leak (from `isolate()`'s own resets, or
+    anything else) stays visible rather than silently disappearing; a
+    nonzero count is not itself a bug (a module reset between cases is
+    routine), only a fact worth keeping.
+
+    Agent-mode cases (`mode="agent"`, no `case.steps`, driven by
+    `tests/gauntlet/agent.py`, never `execute.run_tool_case`) get no
+    reset -- none of the ids this fixed (the 6 undo, 4 P4 warmer/cooler, 6
+    mixed P2) are agent cases, and agent mode has no per-case journal
+    dependency of its own to isolate."""
     job = staged.env.get("SCOUTER_JOB")
     if not job:
-        return
+        return 0
     path = staged.cache / "journal" / f"{job}.jsonl"
-    if path.exists():
+    if not path.exists():
+        return 0
+    lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    if lines:
         path.write_text("", encoding="utf-8")
+    return len(lines)
 
 
 def write_config(root: Path) -> Path:

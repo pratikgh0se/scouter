@@ -95,12 +95,6 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
     obs = Observation()
     t0 = clock()
     role = case.frame_role or "hero"
-    #: Fix round 2 (review R1): per-case undo journal isolation -- see
-    #: session.reset_journal's own docstring. Must run before this case's
-    #: own steps (below), whatever its frame role, so no earlier case's
-    #: still-open journal entry can leak into this one's darkroom_undo_last.
-    if session.staged is not None:
-        reset_journal(session.staged)
     try:
         frame = session.ensure_frame(role)
         if isolate(session, frame, role):
@@ -111,6 +105,16 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
         obs.hang_evidence.append(f"session: {e}")
         obs.wall_s = clock() - t0
         return obs
+    #: Fix round 2 (review R1); fix round 3 (re-review R1, ordering): per-case
+    #: undo journal isolation -- see session.reset_journal's own docstring.
+    #: Must run AFTER isolate() (whose own darkroom_reset calls, for a
+    #: module the PREVIOUS case touched, write their own journal entries)
+    #: and any re-stage above, but before this case's own before-snapshot/
+    #: steps below, so no earlier entry -- isolate's own or an earlier
+    #: case's -- can leak into THIS case's darkroom_undo_last. The count is
+    #: kept in obs.extra so a leak stays visible rather than disappearing.
+    if session.staged is not None:
+        obs.extra["journal_reset_entries"] = reset_journal(session.staged)
     kelvin = observe.kelvin_for(CAMERA.get(case.body or ""))
     obs.before = observe.snapshot(frame, kelvin)
     snaps = [obs.before["params"]]
