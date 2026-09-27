@@ -1,0 +1,42 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for PAR-hollow-pass's outcome check (night-1 triage rank 2, scratchpad/night1-parity-install-guide-triage.md, row 488), corrected by Pratik's ruling (row 496 item 5) and review fix round 2 (finding 1/D-1): a HAPPY variant where both sides fail the same way is needs_review always -- the verb never ran. An ERROR variant is the harness deliberately breaking the call, so both sides refusing the SAME typed way is exactly the point and a genuine pass; it becomes needs_review only when a side ACCEPTED the bad input instead of refusing it, or the shared code is transient. Gated behind policy flag parity.same_failure_is_pass (tests/gauntlet/data/check_map.json's flags list, a Zenkai Z4 override record), default off. Run by gauntlet/tests/test_evaluate.py (evaluate()'s own gate, given a reason) and tests/intent/test_parity_needs_review_intent.py (the REAL parity_pair computing that reason, per finding 11 -- oracle B is a fixture verdict list, not a re-implementation of the formula).",
+  "subject": "tests/gauntlet/exec_parity.py parity_pair/_parity_needs_review; gauntlet/evaluate.py evaluate() + Policy.flags/KNOWN_FLAGS",
+  "examples": [
+    {
+      "id": "happy-both-sides-fail-same-way-is-needs-review",
+      "input": {"variant": "happy",
+                "mcp_envelope": {"ok": false, "outcome": "error:not_in_darkroom",
+                                 "error": {"code": "not_in_darkroom"}},
+                "cli_envelope": {"ok": false, "outcome": "error:not_in_darkroom",
+                                 "error": {"code": "not_in_darkroom"}},
+                "flag_set": false},
+      "expect": {"score": "partial", "outcome": "needs_review"},
+      "source": "Pratik's ruling row 496 item 5: 'both-sides-fail-the-same is needs_review, never pass, for HAPPY variants'"
+    },
+    {
+      "id": "error-both-sides-refuse-same-typed-way-is-pass",
+      "input": {"variant": "error",
+                "mcp_envelope": {"ok": false, "outcome": "error:usage", "error": {"code": "usage"}},
+                "cli_envelope": {"ok": false, "outcome": "error:usage", "error": {"code": "usage"}},
+                "flag_set": false},
+      "expect": {"score": "pass", "outcome": "verified"},
+      "source": "Pratik's ruling row 496 item 5: 'an ERROR variant passes when both sides refuse identically'; review D-1 blocker: the old rule scored ALL 46 error variants (12 P0) needs_review, which this fixes"
+    },
+    {
+      "id": "error-a-side-accepted-the-bad-input-is-needs-review",
+      "input": {"variant": "error", "mcp_envelope": {"ok": true, "outcome": "ok"},
+                "cli_envelope": {"ok": true, "outcome": "ok"}, "flag_set": false},
+      "expect": {"score": "partial", "outcome": "needs_review"},
+      "source": "Pratik's ruling row 496 item 5: '[an error variant] becomes needs_review only when a side accepted the bad input' (finding 1, the triage's PAR-error-variant-accepted class)"
+    },
+    {
+      "id": "flag-flip-restores-old-scoring-for-happy",
+      "input": {"variant": "happy",
+                "mcp_envelope": {"ok": false, "outcome": "error:usage", "error": {"code": "usage"}},
+                "cli_envelope": {"ok": false, "outcome": "error:usage", "error": {"code": "usage"}},
+                "flag_set": true},
+      "expect": {"score": "pass", "outcome": "verified"},
+      "source": "brief: 'implement it behind a flag parity.same_failure_is_pass defaulting to false so a one-line config flip restores the old scoring'; parity.same_failure_is_pass stays per fix round 2's instructions"
+    }
+  ]
+}

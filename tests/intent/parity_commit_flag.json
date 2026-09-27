@@ -1,0 +1,20 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for the PAR-set-commit-flag fix (night-1 triage rank 10, scratchpad/night1-parity-install-guide-triage.md): tests/gauntlet/exec_parity.py cli_argv used to map SMOKE_ARGS's own darkroom.set commit=True to a nonexistent `--commit` flag (the CLI only defines `--no-commit`, for a default-True commit) -- argparse rejected it, so both P0 darkroom.set pairs (par-darkroom.set-happy, par-darkroom.set-error) failed on the harness's own mistake, never reaching the product. Run by tests/gauntlet/test_exec_parity.py.",
+  "subject": "tests/gauntlet/exec_parity.py cli_argv",
+  "examples": [
+    {
+      "id": "commit-true-emits-no-flag",
+      "input": {"verb": "darkroom.set", "args": {"module": "exposure", "param": "exposure",
+                "value": 1.0, "commit": true}},
+      "expect": {"argv_excludes": "--commit"},
+      "source": "night1-parity-install-guide-triage.md PAR-set-commit-flag: 'exec_parity.cli_argv maps commit: True to --commit. The CLI defines only --no-commit ... so argparse rejects it'"
+    },
+    {
+      "id": "commit-false-still-emits-no-commit",
+      "input": {"verb": "darkroom.set", "args": {"module": "exposure", "param": "exposure",
+                "value": 1.0, "commit": false}},
+      "expect": {"argv_includes": "--no-commit"},
+      "source": "unchanged behaviour: the pre-existing branch for commit=False must survive the fix"
+    }
+  ]
+}
