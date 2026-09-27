@@ -6,8 +6,11 @@ the 27 phrase keys bare (159 per body)."""
 
 from __future__ import annotations
 
+import json
+
 from gauntlet.case import Case, Check, Expect, case_id
 from scouter.core import phrases, vocab
+from tests.gauntlet import checkmap
 from tests.gauntlet.layers.common import (
     BODIES,
     BUDGET_MOVE,
@@ -23,10 +26,37 @@ from tests.gauntlet.layers.common import (
     sidecar,
     step,
 )
+from tests.gauntlet.taxonomy import DATA
 
 LAYER = "coverage"
 PREFIX = "cov"
 HERO = frame("hero")
+
+#: Rows 458/461 (night-1 triage class COV-WB-preset4-expectation):
+#: check_map.json's `wb_route_a` block decides what a write to the
+#: temperature module must verify on the corpus hero (checkmap.HERO_WB_PRESET):
+#: refused (`module_unavailable`) while `channelmixerrgb.temperature` is a
+#: candidate action path, routed through color calibration once it is
+#: pinned. Loaded once, module-level, exactly like policy.py's `POLICY`.
+_CMAP = json.loads((DATA / "check_map.json").read_text(encoding="utf-8"))
+
+
+def _wb_route_a(case_key: str) -> dict | None:
+    """checkmap.wb_route_a_expect_for_hero for a hero-frame case (`case_key`
+    a phrase key like "warmer", or a "module.param" key like
+    "temperature.temperature")."""
+    return checkmap.wb_route_a_expect_for_hero(_CMAP, case_key)
+
+
+def _wb_route_a_tint() -> dict | None:
+    """checkmap.wb_route_a_tint_expect_for_hero for a hero-frame
+    temperature.tint case -- always a refusal on preset 4, pin or no pin
+    (tint has no reroute)."""
+    return checkmap.wb_route_a_tint_expect_for_hero(_CMAP)
+
+
+def _wb_refusal_expect(route: dict) -> Expect:
+    return Expect("typed_error", codes=list(route["codes"]))
 #: Cluster D / row 458 (2026-09-27): the olympus `hero` frame surveys near
 #: the darkest in the corpus, so these 6 "touch" phrase cases -- olympus-body
 #: rows of tests/test_touch_floor.py's KNOWN_RESIDUAL -- can't clear their
@@ -178,7 +208,18 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
     k = key(s.module, s.param)
     cid = lambda v: case_id(PREFIX, k, body, v)  # noqa: E731
     out: list[Case] = []
-    pre = _tint_reset() if (s.module, s.param) == ("temperature", "temperature") else []
+    is_wb = (s.module, s.param) == ("temperature", "temperature")
+    #: Rows 458/461 (COV-WB-preset4-expectation): on the corpus hero's preset
+    #: 4, every temperature.temperature write refuses (module_unavailable)
+    #: until channelmixerrgb.temperature is pinned -- this preempts the
+    #: item-4a "no calibration table" refusal below (`relative_ok`), which
+    #: never gets a chance to fire on a preset-4 frame in practice. When
+    #: `wb_route` is not None the whole case shrinks to its single action
+    #: step, same as the item-4a refusal cases already did (no prep write,
+    #: so the sidecar stays untouched for an honest refusal).
+    wb_route = _wb_route_a(k) if is_wb else None
+    wb_refused = wb_route is not None and wb_route["expect"] == "typed_error"
+    pre = [] if (not is_wb or wb_refused) else _tint_reset()
     o = len(pre)
     plo, phi = _probe_lo_hi(s)
     relative_ok = _wb_relative_ok(s, body)
@@ -189,12 +230,17 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
             # item 1: 360 wraps to 0, the module default -- move it off, so
             # `set_hi` stays a real probe distinct from `set_lo`/`set_neutral`.
             v = s.hi - s.step
+        if wb_refused:
+            out.append(_case(cid(label), body, tier, [_set(s, v)], _wb_refusal_expect(wb_route)))
+            continue
         at_base = _at_baseline(s, v)
         out.append(_case(cid(label), body, tier, [*pre, _set(s, v)],
                          Expect("edit", [m1_equals(s.module, s.param, v, s.unit)],
                                 _side(s, changed=not at_base))))
     for label, v in (("set_lo_minus", plo - s.step), ("set_hi_plus", phi + s.step)):
-        if s.wraps:
+        if wb_refused:
+            out.append(_case(cid(label), body, "P1", [_set(s, v)], _wb_refusal_expect(wb_route)))
+        elif s.wraps:
             want = v % 360.0
             out.append(_case(cid(label), body, "P1", [*pre, _set(s, v)],
                              Expect("edit", [m1_equals(s.module, s.param, want, s.unit)],
@@ -208,7 +254,10 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
                              meta={"accept_refusal": True}))
     for n in (1, -1, 3, -3):
         tier = "P0" if abs(n) == 1 else "P1"
-        if relative_ok:
+        if wb_refused:
+            out.append(_case(cid(_signed("adjust", n)), body, tier, [_adjust(s, n * s.step)],
+                             _wb_refusal_expect(wb_route)))
+        elif relative_ok:
             chk = m1_delta(s.module, s.param, n * s.step, s.unit, s.step)
             chk.target["from"] = 1 + o
             out.append(_case(cid(_signed("adjust", n)), body, tier,
@@ -221,7 +270,10 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
             # refusal needs it untouched for `_honest_tool_refusal` to see).
             out.append(_case(cid(_signed("adjust", n)), body, tier, [_adjust(s, n * s.step)],
                              Expect("edit", []), meta={"accept_refusal": True}))
-    if s.wraps:
+    if wb_refused:
+        over = _case(cid("adjust_overflow"), body, "P1", [_adjust(s, 3 * s.step)],
+                     _wb_refusal_expect(wb_route))
+    elif s.wraps:
         over = _case(cid("adjust_overflow"), body, "P1",
                      [*pre, _set(s, s.hi - s.step), _adjust(s, 3 * s.step)],
                      Expect("edit", [m1_equals(s.module, s.param, (s.hi + 2 * s.step) % 360,
@@ -236,7 +288,12 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
                      Expect("edit", []), meta={"accept_refusal": True})
     out.append(over)
     for n in (1, -1):
-        if relative_ok:
+        if wb_refused:
+            out.append(_case(cid(_signed("nudge", n)), body, "P1",
+                             [step("darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param,
+                                   steps=n)],
+                             _wb_refusal_expect(wb_route)))
+        elif relative_ok:
             chg = Check("M1", kind="changed", sign=n,
                        target={"key": k, "unit": s.unit, "from": 1 + o})
             out.append(_case(cid(_signed("nudge", n)), body, "P1",
@@ -250,22 +307,35 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
                                    steps=n)],
                              Expect("edit", []), meta={"accept_refusal": True}))
     units = {k: s.unit}
-    out.append(_case(cid("undo_after_set"), body, "P0",
-                     [*pre, _set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)],
-                     Expect("workflow", [m1_restored([k], units, o)])))
-    out.append(_case(cid("undo_after_adjust"), body, "P1",
-                     [*pre, _adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)],
-                     Expect("workflow", [m1_restored([k], units, o)])))
-    out.append(_case(cid("repeat_set"), body, "P1", [*pre, _set(s, _mid(s)), _set(s, _mid(s))],
-                     Expect("property", [Check("M1", kind="step_equal",
-                                               target={"key": k, "a": 1 + o, "b": 2 + o,
-                                                       "unit": s.unit})], property="P1")))
-    out.append(_case(cid("repeat_adjust"), body, "P1",
-                     [*pre, _set(s, _mid(s)), _adjust(s, s.step), _adjust(s, s.step)],
-                     Expect("property", [Check("M1", kind="step_ratio",
-                                               target={"key": k, "base": [1 + o, 2 + o],
-                                                       "double": [1 + o, 3 + o], "ratio": 2.0,
-                                                       "tol": 0.1})], property="P1")))
+    if wb_refused:
+        undo_expect = checkmap.wb_route_a_undo_expect(_CMAP, wb_route)
+        undo_exp = Expect("typed_error", codes=list(undo_expect["codes"]))
+        out.append(_case(cid("undo_after_set"), body, "P0",
+                         [step("darkroom_undo_last", BUDGET_MOVE)], undo_exp))
+        out.append(_case(cid("undo_after_adjust"), body, "P1",
+                         [step("darkroom_undo_last", BUDGET_MOVE)], undo_exp))
+        out.append(_case(cid("repeat_set"), body, "P1",
+                         [_set(s, _mid(s)), _set(s, _mid(s))], _wb_refusal_expect(wb_route)))
+        out.append(_case(cid("repeat_adjust"), body, "P1",
+                         [_adjust(s, s.step), _adjust(s, s.step)], _wb_refusal_expect(wb_route)))
+    else:
+        out.append(_case(cid("undo_after_set"), body, "P0",
+                         [*pre, _set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)],
+                         Expect("workflow", [m1_restored([k], units, o)])))
+        out.append(_case(cid("undo_after_adjust"), body, "P1",
+                         [*pre, _adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)],
+                         Expect("workflow", [m1_restored([k], units, o)])))
+        out.append(_case(cid("repeat_set"), body, "P1",
+                         [*pre, _set(s, _mid(s)), _set(s, _mid(s))],
+                         Expect("property", [Check("M1", kind="step_equal",
+                                                   target={"key": k, "a": 1 + o, "b": 2 + o,
+                                                           "unit": s.unit})], property="P1")))
+        out.append(_case(cid("repeat_adjust"), body, "P1",
+                         [*pre, _set(s, _mid(s)), _adjust(s, s.step), _adjust(s, s.step)],
+                         Expect("property", [Check("M1", kind="step_ratio",
+                                                   target={"key": k, "base": [1 + o, 2 + o],
+                                                           "double": [1 + o, 3 + o], "ratio": 2.0,
+                                                           "tol": 0.1})], property="P1")))
     return out
 
 
@@ -311,15 +381,23 @@ def module_cases(body: str) -> list[Case]:
 def tint_cases(body: str) -> list[Case]:
     t = vocab.spec("temperature", "tint")
     out = []
+    #: Row 461 (wb_route_a extended to tint): tint has no color-calibration
+    #: reroute, so on the corpus hero's preset 4 every tint write refuses
+    #: module_unavailable, superseding this function's old (pre-guard)
+    #: value_unknown/"changed: True" assumptions unconditionally.
+    wb_route = _wb_route_a_tint()
+    set_exp = _wb_refusal_expect(wb_route) if wb_route else Expect("edit", [], {"changed": True})
     for v in (0.8, 0.9, 1.1, 1.2):
         out.append(_case(case_id(PREFIX, "temperature.tint", body, f"set_{v}"), body, "P1",
-                         [_set(t, v)], Expect("edit", [], {"changed": True})))
-    te = Expect("typed_error", codes=["value_unknown"])
+                         [_set(t, v)], set_exp))
+    te = _wb_refusal_expect(wb_route) if wb_route else Expect("typed_error",
+                                                               codes=["value_unknown"])
     out.append(_case(case_id(PREFIX, "temperature.tint", body, "adjust"), body, "P1",
                      [_adjust(t, 0.05)], te))
+    say_exp = (_wb_refusal_expect(wb_route) if wb_route
+               else Expect("typed_error", codes=["value_unknown"]))
     out.append(_case(case_id(PREFIX, "temperature.tint", body, "say_more_magenta"), body, "P1",
-                     [step("darkroom_say", BUDGET_SAY, phrase="more magenta")],
-                     Expect("typed_error", codes=["value_unknown"])))
+                     [step("darkroom_say", BUDGET_SAY, phrase="more magenta")], say_exp))
     return out
 
 
@@ -334,7 +412,30 @@ def unreachable_cases(body: str) -> list[Case]:
     ]
 
 
+def _phrase_wb_expect(p: phrases.Phrase) -> dict | None:
+    """checkmap's wb_route_a expectation for a phrase whose only live move
+    is on the temperature module (rows 458/461): "warmer"/"cooler" (Kelvin,
+    via `wb_route_a_expect`) or a tint phrase (`more_magenta`/`more_green`,
+    via `wb_route_a_tint_expect`, always a refusal -- tint has no reroute).
+    None for every other phrase, or if the block does not apply."""
+    if p.key in WB_RELATIVE_PHRASE_KEYS:
+        return _wb_route_a(p.key)
+    if p.key in TINT_KEYS:
+        return _wb_route_a_tint()
+    return None
+
+
 def _phrase_expect(p: phrases.Phrase, sign: float = 1.0) -> Expect:
+    wb = _phrase_wb_expect(p)
+    if wb is not None:
+        if wb["expect"] == "typed_error":
+            return _wb_refusal_expect(wb)
+        # Route A pinned and live: the write actually lands on
+        # channelmixerrgb.temperature, not the phrase's usual M1 key, and
+        # direction_verified is False until the host probe -- so keep this
+        # permissive (any edit) rather than asserting a key/sign this
+        # generator cannot verify yet.
+        return Expect("edit", [])
     if p.key in TINT_KEYS:
         return Expect("typed_error", codes=["value_unknown"])
     checks: list[Check] = []
@@ -366,6 +467,15 @@ WB_RELATIVE_PHRASE_KEYS = frozenset({"warmer", "cooler"})
 
 
 def _wb_phrase_meta(p: phrases.Phrase, body: str) -> dict | None:
+    """Item 4a's "no calibration table" refusal -- superseded for
+    warmer/cooler/tint phrases by `_phrase_wb_expect`/checkmap's wb_route_a
+    block (rows 458/461), which fires first on the corpus hero's preset 4
+    and decides the expectation directly (`_phrase_expect` already calls
+    it). This only still applies when the check-map block does not (a
+    non-preset-4 frame, which does not exist in today's corpus, or a body
+    with no calibration table on a param outside route A)."""
+    if _phrase_wb_expect(p) is not None:
+        return None
     if p.key in WB_RELATIVE_PHRASE_KEYS and not _wb_relative_ok(vocab.spec("temperature",
                                                                             "temperature"), body):
         return {"accept_refusal": True}
@@ -390,8 +500,11 @@ def phrase_cases(body: str) -> list[Case]:
         by, amount = EXPLICIT_BY_UNIT.get(row.unit, ("0.2", 0.2))
         text = f"{syn} by {by}"
         one = len(p.moves) == 1 and p.moves[0].kind == "adjust"
+        wb = _phrase_wb_expect(p)
         if wb_meta:
             exp = Expect("edit", [])
+        elif wb is not None:
+            exp = _wb_refusal_expect(wb) if wb["expect"] == "typed_error" else Expect("edit", [])
         elif p.key in TINT_KEYS:
             exp = Expect("typed_error", codes=["value_unknown"])
         elif not one:
@@ -428,7 +541,13 @@ def property_cases(body: str) -> list[Case]:
     for p in phrases.PHRASES:
         syn = p.synonyms[0]
         k, unit = _primary(p)
-        if p.key in TINT_KEYS:
+        wb = _phrase_wb_expect(p)
+        if wb is not None:
+            # rows 458/461: a "say" in this sequence refuses (or, once
+            # pinned, lands on channelmixerrgb, not `k`) before the
+            # monotonic property could ever be observed on `k`.
+            exp = _wb_refusal_expect(wb) if wb["expect"] == "typed_error" else Expect("edit", [])
+        elif p.key in TINT_KEYS:
             exp = Expect("typed_error", codes=["value_unknown"])
         else:
             exp = Expect("property", [Check("M1", kind="monotonic", target={
@@ -439,7 +558,10 @@ def property_cases(body: str) -> list[Case]:
     for a, b in OPPOSED:
         pa, pb = by_key[a], by_key[b]
         k, unit = _primary(pa)
-        if a in TINT_KEYS:
+        wb = _phrase_wb_expect(pa)
+        if wb is not None:
+            exp = _wb_refusal_expect(wb) if wb["expect"] == "typed_error" else Expect("edit", [])
+        elif a in TINT_KEYS:
             exp = Expect("typed_error", codes=["value_unknown"])
         else:
             exp = Expect("property", [m1_restored([k], {k: unit}),
@@ -451,36 +573,60 @@ def property_cases(body: str) -> list[Case]:
         pa, pb = by_key[a], by_key[b]
         ka, _ = _primary(pa)
         kb, _ = _primary(pb)
+        wb = _phrase_wb_expect(pa) or _phrase_wb_expect(pb)
+        if wb is not None and wb["expect"] == "typed_error":
+            exp = _wb_refusal_expect(wb)
+        else:
+            exp = Expect("property", [Check("M1", kind="step_equal", target={
+                "keys": [ka, kb], "a": 2, "b": 6})], property="P2")
         out.append(_case(case_id(PREFIX, "p2", a, b, body), body, "P1",
                          [say(pa.synonyms[0]), say(pb.synonyms[0]), undo(), undo(),
-                          say(pb.synonyms[0]), say(pa.synonyms[0])],
-                         Expect("property", [Check("M1", kind="step_equal", target={
-                             "keys": [ka, kb], "a": 2, "b": 6})], property="P2")))
+                          say(pb.synonyms[0]), say(pa.synonyms[0])], exp))
     return out
 
 
 def nex5n_cases() -> list[Case]:
     body = "sony_nex5n"
     s = vocab.spec("temperature", "temperature")
-    pre = _tint_reset()
+    k = key(s.module, s.param)
+    #: Rows 458/461: the sony_nex5n hero is preset 4 too, so this whole
+    #: hand-built WB set (like param_cases' generic one) refuses now.
+    wb_route = _wb_route_a(k)
+    wb_refused = wb_route is not None and wb_route["expect"] == "typed_error"
+    pre = [] if wb_refused else _tint_reset()
     out = []
     for label, v in (("set_lo", s.lo), ("set_hi", s.hi), ("set_mid", _mid(s)),
                      ("set_3200", 3200.0), ("set_5500", 5500.0), ("set_6500", 6500.0)):
+        if wb_refused:
+            out.append(_case(case_id(PREFIX, "wb", body, label), body, "P1", [_set(s, v)],
+                             _wb_refusal_expect(wb_route)))
+            continue
         out.append(_case(case_id(PREFIX, "wb", body, label), body, "P1", [*pre, _set(s, v)],
                          Expect("edit", [m1_equals(s.module, s.param, v, s.unit)], _side(s))))
     for n in (1, -1, 3, -3):
+        if wb_refused:
+            out.append(_case(case_id(PREFIX, "wb", body, _signed("adjust", n)), body, "P1",
+                             [_adjust(s, n * s.step)], _wb_refusal_expect(wb_route)))
+            continue
         chk = m1_delta(s.module, s.param, n * s.step, s.unit, s.step)
         chk.target["from"] = 2
         out.append(_case(case_id(PREFIX, "wb", body, _signed("adjust", n)), body, "P1",
                          [*pre, _set(s, _mid(s)), _adjust(s, n * s.step)],
                          Expect("edit", [chk], _side(s))))
-    k = key(s.module, s.param)
-    out.append(_case(case_id(PREFIX, "wb", body, "undo_after_set"), body, "P1",
-                     [*pre, _set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)],
-                     Expect("workflow", [m1_restored([k], {k: "K"}, 1)])))
-    out.append(_case(case_id(PREFIX, "wb", body, "undo_after_adjust"), body, "P1",
-                     [*pre, _adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)],
-                     Expect("workflow", [m1_restored([k], {k: "K"}, 1)])))
+    if wb_refused:
+        undo_expect = checkmap.wb_route_a_undo_expect(_CMAP, wb_route)
+        undo_exp = Expect("typed_error", codes=list(undo_expect["codes"]))
+        out.append(_case(case_id(PREFIX, "wb", body, "undo_after_set"), body, "P1",
+                         [step("darkroom_undo_last", BUDGET_MOVE)], undo_exp))
+        out.append(_case(case_id(PREFIX, "wb", body, "undo_after_adjust"), body, "P1",
+                         [step("darkroom_undo_last", BUDGET_MOVE)], undo_exp))
+    else:
+        out.append(_case(case_id(PREFIX, "wb", body, "undo_after_set"), body, "P1",
+                         [*pre, _set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)],
+                         Expect("workflow", [m1_restored([k], {k: "K"}, 1)])))
+        out.append(_case(case_id(PREFIX, "wb", body, "undo_after_adjust"), body, "P1",
+                         [*pre, _adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)],
+                         Expect("workflow", [m1_restored([k], {k: "K"}, 1)])))
     by_key = {p.key: p for p in phrases.PHRASES}
     for pk in ("warmer", "cooler"):
         p = by_key[pk]

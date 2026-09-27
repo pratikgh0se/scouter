@@ -57,10 +57,17 @@ def test_boundary_accepts_refusal_but_not_a_silent_clamp():
     assert c.steps[-1].args["value"] == chk.target["request"]
 
 
-def test_kelvin_cases_reset_tint_first_and_offset_their_checks():
+def test_kelvin_cases_no_longer_reset_tint_first_on_a_wb_route_a_refusal():
+    """Superseded by rows 458/461 (COV-WB-preset4-expectation): the corpus
+    hero's preset 4 refuses every temperature.temperature write outright
+    (checkmap.wb_route_a_expect, candidate until pinned), which preempts
+    item 4a's tint-reset prep entirely -- an item-4a tint-reset write would
+    itself refuse the same way, so it is dropped, same as the (former)
+    "no calibration table" refusal cases already dropped their prep."""
     c = _case("cov-temperature.temperature-olympus-adjust_up1")
-    assert c.steps[0].args == {"module": "temperature", "param": "tint", "value": 1.0}
-    assert c.expect.checks[0].target["from"] == 2
+    assert [s.tool for s in c.steps] == ["darkroom_adjust"]
+    assert c.expect.kind == "typed_error"
+    assert c.expect.codes == ["module_unavailable"]
 
 
 # ---------------------------------------------------------------- item 1:
@@ -124,33 +131,41 @@ def test_phrase_explicit_beyond_range_uses_the_boundary_check():
 
 
 # ---------------------------------------------------------------- item 4:
-# WB by body/range. sony_a7 has no calibration table, so a Kelvin-relative
-# move (adjust/nudge/warmer/cooler) honestly refuses; olympus does have one,
-# but its probe values must stay inside the table's sampled Kelvin range.
+# WB by body/range. Superseded by rows 458/461 (COV-WB-preset4-expectation):
+# the corpus hero's preset 4 refuses every temperature.temperature write on
+# EVERY body (checkmap.wb_route_a_expect, candidate until
+# channelmixerrgb.temperature is pinned) -- this preempts item 4a's
+# "no calibration table" distinction between sony_a7 and olympus, which
+# never gets a chance to fire on a preset-4 frame. `_probe_lo_hi`'s
+# WB_SAMPLED_K narrowing is still exercised (it decides the refused step's
+# own request value, which matters once route A is pinned and live), but
+# the boundary CHECK itself no longer applies to a refused write.
 
 
-def test_temperature_adjust_on_uncalibrated_body_accepts_refusal():
-    c = _case("cov-temperature.temperature-sony_a7-adjust_up1")
-    assert c.meta.get("accept_refusal") is True
+def test_temperature_adjust_refuses_on_every_body_preset_4():
+    for body in ("sony_a7", "olympus"):
+        c = _case(f"cov-temperature.temperature-{body}-adjust_up1")
+        assert c.expect.kind == "typed_error"
+        assert c.expect.codes == ["module_unavailable"]
+        assert not c.meta.get("accept_refusal")  # a strict refusal, not a permissive one
 
 
-def test_temperature_adjust_on_calibrated_body_does_not_accept_refusal():
-    c = _case("cov-temperature.temperature-olympus-adjust_up1")
-    assert not c.meta.get("accept_refusal")
+def test_warmer_phrase_refuses_on_every_body_preset_4():
+    for body in ("sony_a7", "olympus"):
+        for label in ("bare", "touch", "lot", "explicit"):
+            c = _case(f"cov-phrase-warmer-{body}-{label}")
+            assert c.expect.kind == "typed_error", (body, label)
+            assert c.expect.codes == ["module_unavailable"], (body, label)
 
 
-def test_warmer_phrase_on_uncalibrated_body_accepts_refusal():
-    for label in ("bare", "touch", "lot", "explicit"):
-        c = _case(f"cov-phrase-warmer-sony_a7-{label}")
-        assert c.meta.get("accept_refusal") is True, label
-
-
-def test_temperature_boundary_probes_stay_inside_the_calibration_sample_range():
+def test_temperature_boundary_probe_requests_stay_inside_the_calibration_sample_range():
     for label in ("set_lo", "set_hi"):
         c = _case(f"cov-temperature.temperature-olympus-{label}")
-        v = c.expect.checks[0].target["value"]
+        assert c.expect.kind == "typed_error"  # refused; no M1 check to read a value from
+        v = c.steps[-1].args["value"]
         assert 3000.0 <= v <= 12000.0
     for label in ("set_lo_minus", "set_hi_plus"):
         c = _case(f"cov-temperature.temperature-olympus-{label}")
-        v = c.expect.checks[0].target["request"]
+        assert c.expect.kind == "typed_error"
+        v = c.steps[-1].args["value"]
         assert 3000.0 <= v <= 12000.0

@@ -1,0 +1,24 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for the generator wiring added by rows 458/461 (night-1 triage class COV-WB-preset4-expectation): tests/gauntlet/layers/coverage.py and tests/gauntlet/layers/scenarios.py now call checkmap.wb_route_a_expect_for_hero/wb_route_a_tint_expect_for_hero so a case's Expect follows check_map.json's wb_route_a block instead of assuming every temperature-module write succeeds. Run by tests/intent/test_wb_route_a_generators_intent.py against the real generators (coverage.generate(), scenarios.generate()), never a mock of either.",
+  "subject": "tests/gauntlet/layers/coverage.py, tests/gauntlet/layers/scenarios.py",
+  "examples": [
+    {
+      "id": "coverage-warmer-phrase-refuses",
+      "input": {"generator": "coverage", "case_id": "cov-phrase-warmer-olympus-bare"},
+      "expect": {"kind": "typed_error", "codes": ["module_unavailable"]},
+      "why": "olympus IS calibrated, so before this fix the case expected an M4 rb edit to succeed; the corpus hero's preset 4 refuses it regardless of calibration (this was the 74-case wrong_refusal risk the triage flagged)"
+    },
+    {
+      "id": "coverage-tint-set-refuses",
+      "input": {"generator": "coverage", "case_id": "cov-temperature.tint-olympus-set_0.9"},
+      "expect": {"kind": "typed_error", "codes": ["module_unavailable"]},
+      "why": "tint has no color-calibration reroute (wb_route_a_tint_expect_for_hero is unconditional on preset 4), unlike Kelvin/warmer/cooler which route through channelmixerrgb once pinned"
+    },
+    {
+      "id": "scenarios-mixed-capability-drops-only-the-wb-check",
+      "input": {"generator": "scenarios", "case_id_prefix": "scn-r0005-", "case_id_suffix": "-tool"},
+      "expect": {"kind": "edit", "wb_stat_absent": ["M4", "rb"], "other_stat_present": "M2"},
+      "why": "r0005 combines brighter (unaffected) with warmer (WB-refused); the case must stay an edit for brighter but never assert the M4 rb check warmer's own refused sub-move cannot produce"
+    }
+  ]
+}

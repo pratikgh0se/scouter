@@ -4,6 +4,7 @@ other body), agent mode 160 (100 P0 + 60 impossible, olympus)."""
 from __future__ import annotations
 
 from gauntlet.case import Case, Check, Expect, Step, case_id
+from tests.gauntlet import checkmap
 from tests.gauntlet.checkmap import RequestPlan, plan_request
 from tests.gauntlet.layers.common import (
     AGENT_TURN_TIMEOUT_S,
@@ -65,6 +66,20 @@ def _unserved_modules(req: dict, tax: Taxonomy) -> list[dict]:
     return out
 
 
+def _wb_capability_expect(cap: str, cmap: dict) -> dict | None:
+    """checkmap's wb_route_a expectation (rows 458/461) for a scenario
+    capability that writes the temperature module on the corpus hero:
+    warmer/cooler (Kelvin, via `wb_route_a_expect_for_hero`) or
+    tint_magenta/tint_green (tint, via `wb_route_a_tint_expect_for_hero`,
+    always a refusal -- tint has no color-calibration reroute). None for
+    every other capability."""
+    if cap in ("warmer", "cooler"):
+        return checkmap.wb_route_a_expect_for_hero(cmap, cap)
+    if cap in ("tint_magenta", "tint_green"):
+        return checkmap.wb_route_a_tint_expect_for_hero(cmap)
+    return None
+
+
 def _followup_action(sentence: str, cmap: dict) -> str:
     low = sentence.lower()
     for rule in cmap["followup_rules"]:
@@ -124,8 +139,35 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
     elif plan.klass == "workflow":
         steps, expect = _workflow(plan, req)
     else:
+        #: Rows 458/461 (COV-WB-preset4-expectation, wired into scenarios
+        #: too): a capability writing the temperature module refuses
+        #: (module_unavailable) on the corpus hero's preset 4, candidate
+        #: until channelmixerrgb.temperature is pinned. When every
+        #: capability this request would exercise is one of those, the
+        #: request as a whole cannot serve anything and the case becomes an
+        #: honest refusal instead of an edit whose stat never moves.
+        wb_refusals = {c: r for c in plan.capabilities
+                      if (r := _wb_capability_expect(c, cmap)) is not None
+                      and r["expect"] == "typed_error"}
+        if plan.klass == "partial":
+            un = _unserved_modules(req, tax)
+            meta["roadmap_key"] = (un or [{"id": "unknown"}])[0]["id"]
+        else:
+            un = []
         steps = [cap_step(c, req, cmap) for c in plan.capabilities]
-        checks = [stat_check(p) for p in plan.parts if p.capability]
+        if wb_refusals and len(wb_refusals) == len(plan.capabilities):
+            codes = sorted({code for r in wb_refusals.values() for code in r["codes"]})
+            return Case(id=case_id(PREFIX, req["id"], body, "tool"), layer=LAYER, tier=tier,
+                        mode="tool", steps=steps, expect=Expect("typed_error", codes=codes),
+                        body=body, frame_role=role,
+                        source={"file": "requests.json", "id": req["id"],
+                                "cluster": req["cluster_id"]}, meta=meta)
+        # Mixed (some capabilities WB-refused, some not) or none refused:
+        # keep the case as an edit, but never assert a stat check for a
+        # capability that will not actually move (still an accepted gap --
+        # the refused sub-move's own step is unchecked here).
+        checks = [stat_check(p) for p in plan.parts
+                 if p.capability and p.capability not in wb_refusals]
         undo_follow = False
         for f in req["followups"]:
             if _followup_action(f, cmap) == "undo":
@@ -133,13 +175,10 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
                 undo_follow = True
             else:
                 steps.extend(cap_step(c, req, cmap, bit=True) for c in plan.capabilities)
-        if plan.klass == "partial":
-            un = _unserved_modules(req, tax)
-            meta["roadmap_key"] = (un or [{"id": "unknown"}])[0]["id"]
-            if un:
-                steps.append(step("darkroom_say", BUDGET_SAY, phrase=un[0]["phrases"][0]))
-                checks.append(Check("envelope", step=len(steps) - 1, target={
-                    "path": "ok", "op": "eq", "value": False}))
+        if un:
+            steps.append(step("darkroom_say", BUDGET_SAY, phrase=un[0]["phrases"][0]))
+            checks.append(Check("envelope", step=len(steps) - 1, target={
+                "path": "ok", "op": "eq", "value": False}))
         if undo_follow:
             expect = Expect("workflow", [m1_restored([], {})])
         else:
@@ -166,8 +205,20 @@ def agent_case(req: dict, plan: RequestPlan, tax: Taxonomy, tier: str) -> Case:
         if plan.workflow_verb == "undo":
             expect = Expect("workflow", [], {"changed": True})
     else:
-        expect = Expect("edit", [stat_check(p) for p in plan.parts if p.capability],
-                        {"changed": True})
+        # Rows 458/461: agent mode drives the same product, so the same
+        # preset-4 WB refusal applies -- an agent asked to warm/cool/tint an
+        # "as-shot" hero should also be scored against a refusal, not a
+        # "changed: True" edit whose stat cannot move.
+        wb_refusals = {c: r for c in plan.capabilities
+                      if (r := _wb_capability_expect(c, cmap)) is not None
+                      and r["expect"] == "typed_error"}
+        if wb_refusals and len(wb_refusals) == len(plan.capabilities):
+            codes = sorted({code for r in wb_refusals.values() for code in r["codes"]})
+            expect = Expect("typed_error", codes=codes)
+        else:
+            expect = Expect("edit", [stat_check(p) for p in plan.parts
+                                     if p.capability and p.capability not in wb_refusals],
+                            {"changed": True})
         if plan.klass == "partial":
             meta["roadmap_key"] = (_unserved_modules(req, tax) or [{"id": "unknown"}])[0]["id"]
     return Case(id=case_id(PREFIX_AGENT, req["id"], "olympus", "agent"), layer=LAYER_AGENT,

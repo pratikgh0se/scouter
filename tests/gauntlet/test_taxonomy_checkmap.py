@@ -84,3 +84,36 @@ def test_wb_route_a_block_loads_and_resolves(tax):
     assert checkmap.wb_route_a_expect(cmap, "brighter", 4, pinned=True) is None
     from scouter.core import vocab
     assert vocab.spec("channelmixerrgb", "temperature") is not None
+
+
+def test_wb_route_a_tint_always_refuses_on_preset_4(tax):
+    """Unlike warmer/cooler/temperature.temperature, tint has no
+    color-calibration reroute target -- pinning channelmixerrgb.temperature
+    makes no difference to it (row 461's tint extension)."""
+    cmap = tax.check_map
+    always = checkmap.wb_route_a_tint_expect(cmap, 4)
+    assert always == {"expect": "typed_error", "codes": ["module_unavailable"]}
+    # pin does not matter for tint -- there is no pinned parameter to check,
+    # so the function does not even take one.
+    assert checkmap.wb_route_a_tint_expect(cmap, 2) is None
+    assert checkmap.wb_route_a_tint_expect(cmap, None) is None
+
+
+def test_wb_route_a_undo_mirrors_a_refused_antecedent(tax):
+    """An undo right after a WB route-A move that was itself refused has
+    nothing to restore, so it must refuse too, not report an m1_restored
+    workflow check."""
+    cmap = tax.check_map
+    refused = checkmap.wb_route_a_expect(cmap, "warmer", 4, pinned=False)
+    undo = checkmap.wb_route_a_undo_expect(cmap, refused)
+    assert undo == {"expect": "typed_error", "codes": ["module_unavailable"]}
+
+    tint_refused = checkmap.wb_route_a_tint_expect(cmap, 4)
+    undo_tint = checkmap.wb_route_a_undo_expect(cmap, tint_refused)
+    assert undo_tint == {"expect": "typed_error", "codes": ["module_unavailable"]}
+
+    # a live (pinned) route did write, so the ordinary undo check applies --
+    # wb_route_a_undo_expect defers by returning None.
+    live = checkmap.wb_route_a_expect(cmap, "temperature.temperature", 4, pinned=True)
+    assert checkmap.wb_route_a_undo_expect(cmap, live) is None
+    assert checkmap.wb_route_a_undo_expect(cmap, None) is None
