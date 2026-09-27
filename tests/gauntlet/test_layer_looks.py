@@ -26,9 +26,16 @@ def test_generate_orders_cases_to_minimise_chart_hero_switches():
     onto a frame imported earlier in the same session without a relaunch
     (~45-60 s), so the raw generation order (chart, hero, chart, hero, ...)
     cost one switch per case. Grouping by frame_role is a pure sort: it must
-    not change which or how many cases exist, only their order."""
+    not change which or how many cases exist, only their order.
+
+    Row LK-hero-below-floor added a third distinct real frame (`hero_bright`,
+    olympus's stand-in for its too-dark `hero`); it maps 1:1 with body, so
+    grouping by role still groups by body. With 3 distinct frames the floor
+    on total switches is 2 (chart -> real, then hero <-> hero_bright), not 1
+    -- verified below against `looks.FRAME_ROLE_ORDER` itself so this bound
+    tracks the real number of roles rather than a hand-picked constant."""
     cases = looks.generate(taxonomy.load())
-    assert _switches(cases) <= 1
+    assert _switches(cases) <= len(looks.FRAME_ROLE_ORDER) - 1
     assert sorted(c.id for c in cases) == sorted(
         {c.id for c in looks.generate(taxonomy.load())})
 
@@ -54,6 +61,20 @@ def test_order_by_frame_role_is_a_stable_sort_on_a_fixture_set():
         [f"lk-look{i}-hero" for i in range(4)])
     assert _switches(ordered) <= 1
     assert {c.id for c in ordered} == {c.id for c in raw}
+
+
+def test_frame_role_order_covers_every_role_generate_produces():
+    """Merge-exposed bug (this integration): `hero_bright` was added to
+    `generate()`'s per-case `frame_role` (row LK-hero-below-floor) without
+    being added to `FRAME_ROLE_ORDER`, so `order_by_frame_role`'s
+    `FRAME_ROLE_ORDER.index(c.frame_role)` raised a bare `ValueError` for
+    every case on olympus -- a crash, not a typed failure. This test names
+    the invariant directly so the next new role fails loudly and specifically
+    here instead of as an opaque index error deep in the sort."""
+    cases = looks.generate(taxonomy.load())
+    produced = {c.frame_role for c in cases}
+    assert produced <= set(looks.FRAME_ROLE_ORDER), (
+        f"FRAME_ROLE_ORDER is stale: missing {sorted(produced - set(looks.FRAME_ROLE_ORDER))}")
 
 
 def test_looks_real_frame_cases_use_the_bright_hero_on_olympus_only():

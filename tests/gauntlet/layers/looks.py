@@ -18,7 +18,12 @@ SOURCED = ("documented", "community-consensus")
 #: costs a relaunch (about 45-60 s). The interleaved generation order below
 #: (chart, hero, chart, hero, ...) switched on every single case; grouping by
 #: role removes all but one switch per session.
-FRAME_ROLE_ORDER = ("chart", "hero")
+#: `hero_bright` (row LK-hero-below-floor) is a third, distinct real frame
+#: (olympus's normally-exposed stand-in for its too-dark `hero`) -- it maps
+#: 1:1 with body (olympus -> hero_bright, sony_a7 -> hero), so grouping by
+#: role still groups by body, and 3 distinct frames floor the achievable
+#: total at 2 switches (chart -> real, then hero <-> hero_bright), not 1.
+FRAME_ROLE_ORDER = ("chart", "hero", "hero_bright")
 TONE_PATCH = {"shadows_ev": "patch:ramp_-4", "mids_ev": "patch:ramp_+0",
               "highlights_ev": "patch:ramp_+2"}
 TONE_REGION = {"shadows_ev": "shadows", "mids_ev": "frame", "highlights_ev": "highlights"}
