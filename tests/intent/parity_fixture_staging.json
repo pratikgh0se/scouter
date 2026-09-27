@@ -1,0 +1,24 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for PAR-hollow-pass's fixture staging (night-1 triage rank 4, scratchpad/night1-parity-install-guide-triage.md): tests/gauntlet/exec_parity.py parity_pair copied each side's frame but never imported it, staged no smoke-job/style smoke, and used no recovery for the darkroom.open image-switch limit -- 18 pairs (10 'not in library', 6 'fixture missing', 2 'smoke args are errors') and 1 frame-switch pair never really exercised the verb even though envelopes_match read true. Run by tests/gauntlet/test_exec_parity.py against fakes (FakeMcp/FakeDt from tests/gauntlet/test_session.py, and a minimal FakeSession for the staging helpers in isolation, same pattern as tests/gauntlet/test_exec_bulk.py).",
+  "subject": "tests/gauntlet/exec_parity.py _stage_side, _ensure_smoke_style, _call_with_frame_switch, parity_pair",
+  "examples": [
+    {
+      "id": "not-in-library-verb-imports-both-sides",
+      "input": {"verb": "wb.kelvin (P0, happy)"},
+      "expect": {"library_import_calls": 2, "note": "one per side (mcp copy, cli copy)"},
+      "source": "night1-parity-install-guide-triage.md PAR-hollow-pass: '10 because the per-side copy is not in darktable's library ... scout.stats (P0), wb.kelvin (P0) ... all happy. Fix (M, harness): import both copies'"
+    },
+    {
+      "id": "darkroom-open-skips-staging-uses-frame-switch-recovery-instead",
+      "input": {"verb": "darkroom.open (P0, happy)"},
+      "expect": {"library_import_calls": 0, "note": "staging via library_import would not help open, and darkroom_open IS the verb under test"},
+      "source": "night1-parity-install-guide-triage.md: 'Import through library.import, not darkroom.open, which would hit the frame-switch limit' -- so darkroom.open itself is excluded from staging and instead gets the relaunch retry (LK-frame-switch-relaunch)"
+    },
+    {
+      "id": "not-in-darkroom-on-open-retries-once-via-relaunch",
+      "input": {"first_answer": "error not_in_darkroom", "second_answer": "ok"},
+      "expect": {"relaunched": true, "final_error": null},
+      "source": "night1-parity-install-guide-triage.md: 'darkroom.open-happy (P0). It fails on both sides with wrong image loaded ... known darkroom.open image-switch limit' -- mirrors ScouterSession._relaunch_then_reopen's own not_in_darkroom recovery"
+    }
+  ]
+}

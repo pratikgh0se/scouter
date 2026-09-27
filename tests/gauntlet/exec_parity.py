@@ -66,21 +66,132 @@ def compare(a: dict, b: dict) -> list[str]:
     return [k for k in na if na[k] != nb[k]]
 
 
+#: PAR-hollow-pass fixture staging (triage rank 4): the literal job slug and
+#: style name SMOKE_ARGS's own fixture-needing verbs already expect (cull.
+#: apply, export.release, library.register/verify, preset.apply_job,
+#: style.apply_set).
+SMOKE_JOB_SLUG = "smoke-job"
+SMOKE_STYLE_NAME = "smoke"
+
+
+def _imported_path(session, envelope: dict | None, source_name: str):
+    """The absolute path `library_import` actually wrote `source_name` to,
+    using ITS OWN envelope (`data.files[].source_name` -> `.dest`, relative to
+    the job directory -- spec section 6, ImportResult); mirrors
+    tests/gauntlet/exec_bulk.py's `_imported_frames`. `None` when the
+    envelope carries nothing usable (the import did not run or errored)."""
+    data = (envelope or {}).get("data") or {}
+    files = data.get("files") or []
+    dest_by_source = {f.get("source_name"): f.get("dest") for f in files if f.get("source_name")}
+    dest = dest_by_source.get(source_name)
+    if not dest or not data.get("job_slug") or not data.get("date"):
+        return None
+    from scouter import config as scouter_config
+
+    cfg = scouter_config.load(str(session.staged.config))
+    job_path = scouter_config.job_dir(cfg, data["date"], data["job_slug"])
+    return job_path / dest
+
+
+def _stage_side(session, path):
+    """PAR-hollow-pass 'not in library' cases (triage: 10 happy variants, 2
+    P0 -- scout.stats, wb.kelvin): a per-side parity copy that nothing ever
+    imported answers "not in library" (or an equivalent honest miss) on
+    BOTH sides, so the verb never really runs even though the pair agrees.
+    Import it into the library, under job `smoke-job`, via `library_import`
+    -- never `darkroom_open` (LK-frame-switch-relaunch: darktable cannot
+    load a second, differently-named raw into the darkroom while another is
+    loaded, in the same running instance). Falls back to the raw copy when
+    the import did not run or named nothing usable: a downstream verb whose
+    own fixture still needs the library then fails honestly on its own
+    terms, never on a guessed path."""
+    rec = session.call("library_import", {"source": str(path.parent),
+                                          "job_slug": SMOKE_JOB_SLUG}, 30.0, write=True)
+    resolved = _imported_path(session, rec.envelope, path.name)
+    return resolved if resolved is not None else path
+
+
+def _ensure_smoke_style(session, path) -> None:
+    """PAR-hollow-pass 'fixture missing' cases (triage: 6 happy variants, 2
+    P0 -- export.release, preset.apply_job -- need a real darktable style
+    named 'smoke' to already exist). Once per session (idempotent: a
+    session-scoped flag, since every parity case would otherwise re-stage
+    it): `style.extract` with `modules=[]` (SMOKE_ARGS's own style.extract
+    args) writes an empty-history style of that name without needing the
+    darkroom to show `path` (style.py extract's filtered path takes no
+    `dtbridge.require_darkroom()`)."""
+    if getattr(session, "_parity_smoke_style_done", False):
+        return
+    session.call("style_extract", {"image": str(path), "name": SMOKE_STYLE_NAME, "modules": []},
+                 30.0, write=True)
+    session._parity_smoke_style_done = True
+
+
+def _call_with_frame_switch(session, tool: str, args: dict, path, budget_s: float,
+                            write: bool) -> CallRecord:
+    """LK-frame-switch-relaunch (triage, PAR-hollow-pass note 3:
+    'darkroom.open-happy ... fails on both sides with "wrong image loaded"
+    ... known darkroom.open image-switch limit'): darktable cannot load a
+    second, differently-named raw into the darkroom while another is
+    loaded, in the SAME running instance. Retried once via a full relaunch
+    (mirrors `ScouterSession._relaunch_then_reopen`) before the pair is
+    scored, so a genuine open gets a real second chance rather than being
+    scored on a harness artefact."""
+    rec = session.call(tool, args, budget_s, write=write)
+    if rec.error == "not_in_darkroom":
+        session.relaunch(path)
+        rec = session.call(tool, args, budget_s, write=write)
+    if rec.error is None and (rec.envelope or {}).get("ok"):
+        session.current_frame = path
+    return rec
+
+
+def _run_cli(argv: list[str], env: dict, budget_s: float):
+    return subprocess.run(argv, env=env, capture_output=True, text=True, timeout=budget_s + 30)
+
+
+def _run_cli_with_frame_switch(session, argv: list[str], path, budget_s: float):
+    """The CLI side of `_call_with_frame_switch`: the CLI subprocess talks to
+    the SAME running darktable through the shared `session.staged.env`, so it
+    can hit the identical frame-switch limit. One retry, after a relaunch
+    onto `path`, on the same terms as the MCP side."""
+    p = _run_cli(argv, session.staged.env, budget_s)
+    try:
+        env = json.loads(p.stdout)
+    except ValueError:
+        env = None
+    if isinstance(env, dict) and (env.get("error") or {}).get("code") == "not_in_darkroom":
+        session.relaunch(path)
+        p = _run_cli(argv, session.staged.env, budget_s)
+    return p
+
+
 def parity_pair(session, case, step, obs) -> CallRecord:
     verb_id = step.args["verb"]
     hero = session.staged.frames["hero"]
     mcp_copy = copy_readonly(hero, session.root / "parity" / "mcp" / hero.name)
     cli_copy = copy_readonly(hero, session.root / "parity" / "cli" / hero.name)
+    is_open = verb_id == "darkroom.open"
+    if not is_open:
+        mcp_copy = _stage_side(session, mcp_copy)
+        cli_copy = _stage_side(session, cli_copy)
+        _ensure_smoke_style(session, mcp_copy)
     session.staged.frames["hero"] = mcp_copy
     mcp_args = substitute(step.args["args"], session, [])
-    mcp_rec = session.call(case.meta["mcp"], mcp_args, step.budget_s, write=step.write)
+    if is_open:
+        mcp_rec = _call_with_frame_switch(session, case.meta["mcp"], mcp_args, mcp_copy,
+                                          step.budget_s, step.write)
+    else:
+        mcp_rec = session.call(case.meta["mcp"], mcp_args, step.budget_s, write=step.write)
     session.staged.frames["hero"] = cli_copy
     cli_args = substitute(step.args["args"], session, [])
     session.staged.frames["hero"] = hero
     argv = [sys.executable, "-m", "scouter", *cli_argv(verb_id, cli_args)]
     try:
-        p = subprocess.run(argv, env=session.staged.env, capture_output=True, text=True,
-                           timeout=step.budget_s + 30)
+        if is_open:
+            p = _run_cli_with_frame_switch(session, argv, cli_copy, step.budget_s)
+        else:
+            p = _run_cli(argv, session.staged.env, step.budget_s)
     except subprocess.TimeoutExpired:
         obs.blocked = "hang: scouter cli exceeded budget"
         obs.hang_evidence.append(f"parity_pair: scouter cli {verb_id} exceeded "
