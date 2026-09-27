@@ -78,6 +78,231 @@ def test_below_floor_is_silent_c_not_partial():
     assert evaluate(_edit_case([chk], {"changed": True}), obs, POLICY).outcome == "silent_failure"
 
 
+def _mtl(module=None, param=None, applied=None, cap=None, moves=None):
+    """A `moved_to_limit` envelope. With `module`/`param`, a single-adjust
+    claim (`AdjustResult`'s own top-level module/param/applied/cap); with
+    `moves`, a `SayResult`-shaped `data.moved_to_limit` list of such claims.
+    With neither, the outcome is claimed but nothing about it is parseable
+    -- review round 1 probe P1's shape (the claim still needs verifying,
+    it just never can)."""
+    data: dict = {}
+    if moves is not None:
+        data["moved_to_limit"] = moves
+    elif module:
+        data.update(module=module, param=param, applied=applied, cap=cap)
+    return {"ok": False, "outcome": "moved_to_limit", "data": data}
+
+
+#: Review round 1 (I1): `moved_to_limit` is a CLAIM, exactly like a plain
+#: `ok` -- it must go through rules (a)-(f), and only scores
+#: `correct_refusal` when the after snapshot actually verifies the claimed
+#: module.param landed at its claimed cap, AND the failing below-floor
+#: check is the one tagged (`Check.tags["clamp_param"]`) to that same
+#: param. Probe ids below match `scratchpad/n1rev_probe.py`.
+
+def test_p1_moved_to_limit_claim_xmp_unchanged_no_sidecar_is_silent_failure():
+    """Probe P1: the claim is unverifiable (nothing in the envelope names a
+    module/param/cap) and the XMP did not move at all. Before this fix,
+    the unverified claim skipped rules (a)-(f) entirely (`reported` was
+    False) and fell through to a bare 'failed'; it must be silent_failure,
+    same as a plain `ok` that changed nothing would be."""
+    chk = Check("M2", stat="L", region="frame", sign=1)
+    obs = _obs(_mtl(), _snap("a", **{"exposure.exposure": 0.7}),
+               _snap("a", **{"exposure.exposure": 0.7}),
+               stats_before={"frame": {"L": 50.0}}, stats_after={"frame": {"L": 50.1}},
+               floors={"L": 0.5})
+    v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
+    assert v.outcome == "silent_failure"
+
+
+def test_p4_moved_to_limit_claim_applied_does_not_match_cap_is_silent_failure():
+    """Probe P4: claims exposure capped at 4.0, but the after-XMP shows
+    exposure only reached 1.0 -- the claim does not verify, so the
+    below-floor exception must not apply."""
+    chk = Check("M2", stat="L", region="frame", sign=1,
+                tags={"clamp_param": "exposure.exposure"})
+    obs = _obs(_mtl("exposure", "exposure", applied=4.0, cap=4.0),
+               _snap("a", **{"exposure.exposure": 0.7}),
+               _snap("b", **{"exposure.exposure": 1.0}),
+               stats_before={"frame": {"L": 50.0}}, stats_after={"frame": {"L": 50.1}},
+               floors={"L": 0.5})
+    v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
+    assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
+
+
+def test_moved_to_limit_verified_clamp_below_floor_is_correct_refusal_residual_clamp():
+    """A clamp claim the after snapshot actually verifies (exposure landed
+    exactly at its claimed cap, 4.0, changed from 0.7), whose only failing
+    check is the one tagged to that same param, is `correct_refusal`,
+    `residual: clamp` -- this is the shape row 471 describes, built
+    synthetically (I4: the real night-1 D-bare-step rows never hit this
+    path at all -- see I2/test_layer_coverage's touch-floor rows, which
+    are plain `ok` and score `imperceptible_step` instead)."""
+    chk = Check("M2", stat="L", region="frame", sign=1,
+                tags={"clamp_param": "exposure.exposure"})
+    obs = _obs(_mtl("exposure", "exposure", applied=4.0, cap=4.0),
+               _snap("a", **{"exposure.exposure": 0.7}),
+               _snap("b", **{"exposure.exposure": 4.0}),
+               stats_before={"frame": {"L": 50.0}}, stats_after={"frame": {"L": 50.1}},
+               floors={"L": 0.5})
+    v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
+    assert (v.score, v.outcome) == ("pass", "correct_refusal")
+    assert v.notes == ["residual: clamp"]
+
+
+def test_moved_to_limit_below_floor_check_tagged_to_a_different_unclamped_move_is_silent():
+    """A phrase with one clamped move (colorbalancergb.shadows_chroma,
+    verified at its cap) and one plain move (shadows_hue) -- the
+    below-floor stat check is tagged to the PLAIN move's param, so the
+    verified clamp on the OTHER param must not excuse it."""
+    chk = Check("M2", stat="L", region="frame", sign=1,
+                tags={"clamp_param": "colorbalancergb.shadows_hue"})
+    obs = _obs(
+        _mtl(moves=[{"module": "colorbalancergb", "param": "shadows_chroma",
+                     "applied": 0.3, "cap": 0.3}]),
+        _snap("a", **{"colorbalancergb.shadows_chroma": 0.2,
+                      "colorbalancergb.shadows_hue": 10.0}),
+        _snap("b", **{"colorbalancergb.shadows_chroma": 0.3,
+                      "colorbalancergb.shadows_hue": 15.0}),
+        stats_before={"frame": {"L": 50.0}}, stats_after={"frame": {"L": 50.1}},
+        floors={"L": 0.5})
+    v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
+    assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
+
+
+def test_p6_moved_to_limit_wrong_direction_is_silent_failure():
+    """Probe P6: a `moved_to_limit` outcome only ever excuses "below noise
+    floor" -- a check that moved the WRONG way is rule (c)'s honest
+    silent failure, clamp or not (the plain-ok control, P7, scores the
+    same way -- see test_silent_failure_c_stat_wrong_direction above)."""
+    chk = Check("M2", stat="L", region="frame", sign=1)
+    obs = _obs(_mtl(), _snap("a"), _snap("b"),
+               stats_before={"frame": {"L": 50.0}}, stats_after={"frame": {"L": 45.0}},
+               floors={"L": 0.5})
+    v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
+    assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
+
+
+def _plain_ok_move(module, param, previous, delta, unit=""):
+    applied = previous + delta
+    return {"ok": True, "outcome": "ok",
+            "data": {"module": module, "param": param, "previous": previous, "delta": delta,
+                     "applied": applied, "requested": applied, "unit": unit,
+                     "clamped": False, "noop": False}}
+
+
+def test_imperceptible_step_real_recorded_shape_is_its_own_outcome():
+    """Row 475 (I2 ruling, provisional). Real shape from the night-1
+    gauntlet recording (~/Pictures/ScouterScratch/gauntlet/night1-20260926/
+    cases/cov-phrase-more_chroma-sony_a7-bare.json): 'more chroma' moves
+    colorbalancergb.global_chroma 0.0 -> 0.05 (a plain `ok`, `clamped:
+    false`, requested == applied -- the move landed in full), and M5 C
+    measures +0.407 against a floor of 0.5 (gauntlet/metrics.FLOOR_MIN).
+    I2 found all 125 recorded D-bare-step-below-perceptual-floor rows have
+    this exact shape (0 are `moved_to_limit`) -- this must not be
+    `silent_failure` (the product claimed nothing false) nor
+    `correct_refusal` (nothing was refused -- it moved): its own outcome,
+    `imperceptible_step`, tagged `residual: step-below-floor`."""
+    chk = Check("M5", stat="C", region="frame", sign=1)
+    obs = _obs(_plain_ok_move("colorbalancergb", "global_chroma", 0.0, 0.05, unit="%"),
+               _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+               _snap("b", **{"colorbalancergb.global_chroma": 0.05}),
+               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.407}},
+               floors={"C": 0.5})
+    v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
+    assert (v.score, v.outcome) == ("partial", "imperceptible_step")
+    assert v.notes == ["residual: step-below-floor"]
+    assert v.silent_failure is None
+
+
+#: Review round 2 (R1, high, blocking): `_writes_landed_as_requested` used to
+#: trust the envelope's own `applied` field against its own `requested`
+#: field -- both the product's word, never checked against the XMP. Probes
+#: below match `scratchpad/n1rev_probe2.py` (Q1/Q4/Q5/Q7 -- Q2/Q3/Q6/Q8 were
+#: already correct and are covered by other tests above).
+
+def _claims_ok(applied, requested, unit="%"):
+    return {"ok": True, "outcome": "ok",
+            "data": {"module": "colorbalancergb", "param": "global_chroma",
+                     "applied": applied, "requested": requested, "unit": unit,
+                     "clamped": False, "noop": False}}
+
+
+def test_q1_claim_matches_but_xmp_is_identical_is_silent_failure():
+    """Probe Q1: the envelope claims applied == requested == 0.05 (a
+    consistent, plausible-looking claim), but the after snapshot shows the
+    param UNCHANGED from before -- nothing landed at all. Must be
+    silent_failure, not imperceptible_step: `_writes_landed_as_requested`
+    reads the XMP, not the envelope's own numbers."""
+    chk = Check("M5", stat="C", region="frame", sign=1)
+    obs = _obs(_claims_ok(0.05, 0.05), _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+               _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.3}},
+               floors={"C": 0.5})
+    v = evaluate(_edit_case([chk], None), obs, POLICY)
+    assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
+
+
+def test_q4_claim_matches_but_xmp_shows_a_short_move_is_silent_failure():
+    """Probe Q4: claims applied == requested == 0.05, but the after
+    snapshot shows the param only reached 0.01 -- a genuinely short move
+    wearing a full-step claim. Must be silent_failure."""
+    chk = Check("M5", stat="C", region="frame", sign=1)
+    obs = _obs(_claims_ok(0.05, 0.05), _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+               _snap("b", **{"colorbalancergb.global_chroma": 0.01}),
+               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.3}},
+               floors={"C": 0.5})
+    v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
+    assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
+
+
+def test_q5_short_move_with_a_passing_m1_check_is_still_silent_failure():
+    """Probe Q5: same short move as Q4, plus an M1 'changed' check that
+    PASSES (0.01 != 0 is a real, if short, change) -- the passing M1
+    check must not distract from rule (c)'s below-floor stat failure."""
+    chk = Check("M5", stat="C", region="frame", sign=1)
+    m1 = Check("M1", kind="changed", sign=1,
+               target={"key": "colorbalancergb.global_chroma", "unit": "%"})
+    obs = _obs(_claims_ok(0.05, 0.05), _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+               _snap("b", **{"colorbalancergb.global_chroma": 0.01}),
+               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.3}},
+               floors={"C": 0.5})
+    v = evaluate(_edit_case([m1, chk], {"changed": True}), obs, POLICY)
+    assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
+
+
+def test_q7_workflow_kind_genuine_step_below_floor_is_silent_failure_not_unlabelled():
+    """Review round 2 (R2, low): a `workflow`-kind case is never scored by
+    `_imperceptible_step_residual` (edit-only), so the rule (c) exemption
+    must not apply to it either -- a genuine, XMP-verified, merely-too-
+    small-to-measure move on a workflow case keeps its ordinary silent
+    scoring, not an unlabelled 'failed' from a half-applied exemption."""
+    chk = Check("M5", stat="C", region="frame", sign=1)
+    case = _edit_case([chk], {"changed": True}, kind="workflow",
+                      steps=[Step("darkroom_say", {}, budget_s=3.5, write=True)])
+    obs = _obs(_claims_ok(0.05, 0.05), _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+               _snap("b", **{"colorbalancergb.global_chroma": 0.05}),
+               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.3}},
+               floors={"C": 0.5})
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
+
+
+def test_imperceptible_step_does_not_excuse_a_short_move():
+    """Control: if the move's own claimed `applied` falls short of its own
+    `requested` (a genuine silent failure, not an imperceptible one), the
+    exception must not apply -- still silent_failure."""
+    chk = Check("M5", stat="C", region="frame", sign=1)
+    move = _plain_ok_move("colorbalancergb", "global_chroma", 0.0, 0.05, unit="%")
+    move["data"]["applied"] = 0.01  # claims requested 0.05 but only landed 0.01
+    obs = _obs(move, _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+               _snap("b", **{"colorbalancergb.global_chroma": 0.01}),
+               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.05}},
+               floors={"C": 0.5})
+    v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
+    assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
+
+
 def test_silent_failure_d_bulk_counts():
     obs = _obs(_ok(), _snap("a"), _snap("b"), extra={"reported_n": 7, "changed_n": 6,
                                                      "verified_n": 7})
@@ -94,6 +319,34 @@ def test_silent_failure_e_undo_not_restored():
     v = evaluate(_edit_case([chk], None, kind="workflow",
                             steps=[Step("darkroom_undo_last", write=True)]), obs, POLICY)
     assert v.silent_failure.startswith("e:")
+
+
+def test_undo_own_refusal_is_not_silent_e():
+    """Row 459 (COV-undo-first-introduction, night-1): the case sets a module
+    that was absent before (an ok write), then tries to undo it and the
+    product HONESTLY refuses (the previous value was never readable from the
+    XMP -- untyped `error`, ok=False on the undo call itself). Rule (e) must
+    look at the undo call's own ok/refusal, not just "was any write ok" --
+    an earlier ok `set` must not turn an honest refusal into a silent
+    failure. The case should score `failed` (honest), never `silent_failure`.
+    """
+    chk = Check("M1", kind="restored",
+                target={"keys": ["colorbalancergb.highlights_chroma"], "unit": "%"})
+    obs = Observation(
+        calls=[
+            CallRecord("darkroom_set", {}, _ok(), write=True),
+            CallRecord("darkroom_undo_last", {},
+                       _err("error", fix="press Ctrl-Z in darktable, or set the value "
+                                          "you want explicitly"), write=True),
+        ],
+        before=_snap("a"),
+        after=_snap("b", **{"colorbalancergb.highlights_chroma": 12.0}))
+    case = _edit_case([chk], None, kind="workflow",
+                       steps=[Step("darkroom_set", write=True),
+                              Step("darkroom_undo_last", write=True)])
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome != "silent_failure", v.silent_failure
+    assert v.outcome == "failed", (v.outcome, v.silent_failure)
 
 
 def test_silent_failure_f_noop_but_changed():

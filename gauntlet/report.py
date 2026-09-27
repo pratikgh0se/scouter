@@ -212,6 +212,25 @@ def build(run: RunDir, adapter: Adapter, cases: list[Case], results: list[dict],
     p0_pass = sum(r["verdict"]["score"] == "pass" for r in p0)
     served = sum(_outcome(r) in SERVED for r in p0)
     refused = sum(_outcome(r) == "correct_refusal" for r in p0)
+    #: Row 471 (COV-D-residual-clamp-capped): a `correct_refusal` the
+    #: evaluator reached because a move stopped at its own VERIFIED clamp
+    #: below the check floor (gauntlet/evaluate.py `_moved_to_limit_residual`)
+    #: is tagged `residual: clamp` in the verdict's notes -- named here, not
+    #: just counted, so the refused figure in S1 is not a black box.
+    #: Review round 1 (I5): drawn from `p0` (not all `valid`) so the count
+    #: this list names is exactly the subset of the P0 `refused` figure
+    #: above, not a mismatched all-tiers total.
+    residual_clamp_ids = sorted(r["id"] for r in p0
+                                if _outcome(r) == "correct_refusal"
+                                and "residual: clamp" in (r["verdict"].get("notes") or []))
+    #: Row 475 (I2 ruling, provisional): `imperceptible_step` is its own
+    #: outcome (never verified, refused, or silent -- see
+    #: gauntlet/evaluate.py `_imperceptible_step_residual`), counted and
+    #: named across ALL tiers (not P0-scoped like `residual_clamp_ids`,
+    #: since the 125 recorded D-bare-step rows this targets are P0 (25) and
+    #: P1 (100) both).
+    imperceptible_step_ids = sorted(r["id"] for r in valid
+                                    if _outcome(r) == "imperceptible_step")
     missing = len(missing_ids)
     gates_ok = all(row["p1_ok"] and all(g["ok"] for g in row["check_gates"]) for row in layers)
     #: (Task 28 fix round 1, I1): an adapter may name product sign-off items
@@ -249,7 +268,9 @@ def build(run: RunDir, adapter: Adapter, cases: list[Case], results: list[dict],
                         "pass": sum(r["verdict"]["score"] == "pass" for r in valid),
                         "partial": sum(r["verdict"]["score"] == "partial" for r in valid),
                         "fail": sum(r["verdict"]["score"] == "fail" for r in valid),
-                        "p0_served": served, "p0_refused": refused, "p0_total": p0_total},
+                        "p0_served": served, "p0_refused": refused, "p0_total": p0_total,
+                        "residual_clamp_ids": residual_clamp_ids,
+                        "imperceptible_step_ids": imperceptible_step_ids},
         "S2_layers": layers,
         "S3_non_pass": fix_list(valid),
         "S5_timing": timing(valid),
@@ -284,6 +305,17 @@ def markdown(rep: dict) -> str:
          f"{s1['fail']} fail.", "",
          f"**P0 served rate:** {s1['p0_served']} verified edits, {s1['p0_refused']} honest "
          f"refusals, of {s1['p0_total']} P0 cases (a headline, not a gate).", "",
+         f"- Residual (clamp), row 471: {len(s1.get('residual_clamp_ids', []))} of the {s1['p0_refused']} "
+         "P0 honest refusals above are a move that VERIFIABLY stopped at its own declared clamp "
+         "below the check floor -- "
+         + (", ".join(f"`{i}`" for i in s1.get("residual_clamp_ids", [])) or "none"), "",
+         f"- Imperceptible step, row 475 (I2 ruling, provisional): "
+         f"{len(s1.get('imperceptible_step_ids', []))} case(s), all tiers, landed the exact "
+         "requested (unclamped) step but stayed below the check's noise floor -- never "
+         "verified, refused, or silent. Card: recalibrate touch floors / phrase step sizes "
+         "per body. -- "
+         + (", ".join(f"`{i}`" for i in s1.get("imperceptible_step_ids", [])) or "none"),
+         "",
          "## S2 Layers", "",
          "| Layer | Cases | Rate | Pass | Partial | Fail | P0 | P1 rate | Gate |",
          "|---|---|---|---|---|---|---|---|---|"]

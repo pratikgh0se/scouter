@@ -1,0 +1,18 @@
+{
+  "about": "Zenkai Rules Z1 intent examples: 'a clamped move says so' (night-1 row 471, COV-D-residual-clamp-capped, Pratik's ruling). A move that genuinely moved but stopped at its own declared clamp must never answer a plain ok: outcome is the typed partial `moved_to_limit` (module, requested, applied, cap), and the CLI/MCP text says 'moved to the limit'. Run by tests/intent/test_clamped_move_intent.py against the phase 3 _MovesFixture (tests/test_moves.py: P6281348.ORF.xmp). Two oracles per example: the call's own top-level `outcome`/`cap`/`requested` fields (scouter/core/moves.py, scouter/types.py:AdjustResult) and the rendered `summary` text an operator or agent actually reads.",
+  "subject": "scouter/core/moves.py:adjust (exposure.exposure, whose vocab range clamps at 4 EV)",
+  "examples": [
+    {
+      "id": "clamped-adjust-says-moved-to-the-limit",
+      "input": {"module": "exposure", "param": "exposure", "delta": 10.0},
+      "expect": {"outcome": "moved_to_limit", "cap": 4.0, "summary_contains": "moved to the limit"},
+      "source": "night-1 gauntlet triage row 471 (COV-D-residual-clamp-capped) and tests/test_moves.py::AdjustTest::test_clamp_is_reported: a move to +10 EV clamps at the vocab's declared +4 EV ceiling; the recorded run answered a plain ok with '[clamped at 4 EV]' as a footnote -- the fix types it moved_to_limit instead, with requested/applied/cap named in the envelope"
+    },
+    {
+      "id": "unclamped-adjust-is-a-plain-ok",
+      "input": {"module": "exposure", "param": "exposure", "delta": 0.2},
+      "expect": {"outcome": "ok", "cap": null, "summary_contains": null},
+      "source": "control example: a move that lands inside the declared range, nowhere near its clamp, must not be flattened to moved_to_limit just because the field now exists"
+    }
+  ]
+}

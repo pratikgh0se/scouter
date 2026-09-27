@@ -162,7 +162,11 @@ def _summary(s: vocab.ParamSpec, delta: float, prev: float, shown: float | None,
     d = explain.with_unit(s, f"{vocab.to_display(s, delta):+.3g}")
     line = f"{s.ui}: {d} ({_fmt(s, prev)} → {_fmt(s, shown if shown is not None else target)})"
     if clamped:
-        line += f" [clamped at {_fmt(s, target)}]"
+        # Pratik's ruling, row 471 (COV-D-residual-clamp-capped): the CLI/
+        # MCP text says "moved to the limit" -- plain "[clamped at X]" read
+        # as a footnote on an otherwise-normal move, not as the honest
+        # partial it is.
+        line += f"; moved to the limit ({_fmt(s, target)})"
     return line
 
 
@@ -227,12 +231,47 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
     clamped = clamped or result.clamped
     warnings.extend(result.warnings)
     explain_lines = explain.lines([explain.MoveNote(s, previous, target)], level=level, job=job)
+    # Pratik's ruling, row 471 (COV-D-residual-clamp-capped): a move that
+    # genuinely moved (not `noop` -- that early return above already
+    # covers "never moved at all") but stopped at its own declared clamp
+    # must never answer a plain "ok": `outcome` is the typed partial
+    # `moved_to_limit`, which `registry.call`'s `ok = outcome in ("ok",
+    # "dry_run")` already excludes, exactly like `darkroom.undo_last`'s
+    # "noop" outcome.
+    #
+    # Review round 1 (I3): `vocab.clamp`'s `target` is our OWN computed
+    # bound, not necessarily where the value actually landed -- darktable's
+    # own hard bound (or, on the wb_table path, the measured table's own
+    # readback drift, night-1 row 433: up to ~2.4%) can differ from it. A
+    # `commit=True` readback can also fail to decode at all (`applied is
+    # None`) -- that specific case must not claim a verified
+    # `moved_to_limit`: a real write was sent and we do not know where it
+    # landed. `commit=False` never attempts a readback at all (nothing to
+    # verify against -- there is no XMP write to read), so it falls back to
+    # trusting our own computed `target`, exactly as before I3.
+    if commit:
+        applied_matches_cap = applied is not None and \
+            abs(applied - target) <= max(abs(s.step) * 0.5, 1e-9)
+        moved_to_limit = clamped and not result.noop and applied_matches_cap
+        if clamped and not result.noop and not applied_matches_cap:
+            warnings.append(
+                "clamped, but the applied value could not be verified against "
+                "the declared limit -- reporting ok, not moved_to_limit"
+            )
+    else:
+        moved_to_limit = clamped and not result.noop
+    # `cap` NAMES the value that actually bound the move: the verified
+    # `applied` when we have one, our own computed `target` otherwise
+    # (dry write, or a value_source with no separate readback).
+    cap = (applied if applied is not None else target) if moved_to_limit else None
     return AdjustResult(
+        outcome="moved_to_limit" if moved_to_limit else "ok",
         image_id=resolved.image_id, path=resolved.path, module=module, param=param,
         instance=instance, unit=s.unit, delta=delta, previous=previous, target=target,
         applied=applied, clamped=clamped, source=source, committed=result.committed,
         noop=result.noop, summary=_summary(s, delta, previous, applied, clamped, target),
         explain=explain_lines, warnings=warnings,
+        requested=previous + delta, cap=cap,
         plan=[{"action": "darkroom.adjust", "ms_precommit": ms_precommit,
                "ms_read": int((t1 - t0) * 1000),
                "ms_set": int((time.monotonic() - t1) * 1000)}],
@@ -811,13 +850,52 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
                     break
     finally:
         journal.GROUP.reset(token)
+    # COV-weaker-at-zero (night-1, row 471): every planned move landed but
+    # each one, on its own, changed nothing (already at its limit, or the
+    # value it already held) -- "weaker colour grade" on a frame with no
+    # grade to weaken is the recorded case. Never answer a plain `ok` for
+    # that: it reads as a claimed edit with nothing to show for it. `noop`
+    # is the row-432 shape (`CommitResult.noop`) -- `outcome` stays "ok"
+    # (nothing raised, nothing half-applied), but the flag says the phrase
+    # itself did nothing, which is what `_env_ok`/`_is_noop` (gauntlet
+    # evaluate.py) check before calling a write "reported".
+    all_moves_noop = bool(landed) and not failures and all(m.get("noop") for m in landed)
+    noop_warning = (
+        [f"nothing to change: every move of {phrase!r} was already at its target "
+         "(nothing sent to darktable)"]
+        if all_moves_noop else []
+    )
+    # Pratik's ruling, row 471 (COV-D-residual-clamp-capped): a phrase with
+    # any move that stopped at its own declared clamp is `moved_to_limit`
+    # too (never plain "ok"), same family as `noop`/`refused` above. Takes
+    # priority over a plain "ok" but not over `failures`' "partial" -- a
+    # real error in a later move is still the more serious fact.
+    moved_to_limit = [
+        {"module": m.get("module"), "param": m.get("param"), "requested": m.get("requested"),
+         "applied": m.get("applied"), "cap": m.get("cap")}
+        for m in landed if m.get("outcome") == "moved_to_limit"
+    ]
+    clamp_warning = (
+        [f"moved to the limit: {len(moved_to_limit)} move(s) of {phrase!r} stopped at "
+         "their own declared clamp (see moved_to_limit)"]
+        if moved_to_limit and not failures else []
+    )
+    if failures:
+        outcome = "partial"
+    elif moved_to_limit:
+        outcome = "moved_to_limit"
+    else:
+        outcome = "ok"
     return SayResult(
-        outcome="partial" if failures else "ok",
+        outcome=outcome,
+        noop=all_moves_noop,
+        moved_to_limit=moved_to_limit,
         image_id=resolved.image_id, path=resolved.path, phrase=phrase, key=res.key,
         intensity=res.intensity, group=group, moves=landed, refused=failures,
         summary="; ".join(m.get("summary", "") for m in landed),
         explain=explain.lines(notes, level=level, job=job),
-        warnings=[w for w in [warning, wb_routed and darkroom.wb_routed_note(wb_routed)] if w],
+        warnings=[w for w in [warning, wb_routed and darkroom.wb_routed_note(wb_routed)] if w]
+        + noop_warning + clamp_warning,
         plan=[pre],
     )
 

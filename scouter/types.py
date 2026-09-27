@@ -595,6 +595,17 @@ class AdjustResult(Payload):
     noop: bool = False
     summary: str = ""
     explain: list[str] = field(default_factory=list)
+    # Pratik's ruling, row 471 (COV-D-residual-clamp-capped): a move that
+    # actually moved (not `noop`) but stopped at its own declared clamp is
+    # `outcome: "moved_to_limit"` (never a plain "ok" -- `registry.call`'s
+    # `ok = outcome in ("ok", "dry_run")` already excludes it, the same way
+    # `darkroom.undo_last`'s "noop" outcome does). `requested` is the
+    # unclamped target this delta asked for; `cap` is the bound it actually
+    # landed at (== `target`/`applied` here, named explicitly so a reader
+    # of the envelope alone -- no vocabulary lookup needed -- can see it
+    # was capped, not merely reached by coincidence).
+    requested: float | None = None
+    cap: float | None = None
 
 
 @dataclass
@@ -607,6 +618,24 @@ class SayResult(Payload):
     refused: list[dict] = field(default_factory=list)
     summary: str = ""
     explain: list[str] = field(default_factory=list)
+    # Row 432 shape (CommitResult.noop): True when every landed move of the
+    # phrase was itself a no-op (a zero-net move: already at its limit, or
+    # asked for the value it already held) -- COV-weaker-at-zero (night-1,
+    # row 471): "weaker colour grade" on a frame with no grade to weaken
+    # must not answer a plain `ok` that the gauntlet's own `reported`/
+    # `_env_ok` checks (which look at this field, not just `outcome`) would
+    # score as a claimed-but-unverifiable edit. `outcome` stays "ok" -- this
+    # is a fact about the phrase's OWN moves, not a raised error -- exactly
+    # how `darkroom.history_commit`'s `noop` field works.
+    noop: bool = False
+    # Pratik's ruling, row 471 (COV-D-residual-clamp-capped): the phrase's
+    # own `outcome` mirrors its moves' -- when every landed move either
+    # completed in full or stopped at its own declared clamp, and AT LEAST
+    # ONE stopped at a clamp, the phrase is `outcome: "moved_to_limit"`
+    # (never plain "ok"), and `moved_to_limit` names each one (module,
+    # requested, applied, cap) -- the same shape family as `noop`/`refused`
+    # above.
+    moved_to_limit: list[dict] = field(default_factory=list)
 
 
 @dataclass

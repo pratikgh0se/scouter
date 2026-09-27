@@ -154,3 +154,59 @@ def test_temperature_boundary_probes_stay_inside_the_calibration_sample_range():
         c = _case(f"cov-temperature.temperature-olympus-{label}")
         v = c.expect.checks[0].target["request"]
         assert 3000.0 <= v <= 12000.0
+
+
+# ---------------------------------------------------------------- night-1
+# row 471, COV-weaker-at-zero: "weaker colour grade" on the hero frame's
+# never-graded chroma rows, and colorzones.strength's coarse native nudge,
+# both landed exactly back on the frame's own baseline -- a real, honestly
+# reported move that read identically to "nothing happened" once only the
+# sidecar was compared.
+
+
+def test_weaker_grade_bare_gets_a_graded_precondition_first():
+    c = _case("cov-phrase-weaker_grade-olympus-bare")
+    assert [s.tool for s in c.steps] == ["darkroom_say", "darkroom_say"]
+    assert c.steps[0].args["phrase"] == "stronger colour grade a lot"
+    assert c.steps[1].args["phrase"] == "weaker colour grade"
+    # the "changed" checks compare from the snapshot AFTER the grading
+    # precondition, not from the frame's own (ungraded) start -- otherwise
+    # a same-sized weaken cancels the grade step exactly and looks
+    # unchanged from step 0 again.
+    assert c.expect.checks
+    for chk in c.expect.checks:
+        assert chk.target["from"] == 1
+
+
+def test_weaker_grade_touch_lot_and_synonyms_all_get_the_precondition_too():
+    for cid in ("cov-phrase-weaker_grade-olympus-touch", "cov-phrase-weaker_grade-olympus-lot",
+                "cov-phrase-weaker_grade-sony_a7-bare",
+                "cov-synonym-weaker_grade-less_grade-olympus"):
+        c = _case(cid)
+        assert c.steps[0].args["phrase"] == "stronger colour grade a lot", cid
+        assert all(chk.target["from"] == 1 for chk in c.expect.checks), cid
+
+
+def test_weaker_grade_explicit_is_unaffected_a_multi_move_phrase_refuses_by_n():
+    # 'weaker grade by N' has no precondition to add: it is refused (usage)
+    # before any write, exactly like the other multi-move phrases.
+    c = _case("cov-phrase-weaker_grade-olympus-explicit")
+    assert c.expect.kind == "typed_error"
+    assert c.steps == [c.steps[0]]
+
+
+def test_stronger_grade_itself_keeps_no_precondition():
+    c = _case("cov-phrase-stronger_grade-olympus-bare")
+    assert [s.tool for s in c.steps] == ["darkroom_say"]
+    assert c.expect.checks[0].target["from"] == 0
+
+
+def test_colorzones_strength_nudge_down_precondition_is_away_from_the_baseline():
+    c = _case("cov-colorzones.strength-sony_a7-nudge_dn1")
+    set_step = c.steps[-2]
+    assert set_step.tool == "darkroom_set"
+    assert set_step.args["value"] == 2.0  # s.hi -- one native step down cannot reach 0.0
+    # the up direction was never at risk (it can't nudge past the baseline
+    # at s.lo going up), so it keeps the plain midpoint precondition.
+    up = _case("cov-colorzones.strength-sony_a7-nudge_up1")
+    assert up.steps[-2].args["value"] == 1.0
