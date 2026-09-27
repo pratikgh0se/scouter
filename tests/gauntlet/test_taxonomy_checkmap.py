@@ -86,6 +86,30 @@ def test_wb_route_a_block_loads_and_resolves(tax):
     assert vocab.spec("channelmixerrgb", "temperature") is not None
 
 
+def test_wb_route_a_pinned_edit_builds_the_pinned_expect(tax):
+    """Review round 2, finding 10 (GC-1): shared through checkmap.py so
+    every generator (coverage.py, and now layers/guide.py) scores a pinned
+    Route A move the same way -- the channelmixerrgb.temperature key, its
+    derived x/y keys, the untouched WB preset, and a needs_review tag on
+    the move check while direction_verified is still False."""
+    cmap = tax.check_map
+    route = checkmap.wb_route_a_expect(cmap, "temperature.temperature", 4, pinned=True)
+    exp = checkmap.wb_route_a_pinned_edit(route, sign=1)
+    assert exp.kind == "edit"
+    move, unchanged = exp.checks
+    assert move.target["key"] == "channelmixerrgb.temperature"
+    assert move.kind == "changed" and move.sign == 0  # direction_verified False: no guessed sign
+    assert move.tags.get("needs_review")
+    assert unchanged.target["keys"] == ["temperature.preset"]
+    assert exp.sidecar == {"changed": True, "key": "channelmixerrgb.temperature",
+                           "units": {"channelmixerrgb.temperature": "K"},
+                           "allowed": ["channelmixerrgb.x", "channelmixerrgb.y"]}
+    # an explicit value skips the sign branch entirely
+    exp_val = checkmap.wb_route_a_pinned_edit(route, value=6500.0)
+    assert exp_val.checks[0].target == {"key": "channelmixerrgb.temperature", "value": 6500.0,
+                                        "unit": "K"}
+
+
 def test_wb_route_a_tint_always_refuses_on_preset_4(tax):
     """Unlike warmer/cooler/temperature.temperature, tint has no
     color-calibration reroute target -- pinning channelmixerrgb.temperature

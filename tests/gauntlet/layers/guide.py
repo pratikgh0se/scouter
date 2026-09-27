@@ -33,9 +33,27 @@ def _wb_phrase_key(text: str) -> str | None:
     return m.group(0) if m else None
 
 
-def _wb_route_a(text: str) -> dict | None:
+#: Review round 2, finding 10 (GC-1): the pinned-Route-A direction, for the
+#: same phrases _wb_expect matches below. Warmer raises the illuminant
+#: temperature (+); cooler lowers it (-) -- checkmap.wb_route_a_pinned_edit
+#: only asserts a sign when check_map.json's own direction_verified is True.
+_WB_SIGN = {"warmer": 1, "cooler": -1}
+
+
+def _wb_expect(text: str, fallback: Expect) -> Expect:
+    """checkmap.wb_route_a_expect_for_hero's typed_error shape while Route A
+    is a candidate, its pinned-edit shape (shared with coverage.py via
+    checkmap.wb_route_a_pinned_edit, GC-1) once it is pinned, or `fallback`
+    when the phrase is not a warmer/cooler move at all."""
     key = _wb_phrase_key(text)
-    return checkmap.wb_route_a_expect_for_hero(_CMAP, key) if key else None
+    if key is None:
+        return fallback
+    wb = checkmap.wb_route_a_expect_for_hero(_CMAP, key)
+    if wb is None:
+        return fallback
+    if wb["expect"] == "typed_error":
+        return Expect("typed_error", codes=list(wb["codes"]))
+    return checkmap.wb_route_a_pinned_edit(wb, sign=_WB_SIGN[key])
 #: (label, kind, payload, expected). kind "cli": argv after `scouter`; kind
 #: "say": an MCP darkroom_say phrase from the guide's phrase table.
 WALKTHROUGH: tuple[tuple[str, str, object, dict], ...] = (
@@ -99,9 +117,7 @@ def _walk_case(i: int, label: str, kind: str, payload, want: dict) -> Case:
     exp = Expect("typed_error", checks, codes=[want["code"]]) if "code" in want else \
         Expect("workflow", checks)
     text = payload[-1] if kind == "cli" else payload
-    wb = _wb_route_a(text)
-    if wb is not None and wb["expect"] == "typed_error":
-        exp = Expect("typed_error", codes=list(wb["codes"]))
+    exp = _wb_expect(text, exp)
     return Case(id=case_id(PREFIX, f"{i:02d}", label), layer=LAYER, tier="P0",
                 mode="cli" if kind == "cli" else "tool", steps=[step], expect=exp,
                 body="olympus", frame_role="hero", source={"file": "README/user guide",
@@ -124,10 +140,7 @@ def _edu_case(level: str, j: int, phrase: str, concept: str) -> Case:
     if level == "brief":
         checks.append(Check("envelope", step=0, target={"path": "data.explain.0",
                                                         "op": "regex", "value": r"\d.*\d"}))
-    exp = Expect("workflow", checks)
-    wb = _wb_route_a(phrase)
-    if wb is not None and wb["expect"] == "typed_error":
-        exp = Expect("typed_error", codes=list(wb["codes"]))
+    exp = _wb_expect(phrase, Expect("workflow", checks))
     return Case(id=case_id(PREFIX, "edu", level, f"{j}", phrase), layer=LAYER, tier="P0",
                 mode="tool", steps=[Step("darkroom_say", {"phrase": phrase, "educative": level},
                                          8.0, True)],
