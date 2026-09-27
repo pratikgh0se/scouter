@@ -1267,12 +1267,66 @@ def render_table(rows):
     return "\n".join(lines)
 
 
+#: Directories/files this gate's own integrity depends on. The incident this
+#: closes: the gate's own wiring (Makefile's `gate` target, `scripts/
+#: merge_gate.sh`, this file) sat UNCOMMITTED for several merge-gate rounds
+#: while a run exercised it by file path only - a "clean" gate run said
+#: nothing about the fact that the thing actually running was not what HEAD
+#: said it was. `scouter/` is watched for the same reason on the other side:
+#: it is the production code this gate exists to protect.
+DIRTY_TREE_WATCHED_PATHS = ("Makefile", "scripts/", "tests/mutation_check.py", "scouter/")
+
+
+def dirty_tracked_paths(repo):
+    """Tracked files under `DIRTY_TREE_WATCHED_PATHS` in `repo` with
+    uncommitted changes (staged or unstaged) - never untracked files (`??`
+    in `git status --porcelain`), which are not "the gate's own wiring" or
+    "the code under test" disagreeing with HEAD, just scratch files nobody
+    has added yet. Returns a sorted list of relative paths, empty when
+    clean (or when `repo` is not a git worktree at all - a fixture repo that
+    has none of these paths simply reports nothing dirty)."""
+    rc, out = sh(["git", "status", "--porcelain", "--no-renames", "--",
+                  *DIRTY_TREE_WATCHED_PATHS], cwd=str(repo), timeout=30)
+    if rc != 0:
+        return []
+    dirty = []
+    for line in (out or "").splitlines():
+        if not line or line.startswith("??"):
+            continue
+        dirty.append(line[3:].strip())
+    return sorted(set(dirty))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base", required=True)
     ap.add_argument("--head", required=True)
     ap.add_argument("--repo", default=".")
+    ap.add_argument("--allow-dirty", action="store_true",
+                     help="Local-experiment escape hatch only: run even though Makefile, "
+                          "scripts/, tests/mutation_check.py or scouter/ have uncommitted "
+                          "changes in --repo. Prints a loud warning naming the dirty paths; "
+                          "never use this for a real merge decision.")
     a = ap.parse_args(argv)
+    # The incident this closes: the gate's own wiring, or the production
+    # code it protects, riding along uncommitted while a run exercised it by
+    # path only. Refuse before any check - never a table that looks like a
+    # real verdict about a tree that does not match HEAD.
+    dirty = dirty_tracked_paths(a.repo)
+    if dirty:
+        if not a.allow_dirty:
+            print("environment error: uncommitted changes to gate-critical paths:")
+            for p in dirty:
+                print(f"  {p}")
+            print("Commit them first, or pass --allow-dirty for a local experiment only.")
+            return 2
+        print(
+            "WARN: --allow-dirty set; running with uncommitted changes to gate-critical "
+            "paths (local experiments only, never a real merge decision):",
+            file=sys.stderr,
+        )
+        for p in dirty:
+            print(f"  {p}", file=sys.stderr)
     # B0 (round 10): refuse outright, before any check, if this gate cannot
     # even confirm pytest is importable under the interpreter it is about to
     # use - never silently produce a table that looks like a real verdict
