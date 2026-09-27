@@ -69,8 +69,18 @@ def isolate(session, frame: Path, role: str) -> bool:
     """Spec 2.3 case isolation: reset what the previous case touched; then the
     snapshot must equal this frame's session baseline, else the session is
     contaminated and the frame is re-staged from a fresh copy (relaunch).
-    Returns True when it had to re-stage."""
-    from gauntlet import metrics
+    Returns True when it had to re-stage.
+
+    (night-1 fix, class LK-refresh-no-open): resetting a module the previous
+    case touched acts on whatever frame is current, which on a chart<->hero
+    switch is often a module this frame's own history never had (for
+    example, the PFM chart has no temperature module). `darkroom_reset` then
+    writes it in at darktable's default -- absent becomes present-at-default,
+    which is not a real change -- but a plain `param_equal` reads "None" vs
+    "the default value" as moved and re-stages a perfectly clean frame. Use
+    the evaluator's own absent<->default equivalence (bug 3) so isolate and
+    the evaluator agree on what counts as a diff."""
+    from gauntlet import evaluate, metrics
 
     if session.touched:
         from scouter.core import vocab
@@ -83,8 +93,11 @@ def isolate(session, frame: Path, role: str) -> bool:
     now = observe.snapshot(frame)
     base = session.baselines.setdefault(str(frame), now["params"])
     units = now.get("units", {})
-    moved = [k for k in set(base) | set(now["params"])
-             if not metrics.param_equal(units.get(k, "ratio"), now["params"].get(k), base.get(k))]
+    defaults = now.get("defaults", {})
+    now_params = now["params"]
+    moved = [k for k in set(base) | set(now_params)
+             if not metrics.param_equal(units.get(k, "ratio"), now_params.get(k), base.get(k))
+             and not evaluate._absent_equiv(base, now_params, k, defaults)]
     if moved:
         session.refresh_frame(role)
         return True

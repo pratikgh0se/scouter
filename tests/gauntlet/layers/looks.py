@@ -12,6 +12,13 @@ from tests.gauntlet.taxonomy import Taxonomy
 
 LAYER, PREFIX = "looks", "lk"
 SOURCED = ("documented", "community-consensus")
+#: (night-1 fix, class LK-frame-switch-relaunch): darkroom.open cannot switch
+#: onto a frame imported earlier in the same darktable session (product
+#: honest limit R20, "wrong image loaded"), so every chart<->hero switch
+#: costs a relaunch (about 45-60 s). The interleaved generation order below
+#: (chart, hero, chart, hero, ...) switched on every single case; grouping by
+#: role removes all but one switch per session.
+FRAME_ROLE_ORDER = ("chart", "hero")
 TONE_PATCH = {"shadows_ev": "patch:ramp_-4", "mids_ev": "patch:ramp_+0",
               "highlights_ev": "patch:ramp_+2"}
 TONE_REGION = {"shadows_ev": "shadows", "mids_ev": "frame", "highlights_ev": "highlights"}
@@ -158,7 +165,14 @@ def generate(tax: Taxonomy) -> list[Case]:
                         body=body, frame_role="hero",
                         source={"file": "looks.json", "id": look["id"]},
                         meta=dict(meta, check_tags=ftags, gaps=[])))
-    return out
+    return order_by_frame_role(out)
+
+
+def order_by_frame_role(cases: list[Case]) -> list[Case]:
+    """A pure, stable sort: every case keeps its relative position among cases
+    of the same `frame_role`, so a session that hands these out in order does
+    at most one chart<->hero switch instead of one per case."""
+    return sorted(cases, key=lambda c: FRAME_ROLE_ORDER.index(c.frame_role))
 
 
 EXPECTED = 1 + 234 * 2

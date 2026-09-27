@@ -148,6 +148,30 @@ def test_refreshing_a_role_twice_never_reuses_a_contaminated_dir(corpus, tmp_pat
     assert second.read_bytes() == b"raw" and s.staged.frames["dark"] == second
 
 
+def test_refresh_frame_is_not_current_until_the_next_ensure_frame_reopens_it(corpus, tmp_path):
+    """Night-1 fix (class LK-refresh-no-open): before the fix, `refresh_frame`'s
+    `relaunch` -> `_launch` marked the fresh copy `current_frame` the moment
+    darktable was gui_ready with it, so the very next `ensure_frame(role)`
+    saw `current_frame == staged.frames[role]` and skipped `darkroom_open`
+    entirely (RED: zero open calls after a refresh). The job then never
+    recorded the fresh image as opened, and every later write refused
+    "darkroom.current reports N+1, job opened N". Fixed: refresh leaves the
+    frame merely launched, and the next ensure_frame call opens it for real
+    (GREEN: exactly one open call, and current_frame only updates on its
+    success)."""
+    mcp = FakeMcp()
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    s.ensure_frame("dark")
+    mcp.calls.clear()
+
+    fresh = s.refresh_frame("dark")
+    assert s.current_frame != fresh  # launched, not yet current
+
+    assert s.ensure_frame("dark") == fresh
+    assert [c[0] for c in mcp.calls] == ["darkroom_open"]  # exactly one open, not zero
+    assert s.current_frame == fresh  # current only now, after the open succeeded
+
+
 def test_open_failure_after_launch_quits_our_darktable(corpus, tmp_path):
     dt = FakeDt()
 
@@ -185,10 +209,18 @@ def test_ensure_frame_sets_current_only_on_success(corpus, tmp_path):
         s.ensure_frame("dark")
     assert s.current_frame == hero
 
+    # (night-1 fix, sibling gap): a relaunch recovers darktable, but the job
+    # only records the frame as opened through a REAL follow-up darkroom_open
+    # -- the fresh process being gui_ready is not that call. slow_then_ok's
+    # first darkroom_open times out (unresponsive); the one after relaunch()
+    # succeeds, same shape as the not_in_darkroom recovery below.
+    ok = {"ok": True, "outcome": "ok", "data": {}}
+    slow_then_ok = FakeMcp({"darkroom_open": [TimeoutError("slow"), ok]})
     dt = FakeDt(health="unresponsive")
-    s = _session(corpus, tmp_path, dt=dt, mcp=slow).open()
+    s = _session(corpus, tmp_path, dt=dt, mcp=slow_then_ok).open()
     assert s.ensure_frame("dark") == s.staged.frames["dark"]
     assert dt.launches == 2 and s.current_frame == s.staged.frames["dark"]
+    assert [c[0] for c in slow_then_ok.calls] == ["darkroom_open", "darkroom_open"]
 
 
 WRONG_IMAGE = {"ok": False, "outcome": "error", "data": {},
@@ -215,6 +247,37 @@ def test_smoke_s2_frame_imported_mid_session_relaunches_on_it(corpus, tmp_path):
 def test_smoke_s2_relaunches_at_most_once_then_blocks(corpus, tmp_path):
     mcp = FakeMcp({"darkroom_open": [WRONG_IMAGE]})
     dt = FakeDt()
+    s = _session(corpus, tmp_path, dt=dt, mcp=mcp).open()
+    with pytest.raises(sess.SessionBlocked, match="frame dark .*after a relaunch"):
+        s.ensure_frame("dark")
+    assert dt.launches == 2 and len(mcp.calls) == 2
+
+
+def test_timeout_recovery_relaunch_reopens_before_marking_current(corpus, tmp_path):
+    """Night-1 fix sibling gap (reviewer, n1-session-review.md): the
+    timeout/unresponsive recovery branch relaunched and, before the fix,
+    trusted `_launch`'s direct `current_frame` assignment as the sign the job
+    had opened the frame -- exactly refresh_frame's bug, one call site over.
+    A relaunch here must also stay `launched`, not `current`, until a real
+    follow-up `darkroom_open` succeeds (same `_relaunch_then_reopen` helper
+    the not_in_darkroom recovery above already used)."""
+    ok = {"ok": True, "outcome": "ok", "data": {}}
+    mcp = FakeMcp({"darkroom_open": [TimeoutError("slow"), ok]})
+    dt = FakeDt(health="unresponsive")
+    s = _session(corpus, tmp_path, dt=dt, mcp=mcp).open()
+    dark = s.staged.frames["dark"]
+    assert s.ensure_frame("dark") == dark
+    assert dt.launched == [s.staged.frames["hero"], dark] and s.current_frame == dark
+    assert dt.terminated == [False]  # the quit ladder ran before the relaunch
+    assert [c[0] for c in mcp.calls] == ["darkroom_open", "darkroom_open"]  # not just one
+
+
+def test_timeout_recovery_relaunches_at_most_once_then_blocks(corpus, tmp_path):
+    """The follow-up-open failure path mirrors test_smoke_s2_relaunches_at_
+    most_once_then_blocks: a relaunch that still cannot get a confirmed open
+    blocks the session rather than silently trusting the launch."""
+    mcp = FakeMcp({"darkroom_open": [TimeoutError("slow"), TimeoutError("slow again")]})
+    dt = FakeDt(health="unresponsive")
     s = _session(corpus, tmp_path, dt=dt, mcp=mcp).open()
     with pytest.raises(sess.SessionBlocked, match="frame dark .*after a relaunch"):
         s.ensure_frame("dark")
