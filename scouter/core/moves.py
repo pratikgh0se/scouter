@@ -238,7 +238,32 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
     # `moved_to_limit`, which `registry.call`'s `ok = outcome in ("ok",
     # "dry_run")` already excludes, exactly like `darkroom.undo_last`'s
     # "noop" outcome.
-    moved_to_limit = clamped and not result.noop
+    #
+    # Review round 1 (I3): `vocab.clamp`'s `target` is our OWN computed
+    # bound, not necessarily where the value actually landed -- darktable's
+    # own hard bound (or, on the wb_table path, the measured table's own
+    # readback drift, night-1 row 433: up to ~2.4%) can differ from it. A
+    # `commit=True` readback can also fail to decode at all (`applied is
+    # None`) -- that specific case must not claim a verified
+    # `moved_to_limit`: a real write was sent and we do not know where it
+    # landed. `commit=False` never attempts a readback at all (nothing to
+    # verify against -- there is no XMP write to read), so it falls back to
+    # trusting our own computed `target`, exactly as before I3.
+    if commit:
+        applied_matches_cap = applied is not None and \
+            abs(applied - target) <= max(abs(s.step) * 0.5, 1e-9)
+        moved_to_limit = clamped and not result.noop and applied_matches_cap
+        if clamped and not result.noop and not applied_matches_cap:
+            warnings.append(
+                "clamped, but the applied value could not be verified against "
+                "the declared limit -- reporting ok, not moved_to_limit"
+            )
+    else:
+        moved_to_limit = clamped and not result.noop
+    # `cap` NAMES the value that actually bound the move: the verified
+    # `applied` when we have one, our own computed `target` otherwise
+    # (dry write, or a value_source with no separate readback).
+    cap = (applied if applied is not None else target) if moved_to_limit else None
     return AdjustResult(
         outcome="moved_to_limit" if moved_to_limit else "ok",
         image_id=resolved.image_id, path=resolved.path, module=module, param=param,
@@ -246,7 +271,7 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
         applied=applied, clamped=clamped, source=source, committed=result.committed,
         noop=result.noop, summary=_summary(s, delta, previous, applied, clamped, target),
         explain=explain_lines, warnings=warnings,
-        requested=previous + delta, cap=target if moved_to_limit else None,
+        requested=previous + delta, cap=cap,
         plan=[{"action": "darkroom.adjust", "ms_precommit": ms_precommit,
                "ms_read": int((t1 - t0) * 1000),
                "ms_set": int((time.monotonic() - t1) * 1000)}],

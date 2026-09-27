@@ -10,7 +10,7 @@ from unittest import mock
 
 from scouter.core import darkroom, dtbridge, journal, moves
 from scouter.errors import NotPinned, UsageError, ValueUnknown
-from scouter.types import CommitResult
+from scouter.types import CommitResult, SetResult
 from tests.scouter_fakes import FakeBridge, TempCache
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -99,6 +99,39 @@ class AdjustTest(_MovesFixture):
         self.assertEqual(r.outcome, "moved_to_limit")
         self.assertEqual(r.cap, 4.0)
         self.assertAlmostEqual(r.requested, 11.5500002, places=5)
+
+    def test_clamped_commit_with_undecodable_readback_is_plain_ok_not_moved_to_limit(self) -> None:
+        # Review round 1 (I3, gap ii): a `commit=True` write that lands and
+        # clamps but whose readback could not decode (`applied is None`) must
+        # not claim a VERIFIED `moved_to_limit` -- a real write was sent and
+        # we do not know where it landed. Falls back to plain "ok", `cap`
+        # None, with a warning naming the gap.
+        with mock.patch("scouter.core.moves._set_recording_before",
+                        return_value=SetResult(module="exposure", param="exposure",
+                                                requested=4.0, applied=None, previous=1.55,
+                                                committed=True, clamped=True, noop=False)):
+            r = moves.adjust.__wrapped__("exposure", "exposure", 10.0, commit=True, job="job-test")
+        self.assertTrue(r.clamped)
+        self.assertEqual(r.outcome, "ok")
+        self.assertIsNone(r.cap)
+        self.assertTrue(any("could not be verified" in w for w in r.warnings), r.warnings)
+
+    def test_clamped_commit_with_a_hard_bound_below_our_own_computed_target_is_moved_to_limit(
+        self,
+    ) -> None:
+        # Review round 1 (I3, gap i): darktable's own hard bound can differ
+        # slightly from `vocab.clamp`'s own computed `target` -- `cap` must
+        # NAME the value that actually bound it (the verified readback,
+        # `applied`), not our own guess (`target`).
+        with mock.patch("scouter.core.moves._set_recording_before",
+                        return_value=SetResult(module="exposure", param="exposure",
+                                                requested=4.0, applied=3.95, previous=1.55,
+                                                committed=True, clamped=True, noop=False)):
+            r = moves.adjust.__wrapped__("exposure", "exposure", 10.0, commit=True, job="job-test")
+        self.assertTrue(r.clamped)
+        self.assertEqual(r.outcome, "moved_to_limit")
+        self.assertEqual(r.cap, 3.95)
+        self.assertNotEqual(r.cap, r.target)
 
     def test_adjust_at_the_limit_sends_nothing(self) -> None:
         moves.adjust.__wrapped__("exposure", "exposure", 10.0, commit=False, job="job-test")

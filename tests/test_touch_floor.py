@@ -37,17 +37,50 @@ SENSITIVITY = json.loads(FIXTURE.read_text())
 #: D-bare-step-below-perceptual-floor cluster (all "-bare", both hero
 #: bodies), and the (phrase key, body) pairs still short of their floor
 #: after this fix, with the reason -- documented, not silently skipped.
+#:
+#: Review round 1 (I6): each entry is now `{"residual": ..., "why": ...}`,
+#: not a bare string, so the taxonomy classification lives somewhere a
+#: reader (or the report) can find it without re-deriving it. The marker
+#: is `"step-below-floor"`, not `"clamp"`: I2's own rescore of the real
+#: night-1 recordings (scratchpad/n1rev_d.py / n1rev_d2.py, all 125
+#: D-bare-step-below-perceptual-floor rows) found every one of these moves
+#: `clamped: false` -- the "cap" named below is the vocabulary's own
+#: `step <= (hi-lo)/4` invariant (or a soft range), never a clamp any move
+#: actually reaches at runtime (the hero starts at neutral). Calling it
+#: `"clamp"` here would misname the very thing I2 exists to correct; the
+#: evaluator's matching outcome is `imperceptible_step`
+#: (gauntlet/evaluate.py `_imperceptible_step_residual`, row 475).
 KNOWN_RESIDUAL = {
-    ("deepen_shadows", "olympus"): "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.50 needed)",
-    ("deepen_shadows", "sony_a7"): "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.08 needed)",
-    ("lift_shadows", "olympus"): "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.50 needed)",
-    ("lift_shadows", "sony_a7"): "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.08 needed)",
-    ("more_vibrance", "olympus"): "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.58 needed)",
-    ("more_vibrance", "sony_a7"): "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.45 needed)",
-    ("less_vibrance", "olympus"): "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.58 needed)",
-    ("less_vibrance", "sony_a7"): "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.45 needed)",
-    ("cool_shadows", "olympus"): "shadows_chroma touch capped at the 0-0.3 clamp (0.0375 < 0.15 needed)",
-    ("teal_orange", "olympus"): "shadows_chroma touch capped at the 0-0.3 clamp (0.0375 < 0.31 needed)",
+    ("deepen_shadows", "olympus"): {
+        "residual": "step-below-floor",
+        "why": "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.50 needed)"},
+    ("deepen_shadows", "sony_a7"): {
+        "residual": "step-below-floor",
+        "why": "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.08 needed)"},
+    ("lift_shadows", "olympus"): {
+        "residual": "step-below-floor",
+        "why": "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.50 needed)"},
+    ("lift_shadows", "sony_a7"): {
+        "residual": "step-below-floor",
+        "why": "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.08 needed)"},
+    ("more_vibrance", "olympus"): {
+        "residual": "step-below-floor",
+        "why": "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.58 needed)"},
+    ("more_vibrance", "sony_a7"): {
+        "residual": "step-below-floor",
+        "why": "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.45 needed)"},
+    ("less_vibrance", "olympus"): {
+        "residual": "step-below-floor",
+        "why": "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.58 needed)"},
+    ("less_vibrance", "sony_a7"): {
+        "residual": "step-below-floor",
+        "why": "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.45 needed)"},
+    ("cool_shadows", "olympus"): {
+        "residual": "step-below-floor",
+        "why": "shadows_chroma touch capped at the 0-0.3 clamp (0.0375 < 0.15 needed)"},
+    ("teal_orange", "olympus"): {
+        "residual": "step-below-floor",
+        "why": "shadows_chroma touch capped at the 0-0.3 clamp (0.0375 < 0.31 needed)"},
 }
 
 #: The 25 P0 case ids (see htc-triage-coverage.md), spelled out so the test
@@ -104,7 +137,8 @@ class TouchFloorTest(unittest.TestCase):
                 if (key, body) in KNOWN_RESIDUAL:
                     self.assertLess(
                         achieved_stat_delta, floor,
-                        f"{case_id} was a documented residual ({KNOWN_RESIDUAL[(key, body)]}) "
+                        f"{case_id} was a documented residual "
+                        f"({KNOWN_RESIDUAL[(key, body)]['why']}) "
                         "but now clears its floor -- update KNOWN_RESIDUAL",
                     )
                 else:

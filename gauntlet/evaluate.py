@@ -33,6 +33,13 @@ PASS, PARTIAL, FAIL = "pass", "partial", "fail"
 OUTCOMES = {
     "verified": PASS, "correct_refusal": PASS, "over_budget": PASS,
     "partial": PARTIAL, "collateral": PARTIAL, "drift": PARTIAL, "needs_review": PARTIAL,
+    #: Row 475 (I2 ruling, provisional -- Pratik to confirm): a plain `ok`
+    #: move that landed exactly the requested (unclamped) step, whose only
+    #: failing check reads "below noise floor", is neither `verified`
+    #: (the oracle cannot see it), `correct_refusal` (nothing was refused --
+    #: it moved) nor `silent_failure` (the product claimed nothing it did
+    #: not do). Its own outcome, its own report column.
+    "imperceptible_step": PARTIAL,
     "silent_failure": FAIL, "wrong_refusal": FAIL, "unexpected_edit": FAIL,
     "failed": FAIL, "failed_hang": FAIL, "crash": FAIL, "blocked": FAIL,
 }
@@ -586,28 +593,143 @@ def _noop_rule(case: Case, obs: Observation, units: dict) -> str | None:
     return None
 
 
+def _moved_to_limit_claims(obs: Observation) -> list[dict]:
+    """Every {module, param, cap} claim from a `moved_to_limit` write's own
+    envelope data (row 471): a single `darkroom.adjust`'s own
+    module/param/cap, or a `darkroom.say`'s `moved_to_limit` list. Review
+    round 1 (I1): `moved_to_limit` is a CLAIM, exactly like a plain `ok` --
+    it is verified against the after snapshot below, never taken on its
+    own word."""
+    claims: list[dict] = []
+    for c in obs.calls:
+        if not c.write:
+            continue
+        env = c.envelope or {}
+        if env.get("outcome") != "moved_to_limit":
+            continue
+        data = env.get("data") or {}
+        mtl = data.get("moved_to_limit")
+        if isinstance(mtl, list):
+            claims.extend(m for m in mtl if isinstance(m, dict))
+        elif data.get("module") and data.get("param"):
+            claims.append({"module": data.get("module"), "param": data.get("param"),
+                           "cap": data.get("cap")})
+    return claims
+
+
 def _any_moved_to_limit(obs: Observation) -> bool:
-    """Row 471: any write call whose own `outcome` is the typed partial
-    `moved_to_limit` (scouter/core/moves.py `_adjust_core`/`say`) -- a move
-    that genuinely moved but stopped at its own declared clamp."""
+    """Row 471: any write call whose own envelope `outcome` is the typed
+    partial `moved_to_limit` (scouter/core/moves.py `_adjust_core`/`say`)
+    -- a move that CLAIMS it genuinely moved but stopped at its own
+    declared clamp. Keys off the outcome itself, not whether the claim's
+    module/param/cap happen to be parseable (review round 1, I1: an
+    envelope can say `moved_to_limit` with data the evaluator cannot read
+    -- that is still a claim needing verification, not a free pass to
+    skip rules (a)-(f) the way an unrecognised envelope shape would).
+    Used only to decide whether the claim needs verifying (`reported`
+    below) -- never, on its own, to score a verdict."""
     return any((c.envelope or {}).get("outcome") == "moved_to_limit"
                for c in obs.calls if c.write)
 
 
-def _moved_to_limit_residual(case: Case, results: list[CheckResult],
-                             obs: Observation) -> Verdict | None:
-    """Row 471 (COV-D-residual-clamp-capped, Pratik's ruling): when every
-    non-passing check on an `edit` case reads "below noise floor" -- the
-    oracle simply cannot see a move that stopped at its own declared clamp
-    -- that is the clamp being honest about its own limit, not a bug.
-    Scored `correct_refusal` (an honest refusal to move further than the
-    clamp allows), tagged `residual: clamp` so the report can name it
-    (gauntlet/report.py)."""
-    if case.expect.kind != "edit" or not _any_moved_to_limit(obs):
+def _verified_clamped_params(obs: Observation, units: dict) -> set[str]:
+    """Review round 1 (I1): a `moved_to_limit` claim only counts once the
+    after snapshot shows that `module.param` actually landed at its
+    claimed `cap` (within the M1 tolerance) and differs from `before` --
+    an unverified claim of movement is exactly what silent-failure rule
+    (a) catches for a plain `ok`, and `moved_to_limit` earns no exemption
+    from that. Returns the `module.param` keys that verify, so a
+    below-floor stat check can be matched to the ONE clamped param it is
+    actually about (probe P3/P4, and the mixed clamped+plain-move case)."""
+    before, after = _params(obs.before), _params(obs.after)
+    verified: set[str] = set()
+    for claim in _moved_to_limit_claims(obs):
+        module, param, cap = claim.get("module"), claim.get("param"), claim.get("cap")
+        if not module or not param or cap is None:
+            continue
+        key_ = f"{module}.{param}"
+        unit = units.get(key_, "")
+        a = _num(after.get(key_))
+        if a is None or not _same(unit, a, cap):
+            continue
+        b = _num(before.get(key_))
+        if b is not None and not _differs(unit, b, a):
+            continue
+        verified.add(key_)
+    return verified
+
+
+def _writes_landed_as_requested(obs: Observation) -> bool:
+    """Row 475 (I2 ruling): every non-noop write actually reached its own
+    claimed, unclamped target (`AdjustResult`'s own `requested`/`applied`/
+    `unit`, flat on a single `darkroom.adjust`'s `data`, or per-entry in a
+    `darkroom.say`'s `data.moves` list) -- the request landed in full,
+    however small the visible effect on any check. A write that came up
+    short of its own claim is a genuine silent failure, caught elsewhere;
+    this asks a narrower question on purpose."""
+    any_move = False
+    for c in obs.calls:
+        if not c.write:
+            continue
+        data = (c.envelope or {}).get("data") or {}
+        moves = data["moves"] if isinstance(data.get("moves"), list) else [data]
+        for m in moves:
+            if not isinstance(m, dict) or m.get("noop"):
+                continue
+            requested, applied = m.get("requested"), m.get("applied")
+            if requested is None or applied is None:
+                return False
+            if not _same(m.get("unit", ""), applied, requested):
+                return False
+            any_move = True
+    return any_move
+
+
+def _imperceptible_step_residual(case: Case, results: list[CheckResult],
+                                 obs: Observation) -> Verdict | None:
+    """Row 475 (I2 ruling, option A, provisional -- Pratik to confirm): the
+    real night-1 D-bare-step-below-perceptual-floor rows are plain `ok`,
+    never `moved_to_limit` (I2's finding -- KNOWN_RESIDUAL's "cap" is the
+    fixture's step-size invariant, not a runtime clamp any of these moves
+    ever reach). When every non-passing check on an `edit` case reads
+    "below noise floor" and every write landed exactly its own requested,
+    unclamped step (`_writes_landed_as_requested`), that is a real,
+    complete edit the check floor simply cannot see -- scored its own
+    outcome, `imperceptible_step` (never verified, refused, or silent),
+    tagged `residual: step-below-floor` so the report can name it and
+    carry the recalibration card."""
+    if case.expect.kind != "edit" or _any_moved_to_limit(obs):
         return None
     non_passing = [r for r in results if not r.ok]
     if not non_passing or any(r.note != "below noise floor" for r in non_passing):
         return None
+    if not _writes_landed_as_requested(obs):
+        return None
+    return Verdict(PARTIAL, "imperceptible_step", results, notes=["residual: step-below-floor"])
+
+
+def _moved_to_limit_residual(case: Case, results: list[CheckResult],
+                             obs: Observation) -> Verdict | None:
+    """Row 471 (COV-D-residual-clamp-capped, Pratik's ruling), tightened by
+    review round 1 (I1): score `correct_refusal` only when every
+    non-passing check reads "below noise floor" AND names (via
+    `Check.tags["clamp_param"]`) a `module.param` this observation actually
+    verified as clamped (`_verified_clamped_params`) -- a below-floor check
+    that belongs to some OTHER, unclamped move must not ride along on an
+    unrelated clamp. Tagged `residual: clamp` so the report can name it
+    (gauntlet/report.py)."""
+    if case.expect.kind != "edit":
+        return None
+    sidecar = case.expect.sidecar or {}
+    verified = _verified_clamped_params(obs, sidecar.get("units", {}))
+    if not verified:
+        return None
+    non_passing = [(r, ch) for r, ch in zip(results, case.expect.checks) if not r.ok]
+    if not non_passing:
+        return None
+    for r, ch in non_passing:
+        if r.note != "below noise floor" or ch.tags.get("clamp_param") not in verified:
+            return None
     return Verdict(PASS, "correct_refusal", results, notes=["residual: clamp"])
 
 
@@ -615,7 +737,13 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
                    policy: Policy) -> str | None:
     """Spec 1 conditions (a)-(f). Only asked when the product reported success."""
     writes = [c for c in obs.calls if c.write]
-    reported = any(_env_ok(c) for c in writes)
+    # Review round 1 (I1): `moved_to_limit` is a claim of movement, exactly
+    # like a plain `ok` -- it must not short-circuit `reported` to False
+    # (registry.py's `ok = outcome in ("ok", "dry_run")` makes the envelope
+    # itself `ok: False`) and skip rules (a)-(f) entirely. `_any_moved_to_limit`
+    # only says "something claimed a clamped move"; whether that claim
+    # actually verifies is rule (c)'s job below, via `_verified_clamped_params`.
+    reported = any(_env_ok(c) for c in writes) or _any_moved_to_limit(obs)
     # Row 459 (night-1, COV-undo-first-introduction): rule (e) below must ask
     # the undo call's OWN ok/refusal, not "was any write ok" -- an earlier ok
     # `set` (introducing the module) must not make an honestly-refused
@@ -653,18 +781,30 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     unmoved = _m1_key_unchanged(case, obs)
     if unmoved:
         return f"a: reported ok but {unmoved} did not change"
+    # Row 471 (COV-D-residual-clamp-capped), tightened by review round 1
+    # (I1): a stat check that reads "below noise floor" because the move
+    # VERIFIABLY stopped at its own declared clamp (`_verified_clamped_params`
+    # -- the after snapshot actually shows that module.param at its claimed
+    # cap) is not a silent bug -- it is the clamp being honest about its own
+    # limit. An unverified `moved_to_limit` claim, or a below-floor check
+    # that belongs to some OTHER, unclamped move (`Check.tags["clamp_param"]`
+    # not in the verified set), earns no exception: rule (c) still fires.
+    #
+    # Row 475 (I2 ruling): a plain `ok` (never claimed a clamp at all) whose
+    # every write landed exactly its own requested step also earns the
+    # exception -- `_imperceptible_step_residual` (below `evaluate()`) scores
+    # its own outcome for it; here we only must not let rule (c) call it a
+    # silent bug first.
+    verified_clamped = _verified_clamped_params(obs, units)
+    landed_as_requested = not _any_moved_to_limit(obs) and _writes_landed_as_requested(obs)
     for r, ch in zip(results, case.expect.checks):
         if ch.tags.get("silent_if_fail") and not r.ok:
             return f"c: {ch.tags.get('why', 'a required report is missing')}"
-        # Row 471 (COV-D-residual-clamp-capped): a stat check that reads
-        # "below noise floor" because the move genuinely stopped at its own
-        # declared clamp (`moved_to_limit`) is not a silent bug -- it is the
-        # clamp being honest about its own limit. `_moved_to_limit_residual`
-        # (below) scores the verdict; here we only must not let rule (c)
-        # pre-empt it with the wrong verdict.
         if ch.metric in ("M2", "M3", "M4", "M5", "M6") and ch.sign and not r.ok \
                 and not r.magnitude_only:
-            if r.note == "below noise floor" and _any_moved_to_limit(obs):
+            if r.note == "below noise floor" and (
+                ch.tags.get("clamp_param") in verified_clamped or landed_as_requested
+            ):
                 continue
             return f"c: {ch.metric} {ch.stat} moved {r.measured!r}, expected sign {ch.sign}"
         if ch.kind == "restored" and not r.ok and undo_reported_ok:
@@ -816,6 +956,9 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
         residual = _moved_to_limit_residual(case, results, obs)
         if residual:
             return residual
+        imperceptible = _imperceptible_step_residual(case, results, obs)
+        if imperceptible:
+            return imperceptible
     if blocked and (miss or not all(r.ok for r in results)):
         return Verdict(FAIL, "blocked", results, notes=[blocked])
     if kind == "noop":
