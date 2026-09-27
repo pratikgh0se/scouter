@@ -249,3 +249,58 @@ class SubsetWiringTest(unittest.TestCase):
         self.assertIn("--subset-layer scenarios_agent", text)
         self.assertIn("--subset-keys class,genre", text)
         self.assertIn("--seed", text)
+
+
+class SubsetSeedDeterminismTest(_FakeReposCase):
+    """(row 501 item H, fix round 2, Pratik's ruling 6, Opus re-review
+    finding 6): the earlier seed, `date -j -f '%Y%m%d' "${STAMP#night2-}"
+    +%s`, fills hour/minute/second from the CURRENT wall clock (the stamp
+    itself carries no time of day) -- two calls seconds apart produced two
+    different seeds for the SAME stamp. The fixed formula (a sha1 of the
+    stamp text, truncated and read as base-16) must agree every time.
+    Runs the REAL script (never a reimplementation of its own seed
+    formula) and reads back the `--seed` value each real invocation of the
+    (stubbed) `gauntlet generate` actually received."""
+
+    def _capture_seed(self, stamp: str) -> str:
+        capture = self.runs_root / "seed_capture.txt"  # outside the repo -- never dirties it
+        stub = self.repo / ".venv" / "bin" / "python"
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            f'echo "$@" >> "{capture}"\n'
+            "exit 1\n", encoding="utf-8")
+        stub.chmod(0o755)
+        git(self.repo, "add", "-A")
+        subprocess.run(["git", "commit", "-q", "-m", "stub: capture argv"], cwd=str(self.repo),
+                       capture_output=True, text=True)  # a no-op stub rewrite has nothing to
+                                                         # commit the second time -- fine either
+                                                         # way, only a real failure asserts below
+        self.assertEqual(subprocess.run(["git", "status", "--porcelain"], cwd=str(self.repo),
+                                        capture_output=True, text=True).stdout, "")
+        p = self.run_script(STAMP=stamp)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        lines = [ln for ln in capture.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        self.assertTrue(lines, "the stub python was never invoked")
+        m = re.search(r"--seed (\d+)", lines[-1])
+        self.assertIsNotNone(m, lines[-1])
+        return m.group(1)
+
+    def test_two_real_runs_of_the_same_stamp_agree_on_the_seed(self) -> None:
+        """A realistic, DATE-SHAPED stamp (`night2-YYYYMMDD`): the earlier
+        formula, `date -j -f '%Y%m%d' "${STAMP#night2-}" +%s`, parses this
+        one successfully -- and fills hour/minute/second from the CURRENT
+        wall clock, so two real calls a couple of seconds apart genuinely
+        disagreed (reproduced directly: `date -j -f '%Y%m%d' 20260928 +%s`
+        run twice, 2 s apart, gave 1790606360 and 1790606362). A
+        non-date-shaped stamp would instead fall into the old formula's
+        `|| echo 0` fallback and trivially agree either way -- this uses
+        the one shape that actually exercises the bug this fix closes."""
+        first = self._capture_seed("night2-20260928")
+        time.sleep(1.1)  # real wall-clock gap -- the old formula's own failure mode
+        second = self._capture_seed("night2-20260928")
+        self.assertEqual(first, second)
+
+    def test_a_different_stamp_can_derive_a_different_seed(self) -> None:
+        a = self._capture_seed("night2-20260928")
+        b = self._capture_seed("night2-20261005")
+        self.assertNotEqual(a, b)

@@ -41,6 +41,13 @@ OUTCOMES = {
     #: not do). Its own outcome, its own report column.
     "imperceptible_step": PARTIAL,
     "silent_failure": FAIL, "wrong_refusal": FAIL, "unexpected_edit": FAIL,
+    #: Row 501 item G (fix round 1, Opus finding 6; fix round 2, ruling 8):
+    #: `evaluate()`'s own `out_of_scope_policy` branch (above) returns this
+    #: outcome for a write before the user picks between offered options --
+    #: distinct from the generic `unexpected_edit` every other refuse-kind
+    #: write earns. It was missing from this table, though nothing here
+    #: reads the table for scoring (only `canonical_outcome`/reporting do).
+    "unrequested_edit": FAIL,
     "failed": FAIL, "failed_hang": FAIL, "crash": FAIL, "blocked": FAIL,
 }
 #: Old benchmark labels still readable (spec 1: renamed, alias kept).
@@ -456,14 +463,37 @@ def _check_verb(i: int, ch: Check, obs: Observation) -> CheckResult:
     return CheckResult(i, "verb", False, None, sorted(verbs), note="no matching verb call")
 
 
+#: (row 501 item B, fix round 2, Pratik's ruling 1 on the re-review's finding
+#: 1): the envelope `verb` id a genuine undo call reports
+#: (`scouter/core/darkroom.py`'s `id="darkroom.undo_last"`).
+UNDO_VERB = "darkroom.undo_last"
+
+
 def _check_undo(i: int, ch: Check, obs: Observation) -> CheckResult:
-    """(row 501 item B, fix round 1, ruling on r0340/r0344/r0368): an undo
-    case is verified when history_end DECREMENTED, OR the snapshotted
-    params are restored to their before-value -- not by a sidecar change,
-    which a fresh frame with nothing of the agent's own to undo may never
-    produce (`darkroom_undo_last` on an empty journal is an honest noop,
-    not a failure to detect). Either signal alone is enough (OR, not AND
-    with a `changed: True` sidecar expectation)."""
+    """(row 501 item B, fix round 1, ruling on r0340/r0344/r0368; fix round
+    2, Pratik's ruling 1): an undo case is verified when the agent made a
+    SUCCESSFUL undo call (`darkroom_undo_last`, verb `darkroom.undo_last`,
+    envelope `ok`) AND history_end DECREMENTED, OR the snapshotted params
+    are restored to their before-value -- not by a sidecar change, which a
+    fresh frame with nothing of the agent's own to undo may never produce
+    (`darkroom_undo_last` on an empty journal is an honest noop, not a
+    failure to detect). Either the decrement or the restored signal is
+    enough (OR, not AND with a `changed: True` sidecar expectation) --
+    but only once a real undo call is on the record. Without one, the
+    before/after snapshots are trivially equal to themselves (zero calls,
+    or only a successful READ) and would otherwise score a hollow pass --
+    the re-review's own finding 1: r0340/r0344/r0368 scored `verified` with
+    no calls at all, one successful read, or a no-op undo. This check fails
+    then; `evaluate()`'s workflow needs_review fallback (no verb/undo call
+    and no write at all) turns that into `needs_review`, never a silent
+    pass and never a hard fail either."""
+    undo_called = any(
+        (c.envelope or {}).get("ok") and (c.envelope or {}).get("verb") == UNDO_VERB
+        for c in obs.calls
+    )
+    if not undo_called:
+        return CheckResult(i, "undo", False, {"undo_called": False}, "a successful undo call",
+                           note="no successful darkroom.undo_last call")
     before_end = (obs.before or {}).get("history_end")
     after_end = (obs.after or {}).get("history_end")
     decremented = (before_end is not None and after_end is not None and after_end < before_end)
@@ -1039,6 +1069,7 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     sf = silent_failure(case, obs, results, policy)
     if sf:
         return Verdict(FAIL, "silent_failure", results, silent_failure=sf)
+    ok_all = all(r.ok for r in results)
     miss = _sidecar_miss(case, obs) if kind != "noop" else None
     if not miss and not blocked:
         residual = _moved_to_limit_residual(case, results, obs)
@@ -1055,6 +1086,27 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
             return Verdict(PASS, "verified", results)
         return Verdict(FAIL, "failed", results, notes=["expected an honest noop"])
 
+    #: (row 501 item B, fix round 1, Opus finding 3; fix round 2, Pratik's
+    #: ruling 3, Opus re-review finding 3): a workflow case whose verb/undo
+    #: check failed because the agent never actually called the tool this
+    #: verb needs (a clarify-only conversation, no write at all) is not a
+    #: confident FAIL -- the agent may be waiting on the user's answer to a
+    #: real question. needs_review, never a silent pass and never a hard
+    #: fail either. MUST run before the sidecar-must-change gate (`if
+    #: miss:` below): `preset_save` (r0348) and `repeat_more` (r0364,
+    #: "More.") both carry `sidecar={"changed": True}`, so with the sidecar
+    #: gate checked first a clarify-only conversation hit "sidecar expected
+    #: to change but did not" and returned a hard `failed` before this
+    #: branch was ever reached -- the re-review's own finding 3. Placed
+    #: after the blocked/noop returns above (unchanged from fix round 1)
+    #: so a genuinely transient/blocked call still scores `blocked`, not a
+    #: clarify-only needs_review it never was.
+    if kind == "workflow" and not ok_all and \
+            any(r.metric in ("verb", "undo") and not r.ok for r in results) and \
+            not any(c.write for c in obs.calls):
+        return Verdict(PARTIAL, "needs_review", results,
+                       notes=["asked before acting: no verb/write call"])
+
     if miss:
         return Verdict(FAIL, "failed", results, notes=[miss])
     if kind == "edit" and not results and not case.expect.sidecar:
@@ -1070,18 +1122,6 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
         collateral = [k for k in _changed_keys(obs, sidecar.get("units", {}))
                       if k not in allowed
                       and not (before.get(k) is None and _module(k) in introduced)]
-    ok_all = all(r.ok for r in results)
-    #: (row 501 item B, fix round 1, Opus finding 3): a workflow case whose
-    #: verb/undo check failed because the agent never actually called the
-    #: tool this verb needs (a clarify-only conversation, no write at all)
-    #: is not a confident FAIL -- the agent may be waiting on the user's
-    #: answer to a real question. needs_review, never a silent pass and
-    #: never a hard fail either.
-    if kind == "workflow" and not ok_all and \
-            any(r.metric in ("verb", "undo") and not r.ok for r in results) and \
-            not any(c.write for c in obs.calls):
-        return Verdict(PARTIAL, "needs_review", results,
-                       notes=["asked before acting: no verb/write call"])
     if ok_all and not collateral:
         over = [c.tool for c, s in zip(obs.calls, case.steps) if c.wall_s > s.budget_s]
         if over:

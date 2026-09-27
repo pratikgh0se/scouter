@@ -83,17 +83,27 @@ cd "$REPO" || die "cannot cd $REPO"
 export PYTHONPATH="$REPO"
 
 if [[ ! -f "$RUN_DIR/cases.jsonl" ]]; then
-  # Row 501 item H (Pratik's ruling): night 2 runs a STRATIFIED 40-case
-  # subset of scenarios_agent (every problem class and genre represented at
-  # least once), not the full 160 -- the seed is derived from the stamp's
-  # own date, so a resume (cases.jsonl already exists -> this block never
-  # re-runs) always sees the exact same subset it started with.
-  SUBSET_SEED="${HTC_NIGHT2_SUBSET_SEED:-$(date -j -f '%Y%m%d' "${STAMP#night2-}" +%s \
-    2>/dev/null || echo 0)}"
+  # Row 501 item H (Pratik's ruling); fix round 2 (Pratik's ruling 6, Opus
+  # re-review finding 6): night 2 runs a STRATIFIED 40-case subset of
+  # scenarios_agent (every problem class and genre represented at least
+  # once), not the full 160 -- the seed is derived from the stamp's own
+  # text DETERMINISTICALLY (a sha1 of the stamp string, truncated to 8 hex
+  # digits and read as a base-16 integer -- `--seed` is `type=int`), so a
+  # resume (cases.jsonl already exists -> this block never re-runs) always
+  # sees the exact same subset it started with, AND regenerating the same
+  # stamp (a rerun with cases.jsonl deleted, or a different machine) always
+  # derives the same seed too. The earlier cut, `date -j -f '%Y%m%d'
+  # "${STAMP#night2-}" +%s`, filled hour/minute/second from the CURRENT
+  # clock (no time-of-day in the stamp itself) -- two calls seconds apart
+  # gave two different seeds for the same stamp, so the comment's own claim
+  # ("derived from the stamp's own date") was false.
+  SUBSET_SEED="${HTC_NIGHT2_SUBSET_SEED:-$((16#$(printf '%s' "$STAMP" | shasum | cut -c1-8)))}"
   "$PY" -m gauntlet generate --stamp "$STAMP" \
     --subset "${HTC_NIGHT2_SUBSET_SIZE:-40}" --subset-layer scenarios_agent \
     --subset-keys class,genre --seed "$SUBSET_SEED" || die "generate failed" 2
-  grep -m1 -i "total\|cases" "$RUN_DIR/generation.md" || true   # expect 5,167
+  # The subset (40 of 160 scenarios_agent cases) shrinks the total well
+  # below the full run's own count -- no fixed number to grep for here.
+  grep -m1 -i "total\|cases" "$RUN_DIR/generation.md" || true
 fi
 
 caffeinate -i -w $$ &   # keep the laptop awake for this script's lifetime

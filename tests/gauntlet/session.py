@@ -269,10 +269,10 @@ class DtControl:
 
         return dtprocess.launch(frame, library, log_path=log)
 
-    def ready(self, timeout_s: float) -> dict:
+    def ready(self, timeout_s: float, *, stop_if=None) -> dict:
         from scouter.core import dtprocess
 
-        return dtprocess.wait_gui_ready(timeout_s)
+        return dtprocess.wait_gui_ready(timeout_s, stop_if=stop_if)
 
     def health(self) -> str:
         from scouter.core import dtbridge
@@ -424,9 +424,21 @@ class ScouterSession:
             pid = _check_library_lock(log_path, since=since)
             if pid is not None:
                 self._raise_library_locked(pid)
-            ready = self.dt.ready(LAUNCH_READY_S)
-            #: Defense in depth: a lock line that only lands during the
-            #: ready wait (a slow write) is still caught, same offset.
+            #: Fix round 2 (Pratik's ruling 4, Opus re-review finding 4): a
+            #: lock line darktable writes only DURING the ready wait (the
+            #: common real case -- `dtprocess.launch` returns as soon as `ps`
+            #: can read the process's start time, well before darktable's
+            #: own `dt_init`/database init has written anything) must be
+            #: caught at the ready poll's own cadence (~poll_s, about 1 s),
+            #: not only after the full LAUNCH_READY_S (30 s) wait completes.
+            #: `stop_if` is checked once per `wait_gui_ready` poll iteration.
+            ready = self.dt.ready(
+                LAUNCH_READY_S,
+                stop_if=lambda: _check_library_lock(log_path, since=since) is not None)
+            #: Defense in depth: a lock line that lands in the narrow window
+            #: between the last stop_if check and wait_gui_ready returning
+            #: (or one the fake/stub above never wired stop_if for) is still
+            #: caught here, same offset.
             pid = _check_library_lock(log_path, since=since)
             if pid is not None:
                 self._raise_library_locked(pid)

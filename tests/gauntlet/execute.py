@@ -11,6 +11,7 @@ from pathlib import Path
 from gauntlet import chart
 from gauntlet.adapter import CallRecord, Observation, Park
 from gauntlet.case import Case
+from scouter import config as scouter_config
 from tests.gauntlet import observe
 from tests.gauntlet.corpus import guard
 from tests.gauntlet.session import SessionBlocked, reset_journal
@@ -22,6 +23,52 @@ VIRTUAL: dict = {}
 STAT_METRICS = {"M2", "M3", "M4", "M5", "M6", "M7", "M8"}
 #: body -> WB table camera id (config `cameras` map).
 CAMERA = {"olympus": "em10iii", "sony_a7": "a7", "sony_nex5n": "nex5n"}
+
+
+class ImportIncomplete(RuntimeError):
+    """`library_import`'s own envelope did not account for every source
+    frame the harness staged (a partial import). The destination for the
+    missing frame(s) is genuinely unknown -- guessing the card path would
+    only surface downstream as a false `usage`/`not_in_darkroom` refusal on
+    a frame that was never the harness's fault. Raised, never swallowed:
+    callers turn it into `obs.blocked`, so the case scores `blocked`,
+    honestly naming what's missing.
+
+    (Fix round 2, review finding "I", Opus re-review 5e398c5): moved here
+    from `tests/gauntlet/exec_bulk.py` (which re-exports it, unchanged) so
+    `run_tool_case` below can reuse the exact same, already-reviewed
+    resolution instead of a second copy that could drift from it."""
+
+
+def _imported_frames(session, envelope: dict | None,
+                      source_frames: list[Path]) -> list[Path] | None:
+    """Map `source_frames` (the staged copies -- the card, or a workflow
+    case's `job_frames`) to the absolute paths `library_import` actually
+    wrote them to, using ITS OWN envelope (`data.files[].source_name` ->
+    `.dest`, relative to the job directory -- spec section 6,
+    `scouter.types.ImportResult`). Returns `None` when the envelope carries
+    nothing usable at all (the import did not run or errored -- callers keep
+    the original paths, since a downstream step will honestly fail on its
+    own terms). Raises `ImportIncomplete` when the import DID run but its
+    own `files[]` is missing one or more of the frames the harness staged (a
+    partial import): the destination for those frames is unknown, not "the
+    staged path", and must never be guessed. Every later step (`{job_frame:N}`,
+    `{job_frames}`) must address these destination files."""
+    data = (envelope or {}).get("data") or {}
+    files = data.get("files") or []
+    job_slug, date = data.get("job_slug"), data.get("date")
+    if not files or not job_slug or not date:
+        return None
+    dest_by_source = {f.get("source_name"): f.get("dest") for f in files if f.get("source_name")}
+    missing = [src.name for src in source_frames if src.name not in dest_by_source]
+    if missing:
+        raise ImportIncomplete(
+            f"import_incomplete: library_import's files[] names none of {missing!r} "
+            f"({len(missing)} of {len(source_frames)} staged frames)"
+        )
+    cfg = scouter_config.load(str(session.staged.config))
+    job_path = scouter_config.job_dir(cfg, date, job_slug)
+    return [job_path / dest_by_source[src.name] for src in source_frames]
 
 
 def substitute(value, session, calls: list[CallRecord]):
@@ -162,6 +209,26 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
         else:
             rec = session.call(st.tool, args, st.budget_s, write=st.write)
         obs.calls.append(rec)
+        #: (Fix round 2, review finding "I", Opus re-review 5e398c5): a
+        #: `library_import` step's `{job_frames}` placeholder must resolve
+        #: to the paths library_import ACTUALLY wrote (the job directory),
+        #: not the staged card copies substitute() filled in before the
+        #: import ran. `run_bulk_case` (tests/gauntlet/exec_bulk.py) already
+        #: does exactly this for the bulk layer; a tool-mode workflow case
+        #: (r0066's export_release, session.staged.job_frames set once at
+        #: stage() time) needed the same rewrite here or its later
+        #: `images="{job_frames}"` step named files darktable's library never
+        #: imported -- `export.release` then raised `ImageNotFound` on every
+        #: one of them (found by reading the code, not in a live run).
+        if st.tool == "library_import" and not rec.error:
+            try:
+                resolved = _imported_frames(session, rec.envelope, session.staged.job_frames)
+            except ImportIncomplete as e:
+                obs.blocked = f"harness_error: {e}"
+                obs.hang_evidence.append(str(e))
+                break
+            if resolved is not None:
+                session.staged.job_frames = resolved
         if obs.blocked:  # (final fix M3): a virtual tool blocked the case itself
             break
         if rec.error == "timeout" and rec.health == "unresponsive":

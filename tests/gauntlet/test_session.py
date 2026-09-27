@@ -1,6 +1,8 @@
 """Session + tool-mode execution against fakes: no darktable, no MCP server."""
 
 
+import time
+
 import pytest
 
 from scouter.core.dtprocess import LaunchError
@@ -33,7 +35,11 @@ class FakeDt:
         self.launches += 1
         self.launched.append(frame)
 
-    def ready(self, timeout_s):
+    def ready(self, timeout_s, *, stop_if=None):
+        #: (fix round 2, Pratik's ruling 4): stop_if for forward
+        #: compatibility with `DtControl.ready`'s new keyword; this plain
+        #: fake never calls it (nothing here spans real time to poll
+        #: during) -- `SlowLockDt` below does.
         return {"ready": self._ready.pop(0) if self._ready else True}
 
     def health(self):
@@ -252,6 +258,66 @@ def test_no_lock_line_launches_normally(corpus, tmp_path):
     dt = LockedDt("darktable started fine\n")
     _session(corpus, tmp_path, dt).open()
     assert dt.launches == 1
+
+
+class SlowLockDt(FakeDt):
+    """(row 501 item D, fix round 2, Pratik's ruling 4, Opus re-review
+    finding 4): `launch()` starts the process WITHOUT writing the lock line
+    -- exactly like real darktable, whose `dt_init`/database check (and so
+    the lock-file error) lands well after `dtprocess.launch` itself
+    returns, during what would otherwise be the 30 s `gui_ready` wait.
+    `ready()` stands in for `dtprocess.wait_gui_ready`'s own poll loop: it
+    writes the lock line partway through its own polling and calls
+    `stop_if()` every poll, the same cadence the real fix wires through
+    `session._launch` -> `DtControl.ready(stop_if=...)` ->
+    `dtprocess.wait_gui_ready`. `poll_s` is real wall-clock (`time.sleep`)
+    so a caller measuring elapsed time with `time.monotonic()` sees the
+    genuine saving."""
+
+    def __init__(self, lock_line: str, *, write_after_polls: int = 2, poll_s: float = 0.05,
+                 **kw):
+        super().__init__(**kw)
+        self.lock_line = lock_line
+        self.write_after_polls = write_after_polls
+        self.poll_s = poll_s
+        self._log_path = None
+        self.ready_calls = 0
+
+    def launch(self, frame, library, log, **kw):
+        super().launch(frame, library, log, **kw)
+        self._log_path = log
+
+    def ready(self, timeout_s, *, stop_if=None):
+        self.ready_calls += 1
+        for i in range(int(timeout_s / self.poll_s) + 1):
+            if i == self.write_after_polls and self._log_path is not None:
+                with self._log_path.open("a", encoding="utf-8") as f:
+                    f.write(self.lock_line)
+            if stop_if is not None and stop_if():
+                return {"ready": False, "stopped": True}
+            time.sleep(self.poll_s)
+        return {"ready": False}
+
+
+def test_lock_line_written_during_the_ready_wait_is_caught_within_about_a_second(
+        corpus, tmp_path):
+    """RED (before the fix): the lock check only ran once before the ready
+    wait and once after `dt.ready(LAUNCH_READY_S)` returns -- a lock line
+    darktable writes only DURING that wait (the real, common timing: the
+    process is running well before `dt_init` gets to the database check)
+    was invisible until the full 30 s elapsed. GREEN: `stop_if` is checked
+    once per ready poll (~poll_s apart), so a line written on the SECOND
+    poll is caught almost immediately -- proven here by a real elapsed-time
+    bound, not a mocked clock, against a fake whose own `poll_s` (0.05 s)
+    stands in for `wait_gui_ready`'s real ~0.5 s cadence."""
+    dt = SlowLockDt(REAL_LOCK_LINE, write_after_polls=2, poll_s=0.05)
+    t0 = time.monotonic()
+    with pytest.raises(sess.LibraryLocked, match="library_lock 69648"):
+        _session(corpus, tmp_path, dt).open()
+    elapsed = time.monotonic() - t0
+    assert elapsed < 5.0, elapsed
+    assert dt.ready_calls == 1  # one ready() call; stop_if caught it mid-poll, no retry
+    assert dt.launches == 1  # no second, doomed launch attempt either
 
 
 def test_stage_job_imports_the_staged_card_into_the_session_slug(corpus, tmp_path):
