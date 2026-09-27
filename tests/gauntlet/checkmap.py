@@ -91,11 +91,22 @@ def plan_request(req: dict, cmap: dict) -> RequestPlan:
         return RequestPlan(rid, "impossible", (), ())
     if kind == "workflow":
         stat = check["stat_or_param"].lower()
-        verb = "out"
-        for rule in cmap["workflow_rules"]:
-            if rule["match"] in stat:
-                verb = rule["verb"]
-                break
+        #: (row 501 item I, Pratik's ruling): r0066 ("client proof gallery")
+        #: matches `workflow_rules`' "gallery"/"watermark" -> "out" rule
+        #: before it ever reaches the "export" rule, so it generated as an
+        #: out-of-scope refusal even though export_release has a
+        #: client-proof preset (night-1 triage rank 11). A per-request
+        #: override lets THIS ruled request (and only it) skip the general
+        #: keyword match, without touching workflow_rules for every other
+        #: gallery/watermark/comparison request that is genuinely out of
+        #: scope.
+        verb = cmap.get("workflow_verb_overrides", {}).get(rid)
+        if verb is None:
+            verb = "out"
+            for rule in cmap["workflow_rules"]:
+                if rule["match"] in stat:
+                    verb = rule["verb"]
+                    break
         d = direction_of(check["direction"], cmap)
         klass = "out" if verb == "out" else "workflow"
         return RequestPlan(rid, klass, (), (), workflow_verb=verb,

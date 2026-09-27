@@ -357,6 +357,37 @@ def test_agent_session_parks_on_the_usage_budget_before_spawning_claude(tmp_path
         s.run_case(case)
 
 
+def test_run_case_stages_a_job_when_the_case_asks_for_one(tmp_path, monkeypatch):
+    """(row 501 item I): sca-r0066-style cases (meta["stage_job"]) get a
+    real staged job before the agent's first turn."""
+    from gauntlet.case import Case, Expect
+
+    staged_calls = []
+
+    class Inner:
+        root = tmp_path
+        floors = {}
+        touched = set()
+        staged = type("S", (), {"env": {"PYTHONPATH": "."}})()
+
+        def ensure_frame(self, role):
+            return tmp_path / "f.ORF"
+
+        def stage_job(self):
+            staged_calls.append(True)
+
+    monkeypatch.setattr(agent.observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
+                                                                       "params": {}})
+    popen = _popen_seq(_lines({"type": "result", "result": "ok", "session_id": "s1"}))
+    s = agent.AgentSession(Inner(), popen=popen)
+    case = Case(id="sca-r0066-olympus-agent", layer="scenarios_agent", tier="P0", mode="agent",
+                steps=[], expect=Expect("workflow", [], {"changed": False}), body="olympus",
+                frame_role="hero", meta={"sentence": "client proof gallery", "followups": [],
+                                        "stage_job": True})
+    s.run_case(case)
+    assert staged_calls == [True]
+
+
 def test_mcp_config_pins_the_session_library(tmp_path):
     staged = type("S", (), {"env": {"PYTHONPATH": ".", "SCOUTER_CACHE": "/c",
                                     "SCOUTER_DARKTABLE_LIBRARY_DB": str(tmp_path / "l.db")}})()

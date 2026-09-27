@@ -286,6 +286,10 @@ class ScouterSession:
         self.aborted = False
         self.launched = None  # dtprocess.Launched of our darktable
         self._mcp_pending = None  # the MCP client while it initialises
+        #: (row 501 item I): set by stage_job(); a failed import's reason,
+        #: read-only for callers that only run a case needing a real job
+        #: when this is still None.
+        self.job_stage_error: str | None = None
 
     # -- lifecycle -------------------------------------------------------
 
@@ -506,3 +510,31 @@ class ScouterSession:
                 raise SessionBlocked(f"darkroom_open did not open frame {role} ({path}): "
                                      f"error={rec.error!r} health={rec.health!r}")
         return path
+
+    def stage_job(self) -> None:
+        """(row 501 item I, Pratik's ruling: the client proof gallery, r0066,
+        is in scope): mirrors fix/n1-guide-install-harness's own
+        `_stage_guide_job` (adapter.py) -- a real `library_import` of the
+        session's staged card into `staged.vars["job_slug"]`, so a case
+        whose product tool (`library_jobs`, `export_release`) genuinely
+        needs a staged job to find sees a real one, not the empty library
+        `stage()` alone leaves behind (night-1 triage rank 11: r0066's agent
+        checked `library_jobs`, found it empty, and had nothing to point
+        `export_release` at). Idempotent (a repeat call just re-imports into
+        the same slug, harmless); failure is recorded on
+        `self.job_stage_error`, never raised -- callers that only need this
+        for one case must not fail every other case in the session over it.
+
+        Shared-helper opportunity for the integrator: this is the same
+        shape as `_stage_guide_job`; a future pass could fold both into one
+        helper `session.py` and `adapter.py` share, rather than each
+        re-implementing the same `library_import` call. Not done here --
+        this branch does not depend on fix/n1-guide-install-harness."""
+        self.job_stage_error = None
+        if self.staged is None or not self.staged.job_frames:
+            return
+        rec = self.call("library_import", {"source": str(self.staged.card),
+                                           "job_slug": self.staged.vars["job_slug"],
+                                           "confirm": True}, 60.0, write=True)
+        if rec.error:
+            self.job_stage_error = rec.error

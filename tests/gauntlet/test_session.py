@@ -176,6 +176,28 @@ def test_no_lock_line_launches_normally(corpus, tmp_path):
     assert dt.launches == 1
 
 
+def test_stage_job_imports_the_staged_card_into_the_session_slug(corpus, tmp_path):
+    """(row 501 item I): a real library_import of the staged card into the
+    session's own job slug, so library_jobs/export_release find a real job
+    (night-1 rank 11: r0066's agent found library_jobs empty)."""
+    mcp = FakeMcp({"library_import": {"ok": True, "outcome": "ok", "data": {}}})
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    s.stage_job()
+    assert s.job_stage_error is None
+    tool, args = mcp.calls[-1]
+    assert tool == "library_import"
+    assert args["job_slug"] == s.staged.vars["job_slug"]
+    assert args["source"] == str(s.staged.card)
+
+
+def test_stage_job_records_a_failed_import_without_raising(corpus, tmp_path):
+    mcp = FakeMcp({"library_import": {"ok": False, "outcome": "error",
+                                      "error": {"code": "no_frames"}}})
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    s.stage_job()  # never raises
+    assert s.job_stage_error == "no_frames"
+
+
 def test_refreshing_a_role_twice_never_reuses_a_contaminated_dir(corpus, tmp_path):
     s = _session(corpus, tmp_path).open()
     first = s.refresh_frame("dark")

@@ -127,6 +127,9 @@
   "request_overrides": {
     "r0033": [{"concept": "contrast", "sign": -1}, {"concept": "saturation", "sign": -1}, {"concept": "luminance", "sign": 1}]
   },
+  "workflow_verb_overrides": {
+    "r0066": "export"
+  },
   "workflow_rules": [
     {"match": "stack pointer", "verb": "undo"},
     {"match": "last-applied parameter", "verb": "repeat_more"},

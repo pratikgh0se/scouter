@@ -251,11 +251,21 @@ def _workflow_agent_expect(verb: str) -> Expect:
     return expect
 
 
+#: (row 501 item I, Pratik's ruling): requests whose in-scope workflow
+#: answer needs a real staged job to point at (AgentSession.stage_job()),
+#: not just the frames stage() already copies -- today only the client
+#: proof gallery (r0066: clarify, then export_release's client-proof
+#: preset on the staged job).
+STAGE_JOB_REQUEST_IDS = frozenset({"r0066"})
+
+
 def agent_case(req: dict, plan: RequestPlan, tax: Taxonomy, tier: str) -> Case:
     cmap = tax.check_map
     role = cmap["role_for_problem"][req["problem"]]
     meta = {"sentence": req["sentence"], "class": plan.klass, "genre": req["genre"],
             "followups": list(req["followups"])}
+    if req["id"] in STAGE_JOB_REQUEST_IDS:
+        meta["stage_job"] = True
     if plan.klass in ("impossible", "out"):
         #: (row 501 item C, night-1 triage rank 3, SCA-refuse-case-followup-
         #: presupposes-edit): a scripted follow-up (e.g. r0019's "That's too

@@ -132,6 +132,18 @@ def test_out_of_scope_agent_cases_carry_the_refuse_and_offer_policy():
         assert c.meta["unrequested_write_reason"] == "unrequested_edit", c.id
 
 
+def test_client_proof_gallery_is_in_scope_and_stages_a_job():
+    """(row 501 item I, Pratik's ruling): r0066 is a workflow/export case,
+    not "out", and its agent case asks the session to stage a real job."""
+    tool, agent = scenarios.generate(taxonomy.load())
+    a = next(c for c in agent if c.id == "sca-r0066-olympus-agent")
+    assert a.meta["class"] == "workflow"
+    assert a.expect.kind == "workflow"
+    assert a.meta["stage_job"] is True
+    t = next(c for c in tool if c.id.startswith("scn-r0066-") and c.id.endswith("-tool"))
+    assert t.meta["class"] == "workflow"
+
+
 def test_no_followup_turn_after_an_out_or_impossible_agent_case():
     """(row 501 item C, night-1 rank 3, SCA-refuse-case-followup-
     presupposes-edit, r0019): a scripted follow-up after an honest, no-write

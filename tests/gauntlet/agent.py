@@ -225,6 +225,11 @@ class AgentSession:
         obs = Observation()
         try:
             frame = self.inner.ensure_frame(case.frame_role or "hero")
+            if case.meta.get("stage_job") and getattr(self.inner, "stage_job", None):
+                #: (row 501 item I): a real staged job for cases whose
+                #: product tool (library_jobs/export_release) needs one to
+                #: point at, e.g. sca-r0066 (client proof gallery).
+                self.inner.stage_job()
         except SessionBlocked as e:
             obs.blocked = f"session: {e}"
             obs.hang_evidence.append(f"session: {e}")
