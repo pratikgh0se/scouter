@@ -216,35 +216,56 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
                 meta=meta)
 
 
-def _workflow_agent_expect(verb: str) -> Expect:
-    """(row 501 item B, night-1 triage rank 10, SCA-hollow-workflow-pass):
-    `agent_case`'s workflow Expect used to carry `checks=[]` for every verb
-    -- a genuine sidecar-unchanged expectation (cull/export) then scores
-    `verified` with ZERO MCP calls and nothing else asserted (sca-r0159: a
-    cull request the agent answered with clarifying questions only, never
-    calling `cull_propose`, still passed). A workflow case whose expectation
-    carries no checks can never score `verified` again: every verb below
-    returns at least one, so an r0159-style hollow pass is impossible by
-    construction, and an unresolvable verb fails generation outright rather
-    than silently reaching evaluate.py with nothing to check.
+#: (row 501 item B, fix round 1, Opus finding 3): the envelope `verb` ids
+#: (`scouter.registry`) each workflow verb's own MCP tool answers with.
+#: `export` covers both the generic export_run path and r0066's own
+#: export_release verb (item I) -- either genuinely fulfils "export this".
+_WORKFLOW_VERB_IDS = {
+    "cull": {"cull.propose"},
+    "export": {"export.run", "export.release"},
+    "export_release": {"export.release"},
+    "preset_save": {"preset.save"},
+}
 
-    `undo` reuses `m1_restored` (a snapshot comparison over every key the
-    observation saw, not tied to a specific call index -- works whether the
-    agent needed one `darkroom_undo_last` or two). The other verbs assert
-    the agent's own LAST recorded MCP call answered `ok: true`: agent mode
-    has no fixed step sequence to index into like tool mode's `_workflow`,
-    so the last call is the only call the harness can honestly tie to "did
-    the verb actually run" -- an empty `obs.calls` (r0159's own case) fails
-    this check immediately (`_check_envelope`: "no such step")."""
+
+def _workflow_agent_expect(verb: str) -> Expect:
+    """(row 501 item B, night-1 triage rank 10, SCA-hollow-workflow-pass;
+    fix round 1, Opus finding 3): `agent_case`'s workflow Expect used to
+    carry `checks=[]` for every verb -- a genuine sidecar-unchanged
+    expectation (cull/export) then scores `verified` with ZERO MCP calls
+    and nothing else asserted (sca-r0159: a cull request the agent answered
+    with clarifying questions only, never calling `cull_propose`, still
+    passed). A workflow case whose expectation carries no checks can never
+    score `verified` again: every verb below returns at least one, so an
+    r0159-style hollow pass is impossible by construction, and an
+    unresolvable verb fails generation outright rather than silently
+    reaching evaluate.py with nothing to check.
+
+    Fix round 1 (Opus finding 3): the FIRST cut's generic check ("the
+    agent's last recorded call answered ok") only ever blocked the
+    zero-call case -- a clarify-only answer whose last call is any
+    successful READ (`scout_stats`, `library_jobs`,
+    `darkroom_describe_history`, ...) still passed (r0159/r0066/r0356's own
+    night-1 shape). `cull`/`export`/`preset_save` now check the envelope
+    `verb` field against `_WORKFLOW_VERB_IDS` (`gauntlet.evaluate`'s new
+    "verb" check kind), scanning every call, not only the last one.
+    `repeat_more` has no single canonical tool, so it checks any
+    successful WRITE call instead (`require_write`).
+
+    `undo` is verified by `gauntlet.evaluate`'s "undo" check kind:
+    history_end decremented OR params restored (OR, not tied to a sidecar
+    change) -- a fresh frame with nothing of the agent's own to undo may
+    never rewrite the sidecar at all, so the sidecar's own `changed` field
+    is left unset for this verb (no `_sidecar_miss` gate)."""
     if verb == "undo":
-        checks = [m1_restored([], {})]
-    elif verb in ("repeat_more", "preset_save", "export", "cull"):
-        checks = [Check("envelope", target={"path": "ok", "op": "eq", "value": True})]
+        return Expect("workflow", [Check("undo", target={})], None)
+    if verb == "repeat_more":
+        checks = [Check("verb", target={"require_write": True})]
+    elif verb in _WORKFLOW_VERB_IDS:
+        checks = [Check("verb", target={"any_of": sorted(_WORKFLOW_VERB_IDS[verb])})]
     else:
         raise ValueError(f"no agent workflow expectation for verb {verb!r}")
-    changed = verb not in ("cull", "export")
-    if verb == "undo":
-        changed = True
+    changed = verb not in ("cull", "export", "export_release")
     expect = Expect("workflow", checks, {"changed": changed})
     if not expect.checks:  # defence in depth: never reach evaluate.py hollow
         raise ValueError(f"workflow agent expectation for verb {verb!r} has no checks")

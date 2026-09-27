@@ -429,6 +429,51 @@ def _check_text(i: int, ch: Check, obs: Observation) -> CheckResult:
     return CheckResult(i, "text", found == want, found, want)
 
 
+def _check_verb(i: int, ch: Check, obs: Observation) -> CheckResult:
+    """(row 501 item B, fix round 1, Opus finding 3): "did the agent
+    actually call the tool this workflow verb needs" -- not "was the
+    agent's LAST recorded call, whatever it was, ok". A clarify-only
+    conversation whose last call is any successful READ (`scout_stats`,
+    `library_jobs`, `darkroom_describe_history`, ...) must not pass just
+    because that read succeeded (r0159/r0066/r0356's own shape on
+    night-1). `target["any_of"]` names the envelope `verb` ids this
+    workflow verb accepts (e.g. `cull.propose`, `export.release`); scans
+    every call, not only the last one. `target["require_write"]` is a
+    looser variant for a verb with no single canonical tool (repeat_more):
+    any successful WRITE call (CallRecord.write, from WRITE_TOOLS) counts."""
+    t = ch.target or {}
+    if t.get("require_write"):
+        for c in obs.calls:
+            if c.write and (c.envelope or {}).get("ok"):
+                return CheckResult(i, "verb", True, c.tool, "any write call ok")
+        return CheckResult(i, "verb", False, None, "any write call ok",
+                           note="no successful write call")
+    verbs = set(t.get("any_of") or [])
+    for c in obs.calls:
+        env = c.envelope or {}
+        if env.get("verb") in verbs and env.get("ok"):
+            return CheckResult(i, "verb", True, env.get("verb"), sorted(verbs))
+    return CheckResult(i, "verb", False, None, sorted(verbs), note="no matching verb call")
+
+
+def _check_undo(i: int, ch: Check, obs: Observation) -> CheckResult:
+    """(row 501 item B, fix round 1, ruling on r0340/r0344/r0368): an undo
+    case is verified when history_end DECREMENTED, OR the snapshotted
+    params are restored to their before-value -- not by a sidecar change,
+    which a fresh frame with nothing of the agent's own to undo may never
+    produce (`darkroom_undo_last` on an empty journal is an honest noop,
+    not a failure to detect). Either signal alone is enough (OR, not AND
+    with a `changed: True` sidecar expectation)."""
+    before_end = (obs.before or {}).get("history_end")
+    after_end = (obs.after or {}).get("history_end")
+    decremented = (before_end is not None and after_end is not None and after_end < before_end)
+    restored = _check_m1(i, Check("M1", kind="restored", target={"keys": [], "units": {}}), obs)
+    ok = decremented or restored.ok
+    return CheckResult(i, "undo", ok, {"history_end": [before_end, after_end],
+                                       "restored": restored.ok}, "decremented OR restored",
+                       note=None if ok else "neither history_end decremented nor params restored")
+
+
 def run_check(i: int, ch: Check, obs: Observation) -> CheckResult:
     if ch.metric == "M1":
         return _check_m1(i, ch, obs)
@@ -444,6 +489,10 @@ def run_check(i: int, ch: Check, obs: Observation) -> CheckResult:
         return _check_file(i, ch, obs)
     if ch.metric == "text":
         return _check_text(i, ch, obs)
+    if ch.metric == "verb":
+        return _check_verb(i, ch, obs)
+    if ch.metric == "undo":
+        return _check_undo(i, ch, obs)
     return CheckResult(i, ch.metric, False, note=f"unknown metric {ch.metric!r}")
 
 
@@ -1022,6 +1071,17 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
                       if k not in allowed
                       and not (before.get(k) is None and _module(k) in introduced)]
     ok_all = all(r.ok for r in results)
+    #: (row 501 item B, fix round 1, Opus finding 3): a workflow case whose
+    #: verb/undo check failed because the agent never actually called the
+    #: tool this verb needs (a clarify-only conversation, no write at all)
+    #: is not a confident FAIL -- the agent may be waiting on the user's
+    #: answer to a real question. needs_review, never a silent pass and
+    #: never a hard fail either.
+    if kind == "workflow" and not ok_all and \
+            any(r.metric in ("verb", "undo") and not r.ok for r in results) and \
+            not any(c.write for c in obs.calls):
+        return Verdict(PARTIAL, "needs_review", results,
+                       notes=["asked before acting: no verb/write call"])
     if ok_all and not collateral:
         over = [c.tool for c, s in zip(obs.calls, case.steps) if c.wall_s > s.budget_s]
         if over:

@@ -110,6 +110,20 @@ def test_workflow_agent_cases_never_generate_with_no_checks():
     assert r0159.expect.checks
 
 
+def test_workflow_agent_cases_check_the_real_verb_not_a_generic_last_call():
+    """(row 501 item B, fix round 1, Opus finding 3): sca-r0159 (cull) must
+    check for cull.propose specifically, not just "the last call was ok" --
+    the generic check let a clarify-only, read-only conversation pass."""
+    _, agent = scenarios.generate(taxonomy.load())
+    r0159 = next(c for c in agent if c.id == "sca-r0159-olympus-agent")
+    assert r0159.expect.checks[0].metric == "verb"
+    assert r0159.expect.checks[0].target["any_of"] == ["cull.propose"]
+    for c in agent:
+        if c.expect.kind == "workflow" and c.meta.get("class") == "workflow":
+            metric = c.expect.checks[0].metric
+            assert metric in ("verb", "undo"), c.id
+
+
 def test_workflow_agent_expect_fails_generation_for_an_unknown_verb():
     """A checkless (or unresolvable) workflow expectation fails generation
     outright, rather than reaching evaluate.py as a hollow pass waiting to
