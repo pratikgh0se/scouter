@@ -117,9 +117,10 @@ class Rehearsal:
             #: config-version fact is reported separately in `detail` for
             #: `layers/install.py`'s own second check to score honestly
             #: (needs Pratik: rank 8's options 1/2).
+            tree_unchanged = self._tree_hash() == before
             ok = code == 0
             if name == "setup_again":
-                ok = ok and self._tree_hash() == before
+                ok = ok and tree_unchanged
             detail = dict(rep)
             detail["config_has_version"] = self._config_has_version()
             if not detail["config_has_version"]:
@@ -128,7 +129,11 @@ class Rehearsal:
                     "scouter/cli/setup.py's own config item is required=False and reported "
                     "only -- `scouter config init` writes it by design (night1-parity-"
                     "install-guide-triage.md rank 8, needs Pratik)")
-            self._mark_needs_darktable(code, rep, detail)
+            #: Review round 2, finding 2 (GD-1): setup_again's own
+            #: idempotency break must never be masked by the doctor marker
+            #: below (blocked short-circuits every check in evaluate()).
+            self._mark_needs_darktable(code, rep, detail,
+                                       extra_ok=tree_unchanged if name == "setup_again" else True)
             return ok, detail
         if name == "setup_check":
             code, rep = self._scouter("setup", "--check")
@@ -167,7 +172,8 @@ class Rehearsal:
             return False
 
     @staticmethod
-    def _mark_needs_darktable(code: int, rep: dict, detail: dict) -> None:
+    def _mark_needs_darktable(code: int, rep: dict, detail: dict, *, extra_ok: bool = True
+                              ) -> None:
         """Fix D (night-1 triage rank 5/8's doctor half, INS-doctor-needs-
         darktable): `scouter setup`/`setup --check`'s own `doctor` item is
         `required` (setup.py's default) and answers unavailable/bridge_timeout
@@ -177,11 +183,25 @@ class Rehearsal:
         gap the harness itself created, not a product regression; marking it
         lets InstallSession.run_case set Observation.blocked = "needs_darktable"
         (evaluate()'s own "blocked" outcome, honestly distinct from a bare
-        "failed") instead of the numbers silently reading as a product bug."""
-        if code == 0:
+        "failed") instead of the numbers silently reading as a product bug.
+
+        Review round 2, finding 2 (GD-1, P0 blocker): doctor being down must
+        be the ONLY reason the action did not fully succeed, never a blanket
+        excuse. `extra_ok` is the caller's own check of everything the
+        doctor marker does not cover by itself (setup_again's tree-hash
+        idempotency; the caller passes False when that broke). And every
+        OTHER `required` item (plugin, luarc, wb_tables) must itself be
+        `ok`/`installed`/`updated` -- a broken plugin install, with doctor
+        also down, must still read as a real "failed", not "blocked"."""
+        if code == 0 or not extra_ok:
             return
-        doctor = next((i for i in (rep.get("items") or []) if i.get("item") == "doctor"), None)
-        if doctor is not None and doctor.get("status") != "ok":
+        items = rep.get("items") or []
+        doctor = next((i for i in items if i.get("item") == "doctor"), None)
+        if doctor is None or doctor.get("status") == "ok":
+            return
+        others_ok = all(i.get("status") in ("ok", "installed", "updated")
+                        for i in items if i.get("item") != "doctor" and i.get("required", True))
+        if others_ok:
             detail["_needs_darktable"] = True
 
     def _tree_hash(self) -> str:

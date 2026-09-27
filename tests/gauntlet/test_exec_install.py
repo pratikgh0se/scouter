@@ -87,11 +87,12 @@ def test_leak_check_finds_new_files(tmp_path):
 # -- Fix D (night-1 triage rank 5/8, INS-doctor-needs-darktable + -config-version-assert)  # noqa: E501
 
 
-def _setup_payload(*, doctor_ok: bool) -> dict:
+def _setup_payload(*, doctor_ok: bool, plugin_ok: bool = True) -> dict:
     doctor = {"item": "doctor", "status": "ok" if doctor_ok else "bridge_timeout",
               "detail": "view: darkroom" if doctor_ok else "bridge not answering"}
-    return {"verb": "setup", "check": False, "ok": doctor_ok,
-            "items": [{"item": "plugin", "status": "ok"}, {"item": "luarc", "status": "ok"},
+    plugin = {"item": "plugin", "status": "ok" if plugin_ok else "failed"}
+    return {"verb": "setup", "check": False, "ok": doctor_ok and plugin_ok,
+            "items": [plugin, {"item": "luarc", "status": "ok"},
                       {"item": "wb_tables", "status": "ok"},
                       {"item": "config", "status": "missing", "required": False}, doctor],
             "next": []}
@@ -154,3 +155,45 @@ def test_config_version_true_once_config_actually_has_it(tmp_path):
     assert ok is True
     assert detail["config_has_version"] is True
     assert "needs_review_reason" not in detail
+
+
+# -- Review round 2, finding 2 (GD-1, P0 blocker) ----------------------------
+
+
+def test_plugin_failed_and_doctor_down_gives_no_marker_verdict_failed(tmp_path):
+    """A broken plugin install, with doctor also down (always true in the
+    rehearsal), must never read as an environment gap -- doctor down must be
+    the ONLY reason, or the case is a plain "failed"."""
+    payload = _setup_payload(doctor_ok=False, plugin_ok=False)
+    r = exec_install.Rehearsal(tmp_path, run=_fake_run(payload, 1))
+    ok, detail = r.action("setup")
+    assert ok is False
+    assert "_needs_darktable" not in detail
+
+    session = exec_install.InstallSession(tmp_path)
+    session.rehearsal = r
+    case = Case(id="ins-04", layer="install", tier="P0", mode="cli",
+               steps=[Step("rehearsal", {"action": "setup"}, 120.0, False)],
+               expect=Expect("workflow"), meta={"action": "setup"})
+    obs = session.run_case(case)
+    assert obs.blocked is None  # not blocked: a real product failure
+
+
+def test_setup_again_tree_changed_and_doctor_down_gives_failed_not_blocked(tmp_path):
+    """setup_again's own idempotency break (the tree hash moved) must not be
+    hidden behind the doctor marker either -- blocked short-circuits every
+    check in evaluate(), so a masked idempotency break would never surface."""
+    (tmp_path / "config" / "scouter").mkdir(parents=True)
+    (tmp_path / "config" / "scouter" / "config.json").write_text('{"a": 1}\n')
+    payload = _setup_payload(doctor_ok=False)
+
+    def run(argv, **kwargs):
+        # the second `scouter setup` call changes the tree (writes a new file)
+        (tmp_path / "config" / "scouter" / "extra.json").write_text('{"b": 2}\n')
+        return subprocess.CompletedProcess(argv, returncode=1, stdout=json.dumps(payload),
+                                           stderr="")
+
+    r = exec_install.Rehearsal(tmp_path, run=run)
+    ok, detail = r.action("setup_again")
+    assert ok is False
+    assert "_needs_darktable" not in detail  # the tree changed: not purely an environment gap
