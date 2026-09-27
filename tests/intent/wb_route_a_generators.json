@@ -1,6 +1,6 @@
 {
-  "about": "Zenkai Rules Z1 intent examples for the generator wiring added by rows 458/461 (night-1 triage class COV-WB-preset4-expectation): tests/gauntlet/layers/coverage.py and tests/gauntlet/layers/scenarios.py now call checkmap.wb_route_a_expect_for_hero/wb_route_a_tint_expect_for_hero so a case's Expect follows check_map.json's wb_route_a block instead of assuming every temperature-module write succeeds. Run by tests/intent/test_wb_route_a_generators_intent.py against the real generators (coverage.generate(), scenarios.generate()), never a mock of either.",
-  "subject": "tests/gauntlet/layers/coverage.py, tests/gauntlet/layers/scenarios.py",
+  "about": "Zenkai Rules Z1 intent examples for the generator wiring added by rows 458/461 (night-1 triage class COV-WB-preset4-expectation, and its guide-layer sibling GD-WB-preset4, triage rank 7): tests/gauntlet/layers/coverage.py, tests/gauntlet/layers/scenarios.py and tests/gauntlet/layers/guide.py now call checkmap.wb_route_a_expect_for_hero/wb_route_a_tint_expect_for_hero so a case's Expect follows check_map.json's wb_route_a block instead of assuming every temperature-module write succeeds. Run by tests/intent/test_wb_route_a_generators_intent.py against the real generators (coverage.generate(), scenarios.generate(), guide.generate()), never a mock of any of them.",
+  "subject": "tests/gauntlet/layers/coverage.py, tests/gauntlet/layers/scenarios.py, tests/gauntlet/layers/guide.py",
   "examples": [
     {
       "id": "coverage-warmer-phrase-refuses",
@@ -26,6 +26,18 @@
       "expect": {"kind": "edit", "wb_stat_absent": ["M4", "rb"], "other_stat_present": "M2",
                  "envelope_refusal_present": true},
       "why": "r0005 combines brighter (unaffected) with warmer (WB-refused); the case must stay an edit for brighter, never assert the M4 rb check warmer's own refused sub-move cannot produce, AND (fix round 1, review I5) explicitly assert warmer's own step refused (envelope ok==false plus its error code) so a live rerun cannot silently score verified while the requested warmth did nothing"
+    },
+    {
+      "id": "guide-touch-warmer-refuses",
+      "input": {"generator": "guide", "case_id": "gd-06-session_touch_warmer"},
+      "expect": {"kind": "typed_error", "codes": ["module_unavailable"]},
+      "why": "night-1 triage rank 7 (GD-WB-preset4): the README/user-guide 'a touch warmer' example is a warmth move on the same corpus hero (preset 4) coverage/scenarios already route through wb_route_a; before this fix the walkthrough case expected a landed +150 K move that the guard refuses on every corpus frame, masking 8 cases (gd-06, gd-12, and 6 edu warmer/cooler) as failures once fix/n1-session-reopen lets the walkthrough actually reach them"
+    },
+    {
+      "id": "guide-edu-cooler-refuses",
+      "input": {"generator": "guide", "case_id": "gd-edu-brief-3-cooler"},
+      "expect": {"kind": "typed_error", "codes": ["module_unavailable"]},
+      "why": "the educative-level cases exercise the bare 'cooler' phrase directly (not a full sentence); the guide generator's own word-boundary match must catch this too, not only the README's 'a touch warmer' sentence"
     }
   ]
 }

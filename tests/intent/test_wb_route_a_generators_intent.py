@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from tests.gauntlet import taxonomy
-from tests.gauntlet.layers import coverage, scenarios
+from tests.gauntlet.layers import coverage, guide, scenarios
 
 EXAMPLES = json.loads((Path(__file__).parent / "wb_route_a_generators.json").read_text())[
     "examples"]
@@ -22,10 +22,18 @@ def _scenarios_case(prefix: str, suffix: str):
     return next(c for c in tool if c.id.startswith(prefix) and c.id.endswith(suffix))
 
 
+def _guide_case(case_id: str):
+    return next(c for c in guide.generate() if c.id == case_id)
+
+
 def run_example(ex: dict) -> None:
     inp, want = ex["input"], ex["expect"]
     if inp["generator"] == "coverage":
         c = _coverage_case(inp["case_id"])
+        assert c.expect.kind == want["kind"], ex["id"]
+        assert c.expect.codes == want["codes"], ex["id"]
+    elif inp["generator"] == "guide":
+        c = _guide_case(inp["case_id"])
         assert c.expect.kind == want["kind"], ex["id"]
         assert c.expect.codes == want["codes"], ex["id"]
     else:
