@@ -25,13 +25,30 @@ _CHUNK = 1024 * 1024
 _statvfs = os.statvfs  # seam: tests pass a fake
 
 
-def _owned_kill(sig=signal.SIGKILL) -> None:
-    """Signal ONLY the darktable this session launched (dtprocess.owned_pid())."""
+def _owned_kill(sig=signal.SIGKILL, cache_root=None) -> None:
+    """Signal ONLY the darktable this session launched (dtprocess.owned_pid()).
+
+    `cache_root` (fix round 3 review R2): every call site below passes
+    `_cache_root(session)` -- without it, `owned_pid()` falls back to THIS
+    process's ambient `os.environ["SCOUTER_CACHE"]`, which another
+    session's late close/abort can drift out from under this thread (the
+    same N2 gap `DtControl`/`dtprocess.terminate` were bound against; this
+    was the one caller left reading ambient). Under drift, an unbound call
+    here silently signals nothing: a freeze fault's own SIGSTOP never
+    freezes anything, `kill_during_call`'s SIGKILL never lands, and the
+    watchdog cases' SIGSTOP/SIGCONT and N6's last-resort SIGCONT all miss."""
     from scouter.core import dtprocess
 
-    pid = dtprocess.owned_pid()
+    pid = dtprocess.owned_pid(cache_root)
     if pid:
         os.kill(pid, sig)
+
+
+def _cache_root(session):
+    """(fix round 3 review R2): the session's own bound cache root, when its
+    `dt` has one (a real `DtControl`; a minimal test double may not) --
+    never just ambient. See `_owned_kill`'s docstring."""
+    return getattr(getattr(session, "dt", None), "cache_root", None)
 
 
 def _snap(v: dict, path: Path) -> None:
@@ -104,13 +121,14 @@ def arm(session, fault: str, v: dict | None = None, *, step_tool: str | None = N
             raise ValueError("kill_during_call needs the fault step's tool (step_tool=)")
         v["_relaunch"] = True
         v["_kill_on_tool"] = step_tool
-        timer = threading.Timer(KILL_DELAY_S, _owned_kill)
+        timer = threading.Timer(KILL_DELAY_S, _owned_kill,
+                                kwargs={"cache_root": _cache_root(session)})
         timer.daemon = True
         v["_timer"] = timer
         _start_timer_on_call(session, v)
     elif fault in ("wedge_worker", "slow_bridge"):
         v["_resume_sigcont"] = True  # before the signal: a raise still resumes
-        _owned_kill(signal.SIGSTOP)  # frozen process: the bridge cannot answer
+        _owned_kill(signal.SIGSTOP, _cache_root(session))  # frozen: the bridge cannot answer
     elif fault == "relaunch_stale_job":
         v["_relaunch"] = True  # a failed relaunch is retried by disarm
         session.relaunch()
@@ -521,7 +539,8 @@ def fence_and_recover(session, *, resume_on_quit_failure: bool = False) -> list[
             #: (N6): last resort -- never leave a SIGSTOPped darktable
             #: frozen forever just because the quit ladder itself did not
             #: confirm ok (nothing else in this fence will ever un-stick it).
-            guard("fence: last-resort SIGCONT", lambda: _owned_kill(signal.SIGCONT))
+            guard("fence: last-resort SIGCONT",
+                 lambda: _owned_kill(signal.SIGCONT, _cache_root(session)))
         return errors  # never launch a second darktable when quit did not confirm ok
     purge = getattr(session, "purge_spool", None)
     if purge is not None:
@@ -701,13 +720,14 @@ def watchdog_probe(session, case, step, obs) -> CallRecord:
 
     ok = False
     detail: dict = {}
+    cache_root = _cache_root(session)
     if scen == "ping_states":
         code_alive, rep_alive = doctor("--ping")
-        _owned_kill(signal.SIGSTOP)
+        _owned_kill(signal.SIGSTOP, cache_root)
         try:
             code_dead, rep_dead = doctor("--ping")
         finally:
-            _owned_kill(signal.SIGCONT)
+            _owned_kill(signal.SIGCONT, cache_root)
         ok = code_alive == 0 and code_dead == 1
         detail = {"alive": rep_alive.get("watchdog"), "unresponsive": rep_dead.get("watchdog")}
     elif scen in ("auto_heal_once", "heal_cap_reached"):
@@ -718,7 +738,7 @@ def watchdog_probe(session, case, step, obs) -> CallRecord:
             doc["watchdog"] = {"auto_heal": True, "max_heals_per_job": 1, "heal_budget_s": 60}
             cfg.parent.mkdir(parents=True, exist_ok=True)
             cfg.write_text(_json.dumps(doc))
-            _owned_kill(signal.SIGSTOP)
+            _owned_kill(signal.SIGSTOP, cache_root)
             first = session.call("darkroom_enable", {"module": "exposure"}, 90.0, write=True)
             detail["first"] = first.envelope
             if scen == "auto_heal_once":
@@ -726,7 +746,7 @@ def watchdog_probe(session, case, step, obs) -> CallRecord:
                 # retried verb) -- never at the envelope's top level.
                 ok = healed(first.envelope) and bool((first.envelope or {}).get("ok"))
             else:
-                _owned_kill(signal.SIGSTOP)
+                _owned_kill(signal.SIGSTOP, cache_root)
                 second = session.call("darkroom_enable", {"module": "exposure"}, 90.0,
                                       write=True)
                 detail["second"] = second.envelope
@@ -736,7 +756,7 @@ def watchdog_probe(session, case, step, obs) -> CallRecord:
             # auto_heal must never be left on, and the owned darktable never
             # left stopped: each undo runs even if the one before it raises.
             try:
-                _owned_kill(signal.SIGCONT)
+                _owned_kill(signal.SIGCONT, cache_root)
             finally:
                 try:
                     if original is None:

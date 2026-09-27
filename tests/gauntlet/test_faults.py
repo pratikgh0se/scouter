@@ -12,6 +12,11 @@ from tests.gauntlet import execute, faults, taxonomy
 from tests.gauntlet.layers import robustness
 from tests.gauntlet.session import ScouterSession, SessionBlocked
 
+#: (fix round 3 review R2): captured at import time, before the autouse
+#: `kills` fixture below ever replaces `faults._owned_kill` for a test --
+#: the one way to exercise the REAL function's own body directly.
+_REAL_OWNED_KILL = faults._owned_kill
+
 
 @pytest.fixture(autouse=True)
 def kills(monkeypatch):
@@ -19,7 +24,7 @@ def kills(monkeypatch):
     or quits darktable. Signals are recorded instead."""
     sent: list = []
 
-    def fake_kill(sig=signal.SIGKILL):
+    def fake_kill(sig=signal.SIGKILL, cache_root=None):
         sent.append(sig)
 
     def forbidden(*a, **k):
@@ -62,6 +67,84 @@ def test_file_faults_arm_and_disarm(tmp_path):
     assert os.path.getmtime(str(s.staged.frames["hero"]) + ".xmp") > 2e9 - 1e9
     v = faults.arm(s, "modal_dialog")
     assert "no modal-dialog test hook" in v["_skip"]
+
+
+def test_owned_kill_finds_the_pid_under_the_given_cache_root_not_ambient(tmp_path, monkeypatch):
+    """Fix round 3 review R2 (low): `_owned_kill` must look the pid up under
+    the `cache_root` it is GIVEN, never just ambient
+    `os.environ["SCOUTER_CACHE"]` -- under drift (another session's late
+    close re-pointing ambient, the N2 shape), an unbound call would
+    silently signal nothing: a freeze fault's own SIGSTOP never freezes
+    anything, `kill_during_call`'s SIGKILL never lands, and the watchdog
+    cases' SIGSTOP/SIGCONT and N6's last-resort SIGCONT all miss too. Uses
+    the REAL function (`_REAL_OWNED_KILL`, captured before the autouse
+    `kills` fixture replaces it for every test in this file)."""
+    from scouter.core import dtprocess
+
+    monkeypatch.setattr(faults, "_owned_kill", _REAL_OWNED_KILL)
+    right = tmp_path / "session-cache"
+    wrong = tmp_path / "ambient-drifted-cache"
+    right.mkdir()
+    wrong.mkdir()
+    monkeypatch.setattr(dtprocess, "owned_pid",
+                        lambda cache_root=None: 4242424 if cache_root == right else None)
+    monkeypatch.setenv("SCOUTER_CACHE", str(wrong))  # ambient has drifted elsewhere
+    signalled: list = []
+    monkeypatch.setattr(faults.os, "kill", lambda pid, sig: signalled.append((pid, sig)))
+
+    faults._owned_kill(signal.SIGSTOP, right)
+    assert signalled == [(4242424, signal.SIGSTOP)]
+
+    signalled.clear()
+    faults._owned_kill(signal.SIGSTOP, wrong)  # control: the drifted cache finds nothing
+    assert signalled == []
+
+
+def test_arm_wedge_worker_signals_through_the_sessions_cache_root(tmp_path, monkeypatch):
+    """(R2) confirms the WIRING at this specific call site -- `arm`'s own
+    SIGSTOP for `wedge_worker`/`slow_bridge` -- passes the session's own
+    bound `dt.cache_root` through to `_owned_kill`, not ambient."""
+    seen: list = []
+    monkeypatch.setattr(faults, "_owned_kill", lambda sig, cache_root=None: seen.append(cache_root))
+
+    class Dt:
+        cache_root = "session-cache-token"
+
+    class S(FakeSession):
+        def __init__(self, tmp_path):
+            super().__init__(tmp_path)
+            self.dt = Dt()
+
+    faults.arm(S(tmp_path), "wedge_worker", {})
+    assert seen == ["session-cache-token"]
+
+
+def test_fence_and_recover_sigcont_signals_through_the_sessions_cache_root(tmp_path, monkeypatch):
+    """(R2, N6) the fence's own last-resort SIGCONT must also go through the
+    session's bound cache_root."""
+    seen: list = []
+    monkeypatch.setattr(faults, "_owned_kill", lambda sig, cache_root=None: seen.append(cache_root))
+
+    class Dt:
+        cache_root = "session-cache-token"
+
+        def foreign(self):
+            return []
+
+    class S:
+        dt = Dt()
+        mcp = None
+        current_frame = None
+        staged = SimpleNamespace(frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            raise RuntimeError("did not confirm ok")
+
+        def _launch(self, frame):
+            raise AssertionError("must never launch a second darktable")
+
+    faults.fence_and_recover(S(), resume_on_quit_failure=True)
+    assert seen == ["session-cache-token"]
 
 
 def _cases():
@@ -142,7 +225,7 @@ def test_r18_mount_detached_when_a_later_arm_step_fails(tmp_path, monkeypatch):
 
 
 def test_arm_raising_is_typed_blocked_and_partial_disarm_ran(tmp_path, monkeypatch, kills):
-    def stuck(sig=signal.SIGKILL):
+    def stuck(sig=signal.SIGKILL, cache_root=None):
         kills.append(sig)
         if sig == signal.SIGSTOP:
             raise ProcessLookupError("gone")
@@ -290,7 +373,7 @@ def test_watchdog_probe_restores_config_exactly_even_when_kill_raises(tmp_path, 
     original = '{ "watchdog": {"auto_heal": false},\n  "x": 1 }\n'
     s, cfg, step = _wd(tmp_path, original)
 
-    def boom(sig=signal.SIGKILL):
+    def boom(sig=signal.SIGKILL, cache_root=None):
         raise ProcessLookupError("no owned darktable")
     monkeypatch.setattr(faults, "_owned_kill", boom)
     with pytest.raises(ProcessLookupError):
@@ -358,7 +441,7 @@ def test_r2_timer_starts_on_the_fault_step_not_on_isolate_resets(tmp_path, monke
     started_after: list = []
 
     class FakeTimer:
-        def __init__(self, delay, fn):
+        def __init__(self, delay, fn, kwargs=None):
             self.alive = False
 
         def start(self):
@@ -416,7 +499,7 @@ def test_r3_isolate_runs_before_the_freeze_signal(tmp_path, monkeypatch, kills):
             order.append(tool)
             return super().call(tool, args, budget_s, write=write)
 
-    def recording_kill(sig=signal.SIGKILL):
+    def recording_kill(sig=signal.SIGKILL, cache_root=None):
         order.append({signal.SIGSTOP: "SIGSTOP", signal.SIGCONT: "SIGCONT"}.get(sig, "kill"))
 
     monkeypatch.setattr(faults, "_owned_kill", recording_kill)
@@ -446,7 +529,7 @@ def test_r3_real_run_tool_case_runs_its_step_after_the_freeze(tmp_path, monkeypa
         def health(self):
             return "unresponsive" if state["stopped"] else "alive"
 
-    def recording_kill(sig=signal.SIGKILL):
+    def recording_kill(sig=signal.SIGKILL, cache_root=None):
         if sig == signal.SIGSTOP:
             state["stopped"] = True
         if sig == signal.SIGCONT:
@@ -531,9 +614,9 @@ def test_r2_kill_during_call_is_unaffected_by_the_pre_arm_ping(tmp_path, monkeyp
             self.dt = Dt()
 
     monkeypatch.setattr(observe, "snapshot", lambda *a, **kw: {"params": {}, "units": {}})
-    monkeypatch.setattr(faults, "_owned_kill", lambda sig=signal.SIGKILL: None)
+    monkeypatch.setattr(faults, "_owned_kill", lambda sig=signal.SIGKILL, cache_root=None: None)
     monkeypatch.setattr(faults.threading, "Timer",
-                        lambda delay, fn: type("T", (), {"start": lambda self: None,
+                        lambda delay, fn, kwargs=None: type("T", (), {"start": lambda self: None,
                                                          "cancel": lambda self: None,
                                                          "join": lambda self, t=None: None,
                                                          "is_alive": lambda self: False})())
@@ -559,7 +642,7 @@ def test_r3_restage_is_reopened_before_the_freeze(tmp_path, monkeypatch, kills):
             order.append("ensure_frame")
             return self.staged.frames[role]
 
-    def recording_kill(sig=signal.SIGKILL):
+    def recording_kill(sig=signal.SIGKILL, cache_root=None):
         order.append({signal.SIGSTOP: "SIGSTOP", signal.SIGCONT: "SIGCONT"}.get(sig, "kill"))
 
     monkeypatch.setattr(faults, "isolate", lambda session, frame, role: True)
@@ -747,7 +830,7 @@ def test_fence_and_recover_sigconts_as_a_last_resort_when_the_quit_fails(tmp_pat
     ok, nothing else in the fence will ever un-stick a SIGSTOPped darktable
     -- one last-resort SIGCONT, never launching a second darktable."""
     sent: list = []
-    monkeypatch.setattr(faults, "_owned_kill", lambda sig=signal.SIGKILL: sent.append(sig))
+    monkeypatch.setattr(faults, "_owned_kill", lambda sig=signal.SIGKILL, cache_root=None: sent.append(sig))
 
     class S:
         mcp = None
@@ -769,7 +852,7 @@ def test_fence_and_recover_never_sigconts_without_resume_on_quit_failure(tmp_pat
     """(N6, control) every non-freeze relaunch fault (e.g. plain
     `_relaunch`) must never SIGCONT -- there was nothing frozen to resume."""
     sent: list = []
-    monkeypatch.setattr(faults, "_owned_kill", lambda sig=signal.SIGKILL: sent.append(sig))
+    monkeypatch.setattr(faults, "_owned_kill", lambda sig=signal.SIGKILL, cache_root=None: sent.append(sig))
 
     class S:
         mcp = None
