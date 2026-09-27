@@ -98,6 +98,30 @@ def test_an_ordinary_answer_is_never_mistaken_for_a_limit():
     assert p["limit"] is None
 
 
+def test_limit_text_parks_even_when_is_error_is_unset():
+    """Fix round 1 (Opus finding 8): capsule-corp's run.sh notes the CLI can
+    send the limit text with `is_error` unset. A no-tool-call turn matching
+    the limit text must still park, whatever `is_error` says."""
+    p = agent.parse_stream(_lines({"type": "result", "is_error": False,
+                                   "result": "You've hit your session limit · resets "
+                                             "3:30pm (Asia/Bangkok)"}))
+    assert p["limit"]
+
+
+def test_limit_text_with_tool_calls_and_no_error_is_not_parked():
+    """Control: a turn that actually did work (has tool calls) and never
+    errored is never mistaken for a limit hit, even if its own free text
+    happens to echo limit-like wording."""
+    lines = _lines(
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t1", "name": "mcp__scouter__darkroom_say",
+             "input": {"phrase": "brighter"}}]}},
+        {"type": "result", "result": "Done -- note the vignette's own usage limit setting was "
+                                     "left untouched.", "is_error": False})
+    p = agent.parse_stream(lines)
+    assert p["limit"] is None
+
+
 def test_argv_registers_only_scouter_and_sonnet():
     argv = agent.claude_argv("hi", "/tmp/m.json", resume="s1")
     assert argv[argv.index("--model") + 1] == "sonnet"

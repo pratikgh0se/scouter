@@ -61,7 +61,11 @@ def parse_stream(lines: list[str]) -> dict:
         elif kind == "result":
             out["text"] = msg.get("result") or ""
             out["is_error"] = bool(msg.get("is_error"))
-    if out["is_error"] and LIMIT_RE.search(out["text"] or ""):
+    #: Fix round 1 (Opus finding 8): capsule-corp's own run.sh notes the
+    #: limit text can arrive with `is_error` unset. A turn that matched the
+    #: limit text AND made no tool calls is never the agent's own scored
+    #: answer either way, so it parks independent of `is_error`.
+    if LIMIT_RE.search(out["text"] or "") and (out["is_error"] or not out["tool_calls"]):
         out["limit"] = out["text"]
     return out
 
