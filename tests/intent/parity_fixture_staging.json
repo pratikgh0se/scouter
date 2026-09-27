@@ -23,13 +23,6 @@
       "input": {"first_answer": "error not_in_darkroom", "second_answer": "ok"},
       "expect": {"relaunched": true, "final_error": null, "frame_switch_relaunch_recorded": ["mcp"]},
       "source": "night1-parity-install-guide-triage.md: 'darkroom.open-happy (P0). It fails on both sides with wrong image loaded ... known darkroom.open image-switch limit' -- mirrors ScouterSession._relaunch_then_reopen's own not_in_darkroom recovery. Review fix round 2, A-3: the retry is now RECORDED, not silent."
-    },
-    {
-      "id": "distinct-source-names-and-once-per-session-import",
-      "input": {"two_parity_pair_calls_same_session": true},
-      "expect": {"library_import_calls_first_case": 2, "library_import_calls_second_case": 0,
-                "mcp_and_cli_source_names_differ": true},
-      "source": "review fix round 2, A-1/A-2 (finding 4): 'library_import's resume identity is (source_name, sha256) ... both the CLI-side import is a resume-skip ... every later case also resumes into that one frame'. Fix: distinct per-side names (<stem>-mcp<ext> / <stem>-cli<ext>), imported ONCE per session with the two destinations cached (tests/gauntlet/exec_parity.py test_parity_pair_imports_both_sides_once_for_a_non_open_verb / test_parity_pair_uses_distinct_source_names_per_side)"
     }
   ]
 }
