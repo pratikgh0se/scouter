@@ -233,7 +233,7 @@ def test_broken_luarc_never_launches_when_quit_fails(tmp_path, kills):
         def terminate(self, *, responsive=None):
             return {"ok": False, "how": "still running"}
 
-        def launch(self, *a):
+        def launch(self, *a, **kw):
             launched.append(a)
 
     s = ScouterSession(None, tmp_path, "olympus", dt=Dt(), mcp_factory=lambda *a: None)

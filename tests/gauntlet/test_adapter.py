@@ -500,7 +500,7 @@ def test_abort_open_kills_only_its_own_in_flight_session(pinned_env, fake_corpus
     run = _write_run(pinned_env, [_case("coverage")])
     entered, release = threading.Event(), threading.Event()
     dt = FakeDt()
-    dt.launch = lambda frame, library, log: "rec-777"
+    dt.launch = lambda frame, library, log, env=None: "rec-777"
     proc = _Proc(9001)
     box = {}
 

@@ -30,7 +30,7 @@ class FakeDt:
     def owned(self):
         return self._owned
 
-    def launch(self, frame, library, log):
+    def launch(self, frame, library, log, env=None):
         self.launches += 1
         self.launched.append(frame)
 
@@ -128,7 +128,7 @@ class LaunchFailDt(FakeDt):
         super().__init__(**kw)
         self.fails = fails
 
-    def launch(self, frame, library, log):
+    def launch(self, frame, library, log, env=None):
         self.launches += 1
         if self.launches <= self.fails:
             raise LaunchError(f"could not read the start time of darktable pid {self.launches}")

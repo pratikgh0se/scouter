@@ -188,10 +188,10 @@ class DtControl:
 
         return dtprocess.owned_pid()
 
-    def launch(self, frame: Path, library: Path, log: Path):
+    def launch(self, frame: Path, library: Path, log: Path, env: dict[str, str] | None = None):
         from scouter.core import dtprocess
 
-        return dtprocess.launch(frame, library, log_path=log)
+        return dtprocess.launch(frame, library, log_path=log, env=env)
 
     def ready(self, timeout_s: float) -> dict:
         from scouter.core import dtprocess
@@ -311,7 +311,13 @@ class ScouterSession:
         for _attempt in (1, 2):
             self._check_aborted()
             try:
-                rec = self.dt.launch(frame, self.staged.library, self.root / "darktable.log")
+                #: (fix round 1 review H3c): `env=self.staged.env` so the
+                #: owner record's cache root comes from THIS session, never
+                #: whatever `os.environ["SCOUTER_CACHE"]` happens to be on
+                #: this thread when a mid-session relaunch fires -- see
+                #: `dtprocess.owner_path`'s docstring.
+                rec = self.dt.launch(frame, self.staged.library, self.root / "darktable.log",
+                                     env=self.staged.env)
             except LaunchError as e:  # dtprocess already stopped the unowned process
                 failures.append(f"LaunchError: {e}")
                 continue

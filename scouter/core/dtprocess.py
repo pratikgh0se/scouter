@@ -44,8 +44,20 @@ class Launched:
     frame: str | None
 
 
-def owner_path() -> Path:
-    return paths.cache_root() / OWNER_FILE
+def owner_path(cache_root: Path | None = None) -> Path:
+    """(fix round 1 review H3c): `cache_root`, when given, is used instead of
+    `paths.cache_root()` (which reads `$SCOUTER_CACHE` from THIS process's
+    own ambient `os.environ`). A relaunch mid-session can run on a thread/
+    moment where the harness's own `os.environ["SCOUTER_CACHE"]` has drifted
+    from the session's (an earlier session's late abort re-points it --
+    `tests/gauntlet/adapter.py`'s own `point_cache` comment); the owner
+    record then lands in a cache root other than the one the MCP SERVER
+    subprocess reads, so its `owned_pid()` never matches the just-launched
+    pid (the plausible cause of rob-r11/r12/r13/r15 falling through to the
+    generic `bridge_timeout` instead of `darktable_unresponsive` -- H3
+    review). `launch` passes this explicitly from its own `env` argument
+    when given, closing the race outright."""
+    return (cache_root or paths.cache_root()) / OWNER_FILE
 
 
 def _lstart(pid: int) -> str | None:
@@ -150,8 +162,14 @@ def launch(frame: str | Path | None, library: str | Path, configdir: str | Path 
                           "stopped it rather than leave an unowned process")
     rec = Launched(proc.pid, start, exe, str(library),
                    str(configdir) if configdir else None, str(frame) if frame else None)
-    owner_path().parent.mkdir(parents=True, exist_ok=True)
-    owner_path().write_text(json.dumps(asdict(rec)) + "\n", encoding="utf-8")
+    #: (fix round 1 review H3c): the owner record's cache root comes from
+    #: THIS launch's own `env`, when given -- never just the ambient
+    #: `os.environ` `owner_path()` would otherwise fall back to. See
+    #: `owner_path`'s docstring.
+    cache_root = Path(env["SCOUTER_CACHE"]) if env and env.get("SCOUTER_CACHE") else None
+    op = owner_path(cache_root)
+    op.parent.mkdir(parents=True, exist_ok=True)
+    op.write_text(json.dumps(asdict(rec)) + "\n", encoding="utf-8")
     return rec
 
 

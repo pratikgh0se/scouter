@@ -69,14 +69,31 @@ class UnresponsiveTest(unittest.TestCase):
 
     def test_pid_lookup_failure_counts_only_scouters_own_darktable(self) -> None:
         dtbridge.set_bridge(_dead_bridge())
+        # (fix round 1 review H3d, ruling): `running_pids()` itself raising is
+        # UNKNOWN, never proof darktable is not running -- conservative:
+        # never collapses to the plain bridge_timeout `running == []` does.
         rp, op = _procs(raises=subprocess.TimeoutExpired("pgrep", 5))
-        with rp, op, self.assertRaises(BridgeTimeout) as cm:
+        with rp, op, self.assertRaises(DarktableUnresponsive) as cm:
             dtbridge.call("view.current")
-        self.assertNotIsInstance(cm.exception, DarktableUnresponsive)
+        self.assertIsNone(cm.exception.detail["pid"])
+        self.assertIn("running_pids_error", cm.exception.detail)
         rp, op = _procs(raises=OSError("no pgrep"), owned=91)
         with rp, op, self.assertRaises(DarktableUnresponsive) as cm:
             dtbridge.call("view.current")
         self.assertEqual(cm.exception.detail["pid"], 91)
+
+    def test_bridge_timeout_fallthrough_carries_the_pid_facts(self) -> None:
+        """(fix round 1 review H3a): the ONE remaining fall-through --
+        `owned is None` and a CONFIRMED empty `running == []` -- still names
+        what the lookup saw, not just `{"method": ...}` (night 1's r11
+        `bridge_timeout` gave no way to tell why)."""
+        dtbridge.set_bridge(_dead_bridge())
+        rp, op = _procs(running=[])
+        with rp, op, self.assertRaises(BridgeTimeout) as cm:
+            dtbridge.call("view.current")
+        self.assertNotIsInstance(cm.exception, DarktableUnresponsive)
+        self.assertEqual(cm.exception.detail["owned"], None)
+        self.assertEqual(cm.exception.detail["running"], [])
 
     def test_timeout_with_live_ping_stays_bridge_timeout(self) -> None:
         dtbridge.set_bridge(FakeBridge(raises={"view.current": BridgeTimeoutError("t")},

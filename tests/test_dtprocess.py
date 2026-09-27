@@ -17,7 +17,7 @@ SLEEPER = [sys.executable, "-c", "import signal,time\n"
 
 @pytest.fixture
 def owner(tmp_path, monkeypatch):
-    monkeypatch.setattr(dtprocess, "owner_path", lambda: tmp_path / "darktable.owner.json")
+    monkeypatch.setattr(dtprocess, "owner_path", lambda cache_root=None: tmp_path / "darktable.owner.json")
     return tmp_path
 
 
@@ -90,6 +90,38 @@ def test_launch_forwards_env_to_popen(owner, monkeypatch, tmp_path):
     with pytest.raises(dtprocess.LaunchError):
         dtprocess.launch(None, tmp_path / "lib" / "library.db", env=custom_env)
     assert captured["env"] == custom_env
+
+
+def test_launch_writes_owner_record_under_envs_scouter_cache_not_ambient(monkeypatch, tmp_path):
+    """(fix round 1 review H3c): a mid-session relaunch can run while THIS
+    process's own ambient os.environ has drifted from the session's own
+    cache (an earlier session's late abort re-points it -- `tests/gauntlet/
+    adapter.py`'s own `point_cache` comment). The owner record must land
+    under THIS launch's own `env["SCOUTER_CACHE"]`, never the ambient
+    fallback `paths.cache_root()` would otherwise use -- the plausible
+    cause of night 1's r11/r12/r13/r15 falling through to the generic
+    `bridge_timeout` instead of `darktable_unresponsive` (H3 review)."""
+    class FakeProc:
+        pid = 424242
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            pass
+
+    monkeypatch.setattr(dtprocess.subprocess, "Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(dtprocess, "_lstart", lambda pid: "Mon Jan  1 00:00:00 2026")
+    ambient_wrong = tmp_path / "ambient-wrong-cache"
+    right = tmp_path / "session-cache"
+    monkeypatch.setattr(dtprocess.paths, "cache_root", lambda: ambient_wrong)
+    try:
+        dtprocess.launch(None, tmp_path / "lib" / "library.db",
+                         env={"SCOUTER_CACHE": str(right)})
+    finally:
+        dtprocess._children.pop(424242, None)
+    assert (right / "darktable.owner.json").exists()
+    assert not (ambient_wrong / "darktable.owner.json").exists()
 
 
 def test_foreign_pid_is_refused_and_never_signalled(owner):
