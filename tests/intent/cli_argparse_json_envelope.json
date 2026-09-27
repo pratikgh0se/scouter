@@ -15,10 +15,22 @@
       "source": "night1-parity-install-guide-triage.md: par-darkroom.undo_last-error is one of the 2 P0 cases this fixes"
     },
     {
+      "id": "unknown-flag-resolves-the-real-verb-not-null",
+      "input": {"argv": ["vocab", "list", "--bogus"]},
+      "expect": {"verb": "vocab.list"},
+      "source": "review fix round 2, C-1 (finding 12): an unrecognized-argument error is raised by argparse's TOP-level parser, whose own _defaults never had _verb -- the old envelope said verb: null for every one of these (parity does not compare verb, so it never broke a case, but the field itself lied). Fixed: _JsonErrorParser.parse_args stashes the parsed namespace (which parse_known_args already filled with _verb) before calling error()."
+    },
+    {
       "id": "a_typed_scouter_error_is_unaffected",
       "input": {"note": "a REAL ScouterError (not an argparse usage error) keeps its own code/exit, e.g. wrong_view exits 4"},
       "expect": {"unaffected": true},
       "source": "scouter/cli/main.py main()'s except ScouterError branch, unchanged by this fix -- only argparse's own error() path changes"
+    },
+    {
+      "id": "a-plain-value-error-is-also-error-usage-not-bare-usage",
+      "input": {"verb": "metrics.summary", "raises": "ValueError('bad since')"},
+      "expect": {"exit_code_name": "usage", "ok": false, "outcome": "error:usage", "error.code": "usage"},
+      "source": "triage item 14 (out of scope for the original fix, closed here per review fix round 2 finding 12): 'main.py:573 except ValueError emits outcome: \"usage\" rather than \"error:usage\"'. This is a verb fn's own ValueError (never argparse's), so _JsonErrorParser does not touch it -- fixed at its own except ValueError branch in main()."
     }
   ]
 }

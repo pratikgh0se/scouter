@@ -46,3 +46,40 @@ def test_unknown_flag_on_a_required_positional_verb_is_json_usage():
     assert payload["ok"] == ex["expect"]["ok"]
     assert payload["outcome"] == ex["expect"]["outcome"]
     assert payload["error"]["code"] == ex["expect"]["error.code"]
+
+
+def test_unknown_flag_resolves_the_real_verb_not_null():
+    ex = EXAMPLES["unknown-flag-resolves-the-real-verb-not-null"]
+    payload, code = _run(ex["input"]["argv"])
+    # Oracle A: the resolved verb field.
+    assert payload["verb"] == ex["expect"]["verb"]
+    # Oracle B (independent): the exit code still matches the errors
+    # module's own contract, by name, not a bare literal.
+    from scouter.errors import EXIT_CODES
+
+    assert code == EXIT_CODES["usage"]
+
+
+def test_a_plain_value_error_is_also_error_usage_not_bare_usage():
+    import contextlib as _contextlib
+
+    from scouter.errors import EXIT_CODES
+    from tests.test_cli import _verb_fn_replaced
+
+    ex = EXAMPLES["a-plain-value-error-is-also-error-usage-not-bare-usage"]
+
+    def bad_value(**kwargs):
+        raise ValueError("bad since")
+
+    buf = io.StringIO()
+    with _verb_fn_replaced(ex["input"]["verb"], bad_value), _contextlib.redirect_stdout(buf):
+        code = main(["metrics", "summary"])
+    payload = json.loads(buf.getvalue())
+    # Oracle A: the envelope shape.
+    assert payload["ok"] == ex["expect"]["ok"]
+    assert payload["outcome"] == ex["expect"]["outcome"]
+    assert payload["error"]["code"] == ex["expect"]["error.code"]
+    # Oracle B (independent): the exit code, by the errors module's own name
+    # -- this branch returns normally from main(), it never raises
+    # SystemExit (unlike argparse's own error() path above).
+    assert code == EXIT_CODES[ex["expect"]["exit_code_name"]]

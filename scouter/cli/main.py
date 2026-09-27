@@ -113,11 +113,30 @@ class _JsonErrorParser(argparse.ArgumentParser):
     Every subparser this module builds inherits this class: argparse's own
     `add_subparsers` defaults `parser_class` to `type(self)`, so a bad flag
     anywhere in the tree -- top-level, group (`scouter vocab ...`) or verb
-    (`scouter vocab list ...`) -- answers the same envelope."""
+    (`scouter vocab list ...`) -- answers the same envelope.
+
+    Review fix round 2, C-1 (finding 12): an UNRECOGNIZED argument (any
+    flag argparse's whole tree does not define, e.g. `vocab list --bogus`)
+    is caught by `ArgumentParser.parse_args` itself, on the TOP-level
+    parser -- `parse_known_args` has already filled the verb into the
+    namespace by the time this runs, but the top parser's OWN `_defaults`
+    never had `_verb` (only the verb's own subparser does), so `error()`
+    used to report `"verb": null` for every such case. `parse_args` is
+    overridden to stash the parsed namespace first, so `error()` can read
+    the real verb off it."""
+
+    def parse_args(self, args=None, namespace=None):  # noqa: D102 - mirrors argparse's own
+        ns, extras = self.parse_known_args(args, namespace)
+        if extras:
+            self._htc_ns = ns
+            self.error(argparse._("unrecognized arguments: %s") % " ".join(extras))
+        return ns
 
     def error(self, message: str) -> None:
+        ns = getattr(self, "_htc_ns", None)
+        verb = getattr(ns, "_verb", None) if ns is not None else self._defaults.get("_verb")
         payload = {
-            "verb": self._defaults.get("_verb"),
+            "verb": verb,
             "layer": "cli",
             "ok": False,
             "outcome": "error:usage",
@@ -129,7 +148,7 @@ class _JsonErrorParser(argparse.ArgumentParser):
             },
         }
         print(json.dumps(payload, sort_keys=True))
-        self.exit(2)
+        self.exit(EXIT_CODES["usage"])
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -543,6 +562,11 @@ def main(argv: list[str] | None = None) -> int:
         if positional_val is None and option_val is not None:
             setattr(namespace, dual_name, option_val)
         elif positional_val is None and option_val is None:
+            # C-1: `namespace` already has the real `_verb` (parse_args
+            # succeeded; this is an application-level check, not argparse's
+            # own parsing) -- stash it so `_JsonErrorParser.error()` reports
+            # it instead of `null`.
+            parser._htc_ns = namespace
             parser.error(f"the following arguments are required: {dual_name}")
     kwargs = {
         name: getattr(namespace, name)
@@ -566,14 +590,20 @@ def main(argv: list[str] | None = None) -> int:
         }
         return emit(payload, exit_code_for(f"error:{e.code}"))
     except ValueError as e:
+        # Triage item 14 / review fix round 2, finding 12: this used to say
+        # outcome "usage", the one place in the CLI that broke the
+        # "error:<code>" shape every other typed failure follows -- the MCP
+        # side of the same case (server.py's TypeError branch) already
+        # answers "error:usage", so this was its own parity diff
+        # (PAR-cli-usage-outcome).
         payload = {
             "verb": verb_id,
             "layer": "cli",
             "ok": False,
-            "outcome": "usage",
+            "outcome": "error:usage",
             "error": {"code": "usage", "message": str(e)},
         }
-        return emit(payload, 2)
+        return emit(payload, EXIT_CODES["usage"])
     except KeyboardInterrupt:
         payload = {
             "verb": verb_id,

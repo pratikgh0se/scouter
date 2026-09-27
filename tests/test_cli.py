@@ -89,6 +89,11 @@ class ArgparseJsonErrorTest(unittest.TestCase):
         self.assertEqual(payload["outcome"], "error:usage")
         self.assertEqual(payload["error"]["code"], "usage")
         self.assertIn("bogus", payload["error"]["message"])
+        # Review fix round 2, C-1 (finding 12): an UNRECOGNIZED-argument
+        # error is raised by the TOP-level parser's own `parse_args`, whose
+        # `_defaults` never had `_verb` set -- must still resolve the real
+        # verb from the namespace `parse_known_args` already filled in.
+        self.assertEqual(payload["verb"], "vocab.list")
 
     def test_darkroom_undo_last_with_a_bad_argument_is_a_json_usage_envelope(self) -> None:
         payload, code = self._run(["darkroom", "undo-last", "--bogus"])
@@ -96,6 +101,15 @@ class ArgparseJsonErrorTest(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["outcome"], "error:usage")
         self.assertEqual(payload["error"]["code"], "usage")
+        self.assertEqual(payload["verb"], "darkroom.undo_last")
+
+    def test_missing_dual_positional_argument_resolves_the_verb_too(self) -> None:
+        # main()'s own `parser.error(...)` call site for a missing
+        # style.apply_set `name` (neither positional nor `--name` given).
+        payload, code = self._run(["style", "apply-set"])
+        self.assertEqual(code, 2)
+        self.assertEqual(payload["outcome"], "error:usage")
+        self.assertEqual(payload["verb"], "style.apply_set")
 
 
 def _min_args(verb) -> list[str]:
@@ -204,6 +218,30 @@ class UnhandledErrorTest(unittest.TestCase):
         self.assertEqual(payload["outcome"], "error")
         self.assertEqual(payload["error"]["code"], "error")
         self.assertIn("boom", payload["error"]["message"])
+
+    def test_a_plain_value_error_becomes_error_usage_json_and_exit_2(self) -> None:
+        # Triage item 14 / review fix round 2 finding 12: a verb's own
+        # ValueError (e.g. metrics.summary's `--since` parse) answered
+        # outcome "usage" instead of the same "error:usage" every other
+        # typed usage failure gets (PAR-cli-usage-outcome) -- the MCP side
+        # of the identical case (par-metrics.summary-error) answers
+        # "error:usage", so this was its own parity diff.
+        import io
+
+        from scouter.errors import EXIT_CODES
+
+        def bad_value(**kwargs):
+            raise ValueError("bad since")
+
+        buf = io.StringIO()
+        with _verb_fn_replaced("metrics.summary", bad_value), contextlib.redirect_stdout(buf):
+            code = main(["metrics", "summary"])
+        payload = json.loads(buf.getvalue())
+        self.assertEqual(code, EXIT_CODES["usage"])
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["outcome"], "error:usage")
+        self.assertEqual(payload["error"]["code"], "usage")
+        self.assertIn("bad since", payload["error"]["message"])
 
     def test_keyboard_interrupt_becomes_interrupted_json_and_exit_130(self) -> None:
         import io
