@@ -160,14 +160,12 @@ def wait_gui_ready(timeout_s: float = 30.0, *, poll_s: float = 0.5, call=None,
     """Poll `darktable_mcp.diag` until `gui_ready` is true (row 434). Never
     treats `view.current` as readiness (stall write-up 5).
 
-    `stop_if` (row 501 item D, fix round 2, Pratik's ruling 4): an optional
-    zero-arg callable checked once per poll iteration (same cadence as the
-    diag call, `poll_s` apart -- about 1 s with the session's own lock
-    check, not the full `timeout_s`). When it returns true, this returns
-    immediately with `ready: False, stopped: True` instead of waiting out
-    the rest of `timeout_s` -- a caller with its own fatal-fast condition
-    (a library-lock line landing in darktable.log mid-wait) no longer has
-    to pay for the full 30 s poll to find out."""
+    `stop_if`: an optional zero-arg callable checked once per poll (same
+    cadence as the diag call -- under about 6 s worst case, not the full
+    `timeout_s`); a true return ends the wait early with `ready: False`, so
+    a caller with its own fatal-fast condition (a library-lock line landing
+    in darktable.log mid-wait) does not have to pay for the full 30 s poll
+    to find out."""
     if call is None:
         from scouter.core import dtbridge
 
@@ -182,7 +180,7 @@ def wait_gui_ready(timeout_s: float = 30.0, *, poll_s: float = 0.5, call=None,
         if last.get("gui_ready") is True:
             return {"ready": True, **last}
         if stop_if is not None and stop_if():
-            return {"ready": False, "stopped": True, **last}
+            return {"ready": False, **last}
         sleep(poll_s)
     return {"ready": False, **last}
 

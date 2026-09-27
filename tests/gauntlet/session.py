@@ -33,11 +33,10 @@ EXPORT_PRESETS = ("client-proof", "preview")
 #: session's library fail identically. Left undetected, this cost 22 cases
 #: at ~40 s each on 2026-09-26 (each burning a full two-attempt launch
 #: retry before SessionBlocked).
-#: Fix round 1 (Opus finding 2): darktable's real wording is "the database
-#: lock file contains a pid that seems to be alive in your system: 69648" --
-#: the gap between "pid" and the digits is far more than 10 non-digit
-#: characters, so the original `\bpid\D{0,10}(\d+)` never matched it and the
-#: reason always read "library_lock unknown" on real text.
+#: darktable's real wording is "the database lock file contains a pid that
+#: seems to be alive in your system: 69648" -- the gap between "pid" and
+#: the digits is far more than 10 non-digit characters, so a naive
+#: `\bpid\D{0,10}(\d+)` never matches it.
 _LOCK_RE = re.compile(r"database lock file contains a pid|database is locked", re.I)
 _LOCK_PID_RE = re.compile(r"alive in your system:\s*(\d+)", re.I)
 
@@ -70,12 +69,12 @@ def _check_library_lock(log_path: Path, since: int = 0) -> int | None:
     AFTER `since` (or -1 if the log names the condition but no pid is found
     in it), or None when no lock line is present in that range.
 
-    Fix round 1 (Opus finding 2, sticky log): `dtprocess.launch` opens
-    darktable.log in append mode, so the file accumulates across every
-    launch in a session. Scanning the WHOLE file (as the first cut did)
-    means one real lock line, once written, marks every LATER launch in the
-    session as locked too -- including a clean one that reached gui_ready.
-    Only the bytes this specific launch appended are ever in scope."""
+    `dtprocess.launch` opens darktable.log in append mode, so the file
+    accumulates across every launch in a session. Scanning the WHOLE file
+    would mean one real lock line, once written, marks every LATER launch
+    in the session as locked too, including a clean one that reached
+    gui_ready -- so only the bytes this specific launch appended are ever
+    in scope."""
     if not log_path.exists():
         return None
     with log_path.open("rb") as f:
@@ -125,9 +124,7 @@ def isolated_env(root: Path, *, job: str | None = None) -> dict[str, str]:
 
 
 def reset_journal(staged: Staged) -> int:
-    """Fix round 2 (review R1, triage section 5 item 1); fix round 3
-    (re-review R1: ordering): `SCOUTER_JOB` is pinned once per MCP server
-    process for the whole session (`isolated_env` above / phase 3 task 9's
+    """`SCOUTER_JOB` is pinned once per MCP server process for the whole session (`isolated_env` above / phase 3 task 9's
     `scouter/mcp/server.py::_pin_session_job`), so by default every case in
     a session shares one job's undo journal. A case whose own write was
     refused (nothing landed) must see an EMPTY journal so
@@ -200,8 +197,7 @@ def write_config(root: Path) -> Path:
 
 
 def _neutral_role_dir(root: Path, role: str) -> Path:
-    """(row 501 item F, fix round 1, Opus finding 1, BLOCKER): several corpus
-    roles literally spell the diagnosis (`warm_cast`, `cool_cast`, `blown`,
+    """Several corpus roles literally spell the diagnosis (`warm_cast`, `cool_cast`, `blown`,
     `flat`, `noisy`, `dark`, `bright`) -- r0037's agent read its own
     tool-result path and used the folder name as evidence. A symlink alias
     (the earlier fix, bb4f13f) only hid the leak from the PROMPT: the
@@ -386,9 +382,9 @@ class ScouterSession:
         return str(Path(path).relative_to(self.run_root))
 
     def _raise_library_locked(self, pid: int) -> None:
-        """(fix round 1, Opus finding 2): quit -- or, mid-session, abort --
-        whatever THIS launch started before raising, so a locked library
-        never leaves an owned darktable orphaned behind a fatal case."""
+        """Quit -- or, mid-session, abort -- whatever THIS launch started
+        before raising, so a locked library never leaves an owned darktable
+        orphaned behind a fatal case."""
         try:
             self.abort()
         except Exception:  # noqa: BLE001 - best effort; the raise below is what matters
@@ -401,11 +397,10 @@ class ScouterSession:
         failures: list[str] = []
         for _attempt in (1, 2):
             self._check_aborted()
-            #: Fix round 1 (Opus finding 2): the offset this launch's own
-            #: bytes start at -- darktable.log is opened in append mode, so
-            #: an old lock line already on disk from an earlier launch (or a
-            #: previous session's leftover) must never be re-attributed to
-            #: a later, clean one.
+            #: The offset THIS launch's own bytes start at -- darktable.log
+            #: is opened in append mode, so an old lock line already on disk
+            #: from an earlier launch must never be re-attributed to a
+            #: later, clean one.
             since = _log_size(log_path)
             try:
                 rec = self.dt.launch(frame, self.staged.library, log_path)
@@ -416,29 +411,17 @@ class ScouterSession:
             if self.aborted:  # (N1): the abort landed during the launch
                 self.abort()
                 self._check_aborted()
-            #: Fatal fast, WITHOUT the full 30 s gui_ready wait: darktable
-            #: writes its own lock-file error at startup, well before any
-            #: window could ever reach gui_ready, so checking here first
-            #: never has to wait for the ready poll to find out this launch
-            #: is doomed.
-            pid = _check_library_lock(log_path, since=since)
-            if pid is not None:
-                self._raise_library_locked(pid)
-            #: Fix round 2 (Pratik's ruling 4, Opus re-review finding 4): a
-            #: lock line darktable writes only DURING the ready wait (the
-            #: common real case -- `dtprocess.launch` returns as soon as `ps`
-            #: can read the process's start time, well before darktable's
-            #: own `dt_init`/database init has written anything) must be
-            #: caught at the ready poll's own cadence (~poll_s, about 1 s),
-            #: not only after the full LAUNCH_READY_S (30 s) wait completes.
-            #: `stop_if` is checked once per `wait_gui_ready` poll iteration.
+            #: darktable's own lock-file error lands DURING the ready wait,
+            #: not before it (the launched process has its own start time
+            #: well before `dt_init`/database init writes anything) -- catch
+            #: it at the ready poll's own cadence via `stop_if`, under about
+            #: 6 s, instead of waiting out the full LAUNCH_READY_S (30 s).
             ready = self.dt.ready(
                 LAUNCH_READY_S,
                 stop_if=lambda: _check_library_lock(log_path, since=since) is not None)
-            #: Defense in depth: a lock line that lands in the narrow window
+            #: Defense in depth: a lock line landing in the narrow window
             #: between the last stop_if check and wait_gui_ready returning
-            #: (or one the fake/stub above never wired stop_if for) is still
-            #: caught here, same offset.
+            #: (or a caller that never wires stop_if) is still caught here.
             pid = _check_library_lock(log_path, since=since)
             if pid is not None:
                 self._raise_library_locked(pid)

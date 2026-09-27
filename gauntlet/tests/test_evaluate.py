@@ -1309,7 +1309,24 @@ def test_undo_check_fails_when_neither_decremented_nor_restored():
     assert v.score != "pass", v
 
 
-# -- row 501 item G (fix round 2, ruling 8): `unrequested_edit` in OUTCOMES -
+def test_undo_check_honest_noop_scores_needs_review_not_failed():
+    """An empty journal makes `darkroom_undo_last` answer `ok: false,
+    outcome: "noop"` -- an honest "nothing to undo", not a failed attempt.
+    That must not count as a write for the clarify-only fallback, or an
+    agent that honestly finds nothing to undo scores worse than one that
+    never called anything at all."""
+    case = _agent_workflow_case([Check("undo", target={})], None)
+    calls = [CallRecord("darkroom_undo_last", {},
+                        {"ok": False, "outcome": "noop", "verb": "darkroom.undo_last",
+                         "error": {"code": "noop", "message": "nothing to undo"}}, write=True)]
+    before = {"fingerprint": "a", "history_end": 0, "params": {"exposure.exposure": 1.0}}
+    after = {"fingerprint": "a", "history_end": 0, "params": {"exposure.exposure": 1.0}}
+    obs = Observation(calls=calls, before=before, after=after)
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "needs_review", v
+
+
+# -- row 501 item G, ruling 8: `unrequested_edit` in OUTCOMES -----------------
 
 def test_unrequested_edit_is_in_the_outcomes_table_as_a_fail():
     """(row 501 item G, fix round 1, Opus finding 6): `evaluate()`'s

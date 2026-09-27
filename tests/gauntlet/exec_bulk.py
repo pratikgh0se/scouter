@@ -12,7 +12,7 @@ from gauntlet.adapter import Observation
 from gauntlet.case import Case
 from tests.gauntlet import observe
 from tests.gauntlet.corpus import build_card, delete_card
-from tests.gauntlet.execute import ImportIncomplete, _imported_frames, substitute
+from tests.gauntlet.execute import resolve_import_job_frames, substitute
 from tests.gauntlet.jobslug import job_slug_for
 from tests.gauntlet.session import SessionBlocked
 
@@ -21,12 +21,7 @@ STATS_SAMPLE = 10
 #: Re-exported for callers that used to import `job_slug_for` from this
 #: module (now the shared `tests.gauntlet.jobslug`, since
 #: `tests/gauntlet/session.py` needs it too).
-#: (Fix round 2, review finding "I"): `ImportIncomplete`/`_imported_frames`
-#: themselves moved to `tests/gauntlet/execute.py` (`run_tool_case` needs
-#: the exact same resolution for a workflow case's `library_import` step),
-#: imported back in here unchanged so every existing caller of
-#: `exec_bulk.ImportIncomplete` / `exec_bulk._imported_frames` still resolves.
-__all__ = ["job_slug_for", "ImportIncomplete", "run_bulk_case", "reported_n", "count_changed"]
+__all__ = ["job_slug_for", "run_bulk_case", "reported_n", "count_changed"]
 
 
 def reported_n(envelopes: list[dict]) -> int | None:
@@ -87,18 +82,12 @@ def run_bulk_case(session, case: Case) -> Observation:
                     rec = session.call(st.tool, args, st.budget_s, write=st.write)
                     obs.calls.append(rec)
                     obs.extra["journal_resumed"] = "resum" in json.dumps(rec.envelope or {})
-                if st.tool == "library_import" and not rec.error:
-                    try:
-                        resolved = _imported_frames(session, rec.envelope, frames)
-                    except ImportIncomplete as e:
-                        obs.blocked = f"harness_error: {e}"
-                        obs.hang_evidence.append(str(e))
-                        break
-                    if resolved is not None:
-                        job_files = resolved
-                        session.staged.job_frames = resolved
-                        before = {str(f): observe.snapshot(f).get("fingerprint")
-                                  for f in resolved}
+                resolved = resolve_import_job_frames(obs, session, rec, frames)
+                if obs.blocked:
+                    break
+                if resolved is not None:
+                    job_files = resolved
+                    before = {str(f): observe.snapshot(f).get("fingerprint") for f in resolved}
         except SessionBlocked as e:
             obs.blocked = f"session: {e}"
             obs.hang_evidence.append(f"session: {e}")

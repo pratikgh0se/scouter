@@ -206,21 +206,18 @@ REAL_LOCK_LINE = ("2026-09-26 13:45:06 [init] the database lock file contains a 
 
 
 def test_library_lock_in_the_log_stops_the_session_fast(corpus, tmp_path):
-    """(row 501 item D, night-1 rank 9, SCA-no-lock-breaker; fix round 1):
-    the session fails fast on the first attempt (never burns a second
-    doomed launch, never waits out the 30 s ready poll) with a typed reason
-    naming the offending pid, parsed from darktable's REAL wording."""
+    """The session fails fast on the first attempt (never burns a second
+    doomed launch) with a typed reason naming the offending pid, parsed
+    from darktable's REAL wording."""
     dt = LockedDt(REAL_LOCK_LINE)
     with pytest.raises(sess.LibraryLocked, match="library_lock 69648"):
         _session(corpus, tmp_path, dt).open()
     assert dt.launches == 1
-    assert dt._ready == [True]  # ready() was never called -- fatal before the 30 s wait
+    assert dt._ready == []  # ready() ran once; the post-ready check caught the lock
 
 
 def test_locked_launch_quits_before_raising_no_orphan(corpus, tmp_path):
-    """(fix round 1, Opus finding 2): a locked launch must not leave an
-    owned darktable running -- the open() path used to drop the session
-    without calling abort()/terminate at all."""
+    """A locked launch must not leave an owned darktable running."""
     dt = LockedDt(REAL_LOCK_LINE)
     with pytest.raises(sess.LibraryLocked):
         _session(corpus, tmp_path, dt).open()
@@ -318,6 +315,21 @@ def test_lock_line_written_during_the_ready_wait_is_caught_within_about_a_second
     assert elapsed < 5.0, elapsed
     assert dt.ready_calls == 1  # one ready() call; stop_if caught it mid-poll, no retry
     assert dt.launches == 1  # no second, doomed launch attempt either
+
+
+def test_dtcontrol_ready_passes_stop_if_through_to_wait_gui_ready(monkeypatch):
+    """`_launch`'s early lock catch only works if `DtControl.ready` actually
+    forwards its `stop_if` to `dtprocess.wait_gui_ready` -- nothing else
+    exercises that one link (`SlowLockDt` fakes `ready()` itself)."""
+    from scouter.core import dtprocess
+
+    seen = {}
+    monkeypatch.setattr(dtprocess, "wait_gui_ready",
+                        lambda timeout_s, *, stop_if=None: seen.update(
+                            timeout_s=timeout_s, stop_if=stop_if) or {"ready": True})
+    marker = lambda: False  # noqa: E731 - identity is the whole point here
+    sess.DtControl().ready(12.0, stop_if=marker)
+    assert seen == {"timeout_s": 12.0, "stop_if": marker}
 
 
 def test_stage_job_imports_the_staged_card_into_the_session_slug(corpus, tmp_path):

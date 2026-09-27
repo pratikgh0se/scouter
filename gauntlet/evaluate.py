@@ -41,12 +41,9 @@ OUTCOMES = {
     #: not do). Its own outcome, its own report column.
     "imperceptible_step": PARTIAL,
     "silent_failure": FAIL, "wrong_refusal": FAIL, "unexpected_edit": FAIL,
-    #: Row 501 item G (fix round 1, Opus finding 6; fix round 2, ruling 8):
-    #: `evaluate()`'s own `out_of_scope_policy` branch (above) returns this
-    #: outcome for a write before the user picks between offered options --
-    #: distinct from the generic `unexpected_edit` every other refuse-kind
-    #: write earns. It was missing from this table, though nothing here
-    #: reads the table for scoring (only `canonical_outcome`/reporting do).
+    #: `evaluate()`'s `out_of_scope_policy` branch returns this outcome for
+    #: a write before the user picks between offered options, distinct from
+    #: the generic `unexpected_edit` every other refuse-kind write earns.
     "unrequested_edit": FAIL,
     "failed": FAIL, "failed_hang": FAIL, "crash": FAIL, "blocked": FAIL,
 }
@@ -62,10 +59,9 @@ class Policy:
     transient_codes: frozenset[str]
     refusal_markers: tuple[str, ...]
     claim_markers: tuple[str, ...]
-    #: (row 501 item G, fix round 1): phrases that show a refusal named at
-    #: least one alternative, the ruling's own "refuse AND offer" shape.
-    #: Defaulted so every OTHER caller building a Policy by hand (unit
-    #: tests, other products) keeps working unchanged.
+    #: Phrases that show a refusal named at least one alternative (the
+    #: "refuse AND offer" shape). Defaulted so every other caller building
+    #: a Policy by hand keeps working unchanged.
     offer_markers: tuple[str, ...] = ()
 
 
@@ -116,7 +112,7 @@ def _num(v: object) -> float | None:
 
 def _same(unit: str, a: object, b: object, tol: float | None = None) -> bool:
     """Param equality: numeric within the M1 tolerance, anything else exact.
-    NaN reads as missing (None), and None equals only None (fix round 1, I4)."""
+    NaN reads as missing (None), and None equals only None."""
     a = None if isinstance(a, float) and math.isnan(a) else a
     b = None if isinstance(b, float) and math.isnan(b) else b
     na, nb = _num(a), _num(b)
@@ -319,7 +315,7 @@ def _check_stat(i: int, ch: Check, obs: Observation) -> CheckResult:
         return CheckResult(i, ch.metric, False, d, ch.sign, note="stat not finite")
     floor = obs.floors.get(ch.stat or "", metrics.FLOOR_MIN.get(ch.stat or "", 0.0))
     if ch.kind == "frac" and sb:
-        floor = floor / abs(sb)  # a fractional delta meets a fractional floor (fix round 1, I3)
+        floor = floor / abs(sb)  # a fractional delta meets a fractional floor
     if ch.kind == "unchanged" or ch.sign == 0:
         return CheckResult(i, ch.metric, abs(d) <= floor, d, 0)
     wrong = d * ch.sign < -floor
@@ -437,13 +433,12 @@ def _check_text(i: int, ch: Check, obs: Observation) -> CheckResult:
 
 
 def _check_verb(i: int, ch: Check, obs: Observation) -> CheckResult:
-    """(row 501 item B, fix round 1, Opus finding 3): "did the agent
-    actually call the tool this workflow verb needs" -- not "was the
-    agent's LAST recorded call, whatever it was, ok". A clarify-only
-    conversation whose last call is any successful READ (`scout_stats`,
-    `library_jobs`, `darkroom_describe_history`, ...) must not pass just
-    because that read succeeded (r0159/r0066/r0356's own shape on
-    night-1). `target["any_of"]` names the envelope `verb` ids this
+    """"Did the agent actually call the tool this workflow verb needs" --
+    not "was the agent's LAST recorded call, whatever it was, ok". A
+    clarify-only conversation whose last call is any successful READ
+    (`scout_stats`, `library_jobs`, `darkroom_describe_history`, ...) must
+    not pass just because that read succeeded. `target["any_of"]` names
+    the envelope `verb` ids this
     workflow verb accepts (e.g. `cull.propose`, `export.release`); scans
     every call, not only the last one. `target["require_write"]` is a
     looser variant for a verb with no single canonical tool (repeat_more):
@@ -463,30 +458,26 @@ def _check_verb(i: int, ch: Check, obs: Observation) -> CheckResult:
     return CheckResult(i, "verb", False, None, sorted(verbs), note="no matching verb call")
 
 
-#: (row 501 item B, fix round 2, Pratik's ruling 1 on the re-review's finding
-#: 1): the envelope `verb` id a genuine undo call reports
+#: The envelope `verb` id a genuine undo call reports
 #: (`scouter/core/darkroom.py`'s `id="darkroom.undo_last"`).
 UNDO_VERB = "darkroom.undo_last"
 
 
 def _check_undo(i: int, ch: Check, obs: Observation) -> CheckResult:
-    """(row 501 item B, fix round 1, ruling on r0340/r0344/r0368; fix round
-    2, Pratik's ruling 1): an undo case is verified when the agent made a
-    SUCCESSFUL undo call (`darkroom_undo_last`, verb `darkroom.undo_last`,
-    envelope `ok`) AND history_end DECREMENTED, OR the snapshotted params
-    are restored to their before-value -- not by a sidecar change, which a
-    fresh frame with nothing of the agent's own to undo may never produce
+    """An undo case is verified when the agent made a SUCCESSFUL undo call
+    (`darkroom_undo_last`, verb `darkroom.undo_last`, envelope `ok`) AND
+    history_end DECREMENTED, OR the snapshotted params are restored to
+    their before-value -- not by a sidecar change, which a fresh frame
+    with nothing of the agent's own to undo may never produce
     (`darkroom_undo_last` on an empty journal is an honest noop, not a
-    failure to detect). Either the decrement or the restored signal is
-    enough (OR, not AND with a `changed: True` sidecar expectation) --
-    but only once a real undo call is on the record. Without one, the
-    before/after snapshots are trivially equal to themselves (zero calls,
-    or only a successful READ) and would otherwise score a hollow pass --
-    the re-review's own finding 1: r0340/r0344/r0368 scored `verified` with
-    no calls at all, one successful read, or a no-op undo. This check fails
-    then; `evaluate()`'s workflow needs_review fallback (no verb/undo call
-    and no write at all) turns that into `needs_review`, never a silent
-    pass and never a hard fail either."""
+    failure to detect). Either signal alone is enough (OR, not AND with a
+    `changed: True` sidecar expectation), but only once a real undo call
+    is on the record -- without one, before/after snapshots are trivially
+    equal to themselves (zero calls, or only a successful READ), which
+    would otherwise score a hollow pass. This check fails then;
+    `evaluate()`'s workflow needs_review fallback (no verb/undo call and
+    no non-noop write at all) turns that into `needs_review`, never a
+    silent pass and never a hard fail either."""
     undo_called = any(
         (c.envelope or {}).get("ok") and (c.envelope or {}).get("verb") == UNDO_VERB
         for c in obs.calls
@@ -785,7 +776,7 @@ def _imperceptible_step_residual(case: Case, results: list[CheckResult],
                                  obs: Observation) -> Verdict | None:
     """Row 475 (I2 ruling, option A, provisional -- Pratik to confirm): the
     real night-1 D-bare-step-below-perceptual-floor rows are plain `ok`,
-    never `moved_to_limit` (I2's finding -- KNOWN_RESIDUAL's "cap" is the
+    never `moved_to_limit` (KNOWN_RESIDUAL's "cap" is the
     fixture's step-size invariant, not a runtime clamp any of these moves
     ever reach). When every non-passing check on an `edit` case reads
     "below noise floor" and every write's own claimed module.param
@@ -938,7 +929,7 @@ def _honest_tool_refusal(obs: Observation, policy: Policy) -> tuple[bool, str]:
 
 
 def _sidecar_miss(case: Case, obs: Observation) -> str | None:
-    """`expect.sidecar` as an implicit check (fix round 1, C1)."""
+    """`expect.sidecar` as an implicit check."""
     sc = case.expect.sidecar or {}
     moved = _fingerprint_changed(obs)
     if sc.get("changed") is True and not moved:
@@ -953,7 +944,7 @@ def _sidecar_miss(case: Case, obs: Observation) -> str | None:
 
 
 def _refuse_write_failure(case: Case, results: list[CheckResult]) -> Verdict | None:
-    """On a refuse case that wrote, the checks decide (fix round 1, I1)."""
+    """On a refuse case that wrote, the checks decide."""
     for r, ch in zip(results, case.expect.checks):
         if ch.tags.get("silent_if_fail") and not r.ok:
             why = ch.tags.get("why", "a required report is missing")
@@ -988,12 +979,10 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
             refuses = _refuses(text, policy.refusal_markers)
             claims = _claims(text, policy.claim_markers)
             wrote = _fingerprint_changed(obs)
-            #: (row 501 item G, fix round 1, Opus finding 6): the out-of-
-            #: scope policy (refuse_and_offer_only) is read here, not just
-            #: labelled on the case -- a write before the user picks between
-            #: offered options is the ruling's own named failure,
-            #: unrequested_edit, not the generic unexpected_edit every other
-            #: refuse-kind write earns.
+            #: The out-of-scope policy (refuse_and_offer_only) is read here,
+            #: not just labelled on the case -- a write before the user
+            #: picks between offered options is unrequested_edit, not the
+            #: generic unexpected_edit every other refuse-kind write earns.
             policy_name = case.meta.get("out_of_scope_policy")
             unrequested = policy_name == "refuse_and_offer_only"
             if wrote and not case.meta.get("substitute_ok"):
@@ -1086,24 +1075,21 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
             return Verdict(PASS, "verified", results)
         return Verdict(FAIL, "failed", results, notes=["expected an honest noop"])
 
-    #: (row 501 item B, fix round 1, Opus finding 3; fix round 2, Pratik's
-    #: ruling 3, Opus re-review finding 3): a workflow case whose verb/undo
-    #: check failed because the agent never actually called the tool this
-    #: verb needs (a clarify-only conversation, no write at all) is not a
-    #: confident FAIL -- the agent may be waiting on the user's answer to a
-    #: real question. needs_review, never a silent pass and never a hard
-    #: fail either. MUST run before the sidecar-must-change gate (`if
-    #: miss:` below): `preset_save` (r0348) and `repeat_more` (r0364,
-    #: "More.") both carry `sidecar={"changed": True}`, so with the sidecar
-    #: gate checked first a clarify-only conversation hit "sidecar expected
-    #: to change but did not" and returned a hard `failed` before this
-    #: branch was ever reached -- the re-review's own finding 3. Placed
-    #: after the blocked/noop returns above (unchanged from fix round 1)
-    #: so a genuinely transient/blocked call still scores `blocked`, not a
-    #: clarify-only needs_review it never was.
+    #: A workflow case whose verb/undo check failed because the agent never
+    #: actually called the tool this verb needs (a clarify-only
+    #: conversation, no non-noop write at all) is not a confident FAIL --
+    #: the agent may be waiting on the user's answer to a real question.
+    #: Must run before the sidecar-must-change gate (`if miss:` below):
+    #: `preset_save` (r0348) and `repeat_more` (r0364, "More.") both carry
+    #: `sidecar={"changed": True}`, which would otherwise fail a
+    #: clarify-only conversation on "sidecar expected to change but did
+    #: not" before this branch is ever reached. Placed after the
+    #: blocked/noop returns above so a genuinely transient/blocked call
+    #: still scores `blocked`, not a clarify-only needs_review it never was.
     if kind == "workflow" and not ok_all and \
             any(r.metric in ("verb", "undo") and not r.ok for r in results) and \
-            not any(c.write for c in obs.calls):
+            not any(c.write and (c.envelope or {}).get("outcome") not in NOOP_OUTCOMES
+                    for c in obs.calls):
         return Verdict(PARTIAL, "needs_review", results,
                        notes=["asked before acting: no verb/write call"])
 

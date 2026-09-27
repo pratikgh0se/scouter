@@ -32,12 +32,7 @@ class ImportIncomplete(RuntimeError):
     only surface downstream as a false `usage`/`not_in_darkroom` refusal on
     a frame that was never the harness's fault. Raised, never swallowed:
     callers turn it into `obs.blocked`, so the case scores `blocked`,
-    honestly naming what's missing.
-
-    (Fix round 2, review finding "I", Opus re-review 5e398c5): moved here
-    from `tests/gauntlet/exec_bulk.py` (which re-exports it, unchanged) so
-    `run_tool_case` below can reuse the exact same, already-reviewed
-    resolution instead of a second copy that could drift from it."""
+    honestly naming what's missing."""
 
 
 def _imported_frames(session, envelope: dict | None,
@@ -69,6 +64,26 @@ def _imported_frames(session, envelope: dict | None,
     cfg = scouter_config.load(str(session.staged.config))
     job_path = scouter_config.job_dir(cfg, date, job_slug)
     return [job_path / dest_by_source[src.name] for src in source_frames]
+
+
+def resolve_import_job_frames(obs: Observation, session, rec: CallRecord,
+                              source_frames: list[Path]) -> list[Path] | None:
+    """After a `library_import` step, rewrite `session.staged.job_frames` to
+    the paths it actually wrote (shared by `run_tool_case` and
+    `exec_bulk.run_bulk_case` -- the same rewrite, one place). A no-op
+    unless `rec` is an errorless `library_import` call; sets `obs.blocked`
+    on a partial import instead of guessing a destination."""
+    if rec.tool != "library_import" or rec.error:
+        return None
+    try:
+        resolved = _imported_frames(session, rec.envelope, source_frames)
+    except ImportIncomplete as e:
+        obs.blocked = f"harness_error: {e}"
+        obs.hang_evidence.append(str(e))
+        return None
+    if resolved is not None:
+        session.staged.job_frames = resolved
+    return resolved
 
 
 def substitute(value, session, calls: list[CallRecord]):
@@ -165,9 +180,8 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
         obs.hang_evidence.append(f"session: {e}")
         obs.wall_s = clock() - t0
         return obs
-    #: Fix round 2 (review R1); fix round 3 (re-review R1, ordering): per-case
-    #: undo journal isolation -- see session.reset_journal's own docstring.
-    #: Must run AFTER isolate() (whose own darkroom_reset calls, for a
+    #: Per-case undo journal isolation -- see session.reset_journal's own
+    #: docstring. Must run AFTER isolate() (whose own darkroom_reset calls, for a
     #: module the PREVIOUS case touched, write their own journal entries)
     #: and any re-stage above, but before this case's own before-snapshot/
     #: steps below, so no earlier entry -- isolate's own or an earlier
@@ -209,26 +223,9 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
         else:
             rec = session.call(st.tool, args, st.budget_s, write=st.write)
         obs.calls.append(rec)
-        #: (Fix round 2, review finding "I", Opus re-review 5e398c5): a
-        #: `library_import` step's `{job_frames}` placeholder must resolve
-        #: to the paths library_import ACTUALLY wrote (the job directory),
-        #: not the staged card copies substitute() filled in before the
-        #: import ran. `run_bulk_case` (tests/gauntlet/exec_bulk.py) already
-        #: does exactly this for the bulk layer; a tool-mode workflow case
-        #: (r0066's export_release, session.staged.job_frames set once at
-        #: stage() time) needed the same rewrite here or its later
-        #: `images="{job_frames}"` step named files darktable's library never
-        #: imported -- `export.release` then raised `ImageNotFound` on every
-        #: one of them (found by reading the code, not in a live run).
-        if st.tool == "library_import" and not rec.error:
-            try:
-                resolved = _imported_frames(session, rec.envelope, session.staged.job_frames)
-            except ImportIncomplete as e:
-                obs.blocked = f"harness_error: {e}"
-                obs.hang_evidence.append(str(e))
-                break
-            if resolved is not None:
-                session.staged.job_frames = resolved
+        #: a workflow case's later `{job_frames}` step must see where
+        #: library_import actually wrote its files, not the staged copies.
+        resolve_import_job_frames(obs, session, rec, session.staged.job_frames)
         if obs.blocked:  # (final fix M3): a virtual tool blocked the case itself
             break
         if rec.error == "timeout" and rec.health == "unresponsive":
