@@ -4,9 +4,13 @@
   "examples": [
     {
       "id": "not-in-library-verb-imports-both-sides",
-      "input": {"verb": "wb.kelvin (P0, happy)"},
-      "expect": {"library_import_calls": 2, "note": "one per side (mcp copy, cli copy)"},
-      "source": "night1-parity-install-guide-triage.md PAR-hollow-pass: '10 because the per-side copy is not in darktable's library ... scout.stats (P0), wb.kelvin (P0) ... all happy. Fix (M, harness): import both copies'"
+      "input": {"verb": "wb.kelvin (P0, happy)",
+               "library_import_envelope": {"source_name": "H-mcp.ORF",
+                                          "dest": "raw/2026-05-24_smoke-job_H-mcp.ORF"}},
+      "expect": {"library_import_calls": 2,
+                "wb_kelvin_image": "job_dir(cfg, date, smoke-job) / raw/2026-05-24_smoke-job_H-mcp.ORF",
+                "note": "one import per side (mcp copy, cli copy); the verb call's own image arg must be the RESOLVED library path, not the raw copy (R2-3: a fake naming a dest the source_name can never match only proves the fallback, not staging)"},
+      "source": "night1-parity-install-guide-triage.md PAR-hollow-pass: '10 because the per-side copy is not in darktable's library ... scout.stats (P0), wb.kelvin (P0) ... all happy. Fix (M, harness): import both copies'. Review fix round 3, R2-3: the source_name must match the REAL staged file name for this to be a genuine oracle."
     },
     {
       "id": "darkroom-open-skips-staging-uses-frame-switch-recovery-instead",

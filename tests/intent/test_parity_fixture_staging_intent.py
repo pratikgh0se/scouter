@@ -21,10 +21,16 @@ EXAMPLES = {e["id"]: e for e in
 
 def test_not_in_library_verb_imports_both_sides(corpus, tmp_path, monkeypatch):
     ex = EXAMPLES["not-in-library-verb-imports-both-sides"]
-    ok = {"ok": True, "outcome": "ok", "data": {
+    # Review fix round 3, R2-3: the fake's `source_name` must match the REAL
+    # staged file name (`<stem>-mcp<ext>`, corpus fixture's hero is
+    # "H.ORF") so `_imported_path` actually resolves a dest -- naming an
+    # arbitrary "mcp-stub" only proved the FALLBACK path (the staging never
+    # running), not the staging itself.
+    import_ok = {"ok": True, "outcome": "ok", "data": {
         "job_slug": exec_parity.SMOKE_JOB_SLUG, "date": "2026-05-24",
-        "files": [{"source_name": "mcp-stub", "dest": "raw/x"}]}}
-    mcp = FakeMcp(answers={"wb_kelvin": ok})
+        "files": [{"source_name": "H-mcp.ORF", "dest": "raw/2026-05-24_smoke-job_H-mcp.ORF"}]}}
+    ok = {"ok": True, "outcome": "ok", "data": {}}
+    mcp = FakeMcp(answers={"wb_kelvin": ok, "library_import": import_ok})
     s = _session(corpus, tmp_path, mcp=mcp).open()
     monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: __import__(
         "subprocess").CompletedProcess(a[0], 0, stdout=json.dumps(ok), stderr=""))
@@ -38,17 +44,19 @@ def test_not_in_library_verb_imports_both_sides(corpus, tmp_path, monkeypatch):
     # Oracle A: the import call count.
     imports = [c for c in mcp.calls if c[0] == "library_import"]
     assert len(imports) == ex["expect"]["library_import_calls"]
-    # Oracle B (A-6, review fix round 2 -- independent of the import count):
-    # the wb_kelvin call itself must have been substituted with the STAGED
-    # (library) path, never the raw, un-imported copy. `library_import`'s
-    # own envelope in this fake never names a real dest for "mcp-stub" (the
-    # actual staged file is named "*-mcp.ORF"), so the fallback path is what
-    # reaches the verb here -- still asserted explicitly, not "some path".
+    # Oracle B (A-6, review fix round 3 R2-3 -- independent of the import
+    # count, and now actually proves staging ran, not the fallback): the
+    # wb_kelvin call must have been substituted with the RESOLVED LIBRARY
+    # path `library_import`'s own envelope names, computed the same way
+    # `_imported_path` computes it.
+    from scouter import config as scouter_config
+
+    cfg = scouter_config.load(str(s.staged.config))
+    expected = scouter_config.job_dir(cfg, "2026-05-24", exec_parity.SMOKE_JOB_SLUG) / \
+        "raw/2026-05-24_smoke-job_H-mcp.ORF"
     wb_calls = [c for c in mcp.calls if c[0] == "wb_kelvin"]
     assert wb_calls, "wb_kelvin was never called"
-    image_arg = wb_calls[0][1]["image"]
-    assert image_arg.endswith("-mcp.ORF")
-    assert "/parity/mcp/" in image_arg.replace("\\", "/")
+    assert wb_calls[0][1]["image"] == str(expected)
 
 
 def test_darkroom_open_skips_staging_uses_frame_switch_recovery_instead(corpus, tmp_path,
@@ -103,16 +111,3 @@ def test_not_in_darkroom_on_open_retries_once_via_relaunch(tmp_path):
     # retry must be RECORDED, so a pair where both sides needed it can be
     # scored needs_review instead of a silent pass.
     assert obs.extra["frame_switch_relaunch"] == ["mcp"]
-
-
-def test_distinct_source_names_and_once_per_session_import_documented_here():
-    # Documents the case run here; the full assertions (import counts across
-    # two calls, distinct source dir contents) are pinned in
-    # tests/gauntlet/test_exec_parity.py::
-    #   test_parity_pair_imports_both_sides_once_for_a_non_open_verb
-    #   test_parity_pair_uses_distinct_source_names_per_side
-    # (review fix round 2, A-1/A-2, finding 4) -- kept there rather than
-    # duplicated here since they need the real FakeMcp/_session machinery
-    # this module already imports for the other two examples.
-    assert EXAMPLES["distinct-source-names-and-once-per-session-import"]["expect"][
-        "mcp_and_cli_source_names_differ"] is True
