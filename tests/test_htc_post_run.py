@@ -162,9 +162,11 @@ class PreconditionGateTest(_FakeRepoCase):
         self.assertIn("tests/test_host_colorcal.py", out)
         self.assertIn("darkroom_say", out)
         self.assertIn("view_bounce_action", out)
-        self.assertIn("make -C", out)
-        self.assertIn(f"BASE={self.base_sha}", out)
-        self.assertIn(f"HEAD={self.batch_sha}", out)
+        self.assertIn("tests/mutation_check.py", out)
+        self.assertNotIn("make -C", out)  # R3b: not `make gate` as a real command
+        self.assertIn(f"--base {self.base_sha}", out)
+        self.assertIn(f"--head {self.batch_sha}", out)
+        self.assertIn("--repo", out)
         self.assertIn("pytest -q -m", out)
         self.assertIn("targeted GAUNTLET rerun", out)
         self.assertIn("gauntlet run --stamp", out)
@@ -188,7 +190,7 @@ class MergeBaseGateTest(_FakeRepoCase):
         self.write_progress("done")
         p = self.invoke()
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn(f"BASE={self.base_sha} HEAD={self.batch_sha}", p.stdout)
+        self.assertIn(f"--base {self.base_sha} --head {self.batch_sha}", p.stdout)
         self.assertNotEqual(self.base_sha, self.batch_sha)
 
     def test_reports_already_merged_instead_of_refusing(self) -> None:
@@ -381,6 +383,81 @@ class PythonResolutionTest(unittest.TestCase):
 
             self.assertTrue(marker.exists(), "SCOUTER_PYTHON override was not used:\n" + p.stdout)
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+
+class DefaultGateCommandTest(unittest.TestCase):
+    """Fix round 3 (re-review R3b): --execute's DEFAULT GATE_CMD (no
+    override) calls tests/mutation_check.py directly with this script's own
+    already-resolved PY, not `make gate` -- whose own wrapper
+    (scripts/mutation_check.sh) resolves python only from its own
+    `.venv`, falling back to a bare python3 with no pytest from exactly the
+    kind of bare worktree this script runs from before the merge. Verified
+    with NO GATE_CMD override and NO `.venv` in the batch's own checkout,
+    same worktree-without-a-venv shape as PythonResolutionTest."""
+
+    def test_default_gate_command_calls_mutation_check_py_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            main_repo = root / "main"
+            main_repo.mkdir()
+            git(main_repo, "init", "-q", "-b", "main")
+            git(main_repo, "config", "user.email", "test@example.com")
+            git(main_repo, "config", "user.name", "Test")
+            (main_repo / "f.txt").write_text("base\n", encoding="utf-8")
+            git(main_repo, "add", "-A")
+            git(main_repo, "commit", "-q", "-m", "base")
+            base_sha = git(main_repo, "rev-parse", "HEAD")
+
+            argv_log = root / "argv.log"
+            venv_bin = main_repo / ".venv" / "bin"
+            venv_bin.mkdir(parents=True)
+            stub = venv_bin / "python3"
+            stub.write_text(
+                f"#!/usr/bin/env bash\n"
+                f"echo \"$@\" >> {argv_log}\n"
+                # The status-parsing call (`"$PY" -c '...'`) needs to run for
+                # real (this script's own preconditions read its output);
+                # a script/module invocation (mutation_check.py, -m pytest)
+                # only needs to be PROVEN CALLED with the right args -- there
+                # is no real scouter repo here for either to run against.
+                f"case \"$1\" in\n"
+                f"  -c) exec /usr/bin/env python3 \"$@\" ;;\n"
+                f"  *) exit 0 ;;\n"
+                f"esac\n",
+                encoding="utf-8")
+            stub.chmod(0o755)
+
+            worktree = root / "wt"
+            git(main_repo, "worktree", "add", "-q", str(worktree), "-b", "batch")
+            (worktree / "f.txt").write_text("batch\n", encoding="utf-8")
+            git(worktree, "add", "-A")
+            git(worktree, "commit", "-q", "-m", "batch work")
+            batch_sha = git(worktree, "rev-parse", "HEAD")
+
+            run_dir = root / "rundir"
+            run_dir.mkdir()
+            layers = {name: {"status": "done"} for name in DEFAULT_LAYERS}
+            (run_dir / "progress.json").write_text(
+                json.dumps({"status": "done", "layers": layers}), encoding="utf-8")
+
+            env = dict(os.environ)
+            for k in ("SCOUTER_PYTHON", "GATE_CMD", "PYTEST_CMD"):
+                env.pop(k, None)
+            env.update({"HTC_REPO": str(worktree), "BATCH": batch_sha, "RUN_DIR": str(run_dir)})
+            p = subprocess.run(["bash", str(SCRIPT), "--execute"], capture_output=True, text=True,
+                              env=env)
+
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertTrue(argv_log.exists(), "the stub python3 was never invoked:\n" + p.stdout)
+            lines = argv_log.read_text(encoding="utf-8").splitlines()
+            gate_lines = [ln for ln in lines if "mutation_check.py" in ln]
+            self.assertTrue(gate_lines, f"tests/mutation_check.py was never called: {lines}")
+            gate_line = gate_lines[0]
+            self.assertIn(f"--base {base_sha}", gate_line)
+            self.assertIn(f"--head {batch_sha}", gate_line)
+            self.assertIn(f"--repo {worktree}", gate_line)
+            self.assertFalse(any(ln.split()[:1] == ["gate"] for ln in lines),
+                             "must never call `make gate`")
 
 
 class ExecuteModeTest(_FakeRepoCase):

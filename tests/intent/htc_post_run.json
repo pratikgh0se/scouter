@@ -5,8 +5,8 @@
     {
       "id": "done-no-pidfile-prints-batch",
       "input": {"progress_status": "done", "pidfile": null},
-      "expect": {"exit_code": 0, "stdout_contains": ["ff-merge", "make -C"]},
-      "why": "the ordinary post-run case: the run finished and the runner already exited cleanly, so the script prints the four-step batch for a human to run"
+      "expect": {"exit_code": 0, "stdout_contains": ["ff-merge", "tests/mutation_check.py"]},
+      "why": "the ordinary post-run case: the run finished and the runner already exited cleanly, so the script prints the five-step batch for a human to run -- step 1 (fix round 3, review R3b) calls tests/mutation_check.py directly, not `make gate` (whose own wrapper falls back to a bare python3 with no pytest from a worktree)"
     },
     {
       "id": "running-refuses",

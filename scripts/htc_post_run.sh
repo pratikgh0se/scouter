@@ -202,7 +202,7 @@ if [[ "$ALREADY_MERGED" -eq 1 ]]; then
   echo "#    script with that batch's sha to get a real gate command)"
 else
   echo "# 1) merge-time gate: mutation check + pytest, BASE computed BEFORE the merge"
-  echo "make -C \"$SCRIPT_HOME\" gate BASE=$MERGE_BASE HEAD=$BATCH_SHA"
+  echo "$PY \"$SCRIPT_HOME/tests/mutation_check.py\" --base $MERGE_BASE --head $BATCH_SHA --repo \"$SCRIPT_HOME\""
   echo "$PY -m pytest -q -m \"not host\""
 fi
 echo
@@ -234,7 +234,13 @@ if [[ "$EXECUTE" -eq 1 ]]; then
     exit 0
   fi
   say "--execute: running step 1 (the merge-time gate + pytest) for real; steps 2-5 stay print-only"
-  GATE_CMD=${GATE_CMD:-"make -C \"$SCRIPT_HOME\" gate BASE=\"$MERGE_BASE\" HEAD=\"$BATCH_SHA\""}
+  # R3b (re-review): call tests/mutation_check.py directly, not `make gate`
+  # -- `make gate` execs scripts/mutation_check.sh, which resolves its own
+  # python only from `$SCRIPT_HOME/.venv` (falling back to a bare python3
+  # with no pytest from a worktree, the exact gap PY's own resolution above
+  # already fixed for this script); calling the same file directly with
+  # this script's own already-resolved $PY sidesteps that wrapper entirely.
+  GATE_CMD=${GATE_CMD:-"\"$PY\" \"$SCRIPT_HOME/tests/mutation_check.py\" --base \"$MERGE_BASE\" --head \"$BATCH_SHA\" --repo \"$SCRIPT_HOME\""}
   say "+ $GATE_CMD"
   # A subshell, not a bare `eval`: GATE_CMD/PYTEST_CMD may themselves be (or
   # contain) a literal `exit N` -- a bare eval would run that in THIS
