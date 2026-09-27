@@ -1,0 +1,26 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for the night-1 fix (triage class LK-refresh-no-open, scratchpad/night1-triage.md rank 1: 115 looks cases + 31 scenario wrong_refusal, 7 P0). Each example is a real observed shape from run night1-20260926 (runner on 5501801, recorded under /Users/pratik/Pictures/ScouterScratch/gauntlet/night1-20260926/, read-only), reduced to the harness's own session/execute seam so it runs with no darktable and no MCP server. Run by tests/intent/test_session_reopen_intent.py. Enforced by review until mechanised by t_450535e2.",
+  "subject": "tests/gauntlet/session.py ScouterSession.refresh_frame/ensure_frame + tests/gauntlet/execute.py isolate()",
+  "examples": [
+    {
+      "id": "refresh-then-write-not-refused",
+      "input": {"action": "refresh_frame then the case's next ensure_frame(role)"},
+      "expect": {"open_calls_after_refresh": 1, "current_frame_after_refresh": "not the fresh frame",
+                "current_frame_after_ensure": "the fresh frame"},
+      "source": "night1-20260926 audit sessions/looks/003-olympus/cache/audit/htc-003-olympus.jsonl: after the isolate reset and a ~35s relaunch, every darkroom.set answered not_in_darkroom 'darkroom.current reports 3, job opened 2' -- the job never recorded the fresh frame as opened because ensure_frame skipped darkroom_open; scratchpad/night1-triage.md LK-refresh-no-open"
+    },
+    {
+      "id": "isolate-reset-of-absent-module-is-not-contamination",
+      "input": {"baseline": {"module": "absent (all keys None)"},
+                "after_reset": {"module": "present at darktable's default"}},
+      "expect": {"isolate_restages": false},
+      "source": "scratchpad/night1-triage.md LK-refresh-no-open root cause: 'isolate() finds the chart contaminated, mostly because it resets the previous hero case's modules on the chart and then compares absent-vs-default'; the same absent<->default equivalence the evaluator already uses (gauntlet/evaluate.py _absent_equiv, night-1 evaluator fix bug 3)"
+    },
+    {
+      "id": "isolate-a-real-move-still-restages",
+      "input": {"baseline": {"exposure.exposure": 0.7}, "after": {"exposure.exposure": 1.3}},
+      "expect": {"isolate_restages": true},
+      "source": "tests/gauntlet/test_execute.py test_contaminated_frame_is_restaged (pre-existing): the fix must not mask a genuine cross-case contamination, only the absent-vs-default false positive"
+    }
+  ]
+}

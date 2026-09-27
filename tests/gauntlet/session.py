@@ -280,7 +280,20 @@ class ScouterSession:
         self._launch(frame or self.current_frame or self.staged.frames["hero"])  # type: ignore[union-attr]
 
     def refresh_frame(self, role: str) -> Path:
-        """Contaminated: re-stage this role from a fresh copy and relaunch on it."""
+        """Contaminated: re-stage this role from a fresh copy and relaunch on it.
+
+        (night-1 fix, class LK-refresh-no-open): `relaunch`/`_launch` marks
+        `dst` `current_frame` the moment darktable is gui_ready with it, but
+        darktable displaying a frame is not the JOB recording it as opened --
+        only a successful `darkroom_open` does that (scouter.core.darkroom.
+        `_record_opened_image`). Left as `_launch` sets it, the very next
+        `ensure_frame(role)` saw `current_frame == staged.frames[role]` and
+        skipped the open call, so the job kept the OLD image's id while
+        darktable showed the new one: every write then refused
+        "darkroom.current reports N+1, job opened N". State machine: launched
+        (this method) -> opened (the next real `darkroom_open`) -> current
+        (`ensure_frame` sets it back, only on that call's success). Never
+        launched -> current."""
         assert self.staged is not None
         src = self.corpus.roles(self.body)[role] if role != "chart" else \
             self.run_root / "chart" / "chart-v1.pfm"
@@ -291,6 +304,7 @@ class ScouterSession:
         self.baselines.pop(str(self.staged.frames[role]), None)
         self.staged.frames[role] = dst
         self.relaunch(dst)
+        self.current_frame = None  # not current until ensure_frame opens it for real
         return dst
 
     def abort(self) -> dict:
@@ -371,6 +385,22 @@ class ScouterSession:
         out, self.mcp_deaths = self.mcp_deaths, []
         return out
 
+    def _relaunch_then_reopen(self, role: str, path: Path) -> None:
+        """(night-1 fix, class LK-refresh-no-open, sibling gap): relaunch is
+        `launched`, never `current` -- the job only records an image as
+        opened inside a real `darkroom_open` (scouter.core.darkroom.
+        `_record_opened_image`). Used by every ensure_frame recovery path
+        that relaunches, so none of them can skip the follow-up open the way
+        the original bug did."""
+        self.relaunch(path)
+        again = self.call("darkroom_open", {"image": str(path)}, 30.0)
+        if again.error is None and (again.envelope or {}).get("ok"):
+            self.current_frame = path
+        else:
+            raise SessionBlocked(
+                f"darkroom_open did not open frame {role} ({path}) after a relaunch "
+                f"on it: error={again.error!r} health={again.health!r}")
+
     def ensure_frame(self, role: str) -> Path:
         assert self.staged is not None
         path = self.staged.frames[role]
@@ -379,18 +409,13 @@ class ScouterSession:
             if rec.error is None and (rec.envelope or {}).get("ok"):
                 self.current_frame = path
             elif rec.error == "timeout" and rec.health == "unresponsive":
-                self.relaunch(path)  # sets current_frame only once gui_ready
+                self._relaunch_then_reopen(role, path)
             elif rec.error == "not_in_darkroom":
                 # Smoke S2: darktable cannot load a frame imported into the
                 # SAME running session (product honest limit R20, "wrong image
                 # loaded"). Relaunch on the frame, then open it once more so the
                 # job records it as its opened image.
-                self.relaunch(path)
-                again = self.call("darkroom_open", {"image": str(path)}, 30.0)
-                if not (again.error is None and (again.envelope or {}).get("ok")):
-                    raise SessionBlocked(
-                        f"darkroom_open did not open frame {role} ({path}) after a relaunch "
-                        f"on it: error={again.error!r} health={again.health!r}")
+                self._relaunch_then_reopen(role, path)
             else:
                 raise SessionBlocked(f"darkroom_open did not open frame {role} ({path}): "
                                      f"error={rec.error!r} health={rec.health!r}")

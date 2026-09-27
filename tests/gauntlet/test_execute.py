@@ -142,6 +142,50 @@ def test_contaminated_frame_is_restaged(corpus, tmp_path, monkeypatch):
     assert s.staged.frames["hero"] != frame and dt.launches == 2
 
 
+def test_isolate_does_not_restage_a_reset_absent_module_at_default(corpus, tmp_path, monkeypatch):
+    """Night-1 fix (class LK-refresh-no-open, the isolate half): a chart<->hero
+    switch resets whatever the previous case touched, on the new frame. When
+    that module was never in THIS frame's history (the PFM chart has no
+    temperature module), the reset writes it in at darktable's default:
+    absent -> present-at-default, not a real change. Before the fix, a plain
+    param_equal read that as "moved" and re-staged a perfectly clean frame,
+    which then hit the refresh-no-open bug on every such switch."""
+    dt = FakeDt()
+    s = _session(corpus, tmp_path, dt).open()
+    frame = s.ensure_frame("hero")
+    s.baselines[str(frame)] = {"sigmoid.contrast": None}
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {
+        "fingerprint": "x",
+        "params": {"sigmoid.contrast": 1.0, "sigmoid.__enabled": 1},
+        "units": {"sigmoid.contrast": "ratio", "sigmoid.__enabled": "bool"},
+        "defaults": {"sigmoid.contrast": 1.0}})
+    assert execute.isolate(s, frame, "hero") is False
+    assert dt.launches == 1  # no relaunch: this was never a real move
+
+
+def test_isolate_still_restages_an_absent_module_leaked_at_a_non_default_value(
+        corpus, tmp_path, monkeypatch):
+    """Reviewer follow-up on the absent-vs-default fix above (n1-session-review):
+    the escape hatch is narrow on purpose. A module absent before that comes
+    back at some OTHER value after the reset (not darktable's own default --
+    a real leak from the previous case, or a reset that silently failed) is
+    still a genuine move and must still restage. This guards the exact
+    condition `evaluate._absent_equiv` requires -- `_module_at_default` -- by
+    only ever satisfying `not evaluate._absent_equiv`; it does not touch or
+    duplicate that logic."""
+    dt = FakeDt()
+    s = _session(corpus, tmp_path, dt).open()
+    frame = s.ensure_frame("hero")
+    s.baselines[str(frame)] = {"sigmoid.contrast": None}
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {
+        "fingerprint": "x",
+        "params": {"sigmoid.contrast": 2.5, "sigmoid.__enabled": 1},  # leaked, not default
+        "units": {"sigmoid.contrast": "ratio", "sigmoid.__enabled": "bool"},
+        "defaults": {"sigmoid.contrast": 1.0}})
+    assert execute.isolate(s, frame, "hero") is True
+    assert dt.launches == 2  # a real move: restaged
+
+
 def test_a_virtual_tool_that_blocks_stops_the_later_steps(corpus, tmp_path, monkeypatch):
     """(final fix M3): a virtual tool setting obs.blocked itself ends the case."""
     from gauntlet.adapter import CallRecord
