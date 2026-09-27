@@ -246,6 +246,69 @@ class ProbeCandidatePathsHostTest(unittest.TestCase):
             install.restore()
 
 
+#: A private raw file for `ProbeExposureBlackDefaultHostTest`, never shared
+#: with `SCRATCH` (which other classes in this module write history onto and
+#: which can persist a stale sidecar across runs under `~/Pictures/
+#: ScouterScratch`): this probe needs a frame with NO exposure history entry
+#: at all, so it copies its own raw file and deletes any leftover sidecar
+#: before every launch.
+_BLACK_DEFAULT_SCRATCH = hs.SCRATCH_DIR / "phase3-black-default.ORF"
+
+
+@unittest.skipUnless(RUN, REASON)
+@pytest.mark.host
+class ProbeExposureBlackDefaultHostTest(unittest.TestCase):
+    """Row 474 (final-review issue I1): host-verifies `exposure.black`'s
+    `default_candidate` (`scouter/core/vocab.py`, 0.0).
+
+    The phase3 design spec's own §4.3 table
+    (docs/superpowers/specs/2026-09-24-scouter-phase3-design.md:148-153)
+    leaves this row's `default` column blank by design -- it fills that
+    column only where a value is asserted neutral by construction, and
+    groups `exposure.black` with rows it does NOT assert that for. Nothing
+    else in this repo may claim the value is known; this is the probe that
+    can. On a PASS here, promote `default_candidate=0.0` to `default=0.0` in
+    `scouter/core/vocab.py`, citing this test (not spec §4.3, which stays
+    unedited), and drop the `default_unverified` flag from
+    `tests/gauntlet/exec_looks.py`'s `chart_golden`.
+    """
+
+    def test_fresh_exposure_module_defaults_black_to_zero(self) -> None:
+        from scouter import registry
+        from scouter.core import dtbridge, history
+
+        hs.SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy(hs.HERO, _BLACK_DEFAULT_SCRATCH)
+        Path(str(_BLACK_DEFAULT_SCRATCH) + ".xmp").unlink(missing_ok=True)
+
+        install = hs.PluginInstall()
+        install.install()
+        proc = hs.launch(_BLACK_DEFAULT_SCRATCH)
+        try:
+            hs.wait_ready()
+            self.assertTrue(settle(dtbridge.call),
+                            f"control path {CONTROL_PATH} did not answer after settle")
+            enabled = registry.call("darkroom.enable", "cli", module="exposure")
+            self.assertTrue(enabled.ok, enabled.error)
+            committed = registry.call("history.commit", "cli", image=str(_BLACK_DEFAULT_SCRATCH))
+            self.assertTrue(committed.ok, committed.error)
+
+            entries = [e for e in history.read(str(_BLACK_DEFAULT_SCRATCH)).entries
+                       if e.operation == "exposure"]
+            self.assertTrue(entries, "enabling exposure wrote no history entry")
+            entry = max(entries, key=lambda e: e.num)
+            self.assertIsNotNone(entry.decoded, entry.reason)
+            black = entry.decoded["black"]
+            _record("\n## Phase 3 exposure.black default probe "
+                    f"({time.strftime('%Y-%m-%d %H:%M')})\n\n"
+                    f"fresh exposure module (modversion {entry.modversion}, "
+                    f"num {entry.num}, enabled={entry.enabled}): black={black!r}\n")
+            self.assertAlmostEqual(black, 0.0, places=6)
+        finally:
+            hs.quit_darktable(proc)
+            install.restore()
+
+
 @unittest.skipUnless(RUN, REASON)
 @pytest.mark.host
 class Phase3LiveHostTest(unittest.TestCase):

@@ -48,12 +48,27 @@ class ParamSpec:
     reachable: bool = True
     note: str = ""
     #: darktable's module default for this param (spec §4.3 `default`
-    #: column), declared only where it is known. Final review #1a ruling: a
-    #: `set` move whose before value is unreadable journals this as its
-    #: before (source "default") when the row has no `neutral`; a row with
-    #: neither refuses the move `value_unknown`. Task 10: the colour balance
-    #: rgb hue rows declare 0.0 (darktable's module default).
+    #: column: filled only where §4.3 asserts the value neutral by
+    #: construction, blank everywhere else), declared here only once a real
+    #: check has established it -- either §4.3's own citation, or a
+    #: `tests/test_host_phase3.py` host probe on a fresh, untouched frame.
+    #: Final review #1a ruling: a `set` move whose before value is
+    #: unreadable journals this as its before (source "default") when the
+    #: row has no `neutral`; a row with neither refuses the move
+    #: `value_unknown`. Task 10: the colour balance rgb hue rows declare 0.0
+    #: (darktable's module default, §4.3-cited).
     default: float | None = None
+    #: A candidate value for `default`, believed correct but not yet
+    #: established by either route above (row 474, final-review issue I1):
+    #: only `tests/gauntlet/exec_looks.py`'s `chart_golden` may probe with
+    #: it (recording `calibration_errors[key] = "default_unverified"` when
+    #: it does, so the gauntlet evaluator treats a look depending on it
+    #: exactly like a skipped calibration -- never `verified`). No other
+    #: reader (`scouter/core/moves.py`, `scouter/core/darkroom.py`, the
+    #: coverage/observe gauntlet layers) may treat this as a known value.
+    #: Promote to `default` only once `ProbeCandidatePathsHostTest`'s sibling
+    #: host probe (or an equivalent host measurement) pins it.
+    default_candidate: float | None = None
 
 
 #: darktable's colorbalancergb default for every hue param (degrees).
@@ -134,7 +149,26 @@ PARAMS: tuple[ParamSpec, ...] = (
     ParamSpec("exposure", "black", "exposure › black level correction", "ratio", 1.0,
               -0.1, 0.1, 0.005, "xmp", None, False, "black_level",
               "moves the point that renders as pure black",
-              "the darkest areas: a few thousandths is a visible change"),
+              "the darkest areas: a few thousandths is a visible change",
+              # Row 474 (final-review issue I1): §4.3's own table
+              # (docs/superpowers/specs/2026-09-24-scouter-phase3-design.md:
+              # 148-153) leaves this row's `default` column BLANK by design
+              # -- it fills that column only where a value is asserted
+              # neutral by construction, and groups exposure.black with
+              # exposure.exposure/sigmoid.skew/temperature.tint as rows that
+              # are not. `0.0` is a plausible value (darktable's
+              # dt_iop_exposure_params_t.black is 0.0f in its C default, and
+              # an additive correction with no active history entry applies
+              # none), but nothing in this repo has host-verified it the way
+              # the sign convention was (§10, a rendered before/after
+              # scout.stats run) -- so it is a CANDIDATE, not a cited
+              # default, until tests/test_host_phase3.py's
+              # ProbeExposureBlackDefaultHostTest pins it (row
+              # LK-calibration-holes: the gauntlet's chart calibration probe
+              # may still probe from this candidate to reach a module the
+              # PFM chart never activates, but records the result as
+              # unverified rather than a settled measurement).
+              default_candidate=0.0),
     ParamSpec("sigmoid", "contrast", "sigmoid › contrast", "ratio", 1.0, 0.5, 3.0, 0.1,
               "xmp", None, False, "tone_mapper",
               "steepens or flattens the middle of the tone curve",
