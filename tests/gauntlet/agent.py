@@ -17,7 +17,7 @@ from pathlib import Path
 
 from gauntlet.adapter import CallRecord, Observation, Park
 from gauntlet.case import Case
-from tests.gauntlet import observe
+from tests.gauntlet import agent_budget, observe
 from tests.gauntlet.layers.common import AGENT_TURN_TIMEOUT_S, WRITE_TOOLS
 from tests.gauntlet.session import SessionBlocked
 
@@ -148,17 +148,24 @@ class AgentSession:
     TURN_TIMEOUT_S against the next session's darktable."""
 
     def __init__(self, inner, *, popen=subprocess.Popen, killpg=os.killpg,
-                 clock=time.monotonic) -> None:
+                 clock=time.monotonic, check_usage_budget=agent_budget.check_usage_budget
+                 ) -> None:
         self.inner = inner
         self.popen = popen
         self.killpg = killpg
         self.clock = clock
+        #: (row 501 item H): the pass parks itself (Park("usage_meter: ...")
+        #: -- caught the same way the limit-Park above already is) once the
+        #: usage meter passes its threshold, instead of running every turn
+        #: until the CLI's own wall limit hits mid-case.
+        self.check_usage_budget = check_usage_budget
         self.proc = None
         self.aborted = False
 
     def _turn(self, prompt: str, resume: str | None) -> dict:
         if self.aborted:
             raise AgentAborted("agent session aborted; no further claude turn")
+        self.check_usage_budget()
         path = self.inner.root / "mcp.json"
         path.write_text(json.dumps(mcp_config(self.inner.staged)))
         proc = self.popen(claude_argv(prompt, path, resume), stdout=subprocess.PIPE,

@@ -327,6 +327,36 @@ def test_frame_path_shown_to_the_agent_never_names_the_diagnosis(tmp_path, monke
         assert token not in alias_path, (token, alias_path)
 
 
+def test_agent_session_parks_on_the_usage_budget_before_spawning_claude(tmp_path, monkeypatch):
+    """(row 501 item H): the pass parks itself once the usage meter is over
+    threshold, without ever spawning a claude turn."""
+    from gauntlet.case import Case, Expect
+
+    class Inner:
+        root = tmp_path
+        floors = {}
+        touched = set()
+        staged = type("S", (), {"env": {"PYTHONPATH": "."}})()
+
+        def ensure_frame(self, role):
+            return tmp_path / "f.ORF"
+
+    monkeypatch.setattr(agent.observe, "snapshot", lambda p, k=None: {"fingerprint": "a",
+                                                                       "params": {}})
+
+    def over_budget():
+        raise Park("usage_meter: 75% >= 60%")
+
+    s = agent.AgentSession(Inner(), popen=lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("popen must not be called when parked on budget")),
+        check_usage_budget=over_budget)
+    case = Case(id="sca-budget", layer="scenarios_agent", tier="P0", mode="agent", steps=[],
+                expect=Expect("refuse"), body="olympus", frame_role="hero",
+                meta={"sentence": "warm it", "followups": []})
+    with pytest.raises(Park, match="usage_meter"):
+        s.run_case(case)
+
+
 def test_mcp_config_pins_the_session_library(tmp_path):
     staged = type("S", (), {"env": {"PYTHONPATH": ".", "SCOUTER_CACHE": "/c",
                                     "SCOUTER_DARKTABLE_LIBRARY_DB": str(tmp_path / "l.db")}})()
