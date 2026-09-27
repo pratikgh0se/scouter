@@ -1150,37 +1150,40 @@ def test_fix4_derived_key_is_restored_only_when_its_coefficients_are():
     assert v.outcome == "verified", v
 
 
-# ---- PAR-hollow-pass (night-1 triage rank 2, row 488 -- provisional pending
-# Pratik): a parity pair where BOTH sides fail the SAME way must not read as
-# a pass just because envelopes_match is truthy -- the verb never ran.
+# ---- PAR-hollow-pass (night-1 triage rank 2, row 488; Pratik's ruling row
+# 496 item 5, review fix round 2 D-1): `evaluate()` only reads the REASON
+# `exec_parity.parity_pair` already computed (variant-aware) and recorded in
+# `obs.extra["parity_needs_review"]` -- these tests pin evaluate()'s own
+# gate (present reason -> needs_review, absent -> untouched, flag ->
+# restores old scoring); the reason computation itself is pinned against
+# the real generator+parity_pair in tests/gauntlet/test_exec_parity.py and
+# tests/intent/test_parity_needs_review_intent.py (finding 11 / D-3).
 
 
-def test_parity_both_sides_error_same_way_is_needs_review_by_default():
+def _parity_case_obs(reason: str | None):
     case = _edit_case([Check("extra", target={"path": "envelopes_match", "op": "truthy"})],
                       None, kind="workflow", steps=[Step("parity_pair")])
     obs = Observation(calls=[CallRecord("parity_pair", {}, _ok({"diffs": []}))],
                       extra={"envelopes_match": True, "parity_diffs": [],
-                             "parity_both_failed": True})
+                             "parity_needs_review": reason})
+    return case, obs
+
+
+def test_parity_needs_review_reason_present_downgrades_to_needs_review():
+    case, obs = _parity_case_obs("happy variant: both sides failed the same way")
     v = evaluate(case, obs, POLICY)
     assert (v.score, v.outcome) == ("partial", "needs_review"), v
+    assert v.notes == ["happy variant: both sides failed the same way"]
 
 
-def test_parity_both_sides_ok_same_envelope_is_still_pass():
-    case = _edit_case([Check("extra", target={"path": "envelopes_match", "op": "truthy"})],
-                      None, kind="workflow", steps=[Step("parity_pair")])
-    obs = Observation(calls=[CallRecord("parity_pair", {}, _ok({"diffs": []}))],
-                      extra={"envelopes_match": True, "parity_diffs": [],
-                             "parity_both_failed": False})
+def test_parity_no_reason_is_still_pass():
+    case, obs = _parity_case_obs(None)
     v = evaluate(case, obs, POLICY)
     assert (v.score, v.outcome) == ("pass", "verified"), v
 
 
 def test_parity_same_failure_is_pass_flag_restores_the_old_scoring():
-    case = _edit_case([Check("extra", target={"path": "envelopes_match", "op": "truthy"})],
-                      None, kind="workflow", steps=[Step("parity_pair")])
-    obs = Observation(calls=[CallRecord("parity_pair", {}, _ok({"diffs": []}))],
-                      extra={"envelopes_match": True, "parity_diffs": [],
-                             "parity_both_failed": True})
+    case, obs = _parity_case_obs("happy variant: both sides failed the same way")
     lenient = Policy(**{**vars(POLICY), "flags": frozenset({"parity.same_failure_is_pass"})})
     v = evaluate(case, obs, lenient)
     assert (v.score, v.outcome) == ("pass", "verified"), v

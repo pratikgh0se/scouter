@@ -21,14 +21,16 @@ EXAMPLES = {e["id"]: e for e in
 
 def test_not_in_library_verb_imports_both_sides(corpus, tmp_path, monkeypatch):
     ex = EXAMPLES["not-in-library-verb-imports-both-sides"]
-    ok = {"ok": True, "outcome": "ok", "data": {}}
+    ok = {"ok": True, "outcome": "ok", "data": {
+        "job_slug": exec_parity.SMOKE_JOB_SLUG, "date": "2026-05-24",
+        "files": [{"source_name": "mcp-stub", "dest": "raw/x"}]}}
     mcp = FakeMcp(answers={"wb_kelvin": ok})
     s = _session(corpus, tmp_path, mcp=mcp).open()
     monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: __import__(
         "subprocess").CompletedProcess(a[0], 0, stdout=json.dumps(ok), stderr=""))
     case = Case(id="par-wb-kelvin-happy", layer="parity", tier="P0", mode="tool", steps=[],
                 expect=Expect("workflow"), body="olympus", frame_role="hero",
-                meta={"mcp": "wb_kelvin"})
+                meta={"mcp": "wb_kelvin", "variant": "happy"})
     step = Step("parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0,
                False)
     obs = Observation()
@@ -36,8 +38,17 @@ def test_not_in_library_verb_imports_both_sides(corpus, tmp_path, monkeypatch):
     # Oracle A: the import call count.
     imports = [c for c in mcp.calls if c[0] == "library_import"]
     assert len(imports) == ex["expect"]["library_import_calls"]
-    # Oracle B (independent): the pair still completed and compared cleanly.
-    assert "envelopes_match" in obs.extra
+    # Oracle B (A-6, review fix round 2 -- independent of the import count):
+    # the wb_kelvin call itself must have been substituted with the STAGED
+    # (library) path, never the raw, un-imported copy. `library_import`'s
+    # own envelope in this fake never names a real dest for "mcp-stub" (the
+    # actual staged file is named "*-mcp.ORF"), so the fallback path is what
+    # reaches the verb here -- still asserted explicitly, not "some path".
+    wb_calls = [c for c in mcp.calls if c[0] == "wb_kelvin"]
+    assert wb_calls, "wb_kelvin was never called"
+    image_arg = wb_calls[0][1]["image"]
+    assert image_arg.endswith("-mcp.ORF")
+    assert "/parity/mcp/" in image_arg.replace("\\", "/")
 
 
 def test_darkroom_open_skips_staging_uses_frame_switch_recovery_instead(corpus, tmp_path,
@@ -50,7 +61,7 @@ def test_darkroom_open_skips_staging_uses_frame_switch_recovery_instead(corpus, 
         "subprocess").CompletedProcess(a[0], 0, stdout=json.dumps(ok), stderr=""))
     case = Case(id="par-darkroom-open-happy", layer="parity", tier="P0", mode="tool", steps=[],
                 expect=Expect("workflow"), body="olympus", frame_role="hero",
-                meta={"mcp": "darkroom_open"})
+                meta={"mcp": "darkroom_open", "variant": "happy"})
     step = Step("parity_pair", {"verb": "darkroom.open", "args": {"image": "{frame:hero}"}},
                60.0, False)
     obs = Observation()
@@ -80,10 +91,28 @@ def test_not_in_darkroom_on_open_retries_once_via_relaunch(tmp_path):
                              write=write)
 
     s = _Session(tmp_path)
-    path = tmp_path / "parity" / "mcp" / "H.ORF"
-    rec = exec_parity._call_with_frame_switch(s, "darkroom_open", {"image": str(path)}, path,
-                                              30.0, False)
+    path = tmp_path / "parity" / "mcp" / "H-mcp.ORF"
+    obs = Observation()
+    rec = exec_parity._call_with_frame_switch(s, obs, "darkroom_open", {"image": str(path)}, path,
+                                              30.0, False, "mcp")
     # Oracle A: the relaunch log.
     assert bool(s.relaunches) == ex["expect"]["relaunched"]
     # Oracle B (independent): the call record's own error field.
     assert rec.error == ex["expect"]["final_error"]
+    # Oracle C (review fix round 2, A-3/finding 7 -- also independent): the
+    # retry must be RECORDED, so a pair where both sides needed it can be
+    # scored needs_review instead of a silent pass.
+    assert obs.extra["frame_switch_relaunch"] == ["mcp"]
+
+
+def test_distinct_source_names_and_once_per_session_import_documented_here():
+    # Documents the case run here; the full assertions (import counts across
+    # two calls, distinct source dir contents) are pinned in
+    # tests/gauntlet/test_exec_parity.py::
+    #   test_parity_pair_imports_both_sides_once_for_a_non_open_verb
+    #   test_parity_pair_uses_distinct_source_names_per_side
+    # (review fix round 2, A-1/A-2, finding 4) -- kept there rather than
+    # duplicated here since they need the real FakeMcp/_session machinery
+    # this module already imports for the other two examples.
+    assert EXAMPLES["distinct-source-names-and-once-per-session-import"]["expect"][
+        "mcp_and_cli_source_names_differ"] is True

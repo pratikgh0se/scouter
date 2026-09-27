@@ -1,6 +1,6 @@
 {
-  "about": "Zenkai Rules Z1 intent examples for PAR-hollow-pass's fixture staging (night-1 triage rank 4, scratchpad/night1-parity-install-guide-triage.md): tests/gauntlet/exec_parity.py parity_pair copied each side's frame but never imported it, staged no smoke-job/style smoke, and used no recovery for the darkroom.open image-switch limit -- 18 pairs (10 'not in library', 6 'fixture missing', 2 'smoke args are errors') and 1 frame-switch pair never really exercised the verb even though envelopes_match read true. Run by tests/gauntlet/test_exec_parity.py against fakes (FakeMcp/FakeDt from tests/gauntlet/test_session.py, and a minimal FakeSession for the staging helpers in isolation, same pattern as tests/gauntlet/test_exec_bulk.py).",
-  "subject": "tests/gauntlet/exec_parity.py _stage_side, _ensure_smoke_style, _call_with_frame_switch, parity_pair",
+  "about": "Zenkai Rules Z1 intent examples for PAR-hollow-pass's fixture staging (night-1 triage rank 4, scratchpad/night1-parity-install-guide-triage.md): tests/gauntlet/exec_parity.py parity_pair copied each side's frame but never imported it, staged no smoke-job/style smoke, and used no recovery for the darkroom.open image-switch limit -- 18 pairs (10 'not in library', 6 'fixture missing', 2 'smoke args are errors') and 1 frame-switch pair never really exercised the verb even though envelopes_match read true. Review fix round 2 (Opus, n1-harness-review.md section 1) found the first pass still shared ONE library frame between both sides (A-1: library_import's resume identity is (source_name, sha256), and both copies had the same name), re-imported per case (A-2: ~184 round trips per layer), never recorded a masked frame-switch relaunch (A-3/finding 7) or a failed fixture (A-4/A-5/finding 13), and had a trivially-true oracle (A-6). Fixed: distinct per-side source names, import once per session with cached destinations and a per-case sidecar reset (finding 4), frame_switch_relaunch recorded (both-sides -> needs_review), fixture_errors recorded, and the oracle below now asserts the actual substituted image path. Run by tests/gauntlet/test_exec_parity.py against fakes (FakeMcp/FakeDt from tests/gauntlet/test_session.py, and a minimal FakeSession for the staging helpers in isolation, same pattern as tests/gauntlet/test_exec_bulk.py).",
+  "subject": "tests/gauntlet/exec_parity.py _staged_dests, _stage_side, _ensure_smoke_style, _call_with_frame_switch, parity_pair",
   "examples": [
     {
       "id": "not-in-library-verb-imports-both-sides",
@@ -17,8 +17,15 @@
     {
       "id": "not-in-darkroom-on-open-retries-once-via-relaunch",
       "input": {"first_answer": "error not_in_darkroom", "second_answer": "ok"},
-      "expect": {"relaunched": true, "final_error": null},
-      "source": "night1-parity-install-guide-triage.md: 'darkroom.open-happy (P0). It fails on both sides with wrong image loaded ... known darkroom.open image-switch limit' -- mirrors ScouterSession._relaunch_then_reopen's own not_in_darkroom recovery"
+      "expect": {"relaunched": true, "final_error": null, "frame_switch_relaunch_recorded": ["mcp"]},
+      "source": "night1-parity-install-guide-triage.md: 'darkroom.open-happy (P0). It fails on both sides with wrong image loaded ... known darkroom.open image-switch limit' -- mirrors ScouterSession._relaunch_then_reopen's own not_in_darkroom recovery. Review fix round 2, A-3: the retry is now RECORDED, not silent."
+    },
+    {
+      "id": "distinct-source-names-and-once-per-session-import",
+      "input": {"two_parity_pair_calls_same_session": true},
+      "expect": {"library_import_calls_first_case": 2, "library_import_calls_second_case": 0,
+                "mcp_and_cli_source_names_differ": true},
+      "source": "review fix round 2, A-1/A-2 (finding 4): 'library_import's resume identity is (source_name, sha256) ... both the CLI-side import is a resume-skip ... every later case also resumes into that one frame'. Fix: distinct per-side names (<stem>-mcp<ext> / <stem>-cli<ext>), imported ONCE per session with the two destinations cached (tests/gauntlet/exec_parity.py test_parity_pair_imports_both_sides_once_for_a_non_open_verb / test_parity_pair_uses_distinct_source_names_per_side)"
     }
   ]
 }

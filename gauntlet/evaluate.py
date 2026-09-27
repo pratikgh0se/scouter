@@ -48,6 +48,15 @@ ALIASES = {"reported_ok_unverified": "silent_failure", "honest_refusal": "wrong_
 POINTS = {PASS: 1.0, PARTIAL: 0.5, FAIL: 0.0}
 NOOP_OUTCOMES = ("noop", "dry_run")
 
+#: Zenkai Rules Z4 (docs/ZENKAI.md): every name a `Policy.flags` entry may
+#: carry, added here in the SAME change that adds the `evaluate()` branch
+#: reading it. `tests/gauntlet/policy.py::load_policy` refuses any
+#: check_map.json "flags" entry whose name is not in this set, and refuses
+#: (Z4: "reason, rule named, fix card, expiry") one missing a reason, a
+#: card or an expiry -- a flag is a scoring BYPASS, so it needs the same
+#: override record any other Zenkai exception does, never a bare name.
+KNOWN_FLAGS = frozenset({"parity.same_failure_is_pass"})
+
 
 @dataclass(frozen=True)
 class Policy:
@@ -55,11 +64,15 @@ class Policy:
     transient_codes: frozenset[str]
     refusal_markers: tuple[str, ...]
     claim_markers: tuple[str, ...]
-    #: Named, provisional overrides (row 488 pending Pratik): a flag's mere
-    #: PRESENCE turns it on; a flag never in this set is off -- so a fresh
-    #: Policy (an empty set, the dataclass default) behaves exactly as before
-    #: any flag existed. One flag lives here today:
-    #: "parity.same_failure_is_pass" (see `evaluate`'s PAR-hollow-pass check).
+    #: Named, provisional overrides (row 488 pending Pratik), ACTIVE names
+    #: only -- everything else (reason/card/expiry, Z4) lives in
+    #: check_map.json's own "flags" entries and is checked by
+    #: `tests/gauntlet/policy.py::load_policy` before a name ever lands
+    #: here. A flag's mere PRESENCE turns it on; a flag never in this set
+    #: is off -- so a fresh Policy (an empty set, the dataclass default)
+    #: behaves exactly as before any flag existed. One flag is known today:
+    #: "parity.same_failure_is_pass" (see `evaluate`'s PAR-hollow-pass
+    #: check; the full name list is `KNOWN_FLAGS` above).
     flags: frozenset[str] = frozenset()
 
 
@@ -902,19 +915,30 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     if obs.healed and not case.meta.get("allow_heal"):
         return Verdict(FAIL, "failed", notes=["watchdog heal inside a case (spec 6.4)"])
     results = [run_check(i, ch, obs) for i, ch in enumerate(case.expect.checks)]
-    # PAR-hollow-pass (night-1 triage rank 2, row 488 -- provisional pending
-    # Pratik): a layer 6 parity pair (tests/gauntlet/exec_parity.py
-    # parity_pair) where BOTH sides answered the SAME failure is not
-    # evidence the verb itself ran -- `envelopes_match` alone would read it
-    # as a pass. `parity.same_failure_is_pass` restores the old scoring with
-    # a one-line config flip (tests/gauntlet/data/check_map.json's "flags"),
-    # and defaults off.
-    if obs.extra.get("parity_both_failed") and \
+    # PAR-hollow-pass (night-1 triage rank 2, row 488; Pratik's ruling row
+    # 496 item 5, review fix round 2 D-1): a layer 6 parity pair (tests/
+    # gauntlet/exec_parity.py parity_pair) where both sides answer the SAME
+    # thing is not, on its own, evidence the verb ran as intended --
+    # `envelopes_match` alone would read it as a pass. `parity_pair`
+    # computes the (variant-aware) reason and records it in
+    # `obs.extra["parity_needs_review"]`; ONLY those cases are downgraded:
+    #   - a HAPPY variant where both sides failed the same way (the verb
+    #     never really ran);
+    #   - an ERROR variant where a side ACCEPTED the deliberately-bad
+    #     input instead of refusing it, or where the shared refusal code is
+    #     transient (not a typed refusal the verb chose);
+    #   - a pair where BOTH sides needed a frame-switch relaunch
+    #     (LK-frame-switch-relaunch) to open the frame at all.
+    # An error variant where both sides refuse the SAME typed way is a
+    # genuine pass -- that is the point of the error variant -- and is never
+    # touched here. `parity.same_failure_is_pass` restores the old (lenient)
+    # scoring with a one-line config flip (tests/gauntlet/data/
+    # check_map.json's "flags" list; see Policy.flags/KNOWN_FLAGS), and
+    # defaults off.
+    if obs.extra.get("parity_needs_review") and \
             "parity.same_failure_is_pass" not in policy.flags:
         return Verdict(PARTIAL, "needs_review", results,
-                       notes=["both sides answered the same failure; the verb never ran "
-                              "(parity_diffs empty, neither envelope ok) -- flip "
-                              "parity.same_failure_is_pass to score this a pass instead"])
+                       notes=[obs.extra["parity_needs_review"]])
     kind = case.expect.kind
 
     if kind == "refuse":
