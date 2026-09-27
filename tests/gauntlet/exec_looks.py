@@ -35,12 +35,15 @@ def _probe_base(module: str, param: str) -> tuple[float | None, str | None]:
     delta) reaches the module regardless.
 
     A row may also declare only `default_candidate` (row 474: a value
-    believed correct but not yet host-verified, e.g. `exposure.black` --
-    §4.3 leaves its `default` column blank and no host probe has pinned it).
-    This function still returns it, so `chart_golden` can probe from it and
-    measure a real slope -- but the caller must record the result as
-    unverified (`calibration_errors[key] = "default_unverified"`), never as
-    a settled measurement, until the row is promoted to `default`.
+    believed correct but not yet host-verified -- §4.3 leaves its `default`
+    column blank and no host probe has pinned it; `exposure.black` was one
+    such row until row 495/496's host probe promoted it to a cited
+    `default`, so this function returns it via the `"default"` branch above
+    now, ahead of this one). This function still returns a candidate when it
+    is all a row has, so `chart_golden` can probe from it and measure a real
+    slope -- but the caller must record the result as unverified
+    (`calibration_errors[key] = "default_unverified"`), never as a settled
+    measurement, until the row is promoted to `default`.
 
     When neither `neutral`, `default`, nor `default_candidate` is declared
     for a row (still true for `temperature.temperature` -- the PFM chart has

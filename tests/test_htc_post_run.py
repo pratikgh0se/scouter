@@ -12,7 +12,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+import uuid
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "htc_post_run.sh"
@@ -72,7 +74,17 @@ class _FakeRepoCase(unittest.TestCase):
         # repo; --execute's GATE_CMD/PYTEST_CMD are always overridden below.
 
         self.runs_root = root / "gauntlet"
-        self.run_dir = self.runs_root / "night1-20260927"
+        # Row 495/496: a unique, per-test stamp (uuid), not a fixed
+        # "night1-20260927" shared by every test in this class -- the
+        # precondition check does a HOST-WIDE `pgrep -f "run --stamp
+        # <stamp>"` (unfaked in this class, unlike LiveRunnerRefusalTest),
+        # so a fixed, date-shaped stamp can collide with a real, unrelated
+        # gauntlet runner actually live on a busy shared machine (observed:
+        # keeper-log.md, three separate transient pgrep hits on
+        # night1-20260927 across three reruns). A uuid-suffixed stamp is
+        # never a real run's stamp.
+        self.stamp = f"night1-test-{uuid.uuid4().hex[:12]}"
+        self.run_dir = self.runs_root / self.stamp
         self.run_dir.mkdir(parents=True)
 
     def write_progress(self, status: str, layers: dict[str, str] | None = None) -> None:
@@ -149,6 +161,88 @@ class PreconditionGateTest(_FakeRepoCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("runner pid gone", p.stdout)
 
+    def _spawn_foreign_process(self, argv_text: str) -> subprocess.Popen:
+        """A real process (fix round 1, finding 9: via `sys.executable`, not
+        a bare `python3` off PATH) whose command line contains `argv_text`
+        -- same spawn pattern as
+        `tests/test_htc_night2.py::GauntletRunnerRefusalTest::
+        _spawn_dummy_launcher`. Waits for real `pgrep -f` to see it before
+        returning, and the process is killed AND reaped in cleanup (finding
+        9: `proc.wait()` after `kill`, so it never lingers as a zombie)."""
+        proc = subprocess.Popen(
+            [sys.executable, "-c",
+             f"import time  # stand-in for the gauntlet launcher's own argv\n"
+             f"# {argv_text}\n"
+             "time.sleep(20)"])
+
+        def _cleanup() -> None:
+            proc.kill()
+            proc.wait()
+
+        self.addCleanup(_cleanup)
+        deadline = time.monotonic() + 5.0
+        needle = argv_text.split(" --resume")[0]  # "run --stamp <stamp>"
+        while time.monotonic() < deadline:
+            found = subprocess.run(["pgrep", "-f", needle], capture_output=True).returncode == 0
+            if found:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("dummy foreign process never became visible to pgrep")
+        return proc
+
+    def test_a_foreign_process_whose_argv_contains_another_runs_stamp_text_is_not_matched(
+            self) -> None:
+        """Row 495/496: `pgrep -f` does a plain substring/regex search, so
+        an UNANCHORED `run --stamp $STAMP_NAME` would false-positive when
+        this run's own stamp is a textual PREFIX of a different, unrelated
+        run's (longer) stamp -- exactly the shape a uuid-suffixed test
+        stamp (`self.stamp`) and a copy of it with extra text tacked on
+        recreate. Spawns a REAL foreign process whose argv is
+        `... run --stamp <self.stamp>-OTHERRUN --resume ...` -- text that
+        trivially CONTAINS `self.stamp` -- and proves the precondition for
+        `self.stamp` itself does NOT block on it. Paired with the positive
+        case right below: the same machinery DOES block on an exact match."""
+        self.write_progress("done")
+        foreign_stamp = f"{self.stamp}-OTHERRUN"
+        self._spawn_foreign_process(f"run --stamp {foreign_stamp} --resume --wait-on-park")
+
+        p = self.invoke()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("no live runner", p.stdout)
+        self.assertNotIn("BLOCKED", p.stdout)
+
+    def test_a_foreign_process_running_this_exact_stamp_is_matched_and_blocks(self) -> None:
+        """Fix round 1, finding 7 (reviewer): the anchored regex has no
+        POSITIVE real-pgrep test -- an over-anchored pattern (e.g. matching
+        only end-of-argv) would pass every existing test here while missing
+        the real launcher's argv (which has more text, `--resume ...`,
+        after the stamp) and silently never blocking a live run. Spawns a
+        real foreign process for THIS test's own stamp and proves it DOES
+        block."""
+        self.write_progress("done")
+        self._spawn_foreign_process(f"run --stamp {self.stamp} --resume --wait-on-park")
+
+        p = self.invoke()
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("BLOCKED", p.stdout)
+        self.assertIn(f"stamp {self.stamp}", p.stdout)
+
+    def test_pgrep_override_is_honoured(self) -> None:
+        """Fix round 1, finding 6 (reviewer): `$PGREP` was added but never
+        exercised by a test -- a script that silently hard-codes `pgrep`
+        again would still pass every other test here. A fake `PGREP`
+        pointed to directly (not via a PATH trick, unlike
+        `LiveRunnerRefusalTest`) that always reports a match must BLOCK."""
+        self.write_progress("done")
+        fake_pgrep = Path(self.tmp.name) / "fake-pgrep-direct"
+        fake_pgrep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        fake_pgrep.chmod(0o755)
+        p = self.invoke(PGREP=str(fake_pgrep))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("BLOCKED", p.stdout)
+        self.assertIn(f"stamp {self.stamp}", p.stdout)
+
     def test_passes_and_prints_the_batch_when_both_hold(self) -> None:
         self.write_progress("done")
         p = self.invoke()
@@ -160,6 +254,7 @@ class PreconditionGateTest(_FakeRepoCase):
         self.assertIn("push origin main", out)
         self.assertIn("SCOUTER_HOST_TESTS=1", out)
         self.assertIn("tests/test_host_phase3.py::ProbeCandidatePathsHostTest", out)
+        self.assertIn("tests/test_host_phase3.py::ProbeExposureBlackDefaultHostTest", out)
         self.assertIn("tests/test_host_colorcal.py", out)
         self.assertIn("darkroom_say", out)
         self.assertIn("view_bounce_action", out)
@@ -172,6 +267,79 @@ class PreconditionGateTest(_FakeRepoCase):
         self.assertIn("targeted GAUNTLET rerun", out)
         self.assertIn("gauntlet run --stamp", out)
         self.assertIn("--ids-file", out)
+
+    def test_probe_commands_carry_m_host_exactly_where_the_marker_is(self) -> None:
+        """Row 495/496: the two printed `tests/test_host_phase3.py` probe
+        classes carry `@pytest.mark.host` -- `pyproject.toml`'s
+        `addopts = "-m 'not host'"` deselects them by default, so their
+        printed command needs an explicit `-m host` or a copy-paste of the
+        runbook silently runs nothing (exit 5, deselected). `test_host_
+        colorcal.py` gates via `@unittest.skipUnless`, no pytest marker, so
+        `-m host` there would wrongly deselect IT instead. Verified two
+        ways (oracle 1: the real marker, read by collecting the repo's own
+        test files with `-m host`; oracle 2: the printed command text).
+
+        Fix round 1, finding 8 (reviewer): collecting `test_host_colorcal.py`
+        under `-m host` and finding no `::` lines is ALSO exactly what a
+        broken collection (e.g. a syntax error introduced elsewhere in that
+        file) looks like -- a vacuous pass, not evidence the file has no
+        `@pytest.mark.host`. Pytest's own exit code tells the two apart: 0
+        (some tests ran) or 5 (collected zero, cleanly) are both healthy;
+        anything else (2: collection error) is not -- asserted here, plus a
+        positive control (collecting colorcal with no `-m` at all must find
+        real tests, so collection isn't broken some OTHER way)."""
+        real_repo = Path(__file__).resolve().parent.parent
+        phase3 = real_repo / "tests" / "test_host_phase3.py"
+        colorcal = real_repo / "tests" / "test_host_colorcal.py"
+
+        def collected_under_host(node_id: str) -> tuple[set[str], int]:
+            p = subprocess.run(
+                [sys.executable, "-m", "pytest", "--collect-only", "-q", "-m", "host", node_id],
+                cwd=str(real_repo), capture_output=True, text=True,
+            )
+            return {line for line in p.stdout.splitlines() if "::" in line}, p.returncode
+
+        candidate_paths_host, candidate_paths_rc = collected_under_host(
+            f"{phase3}::ProbeCandidatePathsHostTest")
+        exposure_black_host, exposure_black_rc = collected_under_host(
+            f"{phase3}::ProbeExposureBlackDefaultHostTest")
+        colorcal_host, colorcal_rc = collected_under_host(str(colorcal))
+
+        # Oracle 1: the real markers, as pytest itself resolves them.
+        self.assertTrue(candidate_paths_host, "ProbeCandidatePathsHostTest lost @pytest.mark.host")
+        self.assertEqual(candidate_paths_rc, 0)
+        self.assertTrue(exposure_black_host,
+                        "ProbeExposureBlackDefaultHostTest lost @pytest.mark.host")
+        self.assertEqual(exposure_black_rc, 0)
+        self.assertFalse(colorcal_host,
+                         "test_host_colorcal.py unexpectedly gained @pytest.mark.host")
+        # Finding 8: an empty result must be a clean "collected zero" (5),
+        # not a broken collection (any other code) passing vacuously.
+        self.assertIn(colorcal_rc, (0, 5),
+                      (colorcal_rc, "collection under -m host must be clean, not silently broken"))
+        # Positive control: colorcal WITHOUT -m host really does collect
+        # real tests (rules out collection being broken some other way).
+        p = subprocess.run(
+            [sys.executable, "-m", "pytest", "--collect-only", "-q", str(colorcal)],
+            cwd=str(real_repo), capture_output=True, text=True,
+        )
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(any("::" in line for line in p.stdout.splitlines()),
+                        "test_host_colorcal.py collected no tests at all without -m host")
+
+        self.write_progress("done")
+        out = self.invoke().stdout
+
+        # Oracle 2: the printed command text matches what oracle 1 found.
+        candidate_paths_line = next(
+            l for l in out.splitlines() if "ProbeCandidatePathsHostTest" in l)  # noqa: E741
+        exposure_black_line = next(
+            l for l in out.splitlines() if "ProbeExposureBlackDefaultHostTest" in l)  # noqa: E741
+        colorcal_line = next(
+            l for l in out.splitlines() if "test_host_colorcal.py" in l)  # noqa: E741
+        self.assertIn("-m host", candidate_paths_line, candidate_paths_line)
+        self.assertIn("-m host", exposure_black_line, exposure_black_line)
+        self.assertNotIn("-m host", colorcal_line, colorcal_line)
 
     def test_idempotent_reruns_agree(self) -> None:
         self.write_progress("done")

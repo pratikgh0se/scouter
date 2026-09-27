@@ -75,6 +75,12 @@ fi
 
 say() { echo "[$(date '+%F %T')] $*"; }
 
+# Row 495/496: an injectable pgrep runner (the same override shape as
+# $SCOUTER_PYTHON above / dtprocess's own tests, which fake the binary a
+# process check shells out to rather than hard-coding it) -- a test can set
+# $PGREP to a stand-in without needing a PATH trick.
+PGREP="${PGREP:-pgrep}"
+
 # -- (a) precondition 1: progress.json says the run is done, AND (I8)
 #    every expected layer -- including scenarios_agent, the second pass --
 #    itself terminated cleanly. `doc.status == "done"` alone is NOT
@@ -169,8 +175,17 @@ fi
 #    the command line every pass actually runs (`... run --stamp <STAMP>`)
 #    catches an ACTIVELY running pass; combined with precondition 1's
 #    per-layer check (which catches the gap between passes), the run is
-#    genuinely over. Overridable for tests that fake `pgrep`.
-if pgrep -f "run --stamp $STAMP_NAME" >/dev/null 2>&1; then
+#    genuinely over. Overridable for tests that fake `pgrep` (via $PGREP,
+#    or a PATH override -- either reaches this same call).
+#
+#    Row 495/496: the stamp is anchored with a trailing word boundary
+#    (`([[:space:]]|$)`), not left bare -- a bare `run --stamp $STAMP_NAME`
+#    would substring-match a DIFFERENT, unrelated run whose own (longer)
+#    stamp merely starts with this one's text (e.g. this run's stamp
+#    "night1-2026" is a textual prefix of another, real run's
+#    "night1-20260927"), which pgrep -f's plain substring/regex search
+#    cannot otherwise tell apart from an exact match.
+if "$PGREP" -f "run --stamp ${STAMP_NAME}([[:space:]]|\$)" >/dev/null 2>&1; then
   say "BLOCKED: a gauntlet runner for stamp $STAMP_NAME is still running"
   ok=0
 else
@@ -238,7 +253,8 @@ echo "git -C \"$SCRIPT_HOME\" merge --ff-only $BATCH"
 echo "git -C \"$SCRIPT_HOME\" push origin main"
 echo
 echo "# 3) host probes (quit any running darktable first; never run by this script)"
-echo "SCOUTER_HOST_TESTS=1 $PY -m pytest tests/test_host_phase3.py::ProbeCandidatePathsHostTest -q -s"
+echo "SCOUTER_HOST_TESTS=1 $PY -m pytest tests/test_host_phase3.py::ProbeCandidatePathsHostTest -q -s -m host"
+echo "SCOUTER_HOST_TESTS=1 $PY -m pytest tests/test_host_phase3.py::ProbeExposureBlackDefaultHostTest -q -s -m host"
 echo "SCOUTER_HOST_TESTS=1 $PY -m pytest tests/test_host_colorcal.py -q -s"
 echo
 echo "# 4) stale-history live check (never run by this script):"
