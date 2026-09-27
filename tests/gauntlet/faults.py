@@ -232,12 +232,19 @@ def disarm(session, v: dict) -> list[str]:
             else:
                 del session.call
         guard("restore session.call", restore_call)
-    if v.get("_resume_sigcont"):
-        guard("SIGCONT owned darktable", lambda: _owned_kill(signal.SIGCONT))
     for snap in reversed(v.get("_restore", [])):
         guard(f"restore {snap['path']}", lambda snap=snap: _restore(snap))
     if v.get("_relaunch") or v.get("_resume_sigcont"):
-        guard("relaunch", session.relaunch)
+        #: (fix round 1 review H2/L4): a freeze fault's own recovery had the
+        #: SAME ghost-edit risk hang recovery does -- disarm used to send a
+        #: bare SIGCONT then relaunch, with no MCP teardown or spool purge in
+        #: between (the triage's exact r17 sequence). One fenced helper,
+        #: never a separate SIGCONT step (SIGKILL inside `fence_and_recover`'s
+        #: own quit step terminates a SIGSTOPped process outright; no resume
+        #: needed first) and never doubled up with a hang's own recovery for
+        #: the same case (run_fault_case skips its own fence when either flag
+        #: is set here).
+        errors += fence_and_recover(session)
     if v.get("_detach"):
         guard("hdiutil detach", lambda: _hdiutil("detach", v["_detach"], "-force"))
     if v.get("_job_frames"):
@@ -402,7 +409,13 @@ def run_fault_case(session, case: Case) -> Observation:
     finally:
         errors = disarm(session, v)
         if obs is not None and (obs.blocked or "").startswith("hang"):
-            errors = errors + _recover_from_hang(session)
+            #: (fix round 1 review L4): never doubles up with disarm's own
+            #: fenced recovery for a freeze-fault hang -- `disarm` above
+            #: already ran `fence_and_recover` for `_resume_sigcont`/
+            #: `_relaunch`; a hang from any OTHER fault has neither flag set,
+            #: so this is the only fence that runs for it.
+            if not (v.get("_resume_sigcont") or v.get("_relaunch")):
+                errors = errors + fence_and_recover(session)
     if obs is not None and v.get("_contaminated_restaged"):
         obs.extra["contaminated_restaged"] = True
     if errors:
@@ -410,25 +423,68 @@ def run_fault_case(session, case: Case) -> Observation:
     return obs
 
 
-def _recover_from_hang(session) -> list[str]:
-    """(night1-robustness-triage.md item 1): relaunch darktable and reopen the
-    MCP client after a hang, so the next case starts clean instead of
-    inheriting the wedge (and the abandoned call's backlog) and being scored
-    as its own hang. Never raises: a failure here is reported like any other
-    disarm error. `reopen_mcp` is optional (real `ScouterSession` has it; a
-    minimal test double may not, and skips that half)."""
+def fence_and_recover(session) -> list[str]:
+    """(night1-robustness-triage.md item 1; fix round 1 review H2): the
+    ghost-edit fence. A hang -- or a freeze fault's own disarm -- leaves
+    darktable wedged (or frozen) and the MCP server's own queue backlogged
+    with an abandoned call. The bridge is a file spool: request files are
+    removed only in the MCP server's own `Bridge.call` `finally`, and the
+    plugin's stale-request sweep is 600s. A plain relaunch (quit + launch)
+    is not enough -- the OLD MCP server can keep talking to the NEW
+    darktable for as long as its own graceful close takes, and a request
+    file already written to the spool survives a relaunch untouched (the
+    triage's r17 sequence: relaunch resumed the old process's queued
+    `darkroom_say`, which then answered `ok` on the new darktable AFTER the
+    case that sent it had already ended).
+
+    Order, every step best-effort / independent of the others failing:
+    1. SIGKILL the OLD MCP server outright (never a graceful close, which
+       would let it keep talking).
+    2. Quit darktable (never launch a second one if this does not confirm
+       ok -- same rule `_quit`'s own docstring states).
+    3. Purge the spool of `request-*.json`/`*.json.tmp`.
+    4. Launch darktable fresh.
+    5. Open a fresh MCP client (`reopen_mcp`).
+
+    `session` needs only what real `ScouterSession` exposes for this
+    (`mcp`, `_quit`, `purge_spool`, `_launch`, `reopen_mcp`); a minimal test
+    double that has none of `_quit`/`_launch` falls back to its own
+    `relaunch()` (which bundles quit+launch) plus `reopen_mcp` if it has
+    one -- never crashes a fault case over a fake missing plumbing."""
     errors: list[str] = []
-    try:
-        session.relaunch()
-    except Exception as e:  # noqa: BLE001 - reported, never raised
-        errors.append(f"hang recovery relaunch: {type(e).__name__}: {e}"[:300])
-        return errors  # the mcp client may still be stale; nothing more to try
-    reopen = getattr(session, "reopen_mcp", None)
-    if reopen is not None:
+
+    def guard(what: str, fn) -> bool:
         try:
-            reopen()
-        except Exception as e:  # noqa: BLE001
-            errors.append(f"hang recovery reopen_mcp: {type(e).__name__}: {e}"[:300])
+            fn()
+            return True
+        except Exception as e:  # noqa: BLE001 - reported, never raised
+            errors.append(f"{what}: {type(e).__name__}: {e}"[:300])
+            return False
+
+    mcp = getattr(session, "mcp", None)
+    proc = getattr(mcp, "proc", None)
+    if proc is not None:
+        guard("fence: kill old mcp server", proc.kill)
+
+    quit_fn = getattr(session, "_quit", None)
+    launch_fn = getattr(session, "_launch", None)
+    reopen = getattr(session, "reopen_mcp", None)
+    if quit_fn is None or launch_fn is None:
+        if guard("relaunch", session.relaunch) and reopen is not None:
+            guard("reopen mcp", reopen)
+        return errors
+
+    if not guard("quit darktable", lambda: quit_fn("fence_and_recover")):
+        return errors  # never launch a second darktable when quit did not confirm ok
+    purge = getattr(session, "purge_spool", None)
+    if purge is not None:
+        guard("purge spool", purge)
+    frame = getattr(session, "current_frame", None) or \
+        (session.staged.frames["hero"] if getattr(session, "staged", None) else None)
+    if not guard("launch darktable", lambda: launch_fn(frame)):
+        return errors
+    if reopen is not None:
+        guard("reopen mcp", reopen)
     return errors
 
 

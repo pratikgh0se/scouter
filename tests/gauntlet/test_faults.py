@@ -150,7 +150,12 @@ def test_arm_raising_is_typed_blocked_and_partial_disarm_ran(tmp_path, monkeypat
     s = FakeSession(tmp_path)
     obs = faults.run_fault_case(s, _cases()["R3"])  # wedge_worker
     assert obs.blocked == "harness_bug: ProcessLookupError: gone"
-    assert kills == [signal.SIGSTOP, signal.SIGCONT] and s.relaunches == 1
+    # (fix round 1 review H2): disarm's SIGCONT-then-relaunch is now the one
+    # fence_and_recover helper -- no bare SIGCONT any more (a SIGSTOPped
+    # process is terminated outright by the quit ladder's eventual SIGKILL,
+    # never resumed first); FakeSession has no _quit/_launch, so it falls
+    # back to its own relaunch().
+    assert kills == [signal.SIGSTOP] and s.relaunches == 1
 
 
 def test_disarm_step_raising_is_recorded_not_raised(tmp_path, monkeypatch):
@@ -210,8 +215,8 @@ def test_hang_recovery_failure_is_reported_not_raised(tmp_path, monkeypatch):
     s = FakeSession(tmp_path, relaunch_error=SessionBlocked("relaunch: did not quit"))
     obs = faults.run_fault_case(s, _cases()["R12"])
     assert obs.blocked == "hang"
-    assert obs.extra["disarm_errors"] == [
-        "hang recovery relaunch: SessionBlocked: relaunch: did not quit"]
+    # (fix round 1 review H2): fence_and_recover, same helper disarm uses.
+    assert obs.extra["disarm_errors"] == ["relaunch: SessionBlocked: relaunch: did not quit"]
     assert s.mcp_reopened == 0  # relaunch failed; reopen was never attempted
 
 
@@ -241,7 +246,10 @@ def test_broken_luarc_never_launches_when_quit_fails(tmp_path, kills):
     obs = faults.run_fault_case(s, _cases()["R23"])  # dtprocess.launch raises if called
     assert obs.blocked.startswith("session: broken_luarc: darktable did not quit")
     assert launched == [] and kills == []
-    assert obs.extra["disarm_errors"][0].startswith("relaunch: SessionBlocked")
+    # (fix round 1 review H2): a real ScouterSession's fence_and_recover
+    # quits and launches as two separate guarded steps -- never launches a
+    # second darktable when quit itself did not confirm ok.
+    assert obs.extra["disarm_errors"][0].startswith("quit darktable: SessionBlocked")
 
 
 def test_kill_timer_starts_at_the_step_and_is_cancelled_in_disarm(tmp_path, monkeypatch,
@@ -415,7 +423,7 @@ def test_r3_isolate_runs_before_the_freeze_signal(tmp_path, monkeypatch, kills):
     obs = faults.run_fault_case(s, _cases()["R3"])  # wedge_worker
     assert obs.blocked is None
     # the reset ran, and answered, BEFORE the freeze signal -- never after
-    assert order == ["darkroom_reset", "SIGSTOP", "SIGCONT"]
+    assert order == ["darkroom_reset", "SIGSTOP"]  # (H2) no bare SIGCONT any more
     assert s.touched == set()  # isolate cleared it before arm ever ran
 
 
@@ -486,8 +494,87 @@ def test_r3_restage_is_reopened_before_the_freeze(tmp_path, monkeypatch, kills):
     monkeypatch.setattr(execute, "run_tool_case", lambda session, case, **kw: Observation())
     s = ToolSession(tmp_path)
     obs = faults.run_fault_case(s, _cases()["R3"])  # wedge_worker
-    assert order == ["ensure_frame", "ensure_frame", "SIGSTOP", "SIGCONT"]
+    assert order == ["ensure_frame", "ensure_frame", "SIGSTOP"]  # (H2) no bare SIGCONT
     assert obs.extra.get("contaminated_restaged") is True
+
+
+def test_fence_and_recover_runs_in_the_fenced_order(tmp_path):
+    """Fix round 1 review H2 (high): one fenced helper, always in this exact
+    order: SIGKILL the old MCP server, quit darktable, purge the spool,
+    launch fresh, open a fresh client. A swapped order (e.g. purge before
+    quit, or launch before purge) fails this test -- the previous branch's
+    Fix A tests only asserted `relaunches == 1`/`mcp_reopened == 1`, which a
+    swapped order still satisfies (review finding: "swapping the order
+    leaves 3 of the 4 Fix A tests green")."""
+    order: list[str] = []
+
+    class Proc:
+        def kill(self):
+            order.append("mcp_kill")
+
+    class Mcp:
+        proc = Proc()
+
+    class S:
+        mcp = Mcp()
+        current_frame = None
+        staged = SimpleNamespace(frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            order.append("dt_quit")
+
+        def purge_spool(self):
+            order.append("spool_purge")
+
+        def _launch(self, frame):
+            order.append("dt_launch")
+
+        def reopen_mcp(self):
+            order.append("mcp_open")
+
+    errors = faults.fence_and_recover(S())
+    assert errors == []
+    assert order == ["mcp_kill", "dt_quit", "spool_purge", "dt_launch", "mcp_open"]
+
+
+def test_fence_and_recover_purges_a_stale_request_before_launch(tmp_path):
+    """Fix round 1 review H2 (high): a `request-*.json` the killed MCP server
+    left behind must be gone before the fresh darktable launches, not merely
+    eventually swept by the plugin's own 600s stale-request sweep -- the
+    triage's r17 ghost edit is exactly this file surviving a relaunch."""
+    from tests.gauntlet.session import ScouterSession
+
+    cache = tmp_path / "cache"
+    spool = cache / "darktable-mcp"
+    spool.mkdir(parents=True)
+    stale_request = spool / "request-42.json"
+    stale_request.write_text("{}")
+    stale_tmp = spool / "response-42.json.tmp"
+    stale_tmp.write_text("{}")
+    order: list[str] = []
+
+    class S:
+        mcp = None
+        current_frame = None
+        staged = SimpleNamespace(env={"XDG_CACHE_HOME": str(cache)},
+                                 frames={"hero": Path("/hero.ORF")})
+
+        def _quit(self, why):
+            order.append("dt_quit")
+
+        def purge_spool(self):
+            order.append("spool_purge")
+            ScouterSession.purge_spool(self)
+
+        def _launch(self, frame):
+            order.append("dt_launch")
+            # the purge must already have run by the time darktable launches
+            assert not stale_request.exists() and not stale_tmp.exists()
+
+    errors = faults.fence_and_recover(S())
+    assert errors == []
+    assert order == ["dt_quit", "spool_purge", "dt_launch"]
+    assert not stale_request.exists() and not stale_tmp.exists()
 
 
 def test_r18_attach_timeout_detaches_the_image(tmp_path, monkeypatch):

@@ -351,6 +351,26 @@ class ScouterSession:
                 pass
         self.mcp = self.mcp_factory(self.staged.env, self.root)
 
+    def purge_spool(self) -> None:
+        """(fix round 1 review H2): delete every `request-*.json`/`*.json.tmp`
+        the just-fenced (SIGKILLed) MCP server may have left in the bridge
+        spool. The plugin's own stale-request sweep is 600s, far slower than
+        a fenced recovery -- without this, a fresh darktable can still poll
+        up a request file meant for the darktable that is gone (the r17
+        ghost-edit shape: an abandoned call's request survives its own
+        client and lands on whichever darktable reads it next). The spool
+        location honours THIS session's own env (`SCOUTER_CACHE`/`HOME`),
+        mirroring `darktable_mcp.bridge.client._cache_dir()`, never just the
+        harness process's own ambient `os.environ` (same reasoning as
+        `dtprocess.owner_path`'s `cache_root` override)."""
+        env = self.staged.env
+        base = env.get("XDG_CACHE_HOME") or str(Path(env.get("HOME", str(Path.home()))) /
+                                                 ".cache")
+        spool = Path(base) / "darktable-mcp"
+        for pattern in ("request-*.json", "*.json.tmp"):
+            for f in spool.glob(pattern):
+                f.unlink(missing_ok=True)
+
     def refresh_frame(self, role: str) -> Path:
         """Contaminated: re-stage this role from a fresh copy and relaunch on it.
 
