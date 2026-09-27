@@ -347,6 +347,18 @@ def run_fault_case(session, case: Case) -> Observation:
     """Arm, run, disarm. Never raises: a failing arm or step is a typed
     `blocked`; failing disarm steps land in obs.extra["disarm_errors"].
 
+    (fix round 2 review N1, blocker): the inherited-wedge ping runs HERE,
+    before `arm`, for EVERY fault -- not gated to non-freeze faults any
+    more. Round 1's `pre_ping=fault not in _FREEZE_FAULTS` missed rob-r1
+    (`quit_darktable`, also arms by making darktable stop answering on
+    purpose): its own `run_tool_case` pre-ping still saw that self-inflicted
+    unresponsiveness and blocked it as `inherited_wedge` with zero calls,
+    the exact B1 shape. Pinging before ANY fault's `arm()` runs means the
+    ping only ever sees a wedge an EARLIER case left behind, never one THIS
+    fault is about to cause on purpose. `run_tool_case` always gets
+    `pre_ping=False` from this call site now; `_FREEZE_FAULTS` is only
+    still consulted for the pre-arm isolate/restage below (item 3, M3).
+
     (night1-robustness-triage.md item 3): for `_FREEZE_FAULTS`, isolation
     runs BEFORE `arm` -- see `_FREEZE_FAULTS`'s docstring above. The normal
     `run_tool_case` still runs its own `isolate()` afterwards; with
@@ -357,7 +369,7 @@ def run_fault_case(session, case: Case) -> Observation:
     darktable is left wedged and the MCP server's own queue backlogged with
     the abandoned call -- nothing else relaunches it, so the NEXT case
     inherits the same wedge and is scored as its own hang (rob-r11 scored as
-    six). `_recover_from_hang` runs once, right here, before that next
+    six). `fence_and_recover` runs once, right here, before that next
     case's isolate() has a chance to run against the still-wedged darktable."""
     from tests.gauntlet.execute import run_tool_case
     from tests.gauntlet.session import SessionBlocked
@@ -371,37 +383,39 @@ def run_fault_case(session, case: Case) -> Observation:
     v: dict = {}
     obs: Observation | None = None
     try:
-        if fault in _FREEZE_FAULTS:
-            role = case.frame_role or "hero"
-            frame = session.ensure_frame(role)
-            #: (fix round 1 review M3): a restage (`isolate` returning True)
-            #: leaves `current_frame = None` (`refresh_frame`'s own docstring:
-            #: launched, never current, until a real follow-up `darkroom_open`
-            #: succeeds). Left unopened here, `arm`'s SIGSTOP freezes darktable
-            #: BEFORE that open ever happens; `run_tool_case`'s own
-            #: `ensure_frame` then sends it to the now-frozen process, times
-            #: out, and relaunches -- which kills the fault this case exists to
-            #: test and silently drops `contaminated_restaged`. Mirror
-            #: `execute.run_tool_case`'s own pattern: re-open, record it.
-            if isolate(session, frame, role):
-                session.ensure_frame(role)
-                v["_contaminated_restaged"] = True
-        arm(session, fault, v, step_tool=case.steps[0].tool if case.steps else None)
-        session.staged.vars.update({k: val for k, val in v.items() if not k.startswith("_")})
-        if v.get("_skip"):
-            obs = Observation(blocked=f"skipped: {v['_skip']}")
-        elif case.id.startswith("rob-h"):
-            obs = _hang_case(session, case)
-        elif fault == "two_clients":
-            obs = _two_clients(session, case)
+        dt = getattr(session, "dt", None)
+        if dt is not None and dt.health() == "unresponsive":
+            obs = Observation(blocked="inherited_wedge")
+            obs.hang_evidence.append("darktable was already unresponsive before this case's "
+                                     "own arm/steps ran (inherited from an earlier case)")
         else:
-            #: (fix round 1 review B1): `run_tool_case`'s own pre-case ping
-            #: must be skipped for `_FREEZE_FAULTS` -- darktable is frozen ON
-            #: PURPOSE by `arm` above, and the pre-arm isolate just above
-            #: already proved it responsive before that freeze. Every OTHER
-            #: fault still gets the ping (rob-r12's inherited-wedge shape).
-            obs = run_tool_case(session, case, pre_ping=fault not in _FREEZE_FAULTS)
-            _post_facts(fault, obs, v)
+            if fault in _FREEZE_FAULTS:
+                role = case.frame_role or "hero"
+                frame = session.ensure_frame(role)
+                #: (fix round 1 review M3): a restage (`isolate` returning
+                #: True) leaves `current_frame = None` (`refresh_frame`'s own
+                #: docstring: launched, never current, until a real
+                #: follow-up `darkroom_open` succeeds). Left unopened here,
+                #: `arm`'s SIGSTOP freezes darktable BEFORE that open ever
+                #: happens; `run_tool_case`'s own `ensure_frame` then sends
+                #: it to the now-frozen process, times out, and relaunches --
+                #: which kills the fault this case exists to test and
+                #: silently drops `contaminated_restaged`. Mirror
+                #: `execute.run_tool_case`'s own pattern: re-open, record it.
+                if isolate(session, frame, role):
+                    session.ensure_frame(role)
+                    v["_contaminated_restaged"] = True
+            arm(session, fault, v, step_tool=case.steps[0].tool if case.steps else None)
+            session.staged.vars.update({k: val for k, val in v.items() if not k.startswith("_")})
+            if v.get("_skip"):
+                obs = Observation(blocked=f"skipped: {v['_skip']}")
+            elif case.id.startswith("rob-h"):
+                obs = _hang_case(session, case)
+            elif fault == "two_clients":
+                obs = _two_clients(session, case)
+            else:
+                obs = run_tool_case(session, case, pre_ping=False)
+                _post_facts(fault, obs, v)
     except SessionBlocked as e:
         obs = Observation(blocked=f"session: {e}"[:500])
     except Exception as e:  # noqa: BLE001 - a raise here is the harness's bug

@@ -235,6 +235,9 @@ def test_broken_luarc_never_launches_when_quit_fails(tmp_path, kills):
     launched: list = []
 
     class Dt:
+        def health(self):
+            return "alive"
+
         def terminate(self, *, responsive=None):
             return {"ok": False, "how": "still running"}
 
@@ -468,6 +471,76 @@ def test_r3_real_run_tool_case_runs_its_step_after_the_freeze(tmp_path, monkeypa
     s = S(tmp_path)
     obs = faults.run_fault_case(s, _cases()["R3"])  # wedge_worker
     assert "darkroom_say" in s.tools, f"step never ran: blocked={obs.blocked!r} tools={s.tools!r}"
+
+
+def test_r1_real_run_tool_case_runs_its_step_after_quit_darktable(tmp_path, monkeypatch):
+    """Fix round 2 review N1 (blocker): rob-r1 (P0, `quit_darktable`) has the
+    same shape as B1 and was missed in round 1 -- `arm("quit_darktable")`
+    terminates darktable ON PURPOSE, and (before this fix) the pre-ping,
+    gated only for `_FREEZE_FAULTS`, still ran for this fault (not a freeze
+    fault) INSIDE `run_tool_case`, AFTER `arm`, and saw that self-inflicted
+    unresponsiveness -- blocking R1 as `inherited_wedge` with zero calls.
+    The ping now runs in `run_fault_case`, before `arm`, for every fault, so
+    it only ever sees darktable BEFORE this fault touches it."""
+    from tests.gauntlet import observe
+
+    state = {"closed": False}
+
+    class Dt:
+        def health(self):
+            return "unresponsive" if state["closed"] else "alive"
+
+        def terminate(self, *a, **k):
+            state["closed"] = True
+            return {"ok": True}
+
+    class S(FakeSession):
+        def __init__(self, tmp_path):
+            super().__init__(tmp_path)
+            self.dt = Dt()
+
+        def call(self, tool, args, budget_s, *, write=False):
+            self.tools.append(tool)
+            if state["closed"]:
+                rec = CallRecord(tool, args, {"ok": False, "error": {"code": "bridge_timeout"}})
+                rec.error = "bridge_timeout"
+                return rec
+            return CallRecord(tool, args, {"ok": True})
+
+    monkeypatch.setattr(observe, "snapshot", lambda *a, **kw: {"params": {}, "units": {}})
+    s = S(tmp_path)
+    case = _cases()["R1"]  # quit_darktable
+    obs = faults.run_fault_case(s, case)
+    assert obs.blocked != "inherited_wedge", f"R1 step never ran: {obs.blocked!r} {s.tools!r}"
+
+
+def test_r2_kill_during_call_is_unaffected_by_the_pre_arm_ping(tmp_path, monkeypatch):
+    """(N1, control) `kill_during_call` only kills darktable AFTER the fault
+    step's own call starts, so the pre-arm ping (running before `arm`, thus
+    well before the step) must always see it healthy -- this must keep
+    working exactly as before."""
+    from tests.gauntlet import observe
+
+    class Dt:
+        def health(self):
+            return "alive"
+
+    class S(FakeSession):
+        def __init__(self, tmp_path):
+            super().__init__(tmp_path)
+            self.dt = Dt()
+
+    monkeypatch.setattr(observe, "snapshot", lambda *a, **kw: {"params": {}, "units": {}})
+    monkeypatch.setattr(faults, "_owned_kill", lambda sig=signal.SIGKILL: None)
+    monkeypatch.setattr(faults.threading, "Timer",
+                        lambda delay, fn: type("T", (), {"start": lambda self: None,
+                                                         "cancel": lambda self: None,
+                                                         "join": lambda self, t=None: None,
+                                                         "is_alive": lambda self: False})())
+    s = S(tmp_path)
+    obs = faults.run_fault_case(s, _cases()["R2"])  # kill_during_call
+    assert obs.blocked != "inherited_wedge"
+    assert "darkroom_say" in s.tools
 
 
 def test_r3_restage_is_reopened_before_the_freeze(tmp_path, monkeypatch, kills):
