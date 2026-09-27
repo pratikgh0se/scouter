@@ -613,18 +613,20 @@ def _effective_read(path: str, module: str, param: str, instance: int) -> float 
 def _module_at_defaults(path: str, module: str, instance: int) -> bool:
     """Does the sidecar show `module` at its darktable defaults?
 
-    Only answerable from what Scouter knows: every vocabulary row of the
-    module that declares a neutral/default must decode, and equal it. A
-    module with no such row (exposure, sigmoid, ...) is never "known at
-    defaults" -- its reset stays unconfirmable, and a timeout stays a
-    timeout.
+    Only answerable from what Scouter knows: EVERY xmp-sourced vocabulary
+    row of the module must declare a neutral/default, decode, and equal it.
+    A module with no rows at all, OR with even ONE row that declares
+    neither (fix round 1, finding 1: `exposure` is exactly this case --
+    `exposure.black` now has a cited default, but `exposure.exposure` still
+    has none) is never "known at defaults" -- its reset stays
+    unconfirmable, and a timeout stays a timeout. Checking only the rows
+    that happen to declare a default would silently ignore whatever the
+    UNDECLARED rows hold, which is exactly what a reset changes too.
     """
-    rows = [
-        s for s in vocab.PARAMS
-        if s.module == module and s.value_source == "xmp"
-        and _declared_default(module, s.param) is not None
-    ]
+    rows = [s for s in vocab.PARAMS if s.module == module and s.value_source == "xmp"]
     if not rows:
+        return False
+    if any(_declared_default(module, s.param) is None for s in rows):
         return False
     parsed = _read_sidecar_parsed(path)
     if parsed is None:
@@ -636,11 +638,11 @@ def _module_at_defaults(path: str, module: str, instance: int) -> bool:
         value = params.get(s.param)
         if not isinstance(value, (int, float)):
             return False
-        # Row 495/496: a row-specific tolerance (e.g. exposure.black's
-        # slot-floor quantisation, `vocab.EXPOSURE_BLACK_QUANT`) applies
-        # here, not just the generic float epsilon -- this is the one place
-        # a live XMP value is checked for equality against a declared
-        # neutral/default.
+        # Row 495/496: a row-specific tolerance (e.g. exposure.black, which
+        # has two real darktable defaults depending on workflow --
+        # `vocab.EXPOSURE_BLACK_SCENE_RAW_DEFAULT`) applies here, not just
+        # the generic float epsilon -- this is the one place a live XMP
+        # value is checked for equality against a declared neutral/default.
         if not _close(float(value), _declared_default(module, s.param),
                       tol=vocab.default_tolerance(module, s.param)):
             return False

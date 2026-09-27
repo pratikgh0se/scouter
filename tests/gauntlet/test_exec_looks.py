@@ -89,12 +89,15 @@ def test_chart_golden_probes_exposure_black_with_an_absolute_set_from_its_defaul
 
     RE-GREEN (row 495/496): `tests/test_host_phase3.py::
     ProbeExposureBlackDefaultHostTest` host-verified the candidate (within
-    darktable's slot-floor quantisation, `vocab.EXPOSURE_BLACK_QUANT`) and
-    `scouter/core/vocab.py` promoted it to a cited `default=0.0`. `_probe_base`
-    now returns `("default", 0.0)` for this row ahead of `default_candidate`,
-    so `chart_golden` no longer flags `exposure.black` as
-    `default_unverified`, and `plan_moves` DOES plan a black-point move from
-    the measured slope."""
+    the tolerance that covers darktable's own scene-referred-raw default,
+    `vocab.EXPOSURE_BLACK_SCENE_RAW_DEFAULT` -- fix round 1, finding 2: NOT
+    a quantisation artifact, a real declared darktable default, per
+    `src/iop/exposure.c reload_defaults()`) and `scouter/core/vocab.py`
+    promoted it to a cited `default=0.0`. `_probe_base` now returns
+    `("default", 0.0)` for this row ahead of `default_candidate`, so
+    `chart_golden` no longer flags `exposure.black` as `default_unverified`,
+    and `plan_moves` DOES plan a black-point move from the measured
+    slope."""
     session, obs = _run_chart_golden(monkeypatch, tmp_path)
 
     calls_by_tool = {tool for tool, _ in session.calls}

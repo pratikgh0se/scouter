@@ -1,24 +1,49 @@
 {
-  "about": "Zenkai Rules Z1 intent examples for the chart calibration probe (row LK-calibration-holes, night1-20260926 triage scratchpad/n1/night1-triage.md §2). Each example is a real probe key from tests/gauntlet/chart_render.py:PROBE against the synthetic PFM chart, whose pipeline is colorin/colorout/gamma only -- sigmoid, exposure and temperature never have an active history entry on it. Run by tests/intent/test_looks_calibration_probe_intent.py.",
+  "about": "Zenkai Rules Z1 intent examples for the chart calibration probe (row LK-calibration-holes, night1-20260926 triage scratchpad/n1/night1-triage.md \u00a72). Each example is a real probe key from tests/gauntlet/chart_render.py:PROBE against the synthetic PFM chart, whose pipeline is colorin/colorout/gamma only -- sigmoid, exposure and temperature never have an active history entry on it. Run by tests/intent/test_looks_calibration_probe_intent.py.",
   "subject": "tests/gauntlet/exec_looks.py chart_golden + plan_moves, scouter/core/vocab.py ParamSpec.default / default_candidate",
   "examples": [
     {
       "id": "black-point-probes-absolute-from-a-host-verified-default",
-      "input": {"module": "exposure", "param": "black", "amount": -0.01},
-      "expect": {"tool": "darkroom_set", "value": -0.01, "calibration": "measured",
-                "planned": true},
-      "source": "night-1 golden-case audit (looks/001, 23:21): 'exposure.black' -> value_unknown 'did not decode from the XMP' on a relative darkroom_adjust; the probe sets 0.0 + -0.01 = -0.01 absolutely instead of adjusting a delta with nothing to add it to. Row 474 (final-review issue I1) found the phase3 design spec's own §4.3 table leaves this row's `default` column blank by design, so until a host probe confirmed the value scouter/core/vocab.py declared it only as a `default_candidate` and the measured slope was recorded as calibration_errors['exposure.black'] = 'default_unverified' (never planned). Row 495/496: tests/test_host_phase3.py's ProbeExposureBlackDefaultHostTest host-verified it (a fresh exposure module's black lands within darktable's slot-floor quantisation, vocab.EXPOSURE_BLACK_QUANT, of 0.0), promoting it to a cited `default=0.0` -- the probe now reads it via that branch, is no longer flagged unverified, and plan_moves DOES plan a black-point move from the measured slope"
+      "input": {
+        "module": "exposure",
+        "param": "black",
+        "amount": -0.01
+      },
+      "expect": {
+        "tool": "darkroom_set",
+        "value": -0.01,
+        "calibration": "measured",
+        "planned": true
+      },
+      "source": "night-1 golden-case audit (looks/001, 23:21): 'exposure.black' -> value_unknown 'did not decode from the XMP' on a relative darkroom_adjust; the probe sets 0.0 + -0.01 = -0.01 absolutely instead of adjusting a delta with nothing to add it to. Row 474 (final-review issue I1) found the phase3 design spec's own \u00a74.3 table leaves this row's `default` column blank by design, so until a host probe confirmed the value scouter/core/vocab.py declared it only as a `default_candidate` and the measured slope was recorded as calibration_errors['exposure.black'] = 'default_unverified' (never planned). Row 495/496: tests/test_host_phase3.py's ProbeExposureBlackDefaultHostTest host-verified it (a fresh scene-referred-raw exposure module's black lands within default_tolerance('exposure', 'black') of the declared default=0.0 -- it reads darktable's OWN real default for that workflow (src/iop/exposure.c reload_defaults(), vocab.EXPOSURE_BLACK_SCENE_RAW_DEFAULT), not a quantisation artifact (fix round 1, finding 2)), promoting it to a cited `default=0.0` -- the probe now reads it via that branch, is no longer flagged unverified, and plan_moves DOES plan a black-point move from the measured slope"
     },
     {
       "id": "colour-balance-probes-absolute-from-declared-neutral",
-      "input": {"module": "colorbalancergb", "param": "global_chroma", "amount": 0.2},
-      "expect": {"tool": "darkroom_set", "value": 0.2, "calibration": "measured", "planned": true},
+      "input": {
+        "module": "colorbalancergb",
+        "param": "global_chroma",
+        "amount": 0.2
+      },
+      "expect": {
+        "tool": "darkroom_set",
+        "value": 0.2,
+        "calibration": "measured",
+        "planned": true
+      },
       "source": "night-1 evidence: 'adjust on an absent colorbalancergb works (0% -> 10%)' because vocab.py's _cb() rows declare neutral=0.0; switching every PROBE key to an absolute set keeps this row working the same way, from the same declared value"
     },
     {
       "id": "temperature-probe-has-no-declared-default-and-is-reported-not-zeroed",
-      "input": {"module": "temperature", "param": "temperature", "amount": 600.0},
-      "expect": {"tool": null, "calibration": "failure_reported", "planned": false},
+      "input": {
+        "module": "temperature",
+        "param": "temperature",
+        "amount": 600.0
+      },
+      "expect": {
+        "tool": null,
+        "calibration": "failure_reported",
+        "planned": false
+      },
       "source": "night-1 golden-case audit: 'no active temperature entry' -- the PFM chart carries no EXIF and no white-balance module, so there is no honest Kelvin to declare as a default (scouter/core/vocab.py leaves temperature.temperature's neutral and default both None); chart_golden must record this as a calibration_errors entry, not silently compute a falsy 0.0 slope that plan_moves then reads as 'no calibration' with no trace of why"
     }
   ]

@@ -926,33 +926,45 @@ class CommitReadbackTest(unittest.TestCase):
         self.assertTrue(any("no new sidecar" in w for w in result.warnings))
 
     def test_a_reset_timeout_is_never_dressed_up_as_a_commit(self) -> None:
-        """`reset` cannot be confirmed from the XMP, so its timeout propagates.
+        """`reset` cannot be confirmed from the XMP, so its timeout
+        propagates. `exposure` has a MIX of declared and undeclared rows
+        (`black` has a cited `default=0.0`, `exposure` has none) -- fix
+        round 1, finding 1: `_module_at_defaults` must refuse to confirm a
+        module unless EVERY one of its xmp-sourced rows declares a
+        neutral/default, not just the ones that happen to. Checking only
+        the declared rows would silently ignore whatever
+        `exposure.exposure` (undeclared, and NOT at this fixture's own
+        1.5500002) really holds -- exactly what a reset changes."""
+        with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
+            with self.assertRaises(CommitTimeout):
+                darkroom.reset(module="exposure", confirm=True)
 
-        `sigmoid` (not `exposure`, row 495/496): neither of its rows
-        declares a neutral or a darktable default, so
-        `_module_at_defaults` always returns `False` for it and a reset can
-        never be confirmed -- `exposure` no longer proves this: its `black`
-        row now has a host-verified `default=0.0`
-        (`scouter/core/vocab.py`), and this fixture's own `exposure.black`
-        (-0.000244140625, darktable's slot-floor quantisation for that
-        param) reads AS that default within `default_tolerance`, so a reset
-        of `exposure` on this fixture really is honestly confirmable now.
-        """
+    def test_a_reset_timeout_on_a_module_with_no_declared_rows_at_all_also_propagates(
+            self) -> None:
+        """`sigmoid`: neither of its rows declares a neutral or a darktable
+        default at all (the `rows == []` path, distinct from `exposure`'s
+        mixed-declaration path above) -- `_module_at_defaults` always
+        returns `False` for it too, for a different reason."""
         with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
             with self.assertRaises(CommitTimeout):
                 darkroom.reset(module="sigmoid", confirm=True)
 
-    def test_a_reset_of_exposure_already_at_its_slot_floor_default_is_committed_honestly(
-            self) -> None:
-        """Row 495/496: the fixture's own `exposure.black` is
-        -0.000244140625 -- darktable's slot-floor quantisation of the
-        default, not a real offset -- so a reset of `exposure` (which
-        writes nothing here: it is already effectively at its declared
-        defaults) is now confirmed from the XMP instead of timing out,
-        exactly like the already-enabled/already-landed cases above."""
+    def test_a_reset_of_exposure_is_not_confirmed_by_black_alone(self) -> None:
+        """Regression guard for fix round 1, finding 1: the fixture's own
+        `exposure.black` (-0.000244140625) reads AS darktable's
+        scene-referred-raw default within `default_tolerance` -- but
+        `exposure.exposure` (this fixture: 1.5500002, nowhere near either
+        of darktable's real exposure defaults, 0.0 or 0.7) declares NO
+        neutral/default at all, so the module as a whole must still refuse
+        to be confirmed at defaults. Before the fix, `black` alone made
+        `_module_at_defaults("exposure")` return `True` regardless of what
+        `exposure.exposure` held -- a real honesty regression: a timed-out
+        reset that would actually change `exposure` from 1.5500002 to
+        darktable's real default was reported as a successful commit."""
+        self.assertFalse(darkroom._module_at_defaults(str(self.raw), "exposure", 0))
         with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
-            result = darkroom.reset(module="exposure", confirm=True)
-        self.assertTrue(result.committed)
+            with self.assertRaises(CommitTimeout):
+                darkroom.reset(module="exposure", confirm=True)
 
 
 class DarkroomCommitSeamTest(unittest.TestCase):
@@ -1105,3 +1117,37 @@ class CommitWiringTest(unittest.TestCase):
                     missing.append(f"{node.func.id} at darkroom.py:{node.lineno}")
         self.assertGreaterEqual(seen, 8, "the scan found the commit call sites")
         self.assertEqual(missing, [], "commit calls without expect_module")
+
+
+class DefaultConsumersOutsideModuleAtDefaultsTest(unittest.TestCase):
+    """Fix round 1, finding 3 (reviewer): `vocab.ParamSpec.default` is read
+    by more than `_module_at_defaults` (`scouter/core/darkroom.py`). These
+    pin the other two production consumers the review named, both on
+    `exposure.black` (the row whose `default` this branch promoted):
+    `_effective_current` (the no-op check's "what does darktable really
+    hold" answer) and `moves.before_fallback` (a move's undo-before value).
+    Each is off by at most `EXPOSURE_BLACK_SCENE_RAW_DEFAULT`'s magnitude
+    (2.4e-4) from what darktable may really hold on a scene-referred raw
+    with no exposure history -- small, and the report notes it -- but both
+    consumers exist and behave as documented."""
+
+    def test_effective_current_answers_exposure_black_default_when_module_has_no_history(
+            self) -> None:
+        # Exactly the "sidecar exists, module has no active history entry"
+        # shape _effective_current's own docstring describes: history_end
+        # is set (the sidecar exists), enabled is None (no active entry for
+        # THIS module), value is None (nothing decoded).
+        raw_state = {"value": None, "history_end": 12, "enabled": None}
+        value, source = darkroom._effective_current(raw_state, "exposure", "black")
+        self.assertEqual(value, 0.0)
+        self.assertEqual(source, "default")
+
+    def test_effective_current_is_none_for_exposure_exposure_in_the_same_shape(self) -> None:
+        # The contrast case: exposure.exposure declares no neutral/default
+        # at all, so the SAME "no active history entry" shape answers None,
+        # never a guessed value -- _module_at_defaults's finding-1 fix
+        # relies on this asymmetry existing.
+        raw_state = {"value": None, "history_end": 12, "enabled": None}
+        value, source = darkroom._effective_current(raw_state, "exposure", "exposure")
+        self.assertIsNone(value)
+        self.assertEqual(source, "xmp")

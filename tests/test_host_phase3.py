@@ -270,18 +270,21 @@ class ProbeExposureBlackDefaultHostTest(unittest.TestCase):
     can.
 
     Row 495/496: the host run found a fresh exposure module's `black` at
-    -0.000244140625, not exactly 0.0 -- darktable's slot-floor quantisation
-    for this ratio param (`vocab.EXPOSURE_BLACK_QUANT`, 2**-12), the same
-    ~4.4e-5-class gap the stale-history live check saw. Equality here uses
-    that quantisation step as its tolerance (`vocab.default_tolerance`)
-    instead of a fixed decimal-places check, since a places-based
-    `assertAlmostEqual` would fail on this exact, expected quantised
-    reading. PASS: `default_candidate=0.0` has been promoted to
-    `default=0.0` in `scouter/core/vocab.py`, citing this test (not spec
-    §4.3, which stays unedited); `tests/gauntlet/exec_looks.py`'s
-    `chart_golden` no longer flags `exposure.black` as `default_unverified`
-    (it now reads `row.default`, ahead of `default_candidate`, in
-    `_probe_base`).
+    -0.000244140625, not exactly 0.0. Fix round 1, finding 2 (reviewer,
+    darktable `src/iop/exposure.c reload_defaults()`, master, fetched
+    2026-09-27): this is NOT a quantisation artifact -- it is darktable's
+    own DECLARED default for `black` on a scene-referred colour raw
+    (`vocab.EXPOSURE_BLACK_SCENE_RAW_DEFAULT`, -(2**-12)); every other
+    workflow (monochrome, non-scene-raw) still defaults `black` to exactly
+    0.0. Equality here uses a tolerance (`vocab.default_tolerance`) sized
+    to cover BOTH of those real defaults, instead of a fixed decimal-places
+    check, since a places-based `assertAlmostEqual` would fail on this
+    exact, expected scene-raw reading. PASS: `default_candidate=0.0` has
+    been promoted to `default=0.0` in `scouter/core/vocab.py`, citing this
+    test (not spec §4.3, which stays unedited); `tests/gauntlet/
+    exec_looks.py`'s `chart_golden` no longer flags `exposure.black` as
+    `default_unverified` (it now reads `row.default`, ahead of
+    `default_candidate`, in `_probe_base`).
     """
 
     def test_fresh_exposure_module_defaults_black_to_zero(self) -> None:

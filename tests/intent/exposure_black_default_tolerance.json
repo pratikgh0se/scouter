@@ -1,24 +1,39 @@
 {
-  "about": "Zenkai Rules Z1 intent examples for the exposure.black default-equality tolerance (row 495/496, tests/test_host_phase3.py::ProbeExposureBlackDefaultHostTest, host run 2026-09-27: a fresh exposure module's black reads -0.000244140625, darktable's slot-floor quantisation, not exactly 0.0). Run by tests/intent/test_exposure_black_default_tolerance_intent.py.",
-  "subject": "scouter/core/vocab.py EXPOSURE_BLACK_QUANT / default_tolerance, scouter/core/darkroom.py _module_at_defaults",
+  "about": "Zenkai Rules Z1 intent examples for the exposure.black default-equality tolerance (row 495/496, tests/test_host_phase3.py::ProbeExposureBlackDefaultHostTest, host run 2026-09-27: a fresh scene-referred-raw exposure module's black reads -0.000244140625, not exactly 0.0). Fix round 1, finding 2 (reviewer, darktable src/iop/exposure.c reload_defaults(), master, fetched 2026-09-27): this is darktable's own DECLARED default for that workflow, not a quantisation artifact -- the original 'slot-floor quantisation' story in this file's first revision was wrong and has been corrected throughout. Run by tests/intent/test_exposure_black_default_tolerance_intent.py.",
+  "subject": "scouter/core/vocab.py EXPOSURE_BLACK_SCENE_RAW_DEFAULT / default_tolerance, scouter/core/darkroom.py's use of _close in _module_at_defaults",
   "examples": [
     {
-      "id": "reported-slot-floor-value-is-the-default",
-      "reported": -0.000244140625,
+      "id": "darktable-scene-raw-default-is-within-tolerance",
+      "black": -0.000244140625,
       "expect": {"at_default": true},
-      "source": "tests/test_host_phase3.py::ProbeExposureBlackDefaultHostTest host run 2026-09-27: a fresh exposure module's black lands at exactly -(2**-12), darktable's slot-floor quantisation for this ratio param -- within default_tolerance('exposure', 'black'), so an equality check against the row's declared default=0.0 treats this reading as the default, not an uncorrected real offset"
+      "source": "tests/test_host_phase3.py::ProbeExposureBlackDefaultHostTest host run 2026-09-27: a fresh scene-referred-raw exposure module's black lands at exactly -(2**-12) == EXPOSURE_BLACK_SCENE_RAW_DEFAULT, darktable's own declared default for that workflow (src/iop/exposure.c reload_defaults()) -- within default_tolerance('exposure', 'black'), so an equality check against the row's declared (non-scene-raw) default=0.0 treats this reading as a default too, not an uncorrected real offset"
     },
     {
-      "id": "reported-real-offset-is-not-the-default",
-      "reported": -0.0027,
+      "id": "real-offset-is-not-within-tolerance",
+      "black": -0.0027,
       "expect": {"at_default": false},
-      "source": "row 495/496 stale-history live check: committing a set landed black at -0.0027000010013580322 against a target near there -- over 10x EXPOSURE_BLACK_QUANT away from 0.0, so it must NOT be mistaken for the default by the same tolerance that accepts the slot-floor reading above"
+      "source": "row 495/496 stale-history live check: committing a set landed black at -0.0027000010013580322 against a target near there -- over 10x EXPOSURE_BLACK_SCENE_RAW_DEFAULT's magnitude away from 0.0, so it must NOT be mistaken for either real default by the same tolerance that accepts the scene-raw reading above"
     },
     {
-      "id": "reported-exact-zero-is-the-default",
-      "reported": 0.0,
+      "id": "exact-zero-is-within-tolerance",
+      "black": 0.0,
       "expect": {"at_default": true},
-      "source": "the plain case: darktable reporting exactly 0.0 (the cited default) must still pass, with or without the quantisation tolerance"
+      "source": "the plain case: darktable reporting exactly 0.0 (the cited default for every non-scene-raw workflow) must still pass, with or without the tolerance"
+    },
+    {
+      "id": "mid-range-value-is-not-within-tolerance",
+      "black": -0.0005,
+      "expect": {"at_default": false},
+      "source": "fix round 1, finding 5: a value about 2x EXPOSURE_BLACK_SCENE_RAW_DEFAULT's magnitude (-0.0005 vs -0.000244140625) bounds the tolerance from the other side -- close enough to the scene-raw default that a careless 10x-wide tolerance would wrongly accept it, but this repo's actual 1.5x tolerance correctly refuses it"
+    }
+  ],
+  "module_examples": [
+    {
+      "id": "black-alone-does-not-confirm-exposure-when-exposure-exposure-has-no-declared-default",
+      "exposure": 2.0,
+      "black": -0.000244140625,
+      "expect": {"at_default": false},
+      "source": "fix round 1, finding 1 (reviewer): before this fix, _module_at_defaults only checked the rows that happened to declare a default, so exposure.black alone (read within tolerance of its default) made _module_at_defaults('exposure') return True regardless of exposure.exposure -- a real honesty regression, since a timed-out reset that would actually change exposure.exposure was then reported as a successful commit. exposure.exposure declares neither a neutral nor a darktable default (scouter/core/vocab.py), so the module must never be reported 'at defaults' no matter what exposure.exposure's own live value is (2.0 here, chosen to be far from either of darktable's real exposure defaults, 0.0 and 0.7)"
     }
   ]
 }

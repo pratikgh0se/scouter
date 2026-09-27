@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scouter.core import darkroom, dtbridge, journal, moves
+from scouter.core import darkroom, dtbridge, journal, moves, vocab
 from scouter.errors import NotPinned, UsageError, ValueUnknown
-from scouter.types import CommitResult, SetResult
+from scouter.types import CommitResult, ResolvedImage, SetResult
 from tests.scouter_fakes import FakeBridge, TempCache
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -352,6 +352,38 @@ class GetTest(_MovesFixture):
         r = moves.get.__wrapped__("colorbalancergb", "contrast", job="job-test")
         self.assertIsNone(r.value)
         self.assertIn("no sidecar", " ".join(r.warnings))
+
+
+class BeforeFallbackDefaultConsumerTest(_MovesFixture):
+    """Fix round 1, finding 3 (reviewer): `moves.before_fallback`
+    (`scouter/core/moves.py:367`, the "module has no active history entry"
+    branch) is the second production consumer of `vocab.ParamSpec.default`
+    the review named, alongside `darkroom._effective_current`. Pins its
+    `exposure.black` undo-before value, and the contrasting refusal for
+    `exposure.exposure` (no declared neutral/default) in the same shape."""
+
+    def test_before_fallback_uses_exposure_black_default_when_module_has_no_history(
+            self) -> None:
+        resolved = ResolvedImage(image_id=12, path=str(self.raw), xmp_path=str(self.raw) + ".xmp")
+        s = vocab.spec("exposure", "black")
+        assert s is not None
+        raw = {"value": None, "history_end": 12, "enabled": None}
+        before = {"value": None}
+        with mock.patch("scouter.core.darkroom._raw_and_before_state",
+                        return_value=(raw, before, False)):
+            result = moves.before_fallback(resolved, s, 0, "job-test")
+        self.assertEqual(result, (0.0, "default"))
+
+    def test_before_fallback_refuses_for_exposure_exposure_in_the_same_shape(self) -> None:
+        resolved = ResolvedImage(image_id=12, path=str(self.raw), xmp_path=str(self.raw) + ".xmp")
+        s = vocab.spec("exposure", "exposure")
+        assert s is not None
+        raw = {"value": None, "history_end": 12, "enabled": None}
+        before = {"value": None}
+        with mock.patch("scouter.core.darkroom._raw_and_before_state",
+                        return_value=(raw, before, False)):
+            with self.assertRaises(ValueUnknown):
+                moves.before_fallback(resolved, s, 0, "job-test")
 
 
 class CliNegativeDeltaTest(unittest.TestCase):
