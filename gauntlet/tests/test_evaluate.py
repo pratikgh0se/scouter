@@ -215,6 +215,79 @@ def test_imperceptible_step_real_recorded_shape_is_its_own_outcome():
     assert v.silent_failure is None
 
 
+#: Review round 2 (R1, high, blocking): `_writes_landed_as_requested` used to
+#: trust the envelope's own `applied` field against its own `requested`
+#: field -- both the product's word, never checked against the XMP. Probes
+#: below match `scratchpad/n1rev_probe2.py` (Q1/Q4/Q5/Q7 -- Q2/Q3/Q6/Q8 were
+#: already correct and are covered by other tests above).
+
+def _claims_ok(applied, requested, unit="%"):
+    return {"ok": True, "outcome": "ok",
+            "data": {"module": "colorbalancergb", "param": "global_chroma",
+                     "applied": applied, "requested": requested, "unit": unit,
+                     "clamped": False, "noop": False}}
+
+
+def test_q1_claim_matches_but_xmp_is_identical_is_silent_failure():
+    """Probe Q1: the envelope claims applied == requested == 0.05 (a
+    consistent, plausible-looking claim), but the after snapshot shows the
+    param UNCHANGED from before -- nothing landed at all. Must be
+    silent_failure, not imperceptible_step: `_writes_landed_as_requested`
+    reads the XMP, not the envelope's own numbers."""
+    chk = Check("M5", stat="C", region="frame", sign=1)
+    obs = _obs(_claims_ok(0.05, 0.05), _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+               _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.3}},
+               floors={"C": 0.5})
+    v = evaluate(_edit_case([chk], None), obs, POLICY)
+    assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
+
+
+def test_q4_claim_matches_but_xmp_shows_a_short_move_is_silent_failure():
+    """Probe Q4: claims applied == requested == 0.05, but the after
+    snapshot shows the param only reached 0.01 -- a genuinely short move
+    wearing a full-step claim. Must be silent_failure."""
+    chk = Check("M5", stat="C", region="frame", sign=1)
+    obs = _obs(_claims_ok(0.05, 0.05), _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+               _snap("b", **{"colorbalancergb.global_chroma": 0.01}),
+               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.3}},
+               floors={"C": 0.5})
+    v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
+    assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
+
+
+def test_q5_short_move_with_a_passing_m1_check_is_still_silent_failure():
+    """Probe Q5: same short move as Q4, plus an M1 'changed' check that
+    PASSES (0.01 != 0 is a real, if short, change) -- the passing M1
+    check must not distract from rule (c)'s below-floor stat failure."""
+    chk = Check("M5", stat="C", region="frame", sign=1)
+    m1 = Check("M1", kind="changed", sign=1,
+               target={"key": "colorbalancergb.global_chroma", "unit": "%"})
+    obs = _obs(_claims_ok(0.05, 0.05), _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+               _snap("b", **{"colorbalancergb.global_chroma": 0.01}),
+               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.3}},
+               floors={"C": 0.5})
+    v = evaluate(_edit_case([m1, chk], {"changed": True}), obs, POLICY)
+    assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
+
+
+def test_q7_workflow_kind_genuine_step_below_floor_is_silent_failure_not_unlabelled():
+    """Review round 2 (R2, low): a `workflow`-kind case is never scored by
+    `_imperceptible_step_residual` (edit-only), so the rule (c) exemption
+    must not apply to it either -- a genuine, XMP-verified, merely-too-
+    small-to-measure move on a workflow case keeps its ordinary silent
+    scoring, not an unlabelled 'failed' from a half-applied exemption."""
+    chk = Check("M5", stat="C", region="frame", sign=1)
+    case = _edit_case([chk], {"changed": True}, kind="workflow",
+                      steps=[Step("darkroom_say", {}, budget_s=3.5, write=True)])
+    obs = _obs(_claims_ok(0.05, 0.05), _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+               _snap("b", **{"colorbalancergb.global_chroma": 0.05}),
+               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.3}},
+               floors={"C": 0.5})
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
+
+
 def test_imperceptible_step_does_not_excuse_a_short_move():
     """Control: if the move's own claimed `applied` falls short of its own
     `requested` (a genuine silent failure, not an imperceptible one), the

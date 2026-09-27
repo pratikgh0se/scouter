@@ -659,14 +659,20 @@ def _verified_clamped_params(obs: Observation, units: dict) -> set[str]:
     return verified
 
 
-def _writes_landed_as_requested(obs: Observation) -> bool:
-    """Row 475 (I2 ruling): every non-noop write actually reached its own
-    claimed, unclamped target (`AdjustResult`'s own `requested`/`applied`/
-    `unit`, flat on a single `darkroom.adjust`'s `data`, or per-entry in a
-    `darkroom.say`'s `data.moves` list) -- the request landed in full,
-    however small the visible effect on any check. A write that came up
-    short of its own claim is a genuine silent failure, caught elsewhere;
-    this asks a narrower question on purpose."""
+def _writes_landed_as_requested(obs: Observation, units: dict) -> bool:
+    """Row 475 (I2 ruling), tightened by review round 2 (R1): every
+    non-noop write's claimed `module.param` (`AdjustResult`'s own
+    `module`/`param`/`requested`, flat on a single `darkroom.adjust`'s
+    `data`, or per-entry in a `darkroom.say`'s `data.moves` list) must
+    actually show `requested` in the AFTER snapshot -- never just the
+    envelope's own `applied` field, which is only the product's word for
+    it (the exact gap `_verified_clamped_params` already closes for a
+    `moved_to_limit` claim; the same XMP check applies to a plain-ok claim
+    of a full, unclamped step). It must also differ from `before`: a
+    request that claims it moved but the XMP shows unchanged is a genuine
+    silent failure, caught elsewhere -- this only excuses a real, verified,
+    merely-too-small-to-measure move."""
+    before, after = _params(obs.before), _params(obs.after)
     any_move = False
     for c in obs.calls:
         if not c.write:
@@ -676,10 +682,16 @@ def _writes_landed_as_requested(obs: Observation) -> bool:
         for m in moves:
             if not isinstance(m, dict) or m.get("noop"):
                 continue
-            requested, applied = m.get("requested"), m.get("applied")
-            if requested is None or applied is None:
+            module, param, requested = m.get("module"), m.get("param"), m.get("requested")
+            if not module or not param or requested is None:
                 return False
-            if not _same(m.get("unit", ""), applied, requested):
+            key_ = f"{module}.{param}"
+            unit = units.get(key_, m.get("unit", ""))
+            a = _num(after.get(key_))
+            if a is None or not _same(unit, a, requested):
+                return False
+            b = _num(before.get(key_))
+            if b is not None and not _differs(unit, b, a):
                 return False
             any_move = True
     return any_move
@@ -692,18 +704,20 @@ def _imperceptible_step_residual(case: Case, results: list[CheckResult],
     never `moved_to_limit` (I2's finding -- KNOWN_RESIDUAL's "cap" is the
     fixture's step-size invariant, not a runtime clamp any of these moves
     ever reach). When every non-passing check on an `edit` case reads
-    "below noise floor" and every write landed exactly its own requested,
-    unclamped step (`_writes_landed_as_requested`), that is a real,
-    complete edit the check floor simply cannot see -- scored its own
-    outcome, `imperceptible_step` (never verified, refused, or silent),
-    tagged `residual: step-below-floor` so the report can name it and
-    carry the recalibration card."""
+    "below noise floor" and every write's own claimed module.param
+    VERIFIABLY landed at its own requested, unclamped step in the after
+    snapshot (`_writes_landed_as_requested`, review round 2 R1), that is a
+    real, complete edit the check floor simply cannot see -- scored its
+    own outcome, `imperceptible_step` (never verified, refused, or
+    silent), tagged `residual: step-below-floor` so the report can name it
+    and carry the recalibration card."""
     if case.expect.kind != "edit" or _any_moved_to_limit(obs):
         return None
     non_passing = [r for r in results if not r.ok]
     if not non_passing or any(r.note != "below noise floor" for r in non_passing):
         return None
-    if not _writes_landed_as_requested(obs):
+    sidecar = case.expect.sidecar or {}
+    if not _writes_landed_as_requested(obs, sidecar.get("units", {})):
         return None
     return Verdict(PARTIAL, "imperceptible_step", results, notes=["residual: step-below-floor"])
 
@@ -791,12 +805,17 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     # not in the verified set), earns no exception: rule (c) still fires.
     #
     # Row 475 (I2 ruling): a plain `ok` (never claimed a clamp at all) whose
-    # every write landed exactly its own requested step also earns the
-    # exception -- `_imperceptible_step_residual` (below `evaluate()`) scores
-    # its own outcome for it; here we only must not let rule (c) call it a
-    # silent bug first.
+    # every write VERIFIABLY landed exactly its own requested step in the
+    # after snapshot (review round 2, R1) also earns the exception --
+    # `_imperceptible_step_residual` (below `evaluate()`) scores its own
+    # outcome for it; here we only must not let rule (c) call it a silent
+    # bug first. Review round 2 (R2): scoped to `edit` cases only, the one
+    # kind `_imperceptible_step_residual` ever scores -- a `workflow` case
+    # (or any other kind) keeps its ordinary rule (c) scoring, not a silent
+    # exception with nothing to label it.
     verified_clamped = _verified_clamped_params(obs, units)
-    landed_as_requested = not _any_moved_to_limit(obs) and _writes_landed_as_requested(obs)
+    landed_as_requested = case.expect.kind == "edit" and not _any_moved_to_limit(obs) \
+        and _writes_landed_as_requested(obs, units)
     for r, ch in zip(results, case.expect.checks):
         if ch.tags.get("silent_if_fail") and not r.ok:
             return f"c: {ch.tags.get('why', 'a required report is missing')}"
