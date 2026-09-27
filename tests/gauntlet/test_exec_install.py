@@ -197,3 +197,47 @@ def test_setup_again_tree_changed_and_doctor_down_gives_failed_not_blocked(tmp_p
     ok, detail = r.action("setup_again")
     assert ok is False
     assert "_needs_darktable" not in detail  # the tree changed: not purely an environment gap
+
+
+# -- Pratik's ruling, row 496 item 7 (triage rank 8's recommended option 1) -
+
+
+def test_setup_runs_config_init_yes_after_setup(tmp_path):
+    """The rehearsal now runs `scouter config init --yes` itself, right
+    after `scouter setup` -- config.json ends up with a version field
+    without needing to pre-seed one, and the exact argv reached the CLI."""
+    setup_payload = _setup_payload(doctor_ok=True)
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if argv[-3:] == ["config", "init", "--yes"]:
+            cfg_dir = tmp_path / "config" / "scouter"
+            cfg_dir.mkdir(parents=True, exist_ok=True)
+            (cfg_dir / "config.json").write_text('{"version": 1}\n')
+            return subprocess.CompletedProcess(argv, returncode=0,
+                                               stdout=json.dumps({"outcome": "ok"}), stderr="")
+        return subprocess.CompletedProcess(argv, returncode=0, stdout=json.dumps(setup_payload),
+                                           stderr="")
+
+    r = exec_install.Rehearsal(tmp_path, run=run)
+    ok, detail = r.action("setup")
+    assert ok is True
+    assert detail["config_has_version"] is True
+    assert "needs_review_reason" not in detail
+    assert any(argv[-3:] == ["config", "init", "--yes"] for argv in calls)
+
+
+def test_a_failed_config_init_makes_setup_not_ok(tmp_path):
+    setup_payload = _setup_payload(doctor_ok=True)
+
+    def run(argv, **kwargs):
+        if argv[-3:] == ["config", "init", "--yes"]:
+            return subprocess.CompletedProcess(argv, returncode=1,
+                                               stdout=json.dumps({"outcome": "error"}), stderr="")
+        return subprocess.CompletedProcess(argv, returncode=0, stdout=json.dumps(setup_payload),
+                                           stderr="")
+
+    r = exec_install.Rehearsal(tmp_path, run=run)
+    ok, detail = r.action("setup")
+    assert ok is False

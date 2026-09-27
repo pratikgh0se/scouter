@@ -104,31 +104,30 @@ class Rehearsal:
                 (self.config / "scouter" / "config.json").write_text("{}\n")
             before = self._tree_hash()
             code, rep = self._scouter("setup")
-            #: Fix D (night-1 triage rank 8, INS-config-version-assert): spec
-            #: 3.7 says "setup writes a valid config" (a version field); the
-            #: product's own design (scouter/cli/setup.py's config item is
-            #: `required: False`, "reported only: `scouter config init`
-            #: writes it") means it never does, code 0 or not. Rather than
-            #: fold that disputed assertion into `ok` (masking a real doctor
-            #: regression as the SAME failure, or silently passing once
-            #: darktable is available despite spec 3.7 never being met),
-            #: `ok` only asserts what the product actually claims to do
-            #: (`code == 0`, plus setup_again's idempotency); the
-            #: config-version fact is reported separately in `detail` for
-            #: `layers/install.py`'s own second check to score honestly
-            #: (needs Pratik: rank 8's options 1/2).
+            #: Pratik's ruling, row 496 item 7 (triage rank 8's recommended
+            #: option 1): `scouter/cli/setup.py` deliberately never writes
+            #: config.json itself (its own config item is `required: False`,
+            #: reported only) -- the REHEARSAL now runs `scouter config init
+            #: --yes` right after `scouter setup`, so the rehearsal as a
+            #: whole still leaves a valid config behind. Note for the
+            #: report: spec 3.7's wording ("setup writes a valid config")
+            #: is to be amended to say the REHEARSAL is responsible for the
+            #: config, not the `setup` verb alone.
+            init_code, init_rep = self._scouter("config", "init", "--yes")
             tree_unchanged = self._tree_hash() == before
-            ok = code == 0
+            ok = code == 0 and init_code == 0
             if name == "setup_again":
                 ok = ok and tree_unchanged
             detail = dict(rep)
+            detail["config_init"] = init_rep
             detail["config_has_version"] = self._config_has_version()
             if not detail["config_has_version"]:
                 detail["needs_review_reason"] = (
-                    "spec 3.7 expects setup to leave config.json with a version field, but "
-                    "scouter/cli/setup.py's own config item is required=False and reported "
-                    "only -- `scouter config init` writes it by design (night1-parity-"
-                    "install-guide-triage.md rank 8, needs Pratik)")
+                    "spec 3.7 expects setup to leave config.json with a version field; "
+                    "the rehearsal now runs `scouter config init --yes` itself right after "
+                    "`scouter setup` (row 496 item 7), which should make this always true -- "
+                    "still reported so a regression in `config init` itself is never silently "
+                    "folded into the doctor-down 'blocked' path")
             #: Review round 2, finding 2 (GD-1): setup_again's own
             #: idempotency break must never be masked by the doctor marker
             #: below (blocked short-circuits every check in evaluate()).
