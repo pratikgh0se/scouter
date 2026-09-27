@@ -216,6 +216,41 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
                 meta=meta)
 
 
+def _workflow_agent_expect(verb: str) -> Expect:
+    """(row 501 item B, night-1 triage rank 10, SCA-hollow-workflow-pass):
+    `agent_case`'s workflow Expect used to carry `checks=[]` for every verb
+    -- a genuine sidecar-unchanged expectation (cull/export) then scores
+    `verified` with ZERO MCP calls and nothing else asserted (sca-r0159: a
+    cull request the agent answered with clarifying questions only, never
+    calling `cull_propose`, still passed). A workflow case whose expectation
+    carries no checks can never score `verified` again: every verb below
+    returns at least one, so an r0159-style hollow pass is impossible by
+    construction, and an unresolvable verb fails generation outright rather
+    than silently reaching evaluate.py with nothing to check.
+
+    `undo` reuses `m1_restored` (a snapshot comparison over every key the
+    observation saw, not tied to a specific call index -- works whether the
+    agent needed one `darkroom_undo_last` or two). The other verbs assert
+    the agent's own LAST recorded MCP call answered `ok: true`: agent mode
+    has no fixed step sequence to index into like tool mode's `_workflow`,
+    so the last call is the only call the harness can honestly tie to "did
+    the verb actually run" -- an empty `obs.calls` (r0159's own case) fails
+    this check immediately (`_check_envelope`: "no such step")."""
+    if verb == "undo":
+        checks = [m1_restored([], {})]
+    elif verb in ("repeat_more", "preset_save", "export", "cull"):
+        checks = [Check("envelope", target={"path": "ok", "op": "eq", "value": True})]
+    else:
+        raise ValueError(f"no agent workflow expectation for verb {verb!r}")
+    changed = verb not in ("cull", "export")
+    if verb == "undo":
+        changed = True
+    expect = Expect("workflow", checks, {"changed": changed})
+    if not expect.checks:  # defence in depth: never reach evaluate.py hollow
+        raise ValueError(f"workflow agent expectation for verb {verb!r} has no checks")
+    return expect
+
+
 def agent_case(req: dict, plan: RequestPlan, tax: Taxonomy, tier: str) -> Case:
     cmap = tax.check_map
     role = cmap["role_for_problem"][req["problem"]]
@@ -228,9 +263,7 @@ def agent_case(req: dict, plan: RequestPlan, tax: Taxonomy, tier: str) -> Case:
         meta["roadmap_key"] = nearest_phrase(req, tax)[1]
         expect = Expect("refuse")
     elif plan.klass == "workflow":
-        expect = Expect("workflow", [], {"changed": plan.workflow_verb not in ("cull", "export")})
-        if plan.workflow_verb == "undo":
-            expect = Expect("workflow", [], {"changed": True})
+        expect = _workflow_agent_expect(plan.workflow_verb)
     else:
         # Rows 458/461: agent mode drives the same product, so the same
         # preset-4 WB refusal applies -- an agent asked to warm/cool/tint an

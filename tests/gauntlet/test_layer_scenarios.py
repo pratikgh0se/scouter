@@ -1,5 +1,7 @@
 import collections
 
+import pytest
+
 from tests.gauntlet import taxonomy
 from tests.gauntlet.layers import scenarios
 
@@ -92,3 +94,27 @@ def test_agent_cases_get_a_real_cap():
     for c in agent:
         turns = 1 + len(c.meta["followups"])
         assert c.budget_cap_s() >= turns * TURN_TIMEOUT_S, c.id
+
+
+def test_workflow_agent_cases_never_generate_with_no_checks():
+    """(row 501 item B, night-1 rank 10, SCA-hollow-workflow-pass): every
+    workflow agent case (sca-r0159's cull included) must carry at least one
+    check -- a checkless workflow Expect is exactly what let r0159 score
+    `verified` with zero MCP calls."""
+    _, agent = scenarios.generate(taxonomy.load())
+    workflow_cases = [c for c in agent if c.expect.kind == "workflow"]
+    assert workflow_cases, "expected at least one workflow agent case"
+    for c in workflow_cases:
+        assert c.expect.checks, c.id
+    r0159 = next(c for c in agent if c.id == "sca-r0159-olympus-agent")
+    assert r0159.expect.checks
+
+
+def test_workflow_agent_expect_fails_generation_for_an_unknown_verb():
+    """A checkless (or unresolvable) workflow expectation fails generation
+    outright, rather than reaching evaluate.py as a hollow pass waiting to
+    happen."""
+    with pytest.raises(ValueError, match="no agent workflow expectation"):
+        scenarios._workflow_agent_expect("no-such-verb")
+
+
