@@ -186,6 +186,37 @@ def test_isolate_still_restages_an_absent_module_leaked_at_a_non_default_value(
     assert dt.launches == 2  # a real move: restaged
 
 
+def test_a_job_referencing_case_is_blocked_when_the_guide_job_import_failed(
+        corpus, tmp_path, monkeypatch):
+    """Review round 2, finding 6 (GB-1): gd-19-shaped -- a case whose step
+    args reference {job_slug} must be blocked with a typed fixture reason,
+    never left to fail on the product's own "no job with slug ..." terms."""
+    s = _session(corpus, tmp_path).open()
+    s.guide_job_stage_error = "import_incomplete: library_import's files[] names none of [...]"
+    case = Case(id="gd-19", layer="guide", tier="P0", mode="cli",
+               steps=[Step("cli", {"argv": ["job", "run", "--job-slug", "{job_slug}",
+                                            "--preset", "harbour-warm", "--hero",
+                                            "{job_frame:1}", "--yes"]}, 60.0, True)],
+               expect=Expect("workflow"), body="olympus", frame_role="hero",
+               meta={"session": "walkthrough", "order": 19})
+    obs = execute.run_tool_case(s, case)
+    assert obs.blocked == ("fixture: guide job import failed: import_incomplete: "
+                           "library_import's files[] names none of [...]")
+    assert obs.calls == []  # the step never ran
+
+
+def test_a_non_job_case_is_unaffected_by_a_guide_job_stage_error(corpus, tmp_path, monkeypatch):
+    s = _session(corpus, tmp_path).open()
+    s.guide_job_stage_error = "some failure"
+    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {
+        "fingerprint": "a", "params": {}, "units": {}})
+    case = Case(id="gd-01", layer="guide", tier="P0", mode="tool",
+               steps=[Step("darkroom_set", {"module": "exposure"}, 3.5, True)],
+               expect=Expect("workflow"), body="olympus", frame_role="hero")
+    obs = execute.run_tool_case(s, case)
+    assert obs.blocked is None
+
+
 def test_walkthrough_continuation_skips_isolate_and_journal_reset(corpus, tmp_path, monkeypatch):
     """Fix A (night-1 triage rank 6, GD-walkthrough-state): a walkthrough case
     (meta["session"] == "walkthrough") after the walkthrough's own first case

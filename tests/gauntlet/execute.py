@@ -65,6 +65,24 @@ def needs_stats(case: Case) -> bool:
     return any(c.metric in STAT_METRICS for c in case.expect.checks)
 
 
+_JOB_PLACEHOLDERS = {"job_slug", "job_frame", "job_frames"}
+
+
+def _refs_job(case: Case) -> bool:
+    """True when any step's args reference {job_slug}/{job_frame:N}/
+    {job_frames} -- review round 2, finding 6 (GB-1)."""
+    def walk(v) -> bool:
+        if isinstance(v, str):
+            return any(m.group(1) in _JOB_PLACEHOLDERS for m in _PH.finditer(v))
+        if isinstance(v, list):
+            return any(walk(x) for x in v)
+        if isinstance(v, dict):
+            return any(walk(x) for x in v.values())
+        return False
+
+    return any(walk(st.args) for st in case.steps)
+
+
 def isolate(session, frame: Path, role: str) -> bool:
     """Spec 2.3 case isolation: reset what the previous case touched; then the
     snapshot must equal this frame's session baseline, else the session is
@@ -107,6 +125,18 @@ def isolate(session, frame: Path, role: str) -> bool:
 def run_tool_case(session, case: Case, *, clock=time.monotonic) -> Observation:
     obs = Observation()
     t0 = clock()
+    #: Review round 2, finding 6 (GB-1, P1): a case whose own steps
+    #: reference the guide job placeholders must never run (and fail on the
+    #: product's own terms) when the harness's own job import failed --
+    #: block it honestly instead. Merge note (guide x fix/htc-hang-
+    #: recovery): this and any future pre_ping/inherited_wedge block both
+    #: belong here, at the very top, before the isolate/ensure_frame try;
+    #: whichever lands second in a merge keeps both, this one first.
+    stage_error = getattr(session, "guide_job_stage_error", None)
+    if stage_error and _refs_job(case):
+        obs.blocked = f"fixture: guide job import failed: {stage_error}"
+        obs.wall_s = clock() - t0
+        return obs
     role = case.frame_role or "hero"
     #: Fix A (night-1 triage rank 6, GD-walkthrough-state): the user-guide
     #: walkthrough (layers/guide.py WALKTHROUGH, meta["session"] ==

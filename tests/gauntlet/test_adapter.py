@@ -643,3 +643,5 @@ def test_guide_stage_is_a_noop_when_the_import_errors(pinned_env, fake_corpus):
     s = routed._session("olympus")
     before = list(s.staged.job_frames)
     assert before  # the card copies stage() made are still there, untouched
+    # Review round 2, finding 6 (GB-1): the failure is recorded, not silent.
+    assert s.guide_job_stage_error == "usage"

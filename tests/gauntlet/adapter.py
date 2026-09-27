@@ -173,25 +173,41 @@ def _stage_guide_job(session) -> None:
     import step: a real `library_import` of the staged card into that slug,
     then `exec_bulk._imported_frames` resolves `job_frames` to the paths the
     import actually wrote (never the card copies, which stay outside the
-    library the product's own job/preset verbs read from). A no-op when the
-    import itself fails or answers nothing usable: a later step then fails
-    honestly on its own terms, same as it always has."""
+    library the product's own job/preset verbs read from).
+
+    Review round 2, finding 6 (GB-1, P1): a failed import used to be a
+    silent no-op, so gd-10/18/19 would go on to fail as "product" failures
+    ("no job with slug ...") -- exactly the harness-mis-scoring-as-product
+    class this whole branch exists to remove. Any failure now records the
+    reason on `session.guide_job_stage_error`; `execute.run_tool_case`
+    reads it and blocks (never runs) any later case whose own steps
+    reference `{job_slug}`/`{job_frame:N}`/`{job_frames}`, with a typed
+    `fixture: guide job import failed: <reason>` reason instead of letting
+    it fail on the product's own terms for a fixture gap. Re-opening a
+    guide session on an MCP reopen re-imports into the same slug (a
+    resume-skip on the product side, harmless) and clears any earlier
+    error."""
     from tests.gauntlet.exec_bulk import ImportIncomplete, _imported_frames
 
     staged = session.staged
+    session.guide_job_stage_error = None
     if staged is None or not staged.job_frames:
         return
     rec = session.call("library_import", {"source": str(staged.card),
                                           "job_slug": staged.vars["job_slug"],
                                           "confirm": True}, 60.0, write=True)
     if rec.error:
+        session.guide_job_stage_error = rec.error
         return
     try:
         resolved = _imported_frames(session, rec.envelope, staged.job_frames)
-    except ImportIncomplete:
+    except ImportIncomplete as e:
+        session.guide_job_stage_error = str(e)
         return
-    if resolved is not None:
-        staged.job_frames = resolved
+    if resolved is None:
+        session.guide_job_stage_error = "library_import answered nothing usable"
+        return
+    staged.job_frames = resolved
 
 
 class RoutedSession:

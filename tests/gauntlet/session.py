@@ -254,6 +254,11 @@ class ScouterSession:
         #: see gd-02/03's history, not a reset frame). Never set for any
         #: other meta["session"] value (edu-* cases stay isolated per case).
         self.walkthrough_started: bool = False
+        #: Review round 2, finding 6 (GB-1): set by adapter._stage_guide_job
+        #: when the guide layer's own job import fails; execute.run_tool_case
+        #: reads it (via getattr, finding 14) to block a case that needs the
+        #: job instead of letting it fail on the product's own terms.
+        self.guide_job_stage_error: str | None = None
         self.floors: dict[str, float] = {}
         #: (final fix I3): "mcp_server_death: exit N" notes not yet handed to
         #: an observation; mcp_dead marks the session for reopen.
