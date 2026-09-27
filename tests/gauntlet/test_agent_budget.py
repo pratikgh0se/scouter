@@ -75,12 +75,26 @@ def test_usage_fraction_is_none_with_no_source():
 
 
 def test_check_usage_budget_parks_at_the_threshold():
-    with pytest.raises(Park, match="usage_meter"):
+    with pytest.raises(Park, match="usage_meter") as exc_info:
         agent_budget.check_usage_budget(threshold=0.6, usage_fn=lambda: 0.6)
-    with pytest.raises(Park, match="usage_meter"):
+    assert "usage_meter" in str(exc_info.value)
+    with pytest.raises(Park, match="usage_meter") as exc_info2:
         agent_budget.check_usage_budget(threshold=0.6, usage_fn=lambda: 0.75)
+    assert "usage_meter" in str(exc_info2.value)
 
 
 def test_check_usage_budget_never_parks_below_threshold_or_with_no_source():
-    agent_budget.check_usage_budget(threshold=0.6, usage_fn=lambda: 0.5)  # no raise
-    agent_budget.check_usage_budget(threshold=0.6, usage_fn=lambda: None)  # no raise: fallback
+    calls = []
+    orig = Park.__init__
+
+    def spy_init(self, *a, **kw):
+        calls.append(a)
+        orig(self, *a, **kw)
+
+    Park.__init__ = spy_init
+    try:
+        agent_budget.check_usage_budget(threshold=0.6, usage_fn=lambda: 0.5)
+        agent_budget.check_usage_budget(threshold=0.6, usage_fn=lambda: None)
+    finally:
+        Park.__init__ = orig
+    assert calls == []  # Park was never constructed in either call

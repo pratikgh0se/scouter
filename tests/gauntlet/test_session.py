@@ -164,8 +164,9 @@ def test_library_lock_in_the_log_stops_the_session_fast(corpus, tmp_path):
 
 def test_sqlite_database_is_locked_line_is_also_caught(corpus, tmp_path):
     dt = LockedDt("sqlite3_step: database is locked\n")
-    with pytest.raises(sess.LibraryLocked, match="library_lock unknown"):
+    with pytest.raises(sess.LibraryLocked, match="library_lock unknown") as exc_info:
         _session(corpus, tmp_path, dt).open()
+    assert "library_lock unknown" in str(exc_info.value)
 
 
 def test_no_lock_line_launches_normally(corpus, tmp_path):

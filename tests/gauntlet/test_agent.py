@@ -353,8 +353,9 @@ def test_agent_session_parks_on_the_usage_budget_before_spawning_claude(tmp_path
     case = Case(id="sca-budget", layer="scenarios_agent", tier="P0", mode="agent", steps=[],
                 expect=Expect("refuse"), body="olympus", frame_role="hero",
                 meta={"sentence": "warm it", "followups": []})
-    with pytest.raises(Park, match="usage_meter"):
+    with pytest.raises(Park, match="usage_meter") as exc_info:
         s.run_case(case)
+    assert "usage_meter" in str(exc_info.value)
 
 
 def test_run_case_stages_a_job_when_the_case_asks_for_one(tmp_path, monkeypatch):

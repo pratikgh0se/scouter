@@ -114,8 +114,9 @@ def test_workflow_agent_expect_fails_generation_for_an_unknown_verb():
     """A checkless (or unresolvable) workflow expectation fails generation
     outright, rather than reaching evaluate.py as a hollow pass waiting to
     happen."""
-    with pytest.raises(ValueError, match="no agent workflow expectation"):
+    with pytest.raises(ValueError, match="no agent workflow expectation") as exc_info:
         scenarios._workflow_agent_expect("no-such-verb")
+    assert "no-such-verb" in str(exc_info.value)
 
 
 def test_out_of_scope_agent_cases_carry_the_refuse_and_offer_policy():
