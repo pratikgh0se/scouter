@@ -66,12 +66,18 @@ class LooksCalibrationProbeIntentTest(unittest.TestCase):
                 self.assertEqual(set_call["value"], want["value"], (ex["id"], set_call))
 
             # Oracle 2: the calibration record -- measured, explicitly failed,
-            # or neither -- never a silent falsy zero standing in for a hole.
+            # measured-but-unverified (row 474), or neither -- never a silent
+            # falsy zero standing in for a hole.
             cal = obs.extra["calibration"]
             errors = obs.extra.get("calibration_errors", {})
             if want["calibration"] == "measured":
                 self.assertNotIn(cal[key], (None, 0.0), (ex["id"], cal[key]))
                 self.assertNotIn(key, errors, (ex["id"], errors))
+            elif want["calibration"] == "measured_unverified":
+                # A real slope WAS measured (probed from an un-pinned
+                # `default_candidate`), but flagged, not folded in clean.
+                self.assertNotIn(cal[key], (None, 0.0), (ex["id"], cal[key]))
+                self.assertEqual(errors.get(key), "default_unverified", (ex["id"], errors))
             else:
                 self.assertIsNone(cal[key], (ex["id"], cal[key]))
                 self.assertIn(key, errors, (ex["id"], errors))

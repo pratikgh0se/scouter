@@ -18,10 +18,11 @@ def _cal_path(session) -> Path:
     return session.run_root / "chart" / CAL_FILE
 
 
-def _probe_base(module: str, param: str) -> float | None:
-    """The value the calibration probe sets FROM: the vocabulary row's
-    declared `neutral`, else its darktable `default` (spec §4.3) -- read
-    from `scouter.core.vocab`, never a number picked here.
+def _probe_base(module: str, param: str) -> tuple[float | None, str | None]:
+    """The value the calibration probe sets FROM, and where it came from:
+    `(value, source)` with `source` one of `"neutral"`, `"default"`,
+    `"default_candidate"`, or `None` (nothing declared). Read from
+    `scouter.core.vocab`, never a number picked here.
 
     The PFM chart's pipeline is colorin/colorout/gamma only (row
     LK-calibration-holes): sigmoid, exposure and temperature never have an
@@ -31,23 +32,35 @@ def _probe_base(module: str, param: str) -> float | None:
     (`gate`/`read_current`, `scouter/core/moves.py`). An ABSOLUTE
     `darkroom_set` needs no current value at all, so probing with
     `base + amount` (an absolute target) instead of a bare `amount` (a
-    delta) reaches the module regardless. When neither `neutral` nor
-    `default` is declared for a row (still true for `temperature.temperature`
-    -- the PFM chart has no white-balance module and no camera EXIF, so
-    there is no honest Kelvin to probe from), there is nothing to build an
-    absolute target from either; the caller must skip probing that key and
-    record it as a calibration failure, never silently a zero slope.
+    delta) reaches the module regardless.
+
+    A row may also declare only `default_candidate` (row 474: a value
+    believed correct but not yet host-verified, e.g. `exposure.black` --
+    §4.3 leaves its `default` column blank and no host probe has pinned it).
+    This function still returns it, so `chart_golden` can probe from it and
+    measure a real slope -- but the caller must record the result as
+    unverified (`calibration_errors[key] = "default_unverified"`), never as
+    a settled measurement, until the row is promoted to `default`.
+
+    When neither `neutral`, `default`, nor `default_candidate` is declared
+    for a row (still true for `temperature.temperature` -- the PFM chart has
+    no white-balance module and no camera EXIF, so there is no honest Kelvin
+    to probe from), there is nothing to build an absolute target from
+    either; the caller must skip probing that key and record it as a
+    calibration failure, never silently a zero slope.
     """
     from scouter.core import vocab
 
     row = vocab.spec(module, param)
     if row is None:
-        return None
+        return None, None
     if row.neutral is not None:
-        return float(row.neutral)
+        return float(row.neutral), "neutral"
     if row.default is not None:
-        return float(row.default)
-    return None
+        return float(row.default), "default"
+    if row.default_candidate is not None:
+        return float(row.default_candidate), "default_candidate"
+    return None, None
 
 
 def chart_golden(session, case, step, obs) -> CallRecord:
@@ -65,11 +78,11 @@ def chart_golden(session, case, step, obs) -> CallRecord:
         cal_errors: dict[str, str] = {}
         for key, amount in chart_render.PROBE.items():
             module, param = key.split(".")
-            base = _probe_base(module, param)
+            base, source = _probe_base(module, param)
             if base is None:
                 cal[key] = None
-                cal_errors[key] = (f"{key} has no declared neutral or darktable default in "
-                                    "the vocabulary to probe from")
+                cal_errors[key] = (f"{key} has no declared neutral, darktable default, or "
+                                    "default candidate in the vocabulary to probe from")
                 continue
             rec = session.call("darkroom_set",
                                {"module": module, "param": param, "value": base + amount},
@@ -81,8 +94,18 @@ def chart_golden(session, case, step, obs) -> CallRecord:
             after = chart_render.render_stats(frame, work / f"cal-{key}.ppm")
             cal[key] = chart_render.slope(first, after, key, amount)
             session.call("darkroom_undo_last", {}, 8.0, write=True)
+            if source == "default_candidate":
+                # Row 474: the probe DID reach the module and measured a real
+                # slope, but from a candidate base no host probe has pinned
+                # yet (see vocab.ParamSpec.default_candidate) -- record it as
+                # unverified so a look depending on it is treated exactly
+                # like a skipped calibration (never `verified`), not folded
+                # in as a settled measurement.
+                cal_errors[key] = "default_unverified"
         cal["_base_slope"] = first["chart_tone"]["slope"]
         cal["_base_C"] = first["chart_chromatic"]["C"]
+        if cal_errors:
+            cal["_errors"] = cal_errors
         (session.run_root / "chart").mkdir(parents=True, exist_ok=True)
         _cal_path(session).write_text(json.dumps(cal, indent=2, sort_keys=True) + "\n")
         obs.extra["calibration"] = cal
@@ -91,8 +114,9 @@ def chart_golden(session, case, step, obs) -> CallRecord:
             # calibration hole this run hit, distinct from a genuinely flat
             # (zero) measured slope.
             obs.extra["calibration_errors"] = cal_errors
-        obs.extra["calibration_ok"] = all(v not in (None, 0.0) for k, v in cal.items()
-                                          if not k.startswith("_"))
+        obs.extra["calibration_ok"] = (not cal_errors
+                                       and all(v not in (None, 0.0) for k, v in cal.items()
+                                               if not k.startswith("_")))
         return CallRecord("chart_golden", {}, {"ok": True, "outcome": "ok",
                                                "data": {"golden": golden["verdict"]}})
     except SessionBlocked as e:
@@ -118,8 +142,15 @@ def plan_moves(look: dict, cal: dict, current: dict) -> tuple[list[tuple[str, st
 
     def add(key: str, delta_metric: float) -> None:
         s = cal.get(key)
-        if not s:
-            notes.append(f"no calibration for {key}")
+        error = cal.get("_errors", {}).get(key)
+        if not s or error:
+            # Row 474: a key whose calibration came back unverified (e.g.
+            # `exposure.black` probed from an un-pinned `default_candidate`)
+            # is planned exactly like a key with no calibration at all --
+            # never a move built from a measurement no host probe has
+            # confirmed.
+            notes.append(f"no calibration for {key}" if not s else
+                         f"{key} calibration unverified: {error}")
             return
         module, param = key.split(".")
         row = vocab.spec(module, param)

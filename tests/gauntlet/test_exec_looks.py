@@ -64,23 +64,28 @@ def _run_chart_golden(monkeypatch, tmp_path) -> tuple[_FakeChartSession, Observa
     return session, obs
 
 
-def test_chart_golden_probes_exposure_black_with_an_absolute_set_from_its_default(
+def test_chart_golden_probes_exposure_black_with_an_absolute_set_from_its_candidate_default(
         monkeypatch, tmp_path):
-    """RED (pre-fix): `chart_golden` only ever called `darkroom_adjust`. The
-    fake bridge above refuses that `value_unknown` for exposure.black (the
-    PFM chart never activates it, so there is no current value for a
-    relative delta to add to -- night-1 golden-case audit), the frame is
-    never touched, `slope()` compares identical before/after stats and
-    returns a falsy 0.0, and `plan_moves` reads that as "no calibration" --
-    calibration_ok is false and no black-point move is ever planned, with
-    no record of why.
+    """RED (pre-fix, e2fc2dd): `chart_golden` only ever called
+    `darkroom_adjust`. The fake bridge above refuses that `value_unknown`
+    for exposure.black (the PFM chart never activates it, so there is no
+    current value for a relative delta to add to -- night-1 golden-case
+    audit), the frame is never touched, `slope()` compares identical
+    before/after stats and returns a falsy 0.0, and `plan_moves` reads that
+    as "no calibration" -- calibration_ok is false and no black-point move
+    is ever planned, with no record of why.
 
-    GREEN (this fix): the probe reads exposure.black's declared darktable
-    default (0.0, `scouter/core/vocab.py`) and sends an ABSOLUTE
-    `darkroom_set` instead, which the fake bridge answers ok without
-    needing a current value at all -- `darkroom_adjust` is never called for
-    this key, a real (non-zero) slope is measured, and a black-point move
-    is planned."""
+    GREEN (row 474, final-review issue I1): the probe reads exposure.black's
+    `default_candidate` (0.0, `scouter/core/vocab.py` -- NOT a cited spec
+    §4.3 default: that column is blank for this row by design, and no host
+    probe has pinned the value yet) and sends an ABSOLUTE `darkroom_set`
+    instead, which the fake bridge answers ok without needing a current
+    value at all -- `darkroom_adjust` is never called for this key, and a
+    real (non-zero) slope IS measured. But because the base came from an
+    un-pinned candidate, not a verified `neutral`/`default`, the result is
+    recorded as `calibration_errors["exposure.black"] = "default_unverified"`
+    and `plan_moves` treats it exactly like a skipped calibration: no
+    black-point move is planned until a host probe promotes the row."""
     session, obs = _run_chart_golden(monkeypatch, tmp_path)
 
     calls_by_tool = {tool for tool, _ in session.calls}
@@ -90,13 +95,18 @@ def test_chart_golden_probes_exposure_black_with_an_absolute_set_from_its_defaul
     assert set_calls[("exposure", "black")] == 0.0 + chart_render.PROBE["exposure.black"]
 
     cal = obs.extra["calibration"]
+    # Really measured (the fake renders a distinct black-point stat for this
+    # key, see `fake_render_stats` above) -- not a falsy zero slope.
     assert cal["exposure.black"] not in (None, 0.0)
-    assert "exposure.black" not in obs.extra.get("calibration_errors", {})
+    # But flagged unverified, not folded in as a settled measurement.
+    assert obs.extra["calibration_errors"]["exposure.black"] == "default_unverified"
+    assert cal["_errors"]["exposure.black"] == "default_unverified"
+    assert obs.extra["calibration_ok"] is False
 
     look = {"targets": {"tone": {}, "black_lift": 1.0}}
     moves, notes = exec_looks.plan_moves(look, cal, {})
-    assert ("exposure", "black") in {(m, p) for m, p, _ in moves}
-    assert not any("no calibration for exposure.black" in n for n in notes)
+    assert ("exposure", "black") not in {(m, p) for m, p, _ in moves}
+    assert any("exposure.black calibration unverified: default_unverified" in n for n in notes)
 
 
 def test_chart_golden_reports_a_probe_with_no_declared_default_as_a_failure_not_a_zero(

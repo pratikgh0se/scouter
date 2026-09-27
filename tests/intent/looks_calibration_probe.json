@@ -1,12 +1,13 @@
 {
   "about": "Zenkai Rules Z1 intent examples for the chart calibration probe (row LK-calibration-holes, night1-20260926 triage scratchpad/n1/night1-triage.md §2). Each example is a real probe key from tests/gauntlet/chart_render.py:PROBE against the synthetic PFM chart, whose pipeline is colorin/colorout/gamma only -- sigmoid, exposure and temperature never have an active history entry on it. Run by tests/intent/test_looks_calibration_probe_intent.py.",
-  "subject": "tests/gauntlet/exec_looks.py chart_golden + plan_moves, scouter/core/vocab.py ParamSpec.default",
+  "subject": "tests/gauntlet/exec_looks.py chart_golden + plan_moves, scouter/core/vocab.py ParamSpec.default / default_candidate",
   "examples": [
     {
-      "id": "black-point-probes-absolute-from-declared-default",
+      "id": "black-point-probes-absolute-from-a-candidate-default-but-stays-unverified",
       "input": {"module": "exposure", "param": "black", "amount": -0.01},
-      "expect": {"tool": "darkroom_set", "value": -0.01, "calibration": "measured", "planned": true},
-      "source": "night-1 golden-case audit (looks/001, 23:21): 'exposure.black' -> value_unknown 'did not decode from the XMP' on a relative darkroom_adjust; scouter/core/vocab.py declares exposure.black's darktable default as 0.0 (an additive correction with no history entry applies none), so the probe now sets 0.0 + -0.01 = -0.01 absolutely instead of adjusting a delta with nothing to add it to"
+      "expect": {"tool": "darkroom_set", "value": -0.01, "calibration": "measured_unverified",
+                "planned": false},
+      "source": "night-1 golden-case audit (looks/001, 23:21): 'exposure.black' -> value_unknown 'did not decode from the XMP' on a relative darkroom_adjust; scouter/core/vocab.py declares exposure.black's darktable default only as a `default_candidate` (0.0, an additive correction with no history entry is believed to apply none), so the probe still sets 0.0 + -0.01 = -0.01 absolutely instead of adjusting a delta with nothing to add it to -- but row 474 (final-review issue I1) found the phase3 design spec's own §4.3 table leaves this row's `default` column blank by design and no host probe had confirmed the value, so a real slope IS measured yet recorded as calibration_errors['exposure.black'] = 'default_unverified', and plan_moves treats it exactly like a skipped calibration (never planned) until tests/test_host_phase3.py's ProbeExposureBlackDefaultHostTest pins it"
     },
     {
       "id": "colour-balance-probes-absolute-from-declared-neutral",
