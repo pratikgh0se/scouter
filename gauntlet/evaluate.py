@@ -591,6 +591,11 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     """Spec 1 conditions (a)-(f). Only asked when the product reported success."""
     writes = [c for c in obs.calls if c.write]
     reported = any(_env_ok(c) for c in writes)
+    # Row 459 (night-1, COV-undo-first-introduction): rule (e) below must ask
+    # the undo call's OWN ok/refusal, not "was any write ok" -- an earlier ok
+    # `set` (introducing the module) must not make an honestly-refused
+    # `undo_last` look like a silent failure.
+    undo_reported_ok = any(_env_ok(c) for c in writes if c.tool.endswith("undo_last"))
     if case.mode == "agent" and obs.agent_text:
         reported = reported or _claims(obs.agent_text, policy.claim_markers)
     sidecar = case.expect.sidecar or {}
@@ -629,7 +634,7 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
         if ch.metric in ("M2", "M3", "M4", "M5", "M6") and ch.sign and not r.ok \
                 and not r.magnitude_only:
             return f"c: {ch.metric} {ch.stat} moved {r.measured!r}, expected sign {ch.sign}"
-        if ch.kind == "restored" and not r.ok and any(c.tool.endswith("undo_last") for c in writes):
+        if ch.kind == "restored" and not r.ok and undo_reported_ok:
             return f"e: undo reported ok but {r.measured} were not restored"
     rep, chg, ver = (obs.extra.get(k) for k in ("reported_n", "changed_n", "verified_n"))
     if isinstance(rep, int) and ((isinstance(chg, int) and chg < rep) or

@@ -96,6 +96,34 @@ def test_silent_failure_e_undo_not_restored():
     assert v.silent_failure.startswith("e:")
 
 
+def test_undo_own_refusal_is_not_silent_e():
+    """Row 459 (COV-undo-first-introduction, night-1): the case sets a module
+    that was absent before (an ok write), then tries to undo it and the
+    product HONESTLY refuses (the previous value was never readable from the
+    XMP -- untyped `error`, ok=False on the undo call itself). Rule (e) must
+    look at the undo call's own ok/refusal, not just "was any write ok" --
+    an earlier ok `set` must not turn an honest refusal into a silent
+    failure. The case should score `failed` (honest), never `silent_failure`.
+    """
+    chk = Check("M1", kind="restored",
+                target={"keys": ["colorbalancergb.highlights_chroma"], "unit": "%"})
+    obs = Observation(
+        calls=[
+            CallRecord("darkroom_set", {}, _ok(), write=True),
+            CallRecord("darkroom_undo_last", {},
+                       _err("error", fix="press Ctrl-Z in darktable, or set the value "
+                                          "you want explicitly"), write=True),
+        ],
+        before=_snap("a"),
+        after=_snap("b", **{"colorbalancergb.highlights_chroma": 12.0}))
+    case = _edit_case([chk], None, kind="workflow",
+                       steps=[Step("darkroom_set", write=True),
+                              Step("darkroom_undo_last", write=True)])
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome != "silent_failure", v.silent_failure
+    assert v.outcome == "failed", (v.outcome, v.silent_failure)
+
+
 def test_silent_failure_f_noop_but_changed():
     env = _ok({"noop": True})
     v = evaluate(_edit_case([], {"changed": False}),
