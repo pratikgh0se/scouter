@@ -259,6 +259,11 @@ class ScouterSession:
         #: reads it (via getattr, finding 14) to block a case that needs the
         #: job instead of letting it fail on the product's own terms.
         self.guide_job_stage_error: str | None = None
+        #: Review round 2, finding 9 (GA-1): the id of the first walkthrough
+        #: case that broke the script's own intended state (blocked, or an
+        #: unscripted write refusal). execute.run_tool_case reads and sets
+        #: this via getattr for consistency with minimal session doubles.
+        self.walkthrough_broken: str | None = None
         self.floors: dict[str, float] = {}
         #: (final fix I3): "mcp_server_death: exit N" notes not yet handed to
         #: an observation; mcp_dead marks the session for reopen.
