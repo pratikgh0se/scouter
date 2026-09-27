@@ -99,35 +99,59 @@ class Rehearsal:
             ok = (cfg / "darktablerc").exists() and (cfg / "library.db").exists()
             return ok, {"terminate": res}
         if name in ("setup", "setup_again", "rerun_existing"):
+            #: Review round 3, GR-2 (P1 blocker): `config init --yes`
+            #: unconditionally replaces an existing config.json
+            #: (scouter/config.py init: `os.replace`). Running it after
+            #: EVERY setup-shaped action clobbered ins-08's own pre-seeded
+            #: `{}` -- a product bug where `setup` itself overwrites a
+            #: user's config would have become invisible, and
+            #: config_has_version would have passed trivially either way.
+            #: `config init` now runs ONLY for `setup` (ins-04, the fresh-
+            #: machine case). `rerun_existing` (ins-08) snapshots the
+            #: config bytes before `setup` and asserts they are byte-
+            #: identical after (`detail["config_unchanged"]`) -- so a
+            #: clobber is caught, not hidden. `setup_again` (ins-09) drops
+            #: init too: by the time it runs, ins-04 already wrote a real
+            #: config in this same Rehearsal instance (carry 4, one
+            #: Rehearsal in step order), so a second init would be
+            #: byte-identical and redundant.
+            config_before = None
             if name == "rerun_existing":
                 (self.config / "scouter").mkdir(parents=True, exist_ok=True)
                 (self.config / "scouter" / "config.json").write_text("{}\n")
+                config_before = self._config_bytes()
             before = self._tree_hash()
             code, rep = self._scouter("setup")
-            #: Pratik's ruling, row 496 item 7 (triage rank 8's recommended
-            #: option 1): `scouter/cli/setup.py` deliberately never writes
-            #: config.json itself (its own config item is `required: False`,
-            #: reported only) -- the REHEARSAL now runs `scouter config init
-            #: --yes` right after `scouter setup`, so the rehearsal as a
-            #: whole still leaves a valid config behind. Note for the
-            #: report: spec 3.7's wording ("setup writes a valid config")
-            #: is to be amended to say the REHEARSAL is responsible for the
-            #: config, not the `setup` verb alone.
-            init_code, init_rep = self._scouter("config", "init", "--yes")
+            detail = dict(rep)
+            if name == "setup":
+                #: Pratik's ruling, row 496 item 7 (triage rank 8's
+                #: recommended option 1): `scouter/cli/setup.py`
+                #: deliberately never writes config.json itself (its own
+                #: config item is `required: False`, reported only) -- the
+                #: REHEARSAL runs `scouter config init --yes` right after
+                #: `scouter setup`, so the rehearsal as a whole still
+                #: leaves a valid config behind. Note for the report: spec
+                #: 3.7's wording ("setup writes a valid config") is to be
+                #: amended to say the REHEARSAL is responsible for the
+                #: config, not the `setup` verb alone.
+                init_code, init_rep = self._scouter("config", "init", "--yes")
+                detail["config_init"] = init_rep
+                ok = code == 0 and init_code == 0
+            else:
+                ok = code == 0
             tree_unchanged = self._tree_hash() == before
-            ok = code == 0 and init_code == 0
             if name == "setup_again":
                 ok = ok and tree_unchanged
-            detail = dict(rep)
-            detail["config_init"] = init_rep
+            if name == "rerun_existing":
+                detail["config_unchanged"] = self._config_bytes() == config_before
             detail["config_has_version"] = self._config_has_version()
             if not detail["config_has_version"]:
                 detail["needs_review_reason"] = (
                     "spec 3.7 expects setup to leave config.json with a version field; "
                     "the rehearsal now runs `scouter config init --yes` itself right after "
-                    "`scouter setup` (row 496 item 7), which should make this always true -- "
-                    "still reported so a regression in `config init` itself is never silently "
-                    "folded into the doctor-down 'blocked' path")
+                    "`scouter setup` (row 496 item 7, ins-04 only -- GR-2), which should make "
+                    "this always true there -- still reported so a regression in `config init` "
+                    "itself is never silently folded into the doctor-down 'blocked' path")
             #: Review round 2, finding 2 (GD-1): setup_again's own
             #: idempotency break must never be masked by the doctor marker
             #: below (blocked short-circuits every check in evaluate()).
@@ -169,6 +193,14 @@ class Rehearsal:
             return json.loads(path.read_text()).get("version") is not None
         except ValueError:
             return False
+
+    def _config_bytes(self) -> bytes | None:
+        """Review round 3, GR-2: the raw bytes of config.json, or None when
+        it does not exist -- `rerun_existing`'s own before/after comparison
+        (ins-08 must be able to catch a `setup` that clobbers a user's
+        config, never trivially pass because `config init` overwrote it)."""
+        path = self.config / "scouter" / "config.json"
+        return path.read_bytes() if path.is_file() else None
 
     @staticmethod
     def _mark_needs_darktable(code: int, rep: dict, detail: dict, *, extra_ok: bool = True

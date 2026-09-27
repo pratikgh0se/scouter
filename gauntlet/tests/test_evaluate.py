@@ -1150,14 +1150,17 @@ def test_fix4_derived_key_is_restored_only_when_its_coefficients_are():
     assert v.outcome == "verified", v
 
 
-# -- Review round 2, finding 3 (GD-2): a typed needs_review path for a Check
-# tagged with a review reason, so it can never lift a real failure to
-# partial and never drag a genuine pass below needs_review. -----------------
+# -- Review round 2, finding 3 (GD-2); review round 3, GR-1: a typed
+# needs_review path for a Check tagged {"disputed": "<reason>"}, so it can
+# never lift a real failure to partial and never drag a genuine pass below
+# needs_review. The tag key is `disputed`, never `needs_review` -- that
+# string is already checkmap.wb_route_a_pinned_edit's own tag key
+# (`sign_unverified`, GR-1), and the two must never collide. -----------------
 
 
 ACTION_CHECK = Check("extra", target={"path": "action_ok", "op": "truthy"})
 VERSION_CHECK = Check("extra", target={"path": "detail.config_has_version", "op": "truthy"},
-                      tags={"needs_review": "spec 3.7 vs setup.py design, needs Pratik"})
+                      tags={"disputed": "spec 3.7 vs setup.py design, needs Pratik"})
 
 
 def _install_case(checks):
@@ -1193,6 +1196,20 @@ def test_both_checks_passing_gives_verified():
     v = evaluate(_install_case([ACTION_CHECK, VERSION_CHECK]),
                  _install_obs(action_ok=True, config_has_version=True), POLICY)
     assert (v.score, v.outcome) == ("pass", "verified")
+
+
+def test_a_differently_keyed_tag_is_never_read_as_disputed():
+    """GR-1: only the tag key `disputed` opts a check out of hard failure --
+    any other key (checkmap.wb_route_a_pinned_edit's own `sign_unverified`,
+    or anything else) is inert here, so a real value mismatch under some
+    OTHER tag key still scores as a genuine failure/partial, never
+    needs_review."""
+    checks = [ACTION_CHECK, Check("extra", target={"path": "detail.config_has_version",
+                                                    "op": "truthy"},
+                                  tags={"sign_unverified": "unrelated to this evaluator path"})]
+    v = evaluate(_install_case(checks),
+                 _install_obs(action_ok=True, config_has_version=False), POLICY)
+    assert v.outcome != "needs_review"
 
 
 def test_an_untagged_two_check_workflow_case_keeps_todays_partial():

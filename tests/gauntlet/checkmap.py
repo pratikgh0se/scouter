@@ -185,23 +185,35 @@ def wb_route_a_pinned_edit(route: dict, *, sign: int | None = None,
     pinned) or a permissive `Expect("edit", [])` placeholder.
     `direction_verified` is False in check_map.json until the host probe,
     so a sign is asserted only when it is True; otherwise the case still
-    verifies the value (or that it changed) plus the derived keys and the
-    untouched WB preset, with a `needs_review` tag on the move check
-    instead of guessing a sign. `route["unit"]` is always check_map.json's
-    own canonical unit string (wb_route_a.m1_key.unit is "K") -- no further
-    unit-name normalization needed here, unlike layers/common.py's generic
-    `sidecar()` (which this module cannot import: `layers/common.py`
-    itself imports from here)."""
+    verifies that the value changed (never a specific value: an unverified
+    sign means "moved, direction unknown") plus the derived keys and the
+    untouched WB preset, with a `sign_unverified` tag on the `changed`
+    check instead of guessing a sign. `route["unit"]` is always
+    check_map.json's own canonical unit string (wb_route_a.m1_key.unit is
+    "K") -- no further unit-name normalization needed here, unlike
+    layers/common.py's generic `sidecar()` (which this module cannot
+    import: `layers/common.py` itself imports from here).
+
+    Review round 3, GR-1 (P1 blocker): the tag key here is `sign_unverified`,
+    deliberately never `needs_review` -- gauntlet/evaluate.py's typed
+    needs_review path (added review round 2, GD-2) reads a Check's
+    `needs_review`-named... no: its OWN key is `disputed` for exactly this
+    reason. Before that evaluator change, this tag was read by nothing (a
+    comment only); sharing the key with install's `disputed` tag would have
+    opted every pinned Route-A `equals` case (an explicit `value=`, no sign
+    involved at all) into the same "never hard-fail" path -- a wrong
+    Kelvin value from a real product bug would have silently scored
+    `needs_review` instead of `failed`. So the tag applies ONLY to the
+    `changed`-kind branch below, never to `equals`."""
     to_key = route["m1_key"]
     to_module, to_param = to_key.split(".", 1)
     unit = route["unit"]
-    tags = {} if route["direction_verified"] else {
-        "needs_review": "route A pinned but direction_verified is False in "
-                         "check_map.json -- sign unverified until the host probe"}
     if value is not None:
-        move = Check("M1", kind="equals", target={"key": to_key, "value": value, "unit": unit},
-                     tags=tags)
+        move = Check("M1", kind="equals", target={"key": to_key, "value": value, "unit": unit})
     else:
+        tags = {} if route["direction_verified"] else {
+            "sign_unverified": "route A pinned but direction_verified is False in "
+                               "check_map.json -- sign unverified until the host probe"}
         s = sign if route["direction_verified"] else 0
         move = Check("M1", kind="changed", sign=s or 0, target={"key": to_key, "unit": unit},
                      tags=tags)

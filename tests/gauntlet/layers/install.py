@@ -20,18 +20,32 @@ ACTIONS = (
     ("09_setup_idempotent", "setup_again", "a second scouter setup changes nothing"),
     ("10_leak_check", "leak_check", "no file newer than the stamp outside the root; mcpServers hash unchanged"),  # noqa: E501
 )
-#: Fix D (night-1 triage rank 8, INS-config-version-assert): these 3 actions
-#: run `scouter setup`, whose own `config` item is `required: False` and
-#: reported only ("`scouter config init` writes it", scouter/cli/setup.py) --
-#: spec 3.7's "setup writes a valid config" is a disputed assertion, not a
-#: product bug the rehearsal can silently keep failing on. A second check
-#: against exec_install.Rehearsal's own `detail.config_has_version` (never
-#: folded into `action_ok`) keeps that fact visible without either forcing a
-#: pass or a plain fail while it is undecided (needs Pratik).
-_CONFIG_VERSION_ACTIONS = {"setup", "rerun_existing", "setup_again"}
-_CONFIG_VERSION_TAG = {"needs_review": "spec 3.7 vs scouter/cli/setup.py's own report-only "
+#: Fix D (night-1 triage rank 8, INS-config-version-assert): `setup` and
+#: `setup_again` run `scouter config init --yes` (row 496 item 7), so
+#: `config.json` should carry a version field -- still a disputed
+#: assertion (spec 3.7 vs scouter/cli/setup.py's own report-only config
+#: item), not a product bug the rehearsal can silently keep failing on. A
+#: second check against exec_install.Rehearsal's own
+#: `detail.config_has_version` (never folded into `action_ok`) keeps that
+#: fact visible without either forcing a pass or a plain fail while it is
+#: undecided (needs Pratik). Review round 3, GR-1: the tag KEY is
+#: `disputed`, never `needs_review` -- that string already means something
+#: else on checkmap.wb_route_a_pinned_edit's own move check
+#: (`sign_unverified`), and gauntlet/evaluate.py's new typed needs_review
+#: path reads only `disputed`.
+_CONFIG_VERSION_ACTIONS = {"setup", "setup_again"}
+_CONFIG_VERSION_TAG = {"disputed": "spec 3.7 vs scouter/cli/setup.py's own report-only "
                        "config item (setup writes it via `config init`, not `setup`) -- "
                        "night1-parity-install-guide-triage.md rank 8, needs Pratik"}
+#: Review round 3, GR-2: `rerun_existing` (ins-08, "setup on a pre-existing
+#: config is idempotent") no longer runs `config init` itself (that would
+#: clobber the pre-seeded config and make the case unable to catch a
+#: `setup` that overwrites a user's config -- config_has_version would pass
+#: trivially either way). Its own check is `detail.config_unchanged`
+#: (exec_install.Rehearsal's own before/after byte comparison) instead,
+#: UNTAGGED: a real clobber is a genuine regression, never a disputed spec
+#: question.
+_CONFIG_UNCHANGED_ACTIONS = {"rerun_existing"}
 
 
 def _checks(action: str) -> list[Check]:
@@ -39,6 +53,8 @@ def _checks(action: str) -> list[Check]:
     if action in _CONFIG_VERSION_ACTIONS:
         out.append(Check("extra", target={"path": "detail.config_has_version", "op": "truthy"},
                          tags=dict(_CONFIG_VERSION_TAG)))
+    elif action in _CONFIG_UNCHANGED_ACTIONS:
+        out.append(Check("extra", target={"path": "detail.config_unchanged", "op": "truthy"}))
     return out
 
 

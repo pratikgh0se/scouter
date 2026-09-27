@@ -241,3 +241,87 @@ def test_a_failed_config_init_makes_setup_not_ok(tmp_path):
     r = exec_install.Rehearsal(tmp_path, run=run)
     ok, detail = r.action("setup")
     assert ok is False
+
+
+# -- Review round 3, GR-2 (P1 blocker) ---------------------------------------
+
+
+def test_rerun_existing_never_runs_config_init(tmp_path):
+    """config init --yes runs only for `setup` (ins-04) -- rerun_existing
+    (ins-08) must never call it, or its own pre-seeded config is clobbered
+    and a `setup` that overwrites a user's config becomes invisible."""
+    setup_payload = _setup_payload(doctor_ok=True)
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, returncode=0, stdout=json.dumps(setup_payload),
+                                           stderr="")
+
+    r = exec_install.Rehearsal(tmp_path, run=run)
+    ok, detail = r.action("rerun_existing")
+    assert ok is True
+    assert not any(argv[-3:] == ["config", "init", "--yes"] for argv in calls)
+    assert detail["config_unchanged"] is True  # the pre-seeded {} was never touched
+
+
+def test_setup_again_never_runs_config_init(tmp_path):
+    setup_payload = _setup_payload(doctor_ok=True)
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, returncode=0, stdout=json.dumps(setup_payload),
+                                           stderr="")
+
+    r = exec_install.Rehearsal(tmp_path, run=run)
+    r.action("setup_again")
+    assert not any(argv[-3:] == ["config", "init", "--yes"] for argv in calls)
+
+
+def test_rerun_existing_catches_a_setup_that_clobbers_the_config(tmp_path):
+    """The regression this whole fix exists to catch: if `scouter setup`
+    itself ever started writing config.json, rerun_existing must see it as
+    a byte change, not silently pass."""
+    setup_payload = _setup_payload(doctor_ok=True)
+
+    def run(argv, **kwargs):
+        # simulates a (hypothetical, buggy) `setup` that clobbers config.json
+        (tmp_path / "config" / "scouter" / "config.json").write_text('{"clobbered": true}\n')
+        return subprocess.CompletedProcess(argv, returncode=0, stdout=json.dumps(setup_payload),
+                                           stderr="")
+
+    r = exec_install.Rehearsal(tmp_path, run=run)
+    ok, detail = r.action("rerun_existing")
+    assert detail["config_unchanged"] is False
+    # `ok` itself only reflects `code == 0` (same pattern as config_has_version
+    # for setup/setup_again, finding 2/3): the fact is reported in `detail`,
+    # and layers/install.py's own untagged `detail.config_unchanged` Check
+    # is what turns this into a real "failed" verdict at the case level.
+    assert ok is True
+
+
+def test_setup_still_runs_config_init_and_ins08_state_carries(tmp_path):
+    """ins-08 pre-seeds {} freshly every call (it is its own action, not
+    chained to ins-04 in this unit test) -- config_unchanged compares
+    against THAT pre-seed, not whatever `setup` (ins-04) may have left in a
+    real rehearsal run."""
+    setup_payload = _setup_payload(doctor_ok=True)
+
+    def run(argv, **kwargs):
+        if argv[-3:] == ["config", "init", "--yes"]:
+            (tmp_path / "config" / "scouter").mkdir(parents=True, exist_ok=True)
+            (tmp_path / "config" / "scouter" / "config.json").write_text('{"version": 1}\n')
+            return subprocess.CompletedProcess(argv, returncode=0,
+                                               stdout=json.dumps({"outcome": "ok"}), stderr="")
+        return subprocess.CompletedProcess(argv, returncode=0, stdout=json.dumps(setup_payload),
+                                           stderr="")
+
+    r = exec_install.Rehearsal(tmp_path, run=run)
+    ok, detail = r.action("setup")
+    assert ok is True
+    assert detail["config_has_version"] is True
+
+    ok2, detail2 = r.action("rerun_existing")
+    assert "config_unchanged" in detail2
+    assert "config_has_version" in detail2  # still reported, informationally

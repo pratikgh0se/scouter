@@ -320,7 +320,11 @@ def test_wb_route_a_pinned_verifies_the_real_target_not_a_placeholder(monkeypatc
     chg = next(chk for chk in adj.expect.checks if chk.kind == "changed")
     assert chg.target["key"] == "channelmixerrgb.temperature"
     assert chg.sign == 0  # direction_verified is False -- no sign asserted
-    assert chg.tags.get("needs_review")
+    # GR-1 (review round 3): the tag key is `sign_unverified`, never
+    # `needs_review` -- that key is now evaluator-reactive (install's own
+    # disputed-config-version tag) and would wrongly opt this real
+    # `changed` check out of hard failure too.
+    assert chg.tags.get("sign_unverified")
 
     warmer = _case("cov-phrase-warmer-olympus-bare")
     assert warmer.expect.kind == "edit"
