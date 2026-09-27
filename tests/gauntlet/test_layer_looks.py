@@ -68,9 +68,16 @@ def test_frame_role_order_covers_every_role_generate_produces():
     `generate()`'s per-case `frame_role` (row LK-hero-below-floor) without
     being added to `FRAME_ROLE_ORDER`, so `order_by_frame_role`'s
     `FRAME_ROLE_ORDER.index(c.frame_role)` raised a bare `ValueError` for
-    every case on olympus -- a crash, not a typed failure. This test names
-    the invariant directly so the next new role fails loudly and specifically
-    here instead of as an opaque index error deep in the sort."""
+    every case on olympus -- a crash, not a typed failure. `generate()`
+    itself calls `order_by_frame_role` before this test ever gets its own
+    cases back, so a stale `FRAME_ROLE_ORDER` still surfaces as that same
+    `ValueError`, not as this assertion -- this test does not intercept it.
+    What it does is pin `FRAME_ROLE_ORDER` as a named, checked invariant
+    (every role `generate()` can produce must be listed here) rather than
+    an implicit assumption baked into the sort, so the next new role's
+    author has something explicit to update and a git-blameable line to
+    find, even though the failure they will actually see first is still
+    the sort's own crash."""
     cases = looks.generate(taxonomy.load())
     produced = {c.frame_role for c in cases}
     assert produced <= set(looks.FRAME_ROLE_ORDER), (
