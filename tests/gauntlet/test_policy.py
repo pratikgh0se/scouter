@@ -22,15 +22,17 @@ def test_active_flags_empty_by_default():
 
 
 def test_active_flags_rejects_an_unknown_name():
-    with pytest.raises(UnknownFlagError, match="not_a_real_flag"):
+    with pytest.raises(UnknownFlagError, match="not_a_real_flag") as exc_info:
         _active_flags([{"name": "not_a_real_flag", "reason": "x", "card": "y",
                        "expires": "2099-01-01"}])
+    assert "not_a_real_flag" in str(exc_info.value)
 
 
 def test_active_flags_rejects_a_missing_field():
-    with pytest.raises(UnknownFlagError, match="reason"):
+    with pytest.raises(UnknownFlagError, match="reason") as exc_info:
         _active_flags([{"name": "parity.same_failure_is_pass", "card": "y",
                        "expires": "2099-01-01"}])
+    assert "reason" in str(exc_info.value)
 
 
 def test_active_flags_accepts_a_valid_unexpired_entry():
@@ -59,5 +61,6 @@ def test_load_policy_raises_on_an_unknown_flag_in_a_temp_check_map(tmp_path, mon
     tmp_data.mkdir()
     (tmp_data / "check_map.json").write_text(json.dumps(cm))
     monkeypatch.setattr(policy_module, "DATA", tmp_data)
-    with pytest.raises(UnknownFlagError):
+    with pytest.raises(UnknownFlagError) as exc_info:
         policy_module.load_policy()
+    assert "bogus.flag" in str(exc_info.value)
