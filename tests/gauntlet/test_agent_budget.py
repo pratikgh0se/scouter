@@ -123,6 +123,24 @@ def test_check_usage_budget_parks_at_the_threshold_with_until_the_reset():
         agent_budget.check_usage_budget(threshold=0.6, usage_fn=lambda: (0.75, 12345.0))
 
 
+def test_check_usage_budget_runs_at_59_percent_and_parks_at_60_from_the_real_window(
+        tmp_path, monkeypatch):
+    """(card t_e82c2951): the boundary, read through the real file (not a
+    stub `usage_fn`) -- 59% is below the 60% ruling and must run; 60% is
+    at the threshold and must park."""
+    monkeypatch.delenv(agent_budget.USAGE_ENV, raising=False)
+    path = tmp_path / "usage-window.json"
+    monkeypatch.setattr(agent_budget, "USAGE_WINDOW_PATH", path)
+    now = 1_000_000.0
+    path.write_text(json.dumps({"utilization": 0.59, "reset_at": now + 1800,
+                                "written_at": now - 60}))
+    agent_budget.check_usage_budget(usage_fn=lambda: agent_budget.usage_fraction(now=now))
+    path.write_text(json.dumps({"utilization": 0.60, "reset_at": now + 1800,
+                                "written_at": now - 60}))
+    with pytest.raises(Park, match="usage_meter"):
+        agent_budget.check_usage_budget(usage_fn=lambda: agent_budget.usage_fraction(now=now))
+
+
 def test_check_usage_budget_never_parks_below_threshold_or_with_no_source():
     calls = []
     orig = Park.__init__

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from gauntlet.adapter import LayerSpec, RefuseRun
 from gauntlet.case import Case
+from tests.gauntlet import agent_budget
 from tests.gauntlet import corpus as corpus_mod
 from tests.gauntlet import taxonomy
 from tests.gauntlet.checkmap import plan_request
@@ -307,6 +308,12 @@ class RoutedSession:
         from tests.gauntlet.execute import run_tool_case
         from tests.gauntlet.session import SessionBlocked
 
+        if self.layer == "scenarios_agent":
+            # (card t_e82c2951): before the session even opens, so a case at
+            # or past the usage threshold never pays for a darktable launch
+            # first -- covers every case, and (being the first thing this
+            # layer's first case does) the layer's own start too.
+            agent_budget.check_usage_budget()
         if self.current is not None:
             # (fix round 1, N1): a capped abort/close of an earlier session that
             # finished late may have reset SCOUTER_CACHE; re-point, never carry

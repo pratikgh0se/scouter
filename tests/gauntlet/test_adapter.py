@@ -223,6 +223,39 @@ def test_park_reaches_the_runner(pinned_env, fake_corpus, monkeypatch):
         routed.run_case(_case("scenarios_agent"))
 
 
+def test_usage_budget_parks_before_the_session_opens(pinned_env, fake_corpus, monkeypatch):
+    """Row 501 item H / card t_e82c2951: the 60% usage parker fires once per
+    scenarios_agent case, before the (expensive) darktable session even
+    opens -- covering both "before each agent-layer case" and, for the
+    layer's first case, "once before the agent layer starts" in the same
+    check. A non-agent layer must never see it (the tool layers run to
+    the CLI's own wall limit, item A's fallback, not this meter)."""
+    from tests.gauntlet import agent_budget
+
+    def over_budget():
+        raise Park("usage_meter: 75% >= 60%", until=12345.0)
+
+    monkeypatch.setattr(agent_budget, "check_usage_budget", over_budget)
+    a, run, routed, dts = _routed(pinned_env, fake_corpus, layer="scenarios_agent")
+    with pytest.raises(Park, match="usage_meter"):
+        routed.run_case(_case("scenarios_agent"))
+    assert dts == []  # no darktable session was opened before the park
+
+
+def test_usage_budget_does_not_gate_tool_layers(pinned_env, fake_corpus, monkeypatch):
+    """Only scenarios_agent reads the usage meter; a tool-mode layer's own
+    session must still open normally even when the meter is over budget."""
+    from tests.gauntlet import agent_budget
+
+    def over_budget():
+        raise Park("usage_meter: 75% >= 60%", until=12345.0)
+
+    monkeypatch.setattr(agent_budget, "check_usage_budget", over_budget)
+    _, _, routed, dts = _routed(pinned_env, fake_corpus, layer="coverage")
+    routed.run_case(_case("coverage"))
+    assert len(dts) == 1  # the coverage layer's session opened as usual
+
+
 def test_crash_reports_are_darktable_or_python_only(tmp_path, monkeypatch):
     monkeypatch.setattr(adapter_mod, "CRASH_DIR", tmp_path)
     for name in ("darktable-2026.ips", "Python-1.crash", "Safari.ips", "darktable.txt"):

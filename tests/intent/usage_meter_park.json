@@ -1,0 +1,24 @@
+{
+  "about": "Zenkai Rules Z1 intent examples: row 501 item H / card t_e82c2951, the 60% usage parker. `tests.gauntlet.agent_budget.check_usage_budget` reads capsule-corp's usage-window.json (utilization, reset_at, written_at) and must raise `gauntlet.adapter.Park` once utilization is at or over the 60% threshold with a fresh (<=900s old) reading, carrying `until=reset_at` so the runner's --wait-on-park resumes after the reset; a reading below threshold, or one with no fresh source (missing or stale file), must never park. Run by tests/intent/test_usage_meter_park_intent.py against tests.gauntlet.agent_budget.check_usage_budget + usage_fraction, through a real usage-window.json file (never the USAGE_ENV stub, so staleness is exercised for real). Two oracles per example: whether Park was raised at all, and (when it was) that `until` equals the window's own `reset_at` -- a park with the wrong or missing resume time is as wrong as no park.",
+  "subject": "tests/gauntlet/agent_budget.py:check_usage_budget + usage_fraction",
+  "examples": [
+    {
+      "id": "sixty-percent-parks-with-the-window-reset-time",
+      "input": {"utilization": 0.60, "reset_at_offset_s": 1800, "written_at_offset_s": -60},
+      "expect": {"parked": true, "until_offset_s": 1800},
+      "source": "Pratik's ruling (row 501 item H): park at 60%, resume after the reset"
+    },
+    {
+      "id": "fifty_nine-percent-runs",
+      "input": {"utilization": 0.59, "reset_at_offset_s": 1800, "written_at_offset_s": -60},
+      "expect": {"parked": false, "until_offset_s": null},
+      "source": "the boundary below the ruling's threshold must never park"
+    },
+    {
+      "id": "stale-reading-is-no-source-and-does-not-park",
+      "input": {"utilization": 0.95, "reset_at_offset_s": 1800, "written_at_offset_s": -901},
+      "expect": {"parked": false, "until_offset_s": null},
+      "source": "fix round 1, Opus finding 5: a reading older than STALE_S (15 min) must never silently gate a live run on a stopped writer's last-known number"
+    }
+  ]
+}
