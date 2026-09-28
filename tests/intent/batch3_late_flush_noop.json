@@ -1,6 +1,6 @@
 {
   "about": "Zenkai Rules Z1 intent examples for batch 3 item 4 (night-2 triage, late-flush noop, row 523, 2026-09-28): darkroom.py's `_commit_with_readback` decided `noop=True` from a value readback alone after a `CommitTimeout` -- indistinguishable from a genuine late flush, where darktable answers the commit AFTER Scouter gave up waiting and the edit lands anyway. Sourced from Knowledge/Scouter - Night 2 triage 2026-09-28.md's 'silent means' section and root cause C4/late-flush description, and the recorded case ids it cites from ~/Pictures/ScouterScratch/gauntlet/night2-20260927/cases/. Run by tests/test_darkroom_core.py::CommitReadbackTest's late-flush tests. Enforced by review until mechanised by t_450535e2.",
-  "subject": "scouter/core/darkroom.py _commit_with_readback; scouter/core/history.py sidecar_history_fingerprint/sidecar_committed_as_expected",
+  "subject": "scouter/core/darkroom.py _commit_with_readback, set_param, _late_flush_landed",
   "examples": [
     {
       "id": "sigmoid-contrast-late-flush-reported-as-noop",
@@ -27,7 +27,7 @@
       "input": {"case": "control (not from the run dir)",
                 "underlying_move": "a value already at the target BEFORE the write, no history movement at all"},
       "expect": {"noop": true, "committed": true, "warning": "still 'no new sidecar' -- the honest noop text"},
-      "source": "this fix's own scope guard: `_late_flush_edit`/`sidecar_committed_as_expected` must only flip a timeout to 'applied' when the sidecar's OWN history moved; a real early noop (the value was already there, confirm() true, no history delta) must keep today's honest 'no new sidecar' verdict, per `_commit_with_readback`'s original should-fix 6 contract"
+      "source": "this fix's own scope guard: `_late_flush_landed` must only flip a timeout to 'applied' when BOTH the sidecar's own history moved AND the readback confirms the target; a real early noop (confirm() true, no history delta) must keep today's honest 'no new sidecar' verdict, per `_commit_with_readback`'s original should-fix 6 contract"
     }
   ]
 }
