@@ -498,26 +498,28 @@ def unreachable_cases(body: str) -> list[Case]:
     ]
 
 
-#: Row 523 (night-2 triage C3): 14 phrases move a param whose
-#: `vocab.status` is still `candidate` (no pinned darktable action path --
-#: `moves.py::_refusal`/`CROP_SIDES` refuse them honestly, `not_pinned`).
-#: The generator used to expect a plain edit from these, so Scouter's
-#: honest refusal scored `wrong_refusal`/`failed` (236 coverage fails).
-#: Decision row 523: score the refusal as a pass (host pin probes are a
-#: later card); a pinned edit of the same family must still expect the
-#: edit above, so this only ADDS `accept_refusal` to the existing Expect,
-#: it never replaces the checks.
-def _candidate_status(p: phrases.Phrase) -> bool:
+#: 14 phrases move a param whose `vocab.status` is still `candidate` (no
+#: pinned darktable action path -- `moves.py::_refusal`/`CROP_SIDES` refuse
+#: them honestly, `not_pinned`); score that refusal a pass, naming the
+#: exact code and keys so the evaluator can't wave through an unrelated
+#: refusal, while a pinned edit of the same family still expects the edit.
+def _candidate_keys(p: phrases.Phrase) -> list[str]:
+    keys: list[str] = []
     for mv in p.moves:
-        specs = ([vocab.spec("crop", side) for side in moves.CROP_SIDES] if mv.kind == "crop"
-                 else [vocab.spec(mv.module, mv.param)])
-        if any(s is not None and vocab.status(s) == "candidate" for s in specs):
-            return True
-    return False
+        pairs = ([("crop", side) for side in moves.CROP_SIDES] if mv.kind == "crop"
+                 else [(mv.module, mv.param)])
+        for module, param in pairs:
+            s = vocab.spec(module, param)
+            if s is not None and vocab.status(s) == "candidate":
+                keys.append(f"{module}.{param}")
+    return keys
 
 
 def _candidate_meta(p: phrases.Phrase) -> dict | None:
-    return {"accept_refusal": True} if _candidate_status(p) else None
+    keys = _candidate_keys(p)
+    if not keys:
+        return None
+    return {"accept_refusal": True, "refusal_codes": ["not_pinned"], "candidate_keys": keys}
 
 
 def _phrase_wb_expect(p: phrases.Phrase) -> dict | None:

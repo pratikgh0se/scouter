@@ -1,16 +1,14 @@
 """Runs tests/intent/batch3_c5_evaluator_fixtures.json (Zenkai Rules Z1;
 format pending t_450535e2): 10 real coverage cases sampled from night-2's 61
-C5 evaluator false positives (row 523, 2026-09-28) -- the observation is the
-exact recorded `observation` block from
+C5 evaluator false positives -- the observation is the exact recorded
+`observation` block from
 ~/Pictures/ScouterScratch/gauntlet/night2-20260927/cases/<id>.json, trimmed
-to the fields `gauntlet.adapter.Observation` reads; `recorded_outcome`/
-`recorded_silent_failure` are that same file's own `verdict`. Two
-independent observations per example (Z2): the fixture's OWN recorded
-verdict (oracle A, darktable's real behaviour as the night-2 gauntlet saw
-it) against `evaluate()` run on the SAME observation with the fixed
-evaluator (oracle B, this repo's scoring of it) -- neither is derived from
-the other; the test asserts they now disagree in the direction the triage
-says they should (recorded silent_failure/fail -> fixed verified/pass)."""
+to the fields `gauntlet.adapter.Observation` reads. Two independent
+observations per example (Z2): oracle A reads the RAW recorded facts a
+correct evaluator should honour (the write's own `noop`/`clamped` flags,
+the per-step snapshot delta) -- never the old evaluator's own verdict,
+which is the thing being corrected -- against oracle B, the fixed
+`evaluate()` scoring the SAME observation."""
 
 from __future__ import annotations
 
@@ -42,16 +40,30 @@ def _build_observation(o: dict) -> Observation:
                       extra=o.get("extra", {}), wall_s=o.get("wall_s", 0.0))
 
 
+def _assert_rule_evidence(rule: str, o: dict, case_id: str) -> None:
+    """Oracle A, per rule -- the raw fact the fixed evaluator now honours,
+    read straight from the recorded envelope/snapshots, not from the old
+    verdict string."""
+    data = (o["calls"][-1]["envelope"] or {}).get("data") or {}
+    if rule == "f":
+        assert data.get("noop") is True, case_id
+    elif rule == "c":
+        moves = data.get("moves") or []
+        assert data.get("clamped") is True or any(m.get("clamped") for m in moves), case_id
+    elif rule == "a":
+        snaps = o.get("extra", {}).get("snapshots") or []
+        assert len(snaps) >= 2, case_id
+        assert snaps[-2] != snaps[-1], (case_id, "the write under test must show its own delta")
+    else:
+        raise AssertionError(f"{case_id}: unknown rule {rule!r}")
+
+
 @pytest.mark.parametrize("case_id", sorted(FIXTURES))
 def test_c5_false_positive_now_scores_the_recorded_behaviour_a_pass(case_id):
     fx = FIXTURES[case_id]
-    # Oracle A: the night-2 gauntlet's own recorded verdict was a silent
-    # failure -- the evaluator, not Scouter, was wrong (row 523, C5).
-    assert fx["recorded_outcome"] == "silent_failure"
-    assert fx["recorded_silent_failure"].startswith(("a:", "c:", "f:"))
+    rule = fx["recorded_silent_failure"][0]
+    _assert_rule_evidence(rule, fx["observation"], case_id)  # oracle A
     case = CASES[case_id]
     obs = _build_observation(fx["observation"])
-    # Oracle B: the fixed evaluator, replaying the SAME recorded darktable
-    # behaviour, now scores it a pass.
-    v = evaluate(case, obs, POLICY)
+    v = evaluate(case, obs, POLICY)  # oracle B
     assert v.score == "pass", (case_id, v.outcome, v.notes, v.silent_failure)

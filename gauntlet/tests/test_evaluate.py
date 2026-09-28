@@ -1502,3 +1502,57 @@ def test_unrequested_edit_outcome_is_produced_and_now_in_the_table():
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "unrequested_edit"
     assert OUTCOMES[v.outcome] == FAIL
+
+
+# -- fix round 1 (F6): one synthetic unit test per C5 rule --------------------
+
+
+def test_c5_rule_f_honest_noop_at_target_synthetic():
+    """Rule (f): a toggle already at its target before the write answers
+    `noop: true` -- the pre-write snapshot alone (not "the check happened
+    to pass") proves it was honestly nothing to change."""
+    chk = Check("M1", kind="equals", target={"key": "lens.__enabled", "value": 1.0, "unit": "bool"})
+    case = _edit_case([chk], {"changed": True, "key": "lens.__enabled",
+                              "units": {"lens.__enabled": "bool"}},
+                      steps=[Step("darkroom_say", {}, budget_s=3.5, write=True)])
+    env = _ok({"noop": True, "moves": [{"module": "lens", "param": "__enabled", "noop": True,
+                                        "committed": True}]})
+    obs = _obs(env, _snap("a", **{"lens.__enabled": 1}), _snap("a", **{"lens.__enabled": 1}))
+    v = evaluate(case, obs, POLICY)
+    assert (v.score, v.outcome) == ("pass", "verified")
+
+
+def test_c5_rule_a_net_zero_set_then_undo_synthetic():
+    """Rule (a): a precondition (+0.25) and the tested write (-0.25) net
+    to zero across the WHOLE case, but the per-step snapshot shows the
+    tested write itself landed."""
+    chk = Check("M1", kind="delta", target={"key": "colorbalancergb.global_saturation",
+                                            "delta": -0.25, "unit": "%", "tol": 0.025, "from": 1})
+    case = _edit_case([chk], {"changed": True, "key": "colorbalancergb.global_saturation",
+                              "units": {"colorbalancergb.global_saturation": "%"}},
+                      steps=[Step("darkroom_set", {}, budget_s=3.5, write=True),
+                             Step("darkroom_adjust", {}, budget_s=3.5, write=True)])
+    calls = [CallRecord("darkroom_set", {}, _ok(), write=True),
+             CallRecord("darkroom_adjust", {}, _ok(), write=True)]
+    snaps = [{"colorbalancergb.global_saturation": 0.0},
+             {"colorbalancergb.global_saturation": 0.25},
+             {"colorbalancergb.global_saturation": 0.0}]
+    obs = Observation(calls=calls, before=_snap("a"), after=_snap("a"), extra={"snapshots": snaps})
+    v = evaluate(case, obs, POLICY)
+    assert (v.score, v.outcome) == ("pass", "verified")
+
+
+def test_c5_rule_c_nested_clamp_synthetic():
+    """Rule (c) / `_check_boundary`: a `darkroom_say` envelope nests
+    `clamped: true` per move in `data.moves[j]`, unlike a plain
+    `darkroom_set`'s flat `data.clamped` -- the boundary check must read
+    both shapes."""
+    chk = Check("boundary", target={"key": "exposure.black", "unit": "ratio",
+                                    "request": 0.199755859375, "bound": 0.1})
+    case = _edit_case([chk], kind="edit", steps=[Step("darkroom_say", {}, budget_s=3.5, write=True)])
+    env = _ok({"moves": [{"module": "exposure", "param": "black", "clamped": True,
+                          "applied": 0.1, "cap": 0.1}]}, outcome="moved_to_limit")
+    obs = _obs(env, _snap("a", **{"exposure.black": -0.0002}),
+              _snap("b", **{"exposure.black": 0.1}))
+    v = evaluate(case, obs, POLICY)
+    assert (v.score, v.outcome) == ("pass", "verified")

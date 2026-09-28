@@ -30,13 +30,16 @@ def _snap(fp: str, **params) -> dict:
     return {"fingerprint": fp, "history_end": 1, "params": params}
 
 
-def _not_pinned_envelope(module: str, param: str) -> dict:
-    return {"ok": False, "outcome": "error:not_pinned",
-            "error": {"code": "not_pinned",
+def _refusal_envelope(module: str, param: str, code: str = "not_pinned") -> dict:
+    return {"ok": False, "outcome": f"error:{code}",
+            "error": {"code": code,
                       "detail": {"refused": [{"module": module, "param": param,
-                                              "code": "not_pinned", "status": "candidate"}]},
+                                              "code": code, "status": "candidate"}]},
                       "fix": "this parameter has no pinned darktable action path",
                       "message": f"'{param}' cannot run: not reachable"}}
+
+
+_not_pinned_envelope = _refusal_envelope
 
 
 def _bare_refusal_case(cid: str, module: str, param: str) -> None:
@@ -94,6 +97,50 @@ def test_pinned_live_phrase_still_expects_a_plain_edit():
     # a refusal on this case scores wrong_refusal, not a pass.
     obs = Observation(calls=[CallRecord("darkroom_say", {}, _not_pinned_envelope(
         "exposure", "exposure"), wall_s=0.01, write=True)],
+                      before=_snap("a"), after=_snap("a"))
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome == "wrong_refusal"
+
+
+def test_crop_family_wrong_refusal_code_is_not_accepted():
+    """F3 fix round 1: `accept_refusal` names `not_pinned` specifically
+    (row 523 passes the HONEST not_pinned refusal, not any refusal at
+    all) -- a refusal on the SAME case, same module/param, but with a
+    different policy code (`usage`, a wrong-argument mistake; `disk_full`,
+    an unrelated environment fault) must still fail, not pass."""
+    cases = {c.id: c for c in coverage.phrase_cases("olympus")}
+    case = cases["cov-phrase-crop_16x9-olympus-bare"]
+    assert case.meta.get("refusal_codes") == ["not_pinned"]
+    # A code the POLICY itself still recognises as a refusal (so the outer
+    # `_code(...) in policy.refusal_codes` gate would have let it through
+    # before this fix): must score `wrong_refusal`, never a pass.
+    for code in ("usage", "unreachable"):
+        obs = Observation(calls=[CallRecord("darkroom_say", {}, _refusal_envelope(
+            "crop", "left", code=code), wall_s=0.01, write=True)],
+                          before=_snap("a"), after=_snap("a"))
+        v = evaluate(case, obs, POLICY)
+        assert v.outcome == "wrong_refusal", (code, v.outcome)
+    # A code the policy does not even recognise as a refusal at all
+    # (`disk_full`, `not_in_darkroom`) -- never a pass either way, but
+    # scored generically rather than as a typed wrong refusal.
+    for code in ("disk_full", "not_in_darkroom"):
+        obs = Observation(calls=[CallRecord("darkroom_say", {}, _refusal_envelope(
+            "crop", "left", code=code), wall_s=0.01, write=True)],
+                          before=_snap("a"), after=_snap("a"))
+        v = evaluate(case, obs, POLICY)
+        assert v.score != "pass", (code, v.outcome)
+
+
+def test_crop_family_refusal_naming_an_unrelated_param_is_not_accepted():
+    """F3 fix round 1, remedy 2: `error.detail.refused[*]` must name one of
+    THIS family's own candidate keys (`candidate_keys`) -- a `not_pinned`
+    refusal on some other, unrelated candidate param must not be credited
+    to this case just because the policy code matches."""
+    cases = {c.id: c for c in coverage.phrase_cases("olympus")}
+    case = cases["cov-phrase-crop_16x9-olympus-bare"]
+    assert "crop.left" in case.meta.get("candidate_keys", [])
+    obs = Observation(calls=[CallRecord("darkroom_say", {}, _refusal_envelope(
+        "sharpen", "amount"), wall_s=0.01, write=True)],
                       before=_snap("a"), after=_snap("a"))
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "wrong_refusal"
