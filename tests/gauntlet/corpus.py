@@ -194,7 +194,20 @@ class Corpus:
 
     @classmethod
     def load(cls, path: Path, root: Path | None = None) -> Corpus:
-        return cls(json.loads(path.read_text(encoding="utf-8")), root)
+        """Batch 3 / Zenkai Z1 (night-2 triage C1, row 462): merge EXTRA_ROLES
+        into a cached corpus.json written before that role existed, the same
+        way `pick_roles` already merges it at survey time -- so a stale cache
+        never raises `KeyError: 'hero_bright'` (or any future EXTRA_ROLES
+        addition). EXTRA_ROLES points at a copy outside TRIAL and is not a
+        product of the survey, so it is safe to backfill unconditionally
+        rather than gating on a corpus schema version."""
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        roles = doc.setdefault("roles", {})
+        for body, extra in EXTRA_ROLES.items():
+            roles.setdefault(body, {})
+            for role, abs_path in extra.items():
+                roles[body].setdefault(role, abs_path)
+        return cls(doc, root)
 
     @staticmethod
     def write(path: Path, frames: list[Surveyed]) -> dict:

@@ -1,0 +1,18 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for batch 3 item 1 (night-2 triage C1, decision row 462): a corpus.json cached before EXTRA_ROLES gained hero_bright must still load with every olympus hero_bright case runnable, not KeyError: 'hero_bright'. Sourced from Knowledge/Scouter - Night 2 triage 2026-09-28.md, root-cause table row C1, and the case ids it cites from ~/Pictures/ScouterScratch/gauntlet/night2-20260927/cases/. Run by tests/gauntlet/test_corpus.py::test_load_backfills_hero_bright_into_a_stale_cached_corpus_json. Enforced by review until mechanised by t_450535e2.",
+  "subject": "tests/gauntlet/corpus.py Corpus.load",
+  "examples": [
+    {
+      "id": "stale-cache-predating-hero-bright-loads-with-it-present",
+      "input": {"cached_corpus_json_roles_olympus": ["hero", "dark", "bright", "blown"]},
+      "expect": {"loaded_roles_olympus_hero_bright": "EXTRA_ROLES['olympus']['hero_bright']"},
+      "source": "night-2 triage C1: 'Cached corpus.json (2026-09-26) predates EXTRA_ROLES hero_bright (row 462); Corpus.roles() reads the cache only, so every olympus hero_bright case dies with KeyError: hero_bright' -- looks 117 cases, coverage 6 cases, examples lk-fuji_sim_provia-olympus and cov-phrase-lift_shadows-olympus-touch"
+    },
+    {
+      "id": "cache-with-its-own-hero-bright-is-not-overwritten",
+      "input": {"cached_corpus_json_roles_olympus_hero_bright": "/already/surveyed/copy.ORF"},
+      "expect": {"loaded_roles_olympus_hero_bright": "/already/surveyed/copy.ORF"},
+      "source": "corpus.py pick_roles's own design (row 458): EXTRA_ROLES is a code-level override merged at write time from a real survey; a load-time merge must defer to a value the cache already recorded, never clobber a fresh survey's own copy"
+    }
+  ]
+}

@@ -632,20 +632,24 @@ class ScouterSession:
         out, self.mcp_deaths = self.mcp_deaths, []
         return out
 
-    def _relaunch_then_reopen(self, role: str, path: Path) -> None:
+    def _relaunch_then_reopen(self, role: str, path: Path, *, tag: str = "") -> None:
         """(night-1 fix, class LK-refresh-no-open, sibling gap): relaunch is
         `launched`, never `current` -- the job only records an image as
         opened inside a real `darkroom_open` (scouter.core.darkroom.
         `_record_opened_image`). Used by every ensure_frame recovery path
         that relaunches, so none of them can skip the follow-up open the way
-        the original bug did."""
+        the original bug did. Bounded to exactly one relaunch: a second
+        failure raises rather than retrying again, and (batch 3 / C2) a
+        `tag` lets the caller mark that specific failure kind (for example
+        `bridge_relaunch_failed`) instead of a bare `SessionBlocked`."""
         self.relaunch(path)
         again = self.call("darkroom_open", {"image": str(path)}, 30.0)
         if again.error is None and (again.envelope or {}).get("ok"):
             self.current_frame = path
         else:
+            prefix = f"{tag}: " if tag else ""
             raise SessionBlocked(
-                f"darkroom_open did not open frame {role} ({path}) after a relaunch "
+                f"{prefix}darkroom_open did not open frame {role} ({path}) after a relaunch "
                 f"on it: error={again.error!r} health={again.health!r}")
 
     def ensure_frame(self, role: str) -> Path:
@@ -657,6 +661,13 @@ class ScouterSession:
                 self.current_frame = path
             elif rec.error == "timeout" and rec.health == "unresponsive":
                 self._relaunch_then_reopen(role, path)
+            elif rec.error in ("bridge_timeout", "commit_timeout"):
+                # C2: darktable is wedged in lighttable (bridge_timeout) or
+                # committed late without answering (commit_timeout); one
+                # relaunch clears it, same recovery as not_in_darkroom below.
+                # A second failure of the same kind is tagged
+                # bridge_relaunch_failed rather than a bare SessionBlocked.
+                self._relaunch_then_reopen(role, path, tag="bridge_relaunch_failed")
             elif rec.error == "not_in_darkroom":
                 # Smoke S2: darktable cannot load a frame imported into the
                 # SAME running session (product honest limit R20, "wrong image

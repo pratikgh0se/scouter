@@ -73,6 +73,7 @@ def run_bulk_case(session, case: Case) -> Observation:
                                       kwargs={"stop": stop_killer}, daemon=True)
             killer.start()
         try:
+            bridge_relaunched = False
             for st in case.steps:
                 args = substitute(st.args, session, obs.calls)
                 rec = session.call(st.tool, args, st.budget_s, write=st.write)
@@ -82,6 +83,27 @@ def run_bulk_case(session, case: Case) -> Observation:
                     rec = session.call(st.tool, args, st.budget_s, write=st.write)
                     obs.calls.append(rec)
                     obs.extra["journal_resumed"] = "resum" in json.dumps(rec.envelope or {})
+                elif rec.error in ("bridge_timeout", "commit_timeout"):
+                    # Batch 3 / night-2 triage C2 + C12 (bulk hero-open half,
+                    # row 462): this loop calls session.call directly, never
+                    # session.ensure_frame, so a wedged bridge/commit here
+                    # needs its own bounded relaunch-and-retry. One relaunch
+                    # per case: a repeat failure marks the case
+                    # bridge_relaunch_failed instead of retrying again.
+                    if bridge_relaunched:
+                        obs.blocked = (f"bridge_relaunch_failed: {st.tool} {rec.error} again "
+                                      "after the one relaunch this case already used")
+                        obs.hang_evidence.append(obs.blocked)
+                        break
+                    bridge_relaunched = True
+                    session.relaunch()
+                    rec = session.call(st.tool, args, st.budget_s, write=st.write)
+                    obs.calls.append(rec)
+                    if rec.error in ("bridge_timeout", "commit_timeout"):
+                        obs.blocked = (f"bridge_relaunch_failed: {st.tool} still {rec.error} "
+                                      "after a relaunch")
+                        obs.hang_evidence.append(obs.blocked)
+                        break
                 resolved = resolve_import_job_frames(obs, session, rec, frames)
                 if obs.blocked:
                     break

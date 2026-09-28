@@ -506,6 +506,50 @@ def test_timeout_recovery_relaunches_at_most_once_then_blocks(corpus, tmp_path):
     assert dt.launches == 2 and len(mcp.calls) == 2
 
 
+BRIDGE_TIMEOUT = {"ok": False, "outcome": "error:bridge_timeout", "data": {},
+                  "error": {"code": "bridge_timeout",
+                            "message": "never left lighttable after 20s"}}
+COMMIT_TIMEOUT = {"ok": False, "outcome": "error:commit_timeout", "data": {},
+                  "error": {"code": "commit_timeout", "message": "no answer"}}
+
+
+@pytest.mark.parametrize("first_error", [BRIDGE_TIMEOUT, COMMIT_TIMEOUT])
+def test_bridge_and_commit_timeout_relaunch_once_then_recover(corpus, tmp_path, first_error):
+    """Batch 3 / night-2 triage C2 (row 462): `darkroom_open` answering
+    `bridge_timeout` or `commit_timeout` must relaunch darktable and reopen
+    the frame, the same recovery `not_in_darkroom` already gets -- one
+    relaunch, then a real follow-up open, before the harness trusts the
+    frame as current (sca-r0401-olympus-agent, scn-r0318-sony_a7-tool)."""
+    ok = {"ok": True, "outcome": "ok", "data": {}}
+    mcp = FakeMcp({"darkroom_open": [first_error, ok]})
+    dt = FakeDt()
+    s = _session(corpus, tmp_path, dt, mcp=mcp).open()
+    dark = s.staged.frames["dark"]
+    # Oracle A: the harness's own belief about what is open.
+    assert s.ensure_frame("dark") == dark and s.current_frame == dark
+    # Oracle B: independently, exactly one relaunch and two open calls
+    # reached the fake transport/process -- the recovery, not a retry loop.
+    assert dt.launches == 2
+    assert [c[0] for c in mcp.calls] == ["darkroom_open", "darkroom_open"]
+
+
+@pytest.mark.parametrize("code", ["bridge_timeout", "commit_timeout"])
+def test_bridge_and_commit_timeout_relaunches_at_most_once_then_marks_failed(corpus, tmp_path,
+                                                                             code):
+    """A second bridge_timeout/commit_timeout after the one bounded relaunch
+    must not retry again -- it blocks the case, tagged
+    `bridge_relaunch_failed` so triage can tell this apart from a plain
+    SessionBlocked, and the runner never launches a third darktable for it."""
+    err = {"ok": False, "outcome": f"error:{code}", "data": {}, "error": {"code": code}}
+    mcp = FakeMcp({"darkroom_open": [err, err]})
+    dt = FakeDt()
+    s = _session(corpus, tmp_path, dt, mcp=mcp).open()
+    with pytest.raises(sess.SessionBlocked, match="bridge_relaunch_failed.*frame dark"):
+        s.ensure_frame("dark")
+    # Oracle B: exactly one relaunch was attempted (bounded), not a loop.
+    assert dt.launches == 2 and len(mcp.calls) == 2
+
+
 def test_never_launches_a_second_darktable_when_quit_fails(corpus, tmp_path):
     dt = FakeDt(owned=777, terminate_ok=False)
     with pytest.raises(sess.SessionBlocked, match="did not quit"):

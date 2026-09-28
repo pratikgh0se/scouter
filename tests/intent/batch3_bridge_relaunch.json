@@ -1,0 +1,30 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for batch 3 item 2 (night-2 triage C2, decision row 462): darkroom_open answering bridge_timeout or commit_timeout must relaunch darktable and reopen the frame (bounded to one relaunch per case, then bridge_relaunch_failed), in both the main gauntlet runner (session.ensure_frame) and the bulk layer's own step loop (exec_bulk.run_bulk_case). Sourced from Knowledge/Scouter - Night 2 triage 2026-09-28.md root-cause table row C2 and its case ids, recorded under ~/Pictures/ScouterScratch/gauntlet/night2-20260927/cases/. Run by tests/gauntlet/test_session.py and tests/gauntlet/test_exec_bulk.py (the bridge/commit-timeout cases). Enforced by review until mechanised by t_450535e2.",
+  "subject": "tests/gauntlet/session.py ScouterSession.ensure_frame/_relaunch_then_reopen + tests/gauntlet/exec_bulk.py run_bulk_case",
+  "examples": [
+    {
+      "id": "runner-bridge-timeout-relaunches-and-recovers",
+      "input": {"darkroom_open_answers": ["error:bridge_timeout", "ok"]},
+      "expect": {"relaunches": 1, "current_frame_after": "the requested frame"},
+      "source": "night-2 triage C2: 'darkroom_open answers typed bridge_timeout (\"never left lighttable after 20 s\"); session.ensure_frame relaunches only on timeout+unresponsive or not_in_darkroom, so the session stays wedged case after case' -- cases sca-r0401-olympus-agent, sca-r0372-olympus-agent (scenarios_agent 22 cases, 84.6% of that layer's fails), scn-r0318-sony_a7-tool (scenarios 16 cases)"
+    },
+    {
+      "id": "runner-commit-timeout-relaunches-and-recovers",
+      "input": {"darkroom_open_answers": ["error:commit_timeout", "ok"]},
+      "expect": {"relaunches": 1, "current_frame_after": "the requested frame"},
+      "source": "night-2 triage C2 cases (coverage): 'coverage commit_timeout 6' cases -- run_editor_benchmark.py's own transient-code list already groups bridge_timeout and commit_timeout as the same class of transport wedge (tests/gauntlet/benchmark/run_editor_benchmark.py lines 1255/1262)"
+    },
+    {
+      "id": "runner-second-bridge-timeout-marks-bridge-relaunch-failed-not-a-retry-loop",
+      "input": {"darkroom_open_answers": ["error:bridge_timeout", "error:bridge_timeout"]},
+      "expect": {"relaunches": 1, "outcome": "SessionBlocked tagged bridge_relaunch_failed"},
+      "source": "batch 3 brief (this card): 'bounded (one relaunch per case, then mark the case bridge_relaunch_failed); never leaving a darktable the runner did not launch' -- the runner already refuses a foreign darktable (session.py ForeignDarktable), so a retry loop that kept relaunching would risk exactly that"
+    },
+    {
+      "id": "bulk-step-bridge-timeout-relaunches-and-recovers",
+      "input": {"bulk_step_answers": ["error:bridge_timeout", "ok"]},
+      "expect": {"relaunches": 1, "obs_blocked": null},
+      "source": "night-2 triage C2 kind note: '(plus an A stall underneath)... also in bulk exec (C12 harness half)'; batch 3 rank 2 row: 'C2 relaunch on bridge_timeout/commit_timeout, also in bulk exec (C12 harness half)' -- exec_bulk.run_bulk_case calls session.call directly (no ensure_frame), so it needed its own bounded relaunch-and-retry in its step loop rather than sharing session.ensure_frame's code path"
+    }
+  ]
+}

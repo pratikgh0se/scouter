@@ -53,6 +53,75 @@ def test_relaunch_session_blocked_is_returned_as_observation(tmp_path):
     assert not (session.root / "bulk" / case.id / "card").exists()
 
 
+# -- Batch 3 / night-2 triage C2 + C12 (bulk hero-open half, row 462) -------
+
+def _bulk_session(tmp_path, corpus, answers):
+    """A FakeSession whose `call` answers in order (repeating the last
+    answer once exhausted) and counts relaunches -- the two independent
+    oracles the tests below check: the call log (oracle A) and the relaunch
+    count (oracle B)."""
+    calls = []
+    relaunches = []
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.root = tmp_path / "run"
+            self.corpus = corpus
+            self.staged = SimpleNamespace(
+                vars={"out_dir": str(tmp_path / "run" / "exports"),
+                      "relocate_root": str(tmp_path / "run" / "relocated")},
+                env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")},
+                job_frames=[],
+            )
+
+        def call(self, tool, args, budget_s, write=False):
+            calls.append(tool)
+            ans = answers[len(calls) - 1] if len(calls) <= len(answers) else answers[-1]
+            return CallRecord(tool=tool, args=args, envelope=ans.get("envelope", {"ok": True}),
+                              error=ans.get("error"), write=write)
+
+        def relaunch(self) -> None:
+            relaunches.append(True)
+
+    return FakeSession(), calls, relaunches
+
+
+def _bulk_case():
+    return Case(id="blk-wedge-test", layer="bulk", tier="P1", mode="tool",
+               steps=[Step("job_run", {}, 8.0, True)], expect=Expect("workflow"),
+               body="olympus", frame_role="card", meta={"frames": 2})
+
+
+@pytest.mark.parametrize("code", ["bridge_timeout", "commit_timeout"])
+def test_bulk_bridge_timeout_relaunches_once_then_recovers(tmp_path, code):
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "H.ORF").write_bytes(b"raw")
+    corpus = Corpus({"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {}}, trial)
+    answers = [{"error": code}, {"envelope": {"ok": True, "data": {}}}]
+    session, calls, relaunches = _bulk_session(tmp_path, corpus, answers)
+
+    obs = exec_bulk.run_bulk_case(session, _bulk_case())
+
+    assert obs.blocked is None  # oracle A: the case observation carries no block
+    assert calls == ["job_run", "job_run"] and len(relaunches) == 1  # oracle B: one relaunch
+
+
+@pytest.mark.parametrize("code", ["bridge_timeout", "commit_timeout"])
+def test_bulk_bridge_timeout_relaunches_at_most_once_then_marks_failed(tmp_path, code):
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "H.ORF").write_bytes(b"raw")
+    corpus = Corpus({"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {}}, trial)
+    answers = [{"error": code}, {"error": code}]
+    session, calls, relaunches = _bulk_session(tmp_path, corpus, answers)
+
+    obs = exec_bulk.run_bulk_case(session, _bulk_case())
+
+    assert obs.blocked is not None and obs.blocked.startswith("bridge_relaunch_failed")
+    assert calls == ["job_run", "job_run"] and len(relaunches) == 1  # bounded: never a second
+
+
 # -- final fix M1: the kill timer is stopped at case end -------------------------
 
 def test_kill_after_never_signals_once_stopped(tmp_path, monkeypatch):

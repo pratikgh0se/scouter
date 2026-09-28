@@ -1,4 +1,5 @@
 # ruff: noqa: N806
+import json
 import os
 
 import pytest
@@ -80,3 +81,39 @@ def test_card_duplication_round_robin_and_disk_check(trial, tmp_path, monkeypatc
     monkeypatch.setattr(corpus, "free_space_ok", lambda p, n: False)
     with pytest.raises(OSError, match="free disk"):
         corpus.build_card(c, "olympus", 120, tmp_path / "card2")
+
+
+def test_load_backfills_hero_bright_into_a_stale_cached_corpus_json(tmp_path):
+    """Batch 3 / night-2 triage C1 (row 462): a corpus.json written before
+    EXTRA_ROLES gained `hero_bright` has no `roles.olympus.hero_bright` key
+    at all -- `Corpus.load` must merge it in so `corpus.roles("olympus")`
+    (and the `[role]` lookups in tests/gauntlet/session.py) never raise
+    `KeyError: 'hero_bright'` against a cache that predates row 462."""
+    stale = {
+        "schema": "scouter-gauntlet-corpus/1",
+        "frames": [],
+        "roles": {"olympus": {"hero": "P6281348.ORF", "dark": "P5240151.ORF"}},
+    }
+    path = tmp_path / "corpus.json"
+    path.write_text(json.dumps(stale), encoding="utf-8")
+
+    loaded = corpus.Corpus.load(path)
+
+    assert "hero_bright" not in stale["roles"]["olympus"]  # oracle A: the file on disk, untouched
+    assert loaded.doc["roles"]["olympus"]["hero_bright"] == \
+        corpus.EXTRA_ROLES["olympus"]["hero_bright"]  # oracle B: the loaded object has it
+    assert loaded.doc["roles"]["olympus"]["hero"] == "P6281348.ORF"  # existing roles untouched
+
+
+def test_load_does_not_override_a_roles_entry_the_cache_already_has(tmp_path):
+    """A cache that already carries its own hero_bright (a fresh survey, or
+    one written after row 462) keeps its own value; the merge never
+    clobbers what the cache says."""
+    doc = {"schema": "scouter-gauntlet-corpus/1", "frames": [],
+           "roles": {"olympus": {"hero_bright": "/already/surveyed/copy.ORF"}}}
+    path = tmp_path / "corpus.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    loaded = corpus.Corpus.load(path)
+
+    assert loaded.doc["roles"]["olympus"]["hero_bright"] == "/already/surveyed/copy.ORF"
