@@ -83,7 +83,7 @@ def run_bulk_case(session, case: Case) -> Observation:
                 obs.calls.append(rec)
                 if kill_at and rec.error:
                     session.relaunch()
-                    session.current_frame = None  # F3: relaunch is launched, not current
+                    session.current_frame = None  # relaunch is launched, not current
                     rec = session.call(st.tool, args, st.budget_s, write=st.write)
                     obs.calls.append(rec)
                     obs.extra["journal_resumed"] = "resum" in json.dumps(rec.envelope or {})
@@ -97,7 +97,7 @@ def run_bulk_case(session, case: Case) -> Observation:
                         break
                     bridge_relaunched = True
                     session.relaunch(Path(last_image) if last_image else None)
-                    session.current_frame = None  # F3: relaunch is launched, not current
+                    session.current_frame = None  # relaunch is launched, not current
                     if st.write and rec.error == "commit_timeout":
                         obs.blocked = (f"bridge_relaunch_failed: {st.tool} commit_timeout on a "
                                       "write step is not retried after a relaunch (it may have "

@@ -195,9 +195,8 @@ class Corpus:
     @classmethod
     def load(cls, path: Path, root: Path | None = None) -> Corpus:
         """Backfills EXTRA_ROLES missing from a stale cached corpus.json so a
-        `KeyError` never reaches a lookup (F4: unlike `pick_roles`, an
-        already-cached role wins over EXTRA_ROLES here -- a real survey
-        result must not be discarded for a hardcoded fallback path)."""
+        `KeyError` never reaches a lookup; a cache that already names the
+        role is left as written."""
         doc = json.loads(path.read_text(encoding="utf-8"))
         roles = doc.setdefault("roles", {})
         for body, extra in EXTRA_ROLES.items():
