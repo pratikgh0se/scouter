@@ -1,0 +1,36 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for batch 3 item 3 (night-2 triage C3, decision row 523, 2026-09-28): the 14 phrases whose only move touches a `vocab.status == \"candidate\"` param (crop, rotate, sharpen, denoise, grain, vignette-corners) refuse honestly (`not_pinned`) on every body today -- the coverage generator must expect that refusal as a pass, not a plain edit, while a pinned edit of the SAME family must still expect the edit. Sourced from Knowledge/Scouter - Night 2 triage 2026-09-28.md, root-cause table row C3 ('236 coverage fails = 208 wrong_refusal + 28 p4'), and the recorded case ids it cites from ~/Pictures/ScouterScratch/gauntlet/night2-20260927/cases/. Run by tests/gauntlet/test_layer_coverage.py::test_c3_unpinned_phrase_families_expect_edit_but_accept_the_honest_refusal and gauntlet/tests/test_evaluate.py::test_c3_property_kind_with_accept_refusal_scores_the_honest_refusal_a_pass. Enforced by review until mechanised by t_450535e2.",
+  "subject": "tests/gauntlet/layers/coverage.py phrase_cases/property_cases; gauntlet/evaluate.py evaluate",
+  "examples": [
+    {
+      "id": "crop-family-bare-phrase-refuses-not-pinned",
+      "input": {"case": "cov-phrase-crop_16x9-olympus-bare", "phrase": "crop to 16:9",
+                "underlying_param": "crop.left (status candidate)"},
+      "expect": {"verdict": "correct_refusal (pass)", "was_before_fix": "wrong_refusal (fail)"},
+      "source": "night-2 triage C3 example cov-phrase-crop_16x9-olympus-bare; recorded envelope error.code == 'not_pinned', refused=[{module:'crop', param:'left', status:'candidate'}] (~/Pictures/ScouterScratch/gauntlet/night2-20260927/cases/cov-phrase-crop_16x9-olympus-bare.json)"
+    },
+    {
+      "id": "rotate-family-p4-property-sequence-all-refuse",
+      "input": {"case": "cov-p4-rotate_left-olympus", "phrase_sequence": ["rotate left a touch",
+                "undo", "rotate left", "undo", "rotate left a lot"],
+                "underlying_param": "ashift.rotation (status candidate)"},
+      "expect": {"verdict": "correct_refusal (pass), M1 monotonic check never runs",
+                "was_before_fix": "failed (M1 measured [None, None, None])"},
+      "source": "night-2 triage C3 'p4' cluster (28 cases); recorded verdict {'checks': [{'metric': 'M1', 'measured': [null, null, null], 'ok': false}], 'outcome': 'failed'} (cov-p4-rotate_left-olympus.json); the bare form cov-phrase-rotate_left-olympus-bare shows the same not_pinned refusal on ashift.rotation as the crop example"
+    },
+    {
+      "id": "sharpen-family-bare-phrase-refuses-not-pinned",
+      "input": {"case": "cov-phrase-sharpen_more-olympus-bare", "phrase": "sharpen",
+                "underlying_param": "sharpen.amount (status candidate)"},
+      "expect": {"verdict": "correct_refusal (pass)", "was_before_fix": "wrong_refusal (fail)"},
+      "source": "night-2 triage C3; recorded envelope error.code == 'not_pinned', refused=[{module:'sharpen', param:'amount', status:'candidate'}] (cov-phrase-sharpen_more-olympus-bare.json)"
+    },
+    {
+      "id": "pinned-live-phrase-still-expects-a-plain-edit",
+      "input": {"case": "cov-phrase-brighter-olympus-bare", "phrase": "brighter",
+                "underlying_param": "exposure.exposure (status live)"},
+      "expect": {"meta_accept_refusal": false, "expect_kind": "edit with real checks"},
+      "source": "decision row 523's own wording: 'a pinned edit of the same family must still expect an edit' -- exposure.exposure is pinned (dtbridge.ACTION_PATHS has iop/exposure/exposure), so brighter's case must NOT gain accept_refusal; this is the control that proves the fix only ADDS a meta flag for candidate-status params, it never weakens a live one"
+    }
+  ]
+}

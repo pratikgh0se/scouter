@@ -400,15 +400,37 @@ def _check_envelope(i: int, ch: Check, obs: Observation) -> CheckResult:
     return CheckResult(i, ch.metric, ok, got, t.get("value"))
 
 
+def _boundary_clamped(obs: Observation, idx: int, key_: str) -> bool:
+    """Was `key_` (module.param) reported clamped by call `idx`? Night-2
+    triage C5/row 523: a single `darkroom_set`/`darkroom_adjust` envelope
+    carries a flat `data.clamped`, but a `darkroom_say` envelope (a
+    phrase's own words, e.g. "deeper blacks by 0.2") nests the flag per
+    move in `data.moves[j].clamped` and summarises it again in
+    `data.moved_to_limit` -- the flat-only lookup this replaced never saw
+    either shape, so an honestly-reported clamp on a `say` call scored a
+    silent failure (rule c) instead of a pass."""
+    if not (obs.calls and -len(obs.calls) <= idx < len(obs.calls)):
+        return False
+    data = (obs.calls[idx].envelope or {}).get("data") or {}
+    if data.get("clamped"):
+        return True
+    for m in data.get("moves") or ():
+        if isinstance(m, dict) and m.get("clamped") and \
+                f"{m.get('module')}.{m.get('param')}" == key_:
+            return True
+    return any(isinstance(m, dict) and f"{m.get('module')}.{m.get('param')}" == key_
+              for m in data.get("moved_to_limit") or ())
+
+
 def _check_boundary(i: int, ch: Check, obs: Observation) -> CheckResult:
     """Soft-range boundary probe (2026-09-26 fix pass, item 2): pass when the
     decoded value landed exactly where it was asked (no clamp needed) OR it
-    landed at the declared bound AND the envelope's `data.clamped` says so.
-    `target["request"]` is an absolute value; `target["delta"]` resolves
-    against the case's own before-snapshot (a phrase's `by N`, whose start
-    point the generator does not know) with `target["lo"]`/`target["hi"]`
-    giving the bound to clamp toward. Landing anywhere else -- including
-    at the bound without reporting it -- fails."""
+    landed at the declared bound AND the envelope reports the clamp, per
+    move (`_boundary_clamped`). `target["request"]` is an absolute value;
+    `target["delta"]` resolves against the case's own before-snapshot (a
+    phrase's `by N`, whose start point the generator does not know) with
+    `target["lo"]`/`target["hi"]` giving the bound to clamp toward. Landing
+    anywhere else -- including at the bound without reporting it -- fails."""
     t = ch.target or {}
     unit = t.get("unit", "ratio")
     tol = t.get("tol")
@@ -431,9 +453,7 @@ def _check_boundary(i: int, ch: Check, obs: Observation) -> CheckResult:
     landed_request = _same(unit, got, requested, tol)
     landed_bound = bound is not None and _same(unit, got, bound, tol)
     idx = ch.step if ch.step is not None else -1
-    clamped = False
-    if obs.calls and -len(obs.calls) <= idx < len(obs.calls):
-        clamped = bool(_dig(obs.calls[idx].envelope or {}, "data.clamped"))
+    clamped = _boundary_clamped(obs, idx, key_)
     ok = landed_request or (landed_bound and clamped)
     return CheckResult(i, "boundary", ok, got, {"request": requested, "bound": bound})
 
@@ -568,6 +588,42 @@ def _step_changed(obs: Observation, snaps: list[dict], i: int, units: dict) -> b
     """Did call i itself change params (snaps[i] -> snaps[i + 1], strict)?"""
     return bool(_diff_keys(snaps[i] or {}, snaps[i + 1] or {}, _units(obs, units),
                            _meta(obs, "null_equiv")))
+
+
+def _relevant_changed_keys(obs: Observation, units: dict) -> list[str]:
+    """Row 523 (C5, night-2 triage): `_changed_keys` across the WHOLE case,
+    unioned with the keys the per-step snapshots show the write under test
+    itself changed. A net-zero case (an earlier precondition and the
+    tested write cancel out end to end, e.g. cov-colorbalancergb.
+    global_saturation-olympus-adjust_dn1: set +0.25 then adjust -0.25)
+    must not blind the per-key checks below to a param that genuinely
+    moved for the step being scored -- `_changed_keys` alone reads only
+    the case's start and end, which is exactly 0 -> 0 here."""
+    changed = set(_changed_keys(obs, units))
+    snaps = _step_snaps(obs)
+    if snaps is not None:
+        idx = [i for i, c in enumerate(obs.calls) if c.write]
+        if idx:
+            changed |= set(_diff_keys(snaps[idx[-1]] or {}, snaps[idx[-1] + 1] or {},
+                                      _units(obs, units), _meta(obs, "null_equiv")))
+    return sorted(changed)
+
+
+def _net_zero_write_landed(obs: Observation, units: dict) -> bool:
+    """Row 523 (C5, night-2 triage): the case's own before/after fingerprint
+    nets to zero (a precondition and the write under test cancel out --
+    e.g. cov-colorbalancergb.global_saturation-olympus-adjust_dn1 sets
+    +0.25 then adjusts -0.25), but the write under test still genuinely
+    landed. True only when per-step snapshots (`_step_snaps`) show the
+    LAST write call itself changed something -- a second oracle for rule
+    (a) beside the whole-case fingerprint, not derived from it: without
+    per-step evidence this stays False and rule (a) fires exactly as
+    before."""
+    snaps = _step_snaps(obs)
+    if snaps is None:
+        return False
+    idx = [i for i, c in enumerate(obs.calls) if c.write]
+    return bool(idx) and _step_changed(obs, snaps, idx[-1], units)
 
 
 def _owned(keys: list[str], obs: Observation) -> set[str]:
@@ -868,18 +924,32 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     sidecar = case.expect.sidecar or {}
     units = sidecar.get("units", {})
     rule_f = _noop_rule(case, obs, units)
+    if rule_f == "f: answered noop for a request that needed a change" and \
+            results and all(r.ok for r in results):
+        # Row 523 (C5, night-2 triage): the noop is honest -- every check
+        # already reads the value at its own target (e.g. cov-phrase-
+        # lens_on-olympus-bare: lens was already on, so "correct the lens"
+        # truly had nothing to change). `_noop_rule` cannot see `results`
+        # (it only has the raw calls); this is the one place the honest
+        # case can be told apart from one that dodged a real change --
+        # return None straight away (not just skip this one rule) so rules
+        # (a)-(e) below, which all assume something SHOULD have moved,
+        # never get a turn either; evaluate()'s ordinary check-based
+        # scoring (already all-ok) takes it from here.
+        return None
     if rule_f:
         return rule_f
     if not reported:
         return None
-    if sidecar.get("changed") and not _fingerprint_changed(obs):
+    if sidecar.get("changed") and not _fingerprint_changed(obs) and \
+            not _net_zero_write_landed(obs, units):
         return "a: reported ok but the sidecar history did not change"
     fallback = [sidecar["key"]] if sidecar.get("key") else []
     keys = _reported_keys(writes)
     keys = fallback if keys is None else keys
     every = _reported_keys(writes, every=True)
     every = fallback if every is None else every
-    changed = _changed_keys(obs, units)
+    changed = _relevant_changed_keys(obs, units)
     if every and changed and not _owned(every, obs) & set(changed):
         return f"b: reported {', '.join(every)} but {', '.join(changed)} changed"
     if keys:
@@ -953,17 +1023,26 @@ def _honest_tool_refusal(obs: Observation, policy: Policy) -> tuple[bool, str]:
     return True, code or ""
 
 
-def _sidecar_miss(case: Case, obs: Observation) -> str | None:
-    """`expect.sidecar` as an implicit check."""
+def _sidecar_miss(case: Case, obs: Observation, results: list[CheckResult] | None = None) -> str | None:
+    """`expect.sidecar` as an implicit check. Row 523 (C5, night-2 triage):
+    `honest_noop` (the same test `silent_failure`'s rule (f) uses) exempts
+    a case whose target was already met before it ran -- e.g. cov-phrase-
+    lens_on-olympus-bare, where the lens was already on -- from "expected
+    to change but did not"; without `results` (a caller that never
+    computed checks) it is always False, same as before this fix."""
     sc = case.expect.sidecar or {}
-    moved = _fingerprint_changed(obs)
-    if sc.get("changed") is True and not moved:
+    units = sc.get("units", {})
+    moved = _fingerprint_changed(obs) or _net_zero_write_landed(obs, units)
+    honest_noop = bool(results) and all(r.ok for r in results) and \
+        _noop_rule(case, obs, units) == \
+        "f: answered noop for a request that needed a change"
+    if sc.get("changed") is True and not moved and not honest_noop:
         return "sidecar expected to change but did not"
     if sc.get("changed") is False and moved:
         return "sidecar expected unchanged but changed"
     key = sc.get("key")
-    if key and sc.get("changed") and \
-            not _owned([key], obs) & set(_changed_keys(obs, sc.get("units", {}))):
+    if key and sc.get("changed") and not honest_noop and \
+            not _owned([key], obs) & set(_relevant_changed_keys(obs, units)):
         return f"sidecar {key} expected to change but did not"
     return None
 
@@ -1093,15 +1172,27 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
         return Verdict(FAIL, "failed", results, notes=[f"got {code!r}, want {case.expect.codes}"])
 
     # edit / workflow / noop / property
+    #: Row 523 (night-2 triage C3, coverage's 28 P4 fails): the same
+    #: honest-refusal-is-a-pass rule the `edit` branch already applied only
+    #: to `Expect("edit", ...)` cases now also covers a `property`/
+    #: `workflow` Expect carrying `accept_refusal` (coverage.py's P4
+    #: monotonic case for a candidate-status phrase never observes any
+    #: value once every "say" in its sequence honestly refuses, so its own
+    #: checks can never pass -- the refusal itself is the correct verdict).
+    #: Gated on `accept_refusal` so no case without that meta flag changes
+    #: behaviour; today only coverage.py sets it.
+    if kind in ("edit", "property", "workflow") and case.meta.get("accept_refusal"):
+        refused = [c for c in obs.calls if c.write and not (c.envelope or {}).get("ok")]
+        if refused and _code(refused[0]) in policy.refusal_codes and not \
+                any(_env_ok(c) for c in obs.calls if c.write):
+            honest, why = _honest_tool_refusal(obs, policy)
+            if honest:
+                return Verdict(PASS, "correct_refusal", results, notes=[why])
+            return Verdict(FAIL, "failed", results, notes=[why])
     if kind == "edit":
         refused = [c for c in obs.calls if c.write and not (c.envelope or {}).get("ok")]
         if refused and _code(refused[0]) in policy.refusal_codes and not \
                 any(_env_ok(c) for c in obs.calls if c.write):
-            if case.meta.get("accept_refusal"):
-                honest, why = _honest_tool_refusal(obs, policy)
-                if honest:
-                    return Verdict(PASS, "correct_refusal", results, notes=[why])
-                return Verdict(FAIL, "failed", results, notes=[why])
             return Verdict(FAIL, "wrong_refusal", results, notes=[_code(refused[0]) or ""])
     blocked = _transient_block(obs, policy)
     sf = silent_failure(case, obs, results, policy)
@@ -1137,7 +1228,7 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
         if pending:
             return Verdict(PARTIAL, "needs_review", results, notes=pending)
     ok_all = all(r.ok for r in results)
-    miss = _sidecar_miss(case, obs) if kind != "noop" else None
+    miss = _sidecar_miss(case, obs, results) if kind != "noop" else None
     if not miss and not blocked:
         residual = _moved_to_limit_residual(case, results, obs)
         if residual:

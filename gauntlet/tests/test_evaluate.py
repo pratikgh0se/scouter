@@ -635,6 +635,43 @@ def test_i5_missing_measurements_fail():
         assert v.score == "fail" and v.checks[0].note == "unmeasured", chk
 
 
+def test_c3_property_kind_with_accept_refusal_scores_the_honest_refusal_a_pass():
+    """Row 523 (night-2 triage C3/C5, decision row 523, 2026-09-28):
+    coverage.py's P4 monotonic property case for a candidate-status phrase
+    (e.g. cov-p4-rotate_left-olympus) never observes any M1 value -- every
+    "say" in its sequence honestly refuses `not_pinned` first -- so its own
+    monotonic check can only ever fail even though the refusal itself is
+    correct. Before this fix, only `kind == "edit"` honoured
+    `meta["accept_refusal"]`; `property`/`workflow` cases fell straight to
+    the ordinary check-based scoring and reported "failed" for an honest
+    refusal (28 of the 236 C3 coverage fails)."""
+    chk = Check("M1", kind="monotonic", target={"key": "ashift.rotation",
+                                                 "pairs": [[0, 1], [2, 3], [4, 5]]})
+    case = _edit_case([chk], kind="property", meta={"accept_refusal": True})
+    # Six identical snapshots: the real P4 sequence (touch/undo/bare/undo/
+    # lot) never lands because every "say" honestly refuses first, so
+    # nothing ever moves between any pair.
+    snaps = [{"ashift.rotation": 0.0}] * 6
+    v = evaluate(case, _obs(_err("not_pinned"), _snap("a"), _snap("a"),
+                            extra={"snapshots": snaps}), POLICY)
+    assert (v.score, v.outcome) == ("pass", "correct_refusal")
+
+
+def test_c3_property_kind_without_accept_refusal_is_unaffected():
+    """Same shape as above but no `accept_refusal` meta (today's ordinary
+    property case, e.g. cov-p4-brighter-olympus, a live/pinned param) --
+    the new branch must not fire for it; an honest refusal on a case that
+    never opted in still falls through to the ordinary (failing) check
+    scoring, exactly as before this fix."""
+    chk = Check("M1", kind="monotonic", target={"key": "exposure.exposure",
+                                                 "pairs": [[0, 1], [2, 3], [4, 5]]})
+    case = _edit_case([chk], kind="property")
+    snaps = [{"exposure.exposure": 0.7}] * 6
+    v = evaluate(case, _obs(_err("not_pinned"), _snap("a"), _snap("a"),
+                            extra={"snapshots": snaps}), POLICY)
+    assert v.outcome != "correct_refusal"
+
+
 def test_i6_accept_refusal_needs_a_named_fix():
     chk = Check("M1", kind="equals", target={"key": "k", "value": 1.0})
     case = _edit_case([chk], {"changed": True, "key": "k"}, meta={"accept_refusal": True})
