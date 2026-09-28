@@ -91,5 +91,8 @@ class LateFlushNoopIntentTest(unittest.TestCase):
         # a different verb/module -- cited for the case id trail, not
         # separately replayed here (a full "say"/tool-mode session is
         # exercised by the gauntlet itself, not this unit suite).
-        EXAMPLES["scenario_tool_late_flush"]
-        EXAMPLES["guide_less_contrast_late_flush"]
+        for eid in ("scenario_tool_late_flush", "guide_less_contrast_late_flush"):
+            fx = EXAMPLES[eid]
+            self.assertEqual(fx["expect"]["noop"], False, eid)
+            self.assertEqual(fx["expect"]["committed"], True, eid)
+            self.assertIn("late-flush", fx["source"], eid)
