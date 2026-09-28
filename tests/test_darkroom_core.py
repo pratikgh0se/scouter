@@ -1231,6 +1231,23 @@ class CommitReadbackTest(unittest.TestCase):
             with self.assertRaises(CommitTimeout):
                 darkroom.set_param(module="exposure", param="exposure", value=9.0)
 
+    def test_a_value_that_moved_without_the_module_history_advancing_still_raises(self) -> None:
+        """Fix round 2: the readback confirming the target is not enough on
+        its own either -- rewriting the value in an EXISTING history item
+        in place (no new item, `history_end` unmoved) is a value that moved
+        without this module's history advancing, which is neither a landed
+        edit nor an honest noop, so the timeout must still propagate."""
+        sidecar = self._sidecar_path()
+        before_text = sidecar.read_text()
+
+        def _value_only_change(*_a, **_kw):
+            sidecar.write_text(with_param_value(before_text, "exposure", "exposure", 9.0))
+            raise self._timeout()
+
+        with mock.patch("scouter.core.darkroom._commit", side_effect=_value_only_change):
+            with self.assertRaises(CommitTimeout):
+                darkroom.set_param(module="exposure", param="exposure", value=9.0)
+
     def test_a_reset_of_exposure_is_not_confirmed_by_black_alone(self) -> None:
         """Regression guard for fix round 1, finding 1: the fixture's own
         `exposure.black` (-0.000244140625) reads AS darktable's

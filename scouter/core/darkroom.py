@@ -1186,7 +1186,7 @@ def set_param(
                     "target, so this is reported as applied, not a noop."
                 )
                 return True
-            if confirmed:
+            if confirmed and matched_before:
                 _history.watermark_write(job, resolved.image_id, resolved.xmp_path)
                 committed, noop = True, True
                 warnings.extend(prior_warnings)
