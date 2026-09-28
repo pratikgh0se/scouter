@@ -136,6 +136,34 @@ def _require_job_image(job: str, loaded_image_id: int) -> None:
     )
 
 
+def _late_flush_landed(matched_before: bool, confirmed: bool, history_advanced: bool) -> bool:
+    """Z2: a late-landed edit needs history moving for the write's own
+    module AND an independent value readback confirming the target (or its
+    clamp bound) -- history alone would credit a concurrent, unrelated
+    write to the same module; a readback alone cannot tell a late flush
+    from a value that was already there. `matched_before` (the pre-write
+    state already satisfied the target) rules a write out of "landed" even
+    when both later signals agree -- that shape is an honest early noop."""
+    return (not matched_before) and confirmed and history_advanced
+
+
+def _history_fingerprint_now(xmp_path: str) -> str | None:
+    from scouter.core import history
+
+    return history._history_fingerprint(Path(xmp_path))
+
+
+def _history_advanced_for(xmp_path: str, before_fp: str | None, expect_module: str | None) -> bool:
+    if not expect_module:
+        return False
+    from scouter.core import history
+
+    advanced, _why = history._history_advanced_as_expected(
+        before_fp, _history_fingerprint_now(xmp_path), expect_module
+    )
+    return advanced
+
+
 def _commit_with_readback(
     job: str,
     image_id: int,
@@ -145,48 +173,20 @@ def _commit_with_readback(
     what: str,
     strategy: str = "auto",
     predicted_noop: bool = False,
+    matched_before: bool = False,
     expect_module: str | None = None,
 ) -> tuple[bool, list[str], bool]:
     """`_commit`, with a commit timeout resolved by reading the XMP back.
 
-    Returns `(committed, warnings, noop)`. `noop` is True when darktable wrote
-    nothing because the requested state was already the sidecar's (confirmed
-    by `confirm()`, never assumed).
-
-    Final review, should-fix 6: `darkroom.set` already did this, and every
-    other writer did not -- so a write whose journal entry says `completed`
-    and whose value is already on disk came back as `commit_timeout`.
-    darktable writes a sidecar only when the history actually CHANGES, so a
-    write that asks for the state the image already has legitimately produces
-    no write at all. `confirm()` re-reads the sidecar; if it agrees with what
-    was asked for, the request is satisfied and says so in a warning. If it
-    does not, the timeout is re-raised untouched -- a write that never landed
-    is never reported as committed.
-
-    `predicted_noop` (row 433, night-1 C): the caller already saw, BEFORE
-    sending, that the sidecar holds the requested state (a reset of a module
-    already at its defaults, an undo whose value is already back, an enable
-    of an enabled module). Then one expect-no-change bounce (~1 s) is spent,
-    not the full two-bounce 5.4 s wait for a sidecar darktable will never
-    write; `confirm()` still decides, and a wrong prediction falls through
-    to the real commit.
-
-    `xmp_path` (fix round 1, should-fix 3): the CALLER's already-resolved
-    sidecar path, so watermarking a readback-resolved commit costs no extra
-    `darkroom.current` round-trip -- every caller already has this path from
-    resolving its own image.
-
-    Row 523 (night-2 triage, late-flush noop -- e.g. `cov-synonym-
-    more_contrast-punchier-olympus`, sigmoid.contrast 1.5 -> 1.6, "darktable
-    wrote no new sidecar"): `confirm()` alone cannot tell "the value was
-    already the target" from "darktable answered the timeout late and the
-    edit landed just after we stopped waiting" -- both read the same value
-    once the late write lands. `_late_flush_edit` is a second oracle (Zenkai
-    Z2): the sidecar's own history, compared before the commit call and
-    after the timeout via `history.sidecar_committed_as_expected` -- the
-    same check a normal (non-timeout) commit already uses to confirm the
-    right module actually advanced. Only when the history did NOT move does
-    `confirm()`'s value readback get the final word on noop vs timeout.
+    Returns `(committed, warnings, noop)`. A timeout resolves `noop=True`
+    when `confirm()` agrees with the request and `matched_before` is also
+    true (darktable writes a sidecar only when history changes, so a write
+    already at its target legitimately produces none); it resolves
+    `noop=False` instead when `_late_flush_landed` says the timeout was a
+    late flush -- an edit that lands just after Scouter stopped waiting.
+    `matched_before` is the caller's own knowledge that the pre-write state
+    already matched the target (`_do_module_action`'s `predicted_noop`,
+    `nudge`'s before value vs. the step's landed value).
     """
     from scouter.core import history
 
@@ -197,18 +197,21 @@ def _commit_with_readback(
     )
     late_flush_warning = (
         f"darktable wrote {what}'s sidecar AFTER the commit timeout (a late flush): "
-        "the history advanced the way this write expected, so it is reported as "
-        "applied, not a noop. Confirmed by comparing the sidecar's history before "
-        "the commit call and after the timeout, not by re-reading the value alone."
+        "the history advanced and the readback confirmed the target, so this is "
+        "reported as applied, not a noop."
     )
-    before_fp = history.sidecar_history_fingerprint(xmp_path)
+    before_fp = _history_fingerprint_now(xmp_path) if expect_module else None
 
-    def _late_flush_edit() -> bool:
-        if not expect_module:
-            return False
-        after_fp = history.sidecar_history_fingerprint(xmp_path)
-        advanced, _why = history.sidecar_committed_as_expected(before_fp, after_fp, expect_module)
-        return advanced
+    def _resolve_timeout() -> tuple[bool, list[str], bool] | None:
+        confirmed = confirm()
+        advanced = _history_advanced_for(xmp_path, before_fp, expect_module)
+        if _late_flush_landed(matched_before, confirmed, advanced):
+            history.watermark_write(job, image_id, xmp_path)
+            return True, [late_flush_warning], False
+        if confirmed:
+            history.watermark_write(job, image_id, xmp_path)
+            return True, [noop_warning], True
+        return None
 
     if predicted_noop:
         try:
@@ -218,9 +221,9 @@ def _commit_with_readback(
             )
         except CommitTimeout:
             first = None
-            if _late_flush_edit():
-                history.watermark_write(job, image_id, xmp_path)
-                return True, [late_flush_warning], False
+            resolved = _resolve_timeout()
+            if resolved:
+                return resolved
         if first is not None and first.committed:
             return True, list(first.warnings), False
         if confirm():
@@ -229,19 +232,10 @@ def _commit_with_readback(
     try:
         result = _commit(job, image_id, strategy=strategy, expect_module=expect_module)
     except CommitTimeout:
-        if _late_flush_edit():
-            history.watermark_write(job, image_id, xmp_path)
-            return True, [late_flush_warning], False
-        if not confirm():
-            raise
-        # Task 12, step 2: a readback-resolved commit still means the sidecar
-        # on disk is now the state Scouter believes it committed, so the
-        # watermark is recorded here too -- `history.commit`'s own success
-        # path never ran (it raised), so nothing else would record it. This
-        # branch's own `confirm()` already IS the readback confirmation
-        # blocker 2 (fix round 1) requires, so watermarking here is safe.
-        history.watermark_write(job, image_id, xmp_path)
-        return True, [noop_warning], True
+        resolved = _resolve_timeout()
+        if resolved:
+            return resolved
+        raise
     return result.committed, list(result.warnings), False
 
 
@@ -1101,6 +1095,10 @@ def set_param(
         and raw_state.get("enabled") is not False
         and _close(effective, current)
     )
+    # The `_late_flush_landed` "already at target" oracle, unscoped by
+    # `predicted_noop`'s extra gates so it still applies on the slow path.
+    matched_before = _close(effective, current)
+    before_fp = _history_fingerprint_now(resolved.xmp_path) if commit else None
     entry = journal.begin(
         job,
         verb="darkroom.set",
@@ -1168,30 +1166,46 @@ def set_param(
         else:
             commit_result = _try_commit(True, None)
 
+        def _resolve_readback(prior_warnings: list[str] = ()) -> bool:
+            """The `_late_flush_landed` oracle `_commit_with_readback` uses,
+            reused here because `set_param` never calls it -- this inline
+            path is what `moves.py`'s adjust/say verbs write through."""
+            nonlocal applied, committed, noop
+            applied = _readback()
+            confirmed = _close(applied, effective)
+            advanced = _history_advanced_for(resolved.xmp_path, before_fp, module)
+            from scouter.core import history as _history
+
+            if _late_flush_landed(matched_before, confirmed, advanced):
+                _history.watermark_write(job, resolved.image_id, resolved.xmp_path)
+                committed, noop = True, False
+                warnings.extend(prior_warnings)
+                warnings.append(
+                    f"darktable wrote {module}.{param}'s sidecar AFTER the commit timeout "
+                    "(a late flush): the history advanced and the readback confirmed the "
+                    "target, so this is reported as applied, not a noop."
+                )
+                return True
+            if confirmed:
+                _history.watermark_write(job, resolved.image_id, resolved.xmp_path)
+                committed, noop = True, True
+                warnings.extend(prior_warnings)
+                warnings.append(
+                    f"darktable wrote no new sidecar for {module}.{param}: the value "
+                    f"requested ({value:g}) is the one the XMP already carried, so "
+                    "there was no history change to write. Confirmed by reading the "
+                    "value back from the sidecar."
+                )
+                return True
+            return False
+
         if commit_result is not None and not commit_result.committed:
             # `expect_change=False` (fix round 1, blocker 2): the bridge's own
             # `sidecar_written=False` is NOT proof nothing changed -- only proof
-            # that this ONE bounce found nothing to flush. `history.commit`
-            # never stamps a watermark on this path for exactly that reason
-            # (`CommitResult.confirmed=False`); only an independent readback
-            # against the REQUESTED value earns one. A mismatch means the
-            # one-bounce prediction was wrong -- a real, unflushed change is
-            # pending -- so this escalates to a genuine `expect_change=True`
-            # commit rather than ever certifying a stale sidecar as fresh.
-            applied = _readback()
-            if _close(applied, effective):
-                from scouter.core import history as _history
-
-                _history.watermark_write(job, resolved.image_id, resolved.xmp_path)
-                committed = True
-                noop = True
-                warnings.extend(commit_result.warnings)
-                warnings.append(
-                    f"readback confirmed {module}.{param} already carries {effective:g}: "
-                    "the watermark was recorded now, from this confirmation, not from "
-                    "the bridge's own (unconfirmed) report."
-                )
-            else:
+            # that this ONE bounce found nothing to flush; a mismatch escalates
+            # to a genuine `expect_change=True` commit rather than ever
+            # certifying a stale sidecar as fresh.
+            if not _resolve_readback(commit_result.warnings):
                 commit_result = _try_commit(True, None)
                 applied = None
 
@@ -1199,21 +1213,9 @@ def set_param(
             if commit_result is not None and commit_result.committed:
                 committed = True
                 warnings.extend(commit_result.warnings)
-            else:
-                if applied is None:
-                    applied = _readback()
-                if _close(applied, effective):
-                    committed = True
-                    noop = True
-                    warnings.append(
-                        f"darktable wrote no new sidecar for {module}.{param}: the value "
-                        f"requested ({value:g}) is the one the XMP already carried, so "
-                        "there was no history change to write. Confirmed by reading the "
-                        "value back from the sidecar."
-                    )
-                else:
-                    assert commit_error is not None
-                    raise commit_error
+            elif not _resolve_readback():
+                assert commit_error is not None
+                raise commit_error
         if applied is None:
             applied = _readback()
         if applied is None:
@@ -1398,12 +1400,19 @@ def nudge(
                 return False
             return _close(_read_value(resolved.path, module, param, instance), landed_value)
 
+        # The step already had nowhere to go (a boundary nudge): darktable's
+        # own reported landing value was already the RAW before-value.
+        matched_before = landed_value is not None and _close(
+            before_state.get("value"), landed_value
+        )
+
         committed, warnings, _noop = _commit_with_readback(
             job,
             resolved.image_id,
             xmp_path=resolved.xmp_path,
             confirm=_confirm_nudge,
             what=f"{module}.{param}",
+            matched_before=matched_before,
             expect_module=module,
         )
         applied = _read_value(resolved.path, module, param, instance)
@@ -1527,6 +1536,7 @@ def _do_module_action(
         confirm=_confirm_module,
         what=f"{module} ({action_name})",
         predicted_noop=predicted_noop,
+        matched_before=predicted_noop,
         expect_module=module,
     )
     after_state = _module_state(resolved.path, module, instance)

@@ -634,30 +634,6 @@ def _history_advanced_as_expected(
     return True, None
 
 
-def sidecar_history_fingerprint(xmp_path: str) -> str | None:
-    """Public wrapper for `_history_fingerprint`: the part of the sidecar at
-    `xmp_path` that IS the edit (history_end, history, masks_history), or
-    `None` if it does not exist or cannot be read. A pure read (one `stat`
-    plus a read, no bounce) -- lets a caller capture a before/after pair
-    around its own commit call (row 523, the late-flush noop fix:
-    `darkroom._commit_with_readback`) without re-deriving the sidecar path
-    or duplicating the marker regexes `_history_fingerprint` already owns."""
-    p = Path(xmp_path)
-    return _history_fingerprint(p) if p.exists() else None
-
-
-def sidecar_committed_as_expected(
-    before: str | None, after: str | None, expect_module: str
-) -> tuple[bool, str | None]:
-    """Public wrapper for `_history_advanced_as_expected`: did the sidecar's
-    history move the way a write for `expect_module` expects, between two
-    fingerprints from `sidecar_history_fingerprint`? `(ok, why)` -- see
-    `_history_advanced_as_expected` for the rules (history_end must not go
-    back, the newest history item must be `expect_module`, and it must
-    differ from what was there before)."""
-    return _history_advanced_as_expected(before, after, expect_module)
-
-
 @metrics.instrumented("history.commit")
 def commit(
     image: str | int | None = None,

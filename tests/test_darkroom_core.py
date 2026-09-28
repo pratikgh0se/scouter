@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import time
 import unittest
@@ -1063,28 +1064,45 @@ class CommitReadbackTest(unittest.TestCase):
     def _sidecar_path(self) -> Path:
         return Path(str(self.raw) + ".xmp")
 
+    def _history_end(self) -> int:
+        m = re.search(r'darktable:history_end="(\d+)"', self._sidecar_path().read_text())
+        assert m
+        return int(m.group(1))
+
+    def _flip_enabled(self, text: str, num: int, enabled: str) -> str:
+        pattern = re.compile(rf'(darktable:num="{num}"[^>]*?darktable:enabled=")[^"]*(")', re.S)
+        new, count = pattern.subn(lambda m: m.group(1) + enabled + m.group(2), text, count=1)
+        assert count == 1, f"no item num={num} to flip"
+        return new
+
+    def _clone_exposure_entry(self, text: str) -> str:
+        """A real new top-of-history `exposure` entry, cloned from the
+        fixture's own (num=11, so its modversion/params are genuinely
+        `exposure`'s, unlike `with_new_history_hash`'s placeholder params)
+        -- lets `with_param_value` rewrite ITS value afterward."""
+        end = self._history_end()
+        src = re.search(r'<rdf:li\s(?:(?!/>).)*?darktable:num="11"(?:(?!/>).)*?/>', text, re.S)
+        assert src, "fixture exposure entry (num=11) not found"
+        item = re.sub(r'darktable:num="\d+"', f'darktable:num="{end}"', src.group(0), count=1)
+        close = text.index("</darktable:history>")
+        seq_close = text.rindex("</rdf:Seq>", 0, close)
+        text = text[:seq_close] + " " + item + "\n    " + text[seq_close:]
+        return re.sub(r'darktable:history_end="\d+"', f'darktable:history_end="{end + 1}"',
+                      text, count=1)
+
     def test_a_nudge_that_lands_after_the_timeout_is_reported_applied_not_noop(self) -> None:
-        """Row 523 (night-2 triage, late-flush noop, item 4): darktable can
-        answer `history.commit` AFTER Scouter has already given up and
-        raised `CommitTimeout` -- the edit still lands, just late. A
-        value-only `confirm()` cannot tell that apart from an honest
-        "already at this value" noop once the late write has landed (both
-        read the same value). Fixture: `_commit`'s mock side effect writes
-        the sidecar's OWN new history entry for `exposure` (a real commit,
-        `with_new_history_hash(..., module="exposure")`, not just a value
-        change) before raising the timeout -- second oracle Z2: the
-        sidecar's history, not the value the same write also happens to
-        report."""
+        """A late `history.commit` answer lands the edit after `CommitTimeout`;
+        the mock writes both a real new history entry and the landed value,
+        so Z2's two oracles agree, unlike a bare history bump."""
         sidecar = self._sidecar_path()
         before_text = sidecar.read_text()
 
         def _late_flush(*_a, **_kw):
-            sidecar.write_text(with_new_history_hash(before_text, module="exposure"))
+            landed = self._clone_exposure_entry(before_text)
+            landed = with_param_value(landed, "exposure", "exposure", 9.0)
+            sidecar.write_text(landed)
             raise self._timeout()
 
-        # The bridge's own (never reached, since `_commit` is mocked) value
-        # readback would show a DIFFERENT value than the request -- proving
-        # this is not scored a pass because the value happened to match.
         self.bridge.responses["darkroom.action"] = lambda p: {
             "nan": False, "status": 9.0, "view": "darkroom", **p,
         }
@@ -1095,16 +1113,36 @@ class CommitReadbackTest(unittest.TestCase):
             any("late flush" in w or "AFTER the commit timeout" in w for w in result.warnings),
             result.warnings,
         )
-        # It must NOT be dressed up as the honest "no new sidecar" noop --
-        # that phrase is reserved for a value that was already the target
-        # BEFORE the write, which this is not.
         self.assertFalse(any("no new sidecar" in w for w in result.warnings), result.warnings)
 
-    def test_an_enable_that_lands_after_the_timeout_is_reported_applied_not_noop(self) -> None:
-        """Same shape as the nudge case above, for the module-action commit
-        path (`_do_module_action`, `expect_module` set to the module being
-        enabled) -- a different `_commit_with_readback` call site, same
-        fix."""
+    def test_a_disable_that_lands_after_the_timeout_is_reported_applied_not_noop(self) -> None:
+        """Same shape for `_do_module_action`'s `_commit_with_readback` call
+        site -- `exposure` starts enabled, so `disable` has
+        `matched_before=False` (unlike `enable`, below)."""
+        sidecar = self._sidecar_path()
+        before_text = sidecar.read_text()
+        end = self._history_end()
+
+        def _late_flush(*_a, **_kw):
+            landed = with_new_history_hash(before_text, module="exposure")
+            landed = self._flip_enabled(landed, end, "0")
+            sidecar.write_text(landed)
+            raise self._timeout()
+
+        with mock.patch("scouter.core.darkroom._commit", side_effect=_late_flush):
+            result = darkroom.disable(module="exposure")
+        self.assertTrue(result.committed)
+        self.assertTrue(
+            any("late flush" in w or "AFTER the commit timeout" in w for w in result.warnings),
+            result.warnings,
+        )
+
+    def test_a_predicted_noop_module_action_stays_a_noop_even_with_a_late_history_bump(
+            self) -> None:
+        """A write whose pre-write state already matched the target must
+        never be relabelled "landed" by `matched_before` even when history
+        and the readback happen to agree -- `enable` on an already-enabled
+        `exposure` stays a noop despite the mocked timeout bumping history."""
         sidecar = self._sidecar_path()
         before_text = sidecar.read_text()
 
@@ -1115,10 +1153,8 @@ class CommitReadbackTest(unittest.TestCase):
         with mock.patch("scouter.core.darkroom._commit", side_effect=_late_flush):
             result = darkroom.enable(module="exposure")
         self.assertTrue(result.committed)
-        self.assertTrue(
-            any("late flush" in w or "AFTER the commit timeout" in w for w in result.warnings),
-            result.warnings,
-        )
+        self.assertTrue(any("no new sidecar" in w for w in result.warnings), result.warnings)
+        self.assertFalse(any("late flush" in w for w in result.warnings), result.warnings)
 
     def test_a_timeout_with_no_history_movement_is_still_the_honest_noop(self) -> None:
         """Control: a timeout where the sidecar genuinely never changes (no
@@ -1132,6 +1168,68 @@ class CommitReadbackTest(unittest.TestCase):
             result = darkroom.nudge(module="exposure", param="exposure", steps=1)
         self.assertTrue(result.committed)
         self.assertTrue(any("no new sidecar" in w for w in result.warnings), result.warnings)
+
+    def test_a_concurrent_change_to_the_same_module_is_not_credited_late_flush(self) -> None:
+        """Z2: history moving for `expect_module` is not by itself a second
+        oracle -- a concurrent write to the same module (a hand drag, another
+        job) also bumps history but disagrees with the readback, so the
+        timeout must propagate, not be credited as landed."""
+        sidecar = self._sidecar_path()
+        before_text = sidecar.read_text()
+
+        def _concurrent_edit(*_a, **_kw):
+            # History moves (a real new exposure entry), but its value is
+            # nowhere near the nudge's requested 9.0 -- an unrelated write.
+            landed = self._clone_exposure_entry(before_text)
+            landed = with_param_value(landed, "exposure", "exposure", 0.2)
+            sidecar.write_text(landed)
+            raise self._timeout()
+
+        self.bridge.responses["darkroom.action"] = lambda p: {
+            "nan": False, "status": 9.0, "view": "darkroom", **p,
+        }
+        with mock.patch("scouter.core.darkroom._commit", side_effect=_concurrent_edit):
+            with self.assertRaises(CommitTimeout):
+                darkroom.nudge(module="exposure", param="exposure", steps=1)
+
+    def test_set_param_that_lands_after_the_timeout_is_reported_applied_not_noop(self) -> None:
+        """`set_param` (what `moves.py`'s adjust/say verbs write through, and
+        what every night-2 late-flush case actually hit) has its own inline
+        late-flush resolution, separate from `_commit_with_readback`."""
+        sidecar = self._sidecar_path()
+        before_text = sidecar.read_text()
+
+        def _late_flush(*_a, **_kw):
+            landed = self._clone_exposure_entry(before_text)
+            landed = with_param_value(landed, "exposure", "exposure", 9.0)
+            sidecar.write_text(landed)
+            raise self._timeout()
+
+        with mock.patch("scouter.core.darkroom._commit", side_effect=_late_flush):
+            result = darkroom.set_param(module="exposure", param="exposure", value=9.0)
+        self.assertTrue(result.committed)
+        self.assertTrue(
+            any("late flush" in w or "AFTER the commit timeout" in w for w in result.warnings),
+            result.warnings,
+        )
+        self.assertFalse(any("already carried" in w for w in result.warnings), result.warnings)
+
+    def test_set_param_concurrent_change_to_the_same_module_is_not_credited(self) -> None:
+        """Z2 for the `set_param` path: same shape as the nudge version
+        above -- history moves, but the readback disagrees with the
+        request, so the timeout must still propagate."""
+        sidecar = self._sidecar_path()
+        before_text = sidecar.read_text()
+
+        def _concurrent_edit(*_a, **_kw):
+            landed = self._clone_exposure_entry(before_text)
+            landed = with_param_value(landed, "exposure", "exposure", 0.2)
+            sidecar.write_text(landed)
+            raise self._timeout()
+
+        with mock.patch("scouter.core.darkroom._commit", side_effect=_concurrent_edit):
+            with self.assertRaises(CommitTimeout):
+                darkroom.set_param(module="exposure", param="exposure", value=9.0)
 
     def test_a_reset_of_exposure_is_not_confirmed_by_black_alone(self) -> None:
         """Regression guard for fix round 1, finding 1: the fixture's own
