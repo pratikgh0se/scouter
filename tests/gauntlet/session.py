@@ -662,11 +662,8 @@ class ScouterSession:
             elif rec.error == "timeout" and rec.health == "unresponsive":
                 self._relaunch_then_reopen(role, path)
             elif rec.error in ("bridge_timeout", "commit_timeout"):
-                # C2: darktable is wedged in lighttable (bridge_timeout) or
-                # committed late without answering (commit_timeout); one
-                # relaunch clears it, same recovery as not_in_darkroom below.
-                # A second failure of the same kind is tagged
-                # bridge_relaunch_failed rather than a bare SessionBlocked.
+                # A wedged bridge/commit gets the same relaunch-and-reopen
+                # recovery as not_in_darkroom below, tagged for triage.
                 self._relaunch_then_reopen(role, path, tag="bridge_relaunch_failed")
             elif rec.error == "not_in_darkroom":
                 # Smoke S2: darktable cannot load a frame imported into the

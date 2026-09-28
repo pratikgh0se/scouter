@@ -88,13 +88,8 @@ def run_bulk_case(session, case: Case) -> Observation:
                     obs.calls.append(rec)
                     obs.extra["journal_resumed"] = "resum" in json.dumps(rec.envelope or {})
                 elif rec.error in ("bridge_timeout", "commit_timeout", "not_in_darkroom"):
-                    # F1 (night-2 C12, row 462): the recorded shape is
-                    # darkroom_open -> not_in_darkroom, then a write step ->
-                    # commit_timeout. One relaunch per case; retrying the
-                    # step IS the reopen when it is itself darkroom_open, so
-                    # no separate reopen call is needed. A write step's
-                    # commit_timeout is never blind-retried -- the edit may
-                    # have already landed.
+                    # One relaunch per case; a write step's commit_timeout is
+                    # never blind-retried since its edit may have landed.
                     if bridge_relaunched:
                         obs.blocked = (f"bridge_relaunch_failed: {st.tool} {rec.error} again "
                                       "after the one relaunch this case already used")
