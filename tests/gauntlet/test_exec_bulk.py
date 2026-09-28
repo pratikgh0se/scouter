@@ -167,6 +167,29 @@ def test_bulk_matches_recorded_c12_open_then_write_wedge_shape(tmp_path):
     assert len(relaunches) == 1  # F2: bound holds across steps, not just within one
 
 
+def test_bulk_bridge_relaunch_bound_holds_across_steps(tmp_path):
+    """F2 (test honesty): mutating the `if bridge_relaunched:` guard at
+    exec_bulk.py away lets this survive by coincidence -- a step that wedges
+    AFTER an earlier step already used the case's one relaunch must not get
+    a second one (wedge, ok, wedge)."""
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "H.ORF").write_bytes(b"raw")
+    corpus = Corpus({"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {}}, trial)
+    answers = [{"error": "bridge_timeout"}, {"envelope": {"ok": True, "data": {}}},
+              {"error": "bridge_timeout"}]
+    session, calls, relaunches = _bulk_session(tmp_path, corpus, answers)
+    case = Case(id="blk-wedge-twice", layer="bulk", tier="P1", mode="tool",
+               steps=[Step("job_run", {}, 8.0, True), Step("job_run", {}, 8.0, True)],
+               expect=Expect("workflow"), body="olympus", frame_role="card", meta={"frames": 2})
+
+    obs = exec_bulk.run_bulk_case(session, case)
+
+    assert obs.blocked is not None and obs.blocked.startswith("bridge_relaunch_failed")
+    assert calls == ["job_run", "job_run", "job_run"]
+    assert len(relaunches) == 1  # bound holds across steps
+
+
 # -- final fix M1: the kill timer is stopped at case end -------------------------
 
 def test_kill_after_never_signals_once_stopped(tmp_path, monkeypatch):
