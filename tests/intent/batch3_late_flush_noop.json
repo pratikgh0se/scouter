@@ -1,0 +1,33 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for batch 3 item 4 (night-2 triage, late-flush noop, row 523, 2026-09-28): darkroom.py's `_commit_with_readback` decided `noop=True` from a value readback alone after a `CommitTimeout` -- indistinguishable from a genuine late flush, where darktable answers the commit AFTER Scouter gave up waiting and the edit lands anyway. Sourced from Knowledge/Scouter - Night 2 triage 2026-09-28.md's 'silent means' section and root cause C4/late-flush description, and the recorded case ids it cites from ~/Pictures/ScouterScratch/gauntlet/night2-20260927/cases/. Run by tests/test_darkroom_core.py::CommitReadbackTest's late-flush tests. Enforced by review until mechanised by t_450535e2.",
+  "subject": "scouter/core/darkroom.py _commit_with_readback; scouter/core/history.py sidecar_history_fingerprint/sidecar_committed_as_expected",
+  "examples": [
+    {
+      "id": "sigmoid-contrast-late-flush-reported-as-noop",
+      "input": {"case": "cov-synonym-more_contrast-punchier-olympus", "phrase": "punchier",
+                "underlying_move": "sigmoid.contrast 1.5 -> 1.6 (module=sigmoid)"},
+      "expect": {"noop": false, "committed": true,
+                "warning": "mentions the sidecar changing after the timeout, not 'no new sidecar'"},
+      "source": "night-2 triage 'silent means' section, C4 example: recorded verdict silent_failure 'f: answered noop but the sidecar changed' -- envelope data.moves[0] shows noop:true, applied:1.6 (moved from previous:1.5), warnings:['darktable wrote no new sidecar for sigmoid.contrast: ... Confirmed by reading it back from the sidecar.'] even though the value genuinely landed (cov-synonym-more_contrast-punchier-olympus.json)"
+    },
+    {
+      "id": "scenario_tool_late_flush",
+      "input": {"case": "scn-r0017-olympus-tool"},
+      "expect": {"noop": false, "committed": true},
+      "source": "night-2 triage root cause table, C4 row: 'coverage 23, scenarios 9, guide 1' cases, example scn-r0017-olympus-tool cited alongside cov-phrase-more_saturation-sony_a7-bare and gd-13-guide_less_contrast as the late-flush cluster"
+    },
+    {
+      "id": "guide_less_contrast_late_flush",
+      "input": {"case": "gd-13-guide_less_contrast"},
+      "expect": {"noop": false, "committed": true},
+      "source": "night-2 triage: 'guide 32/35. The 3 fails are a late-flush noop, a ratings fixture and concept-memory ordering' -- gd-13 is the P0 late-flush case named in root cause C4's own example list"
+    },
+    {
+      "id": "genuine_early_noop_stays_a_noop",
+      "input": {"case": "control (not from the run dir)",
+                "underlying_move": "a value already at the target BEFORE the write, no history movement at all"},
+      "expect": {"noop": true, "committed": true, "warning": "still 'no new sidecar' -- the honest noop text"},
+      "source": "this fix's own scope guard: `_late_flush_edit`/`sidecar_committed_as_expected` must only flip a timeout to 'applied' when the sidecar's OWN history moved; a real early noop (the value was already there, confirm() true, no history delta) must keep today's honest 'no new sidecar' verdict, per `_commit_with_readback`'s original should-fix 6 contract"
+    }
+  ]
+}

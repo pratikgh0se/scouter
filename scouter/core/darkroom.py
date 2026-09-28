@@ -175,6 +175,18 @@ def _commit_with_readback(
     sidecar path, so watermarking a readback-resolved commit costs no extra
     `darkroom.current` round-trip -- every caller already has this path from
     resolving its own image.
+
+    Row 523 (night-2 triage, late-flush noop -- e.g. `cov-synonym-
+    more_contrast-punchier-olympus`, sigmoid.contrast 1.5 -> 1.6, "darktable
+    wrote no new sidecar"): `confirm()` alone cannot tell "the value was
+    already the target" from "darktable answered the timeout late and the
+    edit landed just after we stopped waiting" -- both read the same value
+    once the late write lands. `_late_flush_edit` is a second oracle (Zenkai
+    Z2): the sidecar's own history, compared before the commit call and
+    after the timeout via `history.sidecar_committed_as_expected` -- the
+    same check a normal (non-timeout) commit already uses to confirm the
+    right module actually advanced. Only when the history did NOT move does
+    `confirm()`'s value readback get the final word on noop vs timeout.
     """
     from scouter.core import history
 
@@ -183,6 +195,21 @@ def _commit_with_readback(
         "one the XMP already carried, so there was no history change to write. "
         "Confirmed by reading it back from the sidecar."
     )
+    late_flush_warning = (
+        f"darktable wrote {what}'s sidecar AFTER the commit timeout (a late flush): "
+        "the history advanced the way this write expected, so it is reported as "
+        "applied, not a noop. Confirmed by comparing the sidecar's history before "
+        "the commit call and after the timeout, not by re-reading the value alone."
+    )
+    before_fp = history.sidecar_history_fingerprint(xmp_path)
+
+    def _late_flush_edit() -> bool:
+        if not expect_module:
+            return False
+        after_fp = history.sidecar_history_fingerprint(xmp_path)
+        advanced, _why = history.sidecar_committed_as_expected(before_fp, after_fp, expect_module)
+        return advanced
+
     if predicted_noop:
         try:
             first = _commit(
@@ -191,6 +218,9 @@ def _commit_with_readback(
             )
         except CommitTimeout:
             first = None
+            if _late_flush_edit():
+                history.watermark_write(job, image_id, xmp_path)
+                return True, [late_flush_warning], False
         if first is not None and first.committed:
             return True, list(first.warnings), False
         if confirm():
@@ -199,6 +229,9 @@ def _commit_with_readback(
     try:
         result = _commit(job, image_id, strategy=strategy, expect_module=expect_module)
     except CommitTimeout:
+        if _late_flush_edit():
+            history.watermark_write(job, image_id, xmp_path)
+            return True, [late_flush_warning], False
         if not confirm():
             raise
         # Task 12, step 2: a readback-resolved commit still means the sidecar

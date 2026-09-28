@@ -1060,6 +1060,79 @@ class CommitReadbackTest(unittest.TestCase):
             with self.assertRaises(CommitTimeout):
                 darkroom.reset(module="sigmoid", confirm=True)
 
+    def _sidecar_path(self) -> Path:
+        return Path(str(self.raw) + ".xmp")
+
+    def test_a_nudge_that_lands_after_the_timeout_is_reported_applied_not_noop(self) -> None:
+        """Row 523 (night-2 triage, late-flush noop, item 4): darktable can
+        answer `history.commit` AFTER Scouter has already given up and
+        raised `CommitTimeout` -- the edit still lands, just late. A
+        value-only `confirm()` cannot tell that apart from an honest
+        "already at this value" noop once the late write has landed (both
+        read the same value). Fixture: `_commit`'s mock side effect writes
+        the sidecar's OWN new history entry for `exposure` (a real commit,
+        `with_new_history_hash(..., module="exposure")`, not just a value
+        change) before raising the timeout -- second oracle Z2: the
+        sidecar's history, not the value the same write also happens to
+        report."""
+        sidecar = self._sidecar_path()
+        before_text = sidecar.read_text()
+
+        def _late_flush(*_a, **_kw):
+            sidecar.write_text(with_new_history_hash(before_text, module="exposure"))
+            raise self._timeout()
+
+        # The bridge's own (never reached, since `_commit` is mocked) value
+        # readback would show a DIFFERENT value than the request -- proving
+        # this is not scored a pass because the value happened to match.
+        self.bridge.responses["darkroom.action"] = lambda p: {
+            "nan": False, "status": 9.0, "view": "darkroom", **p,
+        }
+        with mock.patch("scouter.core.darkroom._commit", side_effect=_late_flush):
+            result = darkroom.nudge(module="exposure", param="exposure", steps=1)
+        self.assertTrue(result.committed, "the late-landed edit must be reported committed")
+        self.assertTrue(
+            any("late flush" in w or "AFTER the commit timeout" in w for w in result.warnings),
+            result.warnings,
+        )
+        # It must NOT be dressed up as the honest "no new sidecar" noop --
+        # that phrase is reserved for a value that was already the target
+        # BEFORE the write, which this is not.
+        self.assertFalse(any("no new sidecar" in w for w in result.warnings), result.warnings)
+
+    def test_an_enable_that_lands_after_the_timeout_is_reported_applied_not_noop(self) -> None:
+        """Same shape as the nudge case above, for the module-action commit
+        path (`_do_module_action`, `expect_module` set to the module being
+        enabled) -- a different `_commit_with_readback` call site, same
+        fix."""
+        sidecar = self._sidecar_path()
+        before_text = sidecar.read_text()
+
+        def _late_flush(*_a, **_kw):
+            sidecar.write_text(with_new_history_hash(before_text, module="exposure"))
+            raise self._timeout()
+
+        with mock.patch("scouter.core.darkroom._commit", side_effect=_late_flush):
+            result = darkroom.enable(module="exposure")
+        self.assertTrue(result.committed)
+        self.assertTrue(
+            any("late flush" in w or "AFTER the commit timeout" in w for w in result.warnings),
+            result.warnings,
+        )
+
+    def test_a_timeout_with_no_history_movement_is_still_the_honest_noop(self) -> None:
+        """Control: a timeout where the sidecar genuinely never changes (no
+        late flush at all) must still fall through to the ordinary
+        value-readback noop -- this fix must not turn EVERY timeout into a
+        reported edit."""
+        self.bridge.responses["darkroom.action"] = lambda p: {
+            "nan": False, "status": 1.5500002, "view": "darkroom", **p,
+        }
+        with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
+            result = darkroom.nudge(module="exposure", param="exposure", steps=1)
+        self.assertTrue(result.committed)
+        self.assertTrue(any("no new sidecar" in w for w in result.warnings), result.warnings)
+
     def test_a_reset_of_exposure_is_not_confirmed_by_black_alone(self) -> None:
         """Regression guard for fix round 1, finding 1: the fixture's own
         `exposure.black` (-0.000244140625) reads AS darktable's
