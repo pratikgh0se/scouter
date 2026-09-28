@@ -74,32 +74,44 @@ def run_bulk_case(session, case: Case) -> Observation:
             killer.start()
         try:
             bridge_relaunched = False
+            last_image = None
             for st in case.steps:
                 args = substitute(st.args, session, obs.calls)
+                if "image" in args:
+                    last_image = args["image"]
                 rec = session.call(st.tool, args, st.budget_s, write=st.write)
                 obs.calls.append(rec)
                 if kill_at and rec.error:
                     session.relaunch()
+                    session.current_frame = None  # F3: relaunch is launched, not current
                     rec = session.call(st.tool, args, st.budget_s, write=st.write)
                     obs.calls.append(rec)
                     obs.extra["journal_resumed"] = "resum" in json.dumps(rec.envelope or {})
-                elif rec.error in ("bridge_timeout", "commit_timeout"):
-                    # Batch 3 / night-2 triage C2 + C12 (bulk hero-open half,
-                    # row 462): this loop calls session.call directly, never
-                    # session.ensure_frame, so a wedged bridge/commit here
-                    # needs its own bounded relaunch-and-retry. One relaunch
-                    # per case: a repeat failure marks the case
-                    # bridge_relaunch_failed instead of retrying again.
+                elif rec.error in ("bridge_timeout", "commit_timeout", "not_in_darkroom"):
+                    # F1 (night-2 C12, row 462): the recorded shape is
+                    # darkroom_open -> not_in_darkroom, then a write step ->
+                    # commit_timeout. One relaunch per case; retrying the
+                    # step IS the reopen when it is itself darkroom_open, so
+                    # no separate reopen call is needed. A write step's
+                    # commit_timeout is never blind-retried -- the edit may
+                    # have already landed.
                     if bridge_relaunched:
                         obs.blocked = (f"bridge_relaunch_failed: {st.tool} {rec.error} again "
                                       "after the one relaunch this case already used")
                         obs.hang_evidence.append(obs.blocked)
                         break
                     bridge_relaunched = True
-                    session.relaunch()
+                    session.relaunch(Path(last_image) if last_image else None)
+                    session.current_frame = None  # F3: relaunch is launched, not current
+                    if st.write and rec.error == "commit_timeout":
+                        obs.blocked = (f"bridge_relaunch_failed: {st.tool} commit_timeout on a "
+                                      "write step is not retried after a relaunch (it may have "
+                                      "already landed)")
+                        obs.hang_evidence.append(obs.blocked)
+                        break
                     rec = session.call(st.tool, args, st.budget_s, write=st.write)
                     obs.calls.append(rec)
-                    if rec.error in ("bridge_timeout", "commit_timeout"):
+                    if rec.error in ("bridge_timeout", "commit_timeout", "not_in_darkroom"):
                         obs.blocked = (f"bridge_relaunch_failed: {st.tool} still {rec.error} "
                                       "after a relaunch")
                         obs.hang_evidence.append(obs.blocked)

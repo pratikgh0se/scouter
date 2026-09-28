@@ -37,7 +37,7 @@ def test_relaunch_session_blocked_is_returned_as_observation(tmp_path):
             return CallRecord(tool=tool, args=args, envelope={"ok": False}, error="timeout",
                               write=write)
 
-        def relaunch(self) -> None:
+        def relaunch(self, frame=None) -> None:
             raise SessionBlocked("darktable did not quit")
 
     session = FakeSession()
@@ -80,8 +80,8 @@ def _bulk_session(tmp_path, corpus, answers):
             return CallRecord(tool=tool, args=args, envelope=ans.get("envelope", {"ok": True}),
                               error=ans.get("error"), write=write)
 
-        def relaunch(self) -> None:
-            relaunches.append(True)
+        def relaunch(self, frame=None) -> None:
+            relaunches.append(frame)
 
     return FakeSession(), calls, relaunches
 
@@ -92,13 +92,15 @@ def _bulk_case():
                body="olympus", frame_role="card", meta={"frames": 2})
 
 
-@pytest.mark.parametrize("code", ["bridge_timeout", "commit_timeout"])
-def test_bulk_bridge_timeout_relaunches_once_then_recovers(tmp_path, code):
+def test_bulk_bridge_timeout_relaunches_once_then_recovers(tmp_path):
+    """bridge_timeout means darktable wedged before doing anything, so the
+    step is safe to retry after a relaunch (unlike commit_timeout -- see
+    test_bulk_write_step_commit_timeout_is_never_blind_retried)."""
     trial = tmp_path / "trial"
     trial.mkdir()
     (trial / "H.ORF").write_bytes(b"raw")
     corpus = Corpus({"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {}}, trial)
-    answers = [{"error": code}, {"envelope": {"ok": True, "data": {}}}]
+    answers = [{"error": "bridge_timeout"}, {"envelope": {"ok": True, "data": {}}}]
     session, calls, relaunches = _bulk_session(tmp_path, corpus, answers)
 
     obs = exec_bulk.run_bulk_case(session, _bulk_case())
@@ -107,19 +109,62 @@ def test_bulk_bridge_timeout_relaunches_once_then_recovers(tmp_path, code):
     assert calls == ["job_run", "job_run"] and len(relaunches) == 1  # oracle B: one relaunch
 
 
-@pytest.mark.parametrize("code", ["bridge_timeout", "commit_timeout"])
-def test_bulk_bridge_timeout_relaunches_at_most_once_then_marks_failed(tmp_path, code):
+def test_bulk_bridge_timeout_relaunches_at_most_once_then_marks_failed(tmp_path):
     trial = tmp_path / "trial"
     trial.mkdir()
     (trial / "H.ORF").write_bytes(b"raw")
     corpus = Corpus({"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {}}, trial)
-    answers = [{"error": code}, {"error": code}]
+    answers = [{"error": "bridge_timeout"}, {"error": "bridge_timeout"}]
     session, calls, relaunches = _bulk_session(tmp_path, corpus, answers)
 
     obs = exec_bulk.run_bulk_case(session, _bulk_case())
 
     assert obs.blocked is not None and obs.blocked.startswith("bridge_relaunch_failed")
     assert calls == ["job_run", "job_run"] and len(relaunches) == 1  # bounded: never a second
+
+
+def test_bulk_write_step_commit_timeout_is_never_blind_retried(tmp_path):
+    """F1: commit_timeout on a write step may mean the edit already landed
+    (the reviewer's honest reading of the recorded darkroom_say case) -- the
+    harness relaunches once (to leave the wedge behind for any later case)
+    but must not resend the write itself."""
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "H.ORF").write_bytes(b"raw")
+    corpus = Corpus({"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {}}, trial)
+    answers = [{"error": "commit_timeout"}]
+    session, calls, relaunches = _bulk_session(tmp_path, corpus, answers)
+
+    obs = exec_bulk.run_bulk_case(session, _bulk_case())
+
+    assert obs.blocked is not None and obs.blocked.startswith("bridge_relaunch_failed")
+    assert calls == ["job_run"] and len(relaunches) == 1  # relaunched, but never resent
+
+
+def test_bulk_matches_recorded_c12_open_then_write_wedge_shape(tmp_path):
+    """F1: shaped exactly like the recorded C12 bulk cases
+    (blk-copy_paste_history-olympus-card, blk-hero_then_propagate-olympus-card
+    et al, night2-20260927/cases): darkroom_open answers not_in_darkroom,
+    then the write step darkroom_say answers commit_timeout. The open step's
+    own retry IS the reopen (no separate reopen call needed); the case's one
+    relaunch is then already spent, so the write is never resent."""
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "H.ORF").write_bytes(b"raw")
+    corpus = Corpus({"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {}}, trial)
+    answers = [{"error": "not_in_darkroom"}, {"envelope": {"ok": True, "data": {}}},
+              {"error": "commit_timeout"}]
+    session, calls, relaunches = _bulk_session(tmp_path, corpus, answers)
+    case = Case(id="blk-copy_paste_history-olympus-card", layer="bulk", tier="P1", mode="tool",
+               steps=[Step("darkroom_open", {"image": "{job_frame:1}"}, 30.0, False),
+                      Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
+               expect=Expect("workflow"), body="olympus", frame_role="card", meta={"frames": 7})
+
+    obs = exec_bulk.run_bulk_case(session, case)
+
+    assert obs.blocked is not None and obs.blocked.startswith("bridge_relaunch_failed")
+    assert calls == ["darkroom_open", "darkroom_open", "darkroom_say"]
+    assert len(relaunches) == 1  # F2: bound holds across steps, not just within one
 
 
 # -- final fix M1: the kill timer is stopped at case end -------------------------
@@ -397,7 +442,7 @@ def test_reported_n_excludes_librarys_own_import_count(tmp_path):
         CallRecord(tool="library_import", args={}, write=True,
                   envelope={"ok": True, "data": {"imported": 7, "files": []}}),
         CallRecord(tool="darkroom_open", args={}, write=False,
-                  envelope={"ok": False}, error="not_in_darkroom"),
+                  envelope={"ok": False}, error="usage"),
         CallRecord(tool="style_apply", args={}, write=True,
                   envelope=None, error="usage"),
     ])

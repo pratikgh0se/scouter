@@ -14,6 +14,7 @@ import pytest
 
 from gauntlet.case import Case, Expect, Step
 from tests.gauntlet import exec_bulk, session as sess
+from tests.gauntlet.corpus import Corpus
 from tests.gauntlet.test_exec_bulk import _bulk_case, _bulk_session
 from tests.gauntlet.test_session import FakeDt, FakeMcp, _session
 
@@ -100,3 +101,27 @@ def test_bulk_step_bridge_timeout_relaunches_and_recovers(tmp_path):
     assert calls == ["job_run", "job_run"]
     # Oracle B: the relaunch count and the case's own observation.
     assert len(relaunches) == 1 and obs.blocked is None
+
+
+def test_bulk_c12_open_then_write_wedge_write_not_retried(tmp_path):
+    EXAMPLES["bulk-c12-open-then-write-wedge-write-not-retried"]  # documents the case
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "H.ORF").write_bytes(b"raw")
+    bulk_corpus = Corpus({"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {}}, trial)
+    session, calls, relaunches = _bulk_session(
+        tmp_path, bulk_corpus,
+        [{"error": "not_in_darkroom"}, {"envelope": {"ok": True, "data": {}}},
+         {"error": "commit_timeout"}])
+    case = Case(id="blk-copy_paste_history-olympus-card", layer="bulk", tier="P1", mode="tool",
+               steps=[Step("darkroom_open", {"image": "{job_frame:1}"}, 30.0, False),
+                      Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
+               expect=Expect("workflow"), body="olympus", frame_role="card", meta={"frames": 7})
+
+    obs = exec_bulk.run_bulk_case(session, case)
+
+    # Oracle A: the fake transport's own call log -- the write is never resent.
+    assert calls == ["darkroom_open", "darkroom_open", "darkroom_say"]
+    # Oracle B: the relaunch count and the case's own observation.
+    assert len(relaunches) == 1
+    assert obs.blocked is not None and obs.blocked.startswith("bridge_relaunch_failed")
