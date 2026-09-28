@@ -113,6 +113,7 @@ def test_bulk_c12_open_then_write_wedge_write_not_retried(tmp_path):
         tmp_path, bulk_corpus,
         [{"error": "not_in_darkroom"}, {"envelope": {"ok": True, "data": {}}},
          {"error": "commit_timeout"}])
+    session.current_frame = "not-none-until-the-relaunch-resets-it"  # R1-2
     case = Case(id="blk-copy_paste_history-olympus-card", layer="bulk", tier="P1", mode="tool",
                steps=[Step("darkroom_open", {"image": "{job_frame:1}"}, 30.0, False),
                       Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
@@ -125,3 +126,7 @@ def test_bulk_c12_open_then_write_wedge_write_not_retried(tmp_path):
     # Oracle B: the relaunch count and the case's own observation.
     assert len(relaunches) == 1
     assert obs.blocked is not None and obs.blocked.startswith("bridge_relaunch_failed")
+    # R1-1: relaunched on the card frame darkroom_open asked for, not the hero.
+    assert relaunches == [session.staged.job_frames[0]]
+    # R1-2: relaunch is launched, not current, until a real reopen confirms it.
+    assert session.current_frame is None

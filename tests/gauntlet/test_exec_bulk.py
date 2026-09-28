@@ -155,6 +155,7 @@ def test_bulk_matches_recorded_c12_open_then_write_wedge_shape(tmp_path):
     answers = [{"error": "not_in_darkroom"}, {"envelope": {"ok": True, "data": {}}},
               {"error": "commit_timeout"}]
     session, calls, relaunches = _bulk_session(tmp_path, corpus, answers)
+    session.current_frame = "not-none-until-the-relaunch-resets-it"  # R1-2
     case = Case(id="blk-copy_paste_history-olympus-card", layer="bulk", tier="P1", mode="tool",
                steps=[Step("darkroom_open", {"image": "{job_frame:1}"}, 30.0, False),
                       Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
@@ -165,6 +166,11 @@ def test_bulk_matches_recorded_c12_open_then_write_wedge_shape(tmp_path):
     assert obs.blocked is not None and obs.blocked.startswith("bridge_relaunch_failed")
     assert calls == ["darkroom_open", "darkroom_open", "darkroom_say"]
     assert len(relaunches) == 1  # F2: bound holds across steps, not just within one
+    # R1-1: the relaunch must target the card frame darkroom_open asked for
+    # (product limit R20 -- a hero relaunch would not clear not_in_darkroom).
+    assert relaunches == [session.staged.job_frames[0]]
+    # R1-2: relaunch is launched, not current, until a real reopen confirms it.
+    assert session.current_frame is None
 
 
 def test_bulk_bridge_relaunch_bound_holds_across_steps(tmp_path):
