@@ -891,10 +891,11 @@ def _moved_to_limit_residual(case: Case, results: list[CheckResult],
 
 
 def _honest_noop_at_target(case: Case, obs: Observation) -> bool:
-    """Prove the target was already met from the pre-write snapshot alone,
-    not from "every observed check happened to already pass" (which a
-    future envelope-only edit case, with no value-reading check, would
-    pass vacuously)."""
+    """Prove the target was already met from the case-start snapshot alone
+    (`snaps[0]`, or `obs.before` with no per-step snapshots), not from
+    "every observed check happened to already pass" (which a future
+    envelope-only edit case, with no value-reading check, would pass
+    vacuously)."""
     checks = case.expect.checks
     snaps = _step_snaps(obs)
     before = dict(snaps[0]) if snaps else dict(_params(obs.before))
