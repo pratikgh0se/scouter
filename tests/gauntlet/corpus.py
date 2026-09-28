@@ -194,13 +194,10 @@ class Corpus:
 
     @classmethod
     def load(cls, path: Path, root: Path | None = None) -> Corpus:
-        """Batch 3 / Zenkai Z1 (night-2 triage C1, row 462): merge EXTRA_ROLES
-        into a cached corpus.json written before that role existed, the same
-        way `pick_roles` already merges it at survey time -- so a stale cache
-        never raises `KeyError: 'hero_bright'` (or any future EXTRA_ROLES
-        addition). EXTRA_ROLES points at a copy outside TRIAL and is not a
-        product of the survey, so it is safe to backfill unconditionally
-        rather than gating on a corpus schema version."""
+        """Backfills EXTRA_ROLES missing from a stale cached corpus.json so a
+        `KeyError` never reaches a lookup (F4: unlike `pick_roles`, an
+        already-cached role wins over EXTRA_ROLES here -- a real survey
+        result must not be discarded for a hardcoded fallback path)."""
         doc = json.loads(path.read_text(encoding="utf-8"))
         roles = doc.setdefault("roles", {})
         for body, extra in EXTRA_ROLES.items():
