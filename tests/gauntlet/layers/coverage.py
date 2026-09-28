@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 from gauntlet.case import Case, Check, Expect, case_id
-from scouter.core import phrases, vocab
+from scouter.core import moves, phrases, vocab
 from tests.gauntlet import checkmap
 from tests.gauntlet.layers.common import (
     BODIES,
@@ -498,6 +498,28 @@ def unreachable_cases(body: str) -> list[Case]:
     ]
 
 
+#: Row 523 (night-2 triage C3): 14 phrases move a param whose
+#: `vocab.status` is still `candidate` (no pinned darktable action path --
+#: `moves.py::_refusal`/`CROP_SIDES` refuse them honestly, `not_pinned`).
+#: The generator used to expect a plain edit from these, so Scouter's
+#: honest refusal scored `wrong_refusal`/`failed` (236 coverage fails).
+#: Decision row 523: score the refusal as a pass (host pin probes are a
+#: later card); a pinned edit of the same family must still expect the
+#: edit above, so this only ADDS `accept_refusal` to the existing Expect,
+#: it never replaces the checks.
+def _candidate_status(p: phrases.Phrase) -> bool:
+    for mv in p.moves:
+        specs = ([vocab.spec("crop", side) for side in moves.CROP_SIDES] if mv.kind == "crop"
+                 else [vocab.spec(mv.module, mv.param)])
+        if any(s is not None and vocab.status(s) == "candidate" for s in specs):
+            return True
+    return False
+
+
+def _candidate_meta(p: phrases.Phrase) -> dict | None:
+    return {"accept_refusal": True} if _candidate_status(p) else None
+
+
 def _phrase_wb_expect(p: phrases.Phrase) -> dict | None:
     """checkmap's wb_route_a expectation for "warmer"/"cooler" (Kelvin, via
     `wb_route_a_expect`) -- the only phrases whose refusal on preset 4
@@ -614,6 +636,7 @@ def phrase_cases(body: str) -> list[Case]:
         forms = [("bare", syn, "P0"), ("touch", f"{syn} a touch", "P1"),
                  ("lot", f"{syn} a lot", "P1")]
         wb_meta = _wb_phrase_meta(p, body)
+        cand_meta = _candidate_meta(p)
         pre = _graded_precondition(p)
         for label, text, tier in forms:
             exp = Expect("edit", []) if wb_meta else _phrase_expect(p, from_step=len(pre))
@@ -621,7 +644,7 @@ def phrase_cases(body: str) -> list[Case]:
                                       p.key in BRIGHT_HERO_TOUCH_KEYS) else "hero"
             out.append(_case(case_id(PREFIX, "phrase", p.key, body, label), body, tier,
                              [*pre, step("darkroom_say", BUDGET_SAY, phrase=text)], exp,
-                             meta=wb_meta, frame_role=role))
+                             meta=wb_meta or cand_meta, frame_role=role))
         row = _row(p.moves[0])
         by, amount = EXPLICIT_BY_UNIT.get(row.unit, ("0.2", 0.2))
         text = f"{syn} by {by}"
@@ -647,15 +670,17 @@ def phrase_cases(body: str) -> list[Case]:
                                                  delta=sgn * amount, lo=row.lo, hi=row.hi)],
                          sidecar(row.module, row.param, row.unit))
         out.append(_case(case_id(PREFIX, "phrase", p.key, body, "explicit"), body, "P1",
-                         [step("darkroom_say", BUDGET_SAY, phrase=text)], exp, meta=wb_meta))
+                         [step("darkroom_say", BUDGET_SAY, phrase=text)], exp,
+                         meta=wb_meta or cand_meta))
     for p in phrases.PHRASES:
         wb_meta = _wb_phrase_meta(p, body)
+        cand_meta = _candidate_meta(p)
         pre = _graded_precondition(p)
         for syn in p.synonyms:
             exp = Expect("edit", []) if wb_meta else _phrase_expect(p, from_step=len(pre))
             out.append(_case(case_id(PREFIX, "synonym", p.key, syn, body), body, "P1",
                              [*pre, step("darkroom_say", BUDGET_SAY, phrase=syn)], exp,
-                             meta=wb_meta))
+                             meta=wb_meta or cand_meta))
     return out
 
 
@@ -692,7 +717,7 @@ def property_cases(body: str) -> list[Case]:
                 "key": k, "pairs": [[0, 1], [2, 3], [4, 5]]})], property="P4")
         out.append(_case(case_id(PREFIX, "p4", p.key, body), body, "P1",
                          [say(f"{syn} a touch"), undo(), say(syn), undo(), say(f"{syn} a lot")],
-                         exp))
+                         exp, meta=_candidate_meta(p)))
     for a, b in OPPOSED:
         pa, pb = by_key[a], by_key[b]
         k, unit = _primary(pa)

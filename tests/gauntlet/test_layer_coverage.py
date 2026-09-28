@@ -336,3 +336,48 @@ def test_wb_route_a_pinned_verifies_the_real_target_not_a_placeholder(monkeypatc
 
     tint_set = _case("cov-temperature.tint-olympus-set_0.9")
     assert tint_set.expect.kind == "typed_error"  # unaffected by the pin
+
+
+def test_c3_unpinned_phrase_families_expect_edit_but_accept_the_honest_refusal():
+    """Row 523 (night-2 triage C3, decision row 523, 2026-09-28): 14 phrases
+    move a param whose `vocab.status` is still `candidate` (crop, rotate,
+    sharpen, denoise, grain, vignette-corners) -- `moves.py::_refusal`
+    refuses them honestly, `not_pinned`, on every body today. The generator
+    used to demand a plain edit, so the honest refusal scored
+    `wrong_refusal`/`failed` (236 coverage fails, evidence
+    cov-phrase-crop_16x9-olympus-bare, cov-phrase-sharpen_more-olympus-bare,
+    cov-p4-rotate_left-olympus). Pratik's ruling: score the refusal as a
+    pass; a pinned edit of the same family must still expect the edit, so
+    the fix only ADDS `accept_refusal` to the existing `Expect`, it never
+    drops the checks -- verified here by keeping `expect.kind == "edit"`/
+    `"property"` and non-empty checks alongside the new meta flag."""
+    cases = coverage.generate()
+    by_id = {c.id: c for c in cases}
+    candidate_bare = {
+        "cov-phrase-crop_16x9-olympus-bare": "edit",
+        "cov-phrase-crop_square-sony_a7-bare": "edit",
+        "cov-phrase-rotate_left-olympus-bare": "edit",
+        "cov-phrase-rotate_right-sony_a7-bare": "edit",
+        "cov-phrase-sharpen_more-olympus-bare": "edit",
+        "cov-phrase-denoise_more-sony_a7-bare": "edit",
+        "cov-phrase-more_grain-olympus-bare": "edit",
+        "cov-phrase-darker_corners-sony_a7-bare": "edit",
+    }
+    for cid, kind in candidate_bare.items():
+        c = by_id[cid]
+        assert c.expect.kind == kind, cid
+        assert c.meta.get("accept_refusal") is True, cid
+    # A pinned edit of the same family is untouched -- no accept_refusal.
+    brighter = by_id["cov-phrase-brighter-olympus-bare"]
+    assert brighter.meta.get("accept_refusal") is not True
+    assert brighter.expect.checks  # still a real edit expectation
+
+    # The P4 monotonic property case for the same 14 keys never observes a
+    # value (every "say" in its sequence honestly refuses first) -- it must
+    # carry accept_refusal too, or its own checks can only ever fail.
+    props = {c.id: c for c in coverage.property_cases("olympus")}
+    p4 = props["cov-p4-rotate_left-olympus"]
+    assert p4.expect.kind == "property"
+    assert p4.meta.get("accept_refusal") is True
+    p4_live = props["cov-p4-brighter-olympus"]
+    assert p4_live.meta.get("accept_refusal") is not True
