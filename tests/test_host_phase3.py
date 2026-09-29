@@ -410,9 +410,6 @@ class ProbeColorzonesStrengthDefaultHostTest(unittest.TestCase):
             committed = registry.call("history.commit", "cli", image=image)
             self.assertTrue(committed.ok, committed.error)
             strength_sentinel = newest_strength()
-            self.assertAlmostEqual(strength_sentinel, 0.16, delta=1e-6,
-                                    msg="slot 127 did not decode the 0.16 sentinel -- "
-                                        "either the slot moved or it is dead")
 
             reset = registry.call("darkroom.reset", "cli", module="colorzones", confirm=True)
             self.assertTrue(reset.ok, reset.error)
@@ -420,12 +417,37 @@ class ProbeColorzonesStrengthDefaultHostTest(unittest.TestCase):
             self.assertTrue(committed.ok, committed.error)
             strength_reset = newest_strength()
 
+            # All three decoded values, printed BEFORE any value assertion
+            # below can fail, so one host run always yields the
+            # measurement even on a FAIL (host run 2026-09-29: the sentinel
+            # assertion failed at 1e-6, which meant action A and the reset
+            # read never ran and never got recorded).
             _record("\n## Phase 3 colorzones.strength default probe "
                     f"({time.strftime('%Y-%m-%d %H:%M')})\n\n"
                     f"oracle A (fresh enable) strength={strength_a!r}; "
-                    f"oracle B (sentinel 0.16 -> reset) strength={strength_reset!r} "
+                    f"sentinel (0.16 requested) strength={strength_sentinel!r}; "
+                    f"oracle B (post-reset) strength={strength_reset!r} "
                     "(internal units 0..2, display_scale 100 i.e. GUI 100% == internal 1.0)\n")
 
+            # The sentinel only needs to prove slot 127 is LIVE (not dead,
+            # not zero-filled, not a different slot) -- it passes through
+            # darktable's float32 param storage and the GTK slider's own
+            # quantisation, the same floor row 502 hit for exposure.black's
+            # host-measured value. 1e-5 is two orders of magnitude looser
+            # than that floor (host run 2026-09-29 measured 0.16 as
+            # 0.1600027084350586, delta 2.7e-6) while staying far below any
+            # real slider step (colorzones.strength's own step is 0.1), so
+            # a dead or moved slot (which decodes 0.0 or garbage) still
+            # fails this check.
+            self.assertAlmostEqual(strength_sentinel, 0.16, delta=1e-5,
+                                    msg="slot 127 did not decode the 0.16 sentinel -- "
+                                        "either the slot moved or it is dead")
+
+            # The default comparison (oracle A vs the post-reset read) stays
+            # at the tight 1e-6: both sides are darktable running the
+            # module's REAL default (no live user value in play), not a
+            # sentinel run through the slider's quantisation, so there is no
+            # float32-floor reason to widen it here.
             tolerance = vocab.default_tolerance("colorzones", "strength", fallback=1e-6)
             self.assertAlmostEqual(strength_a, strength_reset, delta=tolerance,
                                     msg="oracle A (fresh enable) and oracle B (post-reset) "
