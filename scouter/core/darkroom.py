@@ -1111,7 +1111,7 @@ def set_param(
         commit=commit,
     )
     try:
-        dtbridge.action(
+        action_result = dtbridge.action(
             path_,
             instance=instance,
             element="value",
@@ -1123,6 +1123,24 @@ def set_param(
         journal.fail(job, entry.seq, outcome=f"error:{code}")
         raise
     journal.complete(job, entry.seq, after={"value": value})
+    # Batch 3 item 9 (row 531): when `current` is `None` (no declared
+    # `neutral`/`default` for this param, e.g. `colorzones.strength` --
+    # `_effective_current` has nothing to fall back on), `matched_before`
+    # can never be established from the XMP alone. `dt.gui.action`'s own
+    # `status` for a `set` effect is the same live-reported resulting value
+    # `nudge` already trusts (phase 0 finding 1); reaching this point can
+    # only mean a *commit timeout* is possible later (a real change always
+    # commits normally), so a `status` that already agrees with `effective`
+    # is exactly the "already at target" case `_resolve_readback` needs
+    # `matched_before` for -- never a shortcut for skipping the readback's
+    # own `confirmed` check.
+    live_status: float | None = None
+    if current is None:
+        status_value = action_result.get("status")
+        if isinstance(status_value, (int, float)):
+            live_status = float(status_value)
+            if _close(effective, live_status):
+                matched_before = True
 
     committed = False
     noop = False
@@ -1130,7 +1148,13 @@ def set_param(
     warnings: list[str] = []
 
     def _readback() -> float | None:
-        return _effective_read(resolved.path, module, param, instance)
+        # `current is None` (no declared default/neutral) leaves the XMP
+        # decode with nothing to fall back on for a module still without a
+        # history entry; `live_status` (`dt.gui.action`'s own report for
+        # this exact `set`, only trusted when `current` gave us no other
+        # way to know) fills the same gap `matched_before` above does.
+        read = _effective_read(resolved.path, module, param, instance)
+        return read if read is not None else live_status
 
     if commit:
         # darktable writes a sidecar only when the history actually CHANGES

@@ -180,6 +180,32 @@ class DarkroomCoreTest(_DarkroomFixture):
                 darkroom.set_param(module="exposure", param="exposure", value=4.25)
         self._commit_patcher.start()
 
+    def test_commit_timeout_for_a_param_with_no_declared_default_still_resolves(self) -> None:
+        """Batch 3 item 9 (row 531): `colorzones.strength` declares neither
+        `neutral` nor `default` (vocab.py), so when the module has no active
+        history entry `_effective_current` cannot say what darktable already
+        holds -- `current` is `None`. Setting it to its own lower bound
+        (`s.lo` == 0.0, which is also the fixture frame's own baseline
+        reading, proof3 evidence) is the same "already at target" no-op
+        `test_commit_timeout_is_satisfied_by_a_confirming_readback` covers
+        for `exposure`, but here neither the pre-write `matched_before` nor
+        the post-timeout XMP readback can confirm it via the declared
+        default -- both are `None`. The bridge's own reported `status` for
+        the `set` action (the same signal `nudge` already trusts) is the
+        only oracle left, so a genuine no-op must resolve through it instead
+        of raising `commit_timeout` (proof3-20260929's
+        cov-colorzones.strength-olympus-set_lo/-sony_a7-set_lo)."""
+        self.assertIsNone(darkroom._declared_default("colorzones", "strength"))
+        self._commit_patcher.stop()
+        with mock.patch(
+            "scouter.core.darkroom._commit",
+            side_effect=CommitTimeout("darktable did not write the sidecar"),
+        ):
+            result = darkroom.set_param(module="colorzones", param="strength", value=0.0)
+        self._commit_patcher.start()
+        self.assertTrue(result.committed)
+        self.assertEqual(result.applied, 0.0)
+
     def test_dry_run_sends_no_action_and_resolves_nothing(self) -> None:
         result = darkroom.set_param(module="exposure", param="exposure", value=2.0, dry_run=True)
         self.assertEqual(result.outcome, "dry_run")
