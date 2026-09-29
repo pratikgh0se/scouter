@@ -1,5 +1,5 @@
 {
-  "about": "Zenkai Rules Z1 intent examples: tests/host_support.py::assert_no_concurrent_darktable, the Z5 detector added for card t_cc03dcb4 fix round 1 (I2), after incident inc_f9c5e8f5 (two overlapping darktable launches shared the plugin config, the bridge spool and fixed scratch paths, contaminating a host probe and destroying oracle A's on-disk evidence). Wired into PluginInstall.install() so every host test class gets it for free. Two independent checks: a second darktable process (pgrep -x darktable, injected here via `darktable_running` rather than mocking subprocess itself -- the real file-scanning half of the guard is exercised unmocked, against a real temp cache dir) and a pending bridge request/response file in the spool (darktable_mcp/bridge/client.py's request-<id>.json/response-<id>.json pair; the heartbeat file and cli-config/ directory are normal residents of a live spool per an `ls` of ~/.cache/darktable-mcp and must NOT trip the guard). Two oracles per example (Z2): whether the call raised at all, and (when it does) that the message names the actual cause, not a generic refusal -- a guard that raises for the wrong reason would still pass a raises-only check.",
+  "about": "Zenkai Rules Z1 intent examples: tests/host_support.py::assert_no_concurrent_darktable, a Z5 detector against two darktable launches sharing a plugin config, library.db or bridge spool. Called explicitly by each host test as its own first action (never from PluginInstall.install(), so a non-host unit test of PluginInstall never depends on the real host's live spool). Two independent checks: a second darktable process (pgrep -x darktable, injected here via `darktable_running` rather than mocking subprocess itself -- the real file-scanning half of the guard is exercised unmocked, against a real temp cache dir) and a bridge request/response file in the spool younger than a staleness window (darktable_mcp/bridge/client.py's request-<id>.json/response-<id>.json pair, default 300s; an older file is an orphan the bridge's own sweep would eventually collect, not evidence of a call in flight; the heartbeat file and cli-config/ directory are normal residents of a live spool per an `ls` of ~/.cache/darktable-mcp and must NOT trip the guard either way). File ages are set with os.utime, never a real sleep. Two oracles per example (Z2): whether the call raised at all, and (when it does) that the message names the actual cause, not a generic refusal -- a guard that raises for the wrong reason would still pass a raises-only check.",
   "subject": "tests/host_support.py::assert_no_concurrent_darktable",
   "examples": [
     {
@@ -36,6 +36,20 @@
       "cache_files": [],
       "expect": {"raises": false, "message_contains": null},
       "source": "the ordinary case every host test needs to keep passing: nothing running, nothing pending."
+    },
+    {
+      "id": "a_stale_response_older_than_300s_does_not_refuse",
+      "darktable_running": false,
+      "cache_files": [{"name": "response-stale111.json", "age_s": 3600}],
+      "expect": {"raises": false, "message_contains": null},
+      "source": "an orphaned late response to a request the client already gave up on (normal bridge behaviour, observed after a real rerun: pgrep was empty yet a response file from over an hour earlier still sat in the spool). Once no darktable is running, an old file cannot be evidence of a call in flight, so it must not block a later host test."
+    },
+    {
+      "id": "a_fresh_request_refuses",
+      "darktable_running": false,
+      "cache_files": [{"name": "request-fresh222.json", "age_s": 0}],
+      "expect": {"raises": true, "message_contains": "request-fresh222.json"},
+      "source": "the staleness window must not swallow the real case: a request file written just now is still evidence of a call in flight and must refuse."
     }
   ]
 }

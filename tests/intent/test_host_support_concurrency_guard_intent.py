@@ -5,7 +5,9 @@ at all, and (when it does) that the message names the actual cause."""
 from __future__ import annotations
 
 import json
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -20,10 +22,17 @@ class HostSupportConcurrencyGuardIntentTest(unittest.TestCase):
     def run_example(self, ex: dict) -> None:
         with tempfile.TemporaryDirectory() as d:
             cache_dir = Path(d)
-            for rel in ex["cache_files"]:
+            for entry in ex["cache_files"]:
+                # A plain string is a fresh (age 0) file, same as before the
+                # staleness window existed. A {"name", "age_s"} entry backdates
+                # the file's mtime with os.utime -- no sleep, no injected clock.
+                rel, age_s = (entry, 0) if isinstance(entry, str) else (entry["name"], entry["age_s"])
                 path = cache_dir / rel
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("{}")
+                if age_s:
+                    mtime = time.time() - age_s
+                    os.utime(path, (mtime, mtime))
 
             want = ex["expect"]
             try:

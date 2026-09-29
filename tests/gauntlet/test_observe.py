@@ -79,11 +79,12 @@ def test_m1_declared_default_fallback_accepts_a_real_verified_default_via_real_a
 
 
 #: The 10 colorbalancergb rows a host probe promoted from `neutral`-only to
-#: a verified `default` (card t_cc03dcb4, decision row 560); kept in sync by
-#: hand with `tests/test_host_phase3.py::_CB_NEUTRAL_ROWS`, which names the
-#: same 10 rows for the probe that measures them. Listing all 10 here (not a
-#: sample) matters (fix round 1, I3): reverting any ONE row's promotion in
-#: `scouter/core/vocab.py` must fail this test, not just the golden fixture.
+#: a verified `default` (card t_cc03dcb4, decision row 560): every non-hue
+#: row of the module. Listing all 10 here (not a sample) matters: reverting
+#: any ONE row's promotion in `scouter/core/vocab.py` must fail this test,
+#: not just the golden fixture. `test_cb_promoted_rows_matches_vocab_
+#: non_hue_colorbalancergb_rows` below asserts this literal list equals a
+#: fresh derivation from `vocab.PARAMS`, so it cannot silently drift.
 _CB_PROMOTED_ROWS = (
     "contrast", "global_chroma", "global_saturation", "global_vibrance",
     "shadows_luminance", "shadows_chroma",
@@ -92,17 +93,27 @@ _CB_PROMOTED_ROWS = (
 )
 
 
+def test_cb_promoted_rows_matches_vocab_non_hue_colorbalancergb_rows():
+    """Derives the promoted-row set independently from `vocab.PARAMS`
+    (every colorbalancergb row that does not `wraps`, i.e. every non-hue
+    row) and asserts it equals the literal `_CB_PROMOTED_ROWS` above, so a
+    new non-hue colorbalancergb row landing in vocab without a matching
+    entry here (and without its own probe) is caught, not silently
+    skipped."""
+    derived = {s.param for s in vocab.PARAMS if s.module == "colorbalancergb" and not s.wraps}
+    assert derived == set(_CB_PROMOTED_ROWS)
+
+
 def test_m1_declared_default_fallback_accepts_the_colorbalancergb_neutral_promotions():
     """Card t_cc03dcb4 (decision row 560, follows t_29a9ef47/rows 548/549/554):
     mirror of the colorzones test above for all 10 `_CB_PROMOTED_ROWS`
-    (were `neutral`-only, excluded from `verified_defaults()` by design, I1
-    of the M1 fix, until a host probe verified each at 0.0 and promoted
-    `default` in `scouter/core/vocab.py`; see docs/measurements.md
-    "colorbalancergb neutral-only defaults" for the run this pins to),
-    driven through the REAL `observe.verified_defaults()`, not a hard-coded
-    dict, so a regression that drops any ONE row's promotion (or reverts
-    the function to `defaults()`, the round-1 false-pass bug) fails this
-    test at that row."""
+    (were `neutral`-only, excluded from `verified_defaults()` by design,
+    until a host probe verified each at 0.0 and promoted `default` in
+    `scouter/core/vocab.py`; see docs/measurements.md "colorbalancergb
+    neutral-only defaults" for the evidence of record), driven through the
+    REAL `observe.verified_defaults()`, not a hard-coded dict, so a
+    regression that drops any ONE row's promotion (or reverts the function
+    to `defaults()`) fails this test at that row."""
     vd = observe.verified_defaults()
     for param in _CB_PROMOTED_ROWS:
         module = "colorbalancergb"

@@ -546,28 +546,30 @@ class ProbeColorbalancergbNeutralDefaultsHostTest(unittest.TestCase):
     test never loosens the tolerance or the two-oracle design to force a
     pass -- it fails loudly instead, per row.
 
-    Fix round 1 (incident inc_f9c5e8f5, card t_cc03dcb4): the first run
-    used FIXED scratch names and no concurrency guard, so an accidental
-    second darktable launch overlapped this one, shared the plugin config
-    and bridge spool, and could read/write either oracle's copy through the
-    OTHER darktable's worker -- oracle A's own sidecar was overwritten
-    before it could be re-inspected. That run's table is discarded (see
-    docs/measurements.md); this version fixes the cause:
-    `hs.assert_no_concurrent_darktable()` (called first, inside
-    `PluginInstall.install()`) refuses before anything is touched if a
-    second darktable process or a pending bridge request/response file is
-    found, and every scratch path below is unique per run (timestamp +
-    pid), asserted absent before use, so a rerun can never open on a stale
-    `library.db` history from an earlier run on the same path (I1).
+    `hs.assert_no_concurrent_darktable()` runs first, before anything else,
+    refusing if a second darktable process or a non-stale pending bridge
+    request/response file is found -- two darktable launches sharing a
+    plugin config, library.db or bridge spool would let one read or write
+    the OTHER's scratch copy through the wrong worker. Every scratch path
+    below is unique per run (timestamp + pid) and asserted absent before
+    use, so a rerun can never open on stale `library.db` history from an
+    earlier run on the same path. See docs/measurements.md "colorbalancergb
+    neutral-only defaults" for the run this test's evidence lives in.
     """
 
     def test_fresh_colorbalancergb_module_defaults_rows_to_neutral(self) -> None:
         from scouter import registry
         from scouter.core import dtbridge, history, vocab
 
+        # Refuse before touching anything if a second darktable or a
+        # non-stale pending bridge request could contaminate this run.
+        # Called here, not from PluginInstall.install(), so a non-host unit
+        # test of PluginInstall never depends on the real host's live spool.
+        hs.assert_no_concurrent_darktable()
+
         hs.SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
 
-        # I1: a unique name per run, so a rerun can never reopen a path
+        # a unique name per run, so a rerun can never reopen a path
         # `library.db` already has colorbalancergb history on.
         stamp = f"{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
         scratch_a = hs.SCRATCH_DIR / f"phase3-cb-neutral-{stamp}-a.ORF"
