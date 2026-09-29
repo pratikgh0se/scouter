@@ -474,15 +474,35 @@ M4 section lists as staying failed after the M1 declared-default fix, b2edf66/ro
 overlapped a second darktable launch through the shared plugin config and bridge spool; oracle A's
 scratch sidecar was overwritten and deleted by the second run before it could be re-inspected, so
 that table is not admissible evidence of record -- same handling as the colorzones.strength 18:41
-discard note above. Fix round 1 landed the cause fixes (unique per-run scratch names + asserted
-absence, `hs.assert_no_concurrent_darktable()` wired into `PluginInstall.install()`, a per-row
-"no other slot moved" check) on this branch; **a clean, serialised, single-launch rerun is
-pending** and will replace this section with its table (run stamp, oracle A/B readings, sentinel
-reads) once it lands. Until then the 10 rows' `default=neutral` promotion in
-`scouter/core/vocab.py` stands on the discarded run's readings (independently corroborated by the
-reviewer's own decode of the surviving oracle-B sidecar: 12 clean single-slot colorbalancergb
-entries, reset byte-identical to the fresh-enable entry) but is not yet backed by an admissible
-host measurement.
+discard note above.
+
+**Clean rerun, 2026-09-29 21:57-21:59** (run stamp `20260929T215704-30296`, chief of staff,
+166.31 s, one foreground darktable launch, preconditions checked first: `pgrep -x darktable`
+empty, no gauntlet run active, spool held only `cli-config`/`heartbeat`, worktree clean):
+
+| row | oracle A (fresh enable) | sentinel requested/decoded | oracle B (post-reset) | verified |
+| --- | --- | --- | --- | --- |
+| colorbalancergb.shadows_luminance | 0.0 | 0.17 / 0.16999995708465576 | 0.0 | yes |
+| colorbalancergb.shadows_chroma | 0.0 | 0.16 / 0.1599999964237213 | 0.0 | yes |
+| colorbalancergb.midtones_luminance | 0.0 | 0.15 / 0.15000000596046448 | 0.0 | yes |
+| colorbalancergb.midtones_chroma | 0.0 | 0.14 / 0.14000000059604645 | 0.0 | yes |
+| colorbalancergb.highlights_luminance | 0.0 | 0.13 / 0.12999999523162842 | 0.0 | yes |
+| colorbalancergb.highlights_chroma | 0.0 | 0.12 / 0.11999999731779099 | 0.0 | yes |
+| colorbalancergb.global_chroma | 0.0 | 0.11 / 0.11000001430511475 | 0.0 | yes |
+| colorbalancergb.global_saturation | 0.0 | 0.1 / 0.10000002384185791 | 0.0 | yes |
+| colorbalancergb.global_vibrance | 0.0 | 0.09 / 0.09000003337860107 | 0.0 | yes |
+| colorbalancergb.contrast | 0.0 | 0.08 / 0.07999998331069946 | 0.0 | yes |
+
+Every sentinel decoded in its own slot; every row's oracle A (fresh-enable) reading agreed with
+oracle B's post-reset reading within `vocab.default_tolerance` (1e-6 fallback). All 10 rows
+verified at exactly 0.0 -- the same value each row's `neutral` already declared, matching the
+discarded run's numbers exactly. `scouter/core/vocab.py`'s `default=neutral` promotion for these
+10 rows is now backed by this admissible measurement. This unblocks the M1 declared-default
+fallback (`gauntlet/evaluate.py`) for the matching coverage cases
+(`cov-colorbalancergb.{contrast,global_chroma,global_saturation,global_vibrance,
+highlights_chroma,highlights_luminance,midtones_chroma,midtones_luminance,shadows_chroma,
+shadows_luminance}-{olympus,sony_a7}-{set_lo,set_neutral}`, 26 cases total) on their next gauntlet
+run.
 
 ### Signs (scout.stats, 512 px)
 
