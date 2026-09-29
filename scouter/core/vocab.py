@@ -299,23 +299,33 @@ PARAMS: tuple[ParamSpec, ...] = (
               0.1, "xmp", None, False, "tone_mapper",
               "steepens or flattens the middle of the tone curve",
               "shadow and highlight detail at the two ends", ("iop/filmicrgb/contrast",)),
-    #: Batch 3 item 9, fix round 1 (row 531): NOT a `default=` -- this is a
-    #: `default_candidate` (see the field's own docstring: only
-    #: `exec_looks.py`'s `chart_golden` may read it; `darkroom.py`,
-    #: `moves.py` and the coverage/observe gauntlet layers may not). Evidence
-    #: is the proof3-20260929 gauntlet run, not a host probe: on two
-    #: cameras (olympus, sony_a7; cases cov-colorzones.strength-{olympus,
+    #: Batch 3 item 9, fix round 1 (row 531): candidate evidence was the
+    #: proof3-20260929 gauntlet run, not a host probe: on two cameras
+    #: (olympus, sony_a7; cases cov-colorzones.strength-{olympus,
     #: sony_a7}-set_lo), `darkroom.set colorzones.strength 0.0` produced no
     #: `colorzones.*` key in the before/after params and `history_end`
     #: unchanged (12 -> 12, fingerprints unchanged), consistent with
-    #: darktable already holding 0.0 -- but not yet a
-    #: `tests/test_host_phase3.py` host probe on a fresh, untouched frame,
-    #: so it stays a candidate. Both cases stay honestly `commit_timeout`
-    #: until a host probe promotes this to `default=`.
+    #: darktable already holding 0.0.
+    #:
+    #: PROMOTION (card t_29a9ef47, decision rows 548/549):
+    #: `tests/test_host_phase3.py::ProbeColorzonesStrengthDefaultHostTest`
+    #: (host run 2026-09-29, chief of staff, darktable exited cleanly)
+    #: measured a fresh colorzones module's `strength` (internal units
+    #: 0..2, display_scale 100 i.e. GUI 100% == internal 1.0) at exactly
+    #: 0.0, via two INDEPENDENT XMP-grounded oracles, each on its own
+    #: scratch copy/darktable launch (never `dt.gui.action`'s post-write
+    #: `status` echo, row 430/461 class): oracle A, a fresh enable with no
+    #: other change, read `strength=0.0`; oracle B, after a 0.16 sentinel
+    #: proved slot 127 live (`strength=0.1600027084350586`, within the
+    #: probe's float32-floor tolerance of 0.16) and a `module.reset`, read
+    #: `strength=0.0` again. `docs/measurements.md`'s "colorzones.strength
+    #: default probe" section (below the phase 3 host run table) has the
+    #: full line. PASS: promoted from `default_candidate` to the cited
+    #: `default` below.
     ParamSpec("colorzones", "strength", "color zones › mix", "%", 100.0, 0.0, 2.0, 0.1,
               "xmp", None, False, "color_zones",
               "scales every colour-zone adjustment at once", "the zones you set in darktable",
-              ("iop/colorzones/mix",), default_candidate=0.0),
+              ("iop/colorzones/mix",), default=0.0),
     ParamSpec("colorzones", "curves", "color zones › (zone curves)", "—", 1.0, 0.0, 0.0, 0.0,
               "none", None, False, "color_zones", "", "", (), False,
               "zones are curve nodes, not sliders: no dt.gui.action sets a zone value; "

@@ -444,6 +444,23 @@ global saturation f19 and sigmoid skew f1 agree with the editor benchmark.
 Hue values are stored in degrees, and a freshly enabled module holds 0° (the
 default the hue rows now declare). Fixture: `tests/fixtures/phase3-host.xmp`.
 
+### colorzones.strength default (card t_29a9ef47, decision rows 548/549, 2026-09-29)
+
+`tests/test_host_phase3.py::ProbeColorzonesStrengthDefaultHostTest` (host run 2026-09-29 18:49,
+chief of staff, darktable exited cleanly, 125 s), two independent oracles each on their own
+scratch copy and darktable launch:
+
+> oracle A (fresh enable) strength=0.0; sentinel (0.16 requested) strength=0.1600027084350586;
+> oracle B (post-reset) strength=0.0 (internal units 0..2, display_scale 100 i.e. GUI 100% ==
+> internal 1.0)
+
+The sentinel read confirms slot 127 (above) was live on this run, so the 0.0 reads are not a
+dead/zero-filled slot. Oracle A and oracle B agree: `colorzones.strength`'s darktable default is
+0.0. Promoted `default_candidate` to `default=0.0` in `scouter/core/vocab.py`, citing this run. An
+earlier same-day run (18:41, one shared scratch copy/session for both oracles) read oracle A back
+as the sentinel itself -- a contaminated measurement, discarded; the design was fixed to give each
+oracle its own copy/launch before the 18:49 run above.
+
 ### Signs (scout.stats, 512 px)
 
 | move | measured | expected | verdict |

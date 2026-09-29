@@ -180,13 +180,18 @@ class DarkroomCoreTest(_DarkroomFixture):
                 darkroom.set_param(module="exposure", param="exposure", value=4.25)
         self._commit_patcher.start()
 
-    def test_commit_timeout_for_a_param_with_no_declared_default_still_raises(self) -> None:
-        """Batch 3 item 9 (row 531), fix round 1 (reviewer finding 1):
-        `colorzones.strength` declares neither `neutral` nor `default`
-        (vocab.py), so when the module has no active history entry
-        `_effective_current` cannot say what darktable already holds --
-        `current` is `None`, and neither `matched_before` nor the
-        post-timeout XMP readback can confirm a no-op.
+    def test_commit_timeout_for_a_real_change_off_the_declared_default_still_raises(self) -> None:
+        """Batch 3 item 9 (row 531), fix round 1 (reviewer finding 1);
+        updated for card t_29a9ef47 (rows 548/549) after the host probe
+        promoted `colorzones.strength`'s `default` from `default_candidate`
+        to `0.0` (`tests/test_host_phase3.py::
+        ProbeColorzonesStrengthDefaultHostTest`, host run 2026-09-29).
+        `colorzones.strength` now HAS a declared default, but 37.0 is not
+        it -- `_effective_current` reads `current=0.0` (the declared
+        default, since the fixture has no active colorzones history entry),
+        so `matched_before = _close(37.0, 0.0)` is still False, and neither
+        `matched_before` nor the post-timeout XMP readback can confirm a
+        no-op for a request that far off the default.
 
         This is a NEGATIVE proof, not the positive one fix round 0 wrongly
         shipped: `FakeBridge._action` (this file, `_action`) unconditionally
@@ -196,16 +201,16 @@ class DarkroomCoreTest(_DarkroomFixture):
         "never relabelled as a value"; `darktable_mcp/lua/darktable_mcp.lua`
         calls it a normalised slider position). An echoing status therefore
         proves nothing about what the sidecar holds -- a `set` to 37 (well
-        past `colorzones.strength`'s own `hi=2.0`, and NOT the fixture's
-        baseline) that never lands (sidecar genuinely unchanged, exactly
-        the proof3 shape) must still raise `commit_timeout`, the same as
+        past `colorzones.strength`'s own `hi=2.0`, and NOT its default)
+        that never lands (sidecar genuinely unchanged, exactly the proof3
+        shape) must still raise `commit_timeout`, the same as
         `test_commit_timeout_still_raises_when_the_readback_disagrees`
         does for `exposure`. Fix round 0 (commit ed903f3) trusted that echo
         as an oracle and returned `committed=True` for this exact call --
         the row 430/461 failure class. This must pass on main and on this
         branch, and fail (raise nothing / return committed) against
         ed903f3."""
-        self.assertIsNone(darkroom._declared_default("colorzones", "strength"))
+        self.assertEqual(darkroom._declared_default("colorzones", "strength"), 0.0)
         self._commit_patcher.stop()
         with mock.patch(
             "scouter.core.darkroom._commit",
@@ -214,6 +219,45 @@ class DarkroomCoreTest(_DarkroomFixture):
             with self.assertRaises(CommitTimeout):
                 darkroom.set_param(module="colorzones", param="strength", value=37.0)
         self._commit_patcher.start()
+
+    def test_commit_timeout_for_the_declared_default_resolves_as_a_noop(self) -> None:
+        """Card t_29a9ef47 (decision rows 548/549): the positive case the
+        promotion above was FOR. The two P0 gauntlet cases this closes
+        (`cov-colorzones.strength-{olympus,sony_a7}-set_lo`) are exactly
+        this shape: `darkroom.set colorzones.strength 0.0` on a frame with
+        no colorzones history entry (this suite's real fixture,
+        `P6281348.ORF.xmp`, matches the olympus case's frame) -- darktable
+        already holds 0.0 (its own default), so the write lands no new
+        history item and the commit times out for real, exactly like
+        `test_commit_timeout_is_satisfied_by_a_confirming_readback` above
+        for `exposure`.
+
+        Before the promotion (`default_candidate` only, `default=None`),
+        `_effective_current` returned `(None, "xmp")` for this exact call --
+        RED on 52c1d14 (pre-promotion): this test raises `CommitTimeout`
+        there, the same failure `cov-colorzones.strength-*-set_lo` hit on
+        the host. After promotion, `_effective_current` reads
+        `current=0.0, source="default"` (no code in `darkroom.py` changed
+        to get there -- only `vocab.py`'s declared `default`), so
+        `matched_before = _close(0.0, 0.0)` is True and the post-timeout
+        readback (which ALSO reads the declared default, since the
+        fixture's sidecar still has no colorzones entry) confirms it: GREEN.
+        No `dt.gui.action` status oracle is involved anywhere in this path
+        (`FakeBridge._action`'s echo is asserted meaningless in the sibling
+        test above; this test does not even need it to matter, since the
+        no-op resolves before any echo is consulted)."""
+        self._commit_patcher.stop()
+        with mock.patch(
+            "scouter.core.darkroom._commit",
+            side_effect=CommitTimeout("darktable did not write the sidecar"),
+        ):
+            result = darkroom.set_param(module="colorzones", param="strength", value=0.0)
+        self._commit_patcher.start()
+        self.assertTrue(result.committed)
+        self.assertTrue(result.noop)
+        self.assertTrue(
+            any("no history change to write" in w for w in result.warnings), result.warnings
+        )
 
     def test_dry_run_sends_no_action_and_resolves_nothing(self) -> None:
         result = darkroom.set_param(module="exposure", param="exposure", value=2.0, dry_run=True)
