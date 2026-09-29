@@ -491,6 +491,184 @@ class ProbeColorzonesStrengthDefaultHostTest(unittest.TestCase):
                                msg="host default disagrees with vocab.py's declared default")
 
 
+_CB_NEUTRAL_SCRATCH_A = hs.SCRATCH_DIR / "phase3-colorbalancergb-neutral-default-a.ORF"
+_CB_NEUTRAL_SCRATCH_B = hs.SCRATCH_DIR / "phase3-colorbalancergb-neutral-default-b.ORF"
+
+#: The 10 colorbalancergb rows that carry only `neutral` today (no
+#: host-verified `default`) and gate the 26 coverage cases
+#: m1-default-report.md's "Fix round 1" M4 section lists as staying failed
+#: after the M1 declared-default fallback (b2edf66, decision rows 548/549):
+#: the fallback only credits a row with a verified `default`, never
+#: `neutral` (I1 of that fix). The hue rows (`shadows_hue`/`midtones_hue`/
+#: `highlights_hue`) already declare a host-verified `default`
+#: (`_CB_HUE_DEFAULT`, `scouter/core/vocab.py`) and are NOT probed here.
+_CB_NEUTRAL_ROWS = (
+    "shadows_luminance", "shadows_chroma",
+    "midtones_luminance", "midtones_chroma",
+    "highlights_luminance", "highlights_chroma",
+    "global_chroma", "global_saturation", "global_vibrance",
+    "contrast",
+)
+
+
+@unittest.skipUnless(RUN, REASON)
+@pytest.mark.host
+class ProbeColorbalancergbNeutralDefaultsHostTest(unittest.TestCase):
+    """Card t_cc03dcb4 (decision row 560; follows `t_29a9ef47`, rows
+    548/549/554): host-verifies the darktable default for the 10
+    colorbalancergb rows in `_CB_NEUTRAL_ROWS`, exactly the rows
+    `m1-default-report.md` names as neutral-only.
+
+    Same two-oracle design as `ProbeColorzonesStrengthDefaultHostTest`
+    (fresh-enable vs. mandatory-sentinel-then-reset, each its own scratch
+    copy and darktable launch, never trusting `dt.gui.action`'s post-write
+    `status` echo -- rows 430/461/548), batched across all 10 rows within
+    each oracle's ONE launch because darktable writes every colorbalancergb
+    param into a SINGLE history entry per commit (xmp.py's
+    `("colorbalancergb", 5)` named-slot layout, task 12's slot probe):
+
+    - Oracle A: on its OWN fresh scratch copy and its OWN darktable launch,
+      enable colorbalancergb with no other change, commit once, decode the
+      newest `colorbalancergb` history entry, read all 10 named slots.
+    - Oracle B: on a SEPARATE fresh scratch copy and a SEPARATE darktable
+      launch, first prove every slot is LIVE on this host/build (the
+      sentinel is mandatory, per the colorzones design) by setting a
+      distinct in-range sentinel (`sentinel_for`) on each of the 10 rows in
+      turn, committing and decoding after EACH set (so a dead or colliding
+      slot fails at its own row, never silently smoothed over by the next
+      row's write), asserting each decodes back near its own sentinel.
+      Then reset colorbalancergb to its defaults, commit once, and decode
+      all 10 slots again.
+
+    A row is verified only when its sentinel read back live AND oracle A's
+    fresh-enable reading agrees with oracle B's post-reset reading within
+    `vocab.default_tolerance` (1e-6 fallback -- no darktable source found
+    citing a non-zero declared default for any of these 10 fields, same
+    reasoning as `colorzones.strength`). A row that disagrees, or whose
+    sentinel does not read back live, is recorded as NOT verified; this
+    test never loosens the tolerance or the two-oracle design to force a
+    pass -- it fails loudly instead, per row.
+    """
+
+    def test_fresh_colorbalancergb_module_defaults_rows_to_neutral(self) -> None:
+        from scouter import registry
+        from scouter.core import dtbridge, history, vocab
+
+        hs.SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+
+        def newest_decoded(image: str) -> dict:
+            entries = [e for e in history.read(image).entries if e.operation == "colorbalancergb"]
+            self.assertTrue(entries, "no colorbalancergb history entry")
+            entry = max(entries, key=lambda e: e.num)
+            self.assertIsNotNone(entry.decoded, entry.reason)
+            return entry.decoded
+
+        install = hs.PluginInstall()
+        install.install()
+        try:
+            # Oracle A: its own scratch copy, its own launch, quit before
+            # oracle B's copy even exists -- nothing it does can touch A.
+            shutil.copy(hs.HERO, _CB_NEUTRAL_SCRATCH_A)
+            Path(str(_CB_NEUTRAL_SCRATCH_A) + ".xmp").unlink(missing_ok=True)
+            image_a = str(_CB_NEUTRAL_SCRATCH_A)
+            proc = hs.launch(_CB_NEUTRAL_SCRATCH_A)
+            try:
+                hs.wait_ready()
+                self.assertTrue(settle(dtbridge.call),
+                                f"control path {CONTROL_PATH} did not answer after settle")
+                enabled = registry.call("darkroom.enable", "cli", module="colorbalancergb")
+                self.assertTrue(enabled.ok, enabled.error)
+                committed = registry.call("history.commit", "cli", image=image_a)
+                self.assertTrue(committed.ok, committed.error)
+                decoded_a = newest_decoded(image_a)
+            finally:
+                hs.quit_darktable(proc)
+
+            # Oracle B: a separate scratch copy, a separate launch.
+            # Sentinel first (mandatory, one row at a time), then reset.
+            shutil.copy(hs.HERO, _CB_NEUTRAL_SCRATCH_B)
+            Path(str(_CB_NEUTRAL_SCRATCH_B) + ".xmp").unlink(missing_ok=True)
+            image_b = str(_CB_NEUTRAL_SCRATCH_B)
+            proc = hs.launch(_CB_NEUTRAL_SCRATCH_B)
+            sentinels: dict[str, float] = {}
+            decoded_sentinel: dict[str, Any] = {}
+            try:
+                hs.wait_ready()
+                self.assertTrue(settle(dtbridge.call),
+                                f"control path {CONTROL_PATH} did not answer after settle")
+                enabled = registry.call("darkroom.enable", "cli", module="colorbalancergb")
+                self.assertTrue(enabled.ok, enabled.error)
+                for k, param in enumerate(_CB_NEUTRAL_ROWS):
+                    spec = vocab.spec("colorbalancergb", param)
+                    self.assertIsNotNone(spec, f"no vocab row for colorbalancergb.{param}")
+                    sentinel = sentinel_for(spec, k)
+                    r = registry.call("darkroom.set", "cli", module="colorbalancergb",
+                                      param=param, value=sentinel)
+                    if not r.ok and (r.error or {}).get("code") == "commit_timeout":
+                        # Slot already held this rounded value (an earlier
+                        # run's sentinel survived in this scratch copy's
+                        # base sidecar): one retry with a shifted sentinel,
+                        # same as Phase3LiveHostTest.test_1.
+                        sentinel = round(sentinel - 0.01, 2)
+                        r = registry.call("darkroom.set", "cli", module="colorbalancergb",
+                                          param=param, value=sentinel)
+                    self.assertTrue(r.ok, f"colorbalancergb.{param}: sentinel set failed: {r.error}")
+                    committed = registry.call("history.commit", "cli", image=image_b)
+                    self.assertTrue(committed.ok, committed.error)
+                    sentinels[param] = sentinel
+                    decoded_sentinel[param] = newest_decoded(image_b).get(param)
+
+                reset = registry.call("darkroom.reset", "cli", module="colorbalancergb",
+                                       confirm=True)
+                self.assertTrue(reset.ok, reset.error)
+                committed = registry.call("history.commit", "cli", image=image_b)
+                self.assertTrue(committed.ok, committed.error)
+                decoded_reset = newest_decoded(image_b)
+            finally:
+                hs.quit_darktable(proc)
+        finally:
+            install.restore()
+
+        # Every row's three readings, printed BEFORE any value assertion
+        # below can fail, so one host run always yields the measurement
+        # even on a FAIL.
+        lines = [
+            "\n## Phase 3 colorbalancergb neutral-only defaults probe "
+            f"({time.strftime('%Y-%m-%d %H:%M')})\n",
+            "| row | oracle A (fresh enable) | sentinel requested/decoded | "
+            "oracle B (post-reset) | verified |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        failures = []
+        for param in _CB_NEUTRAL_ROWS:
+            a = decoded_a.get(param)
+            s_req = sentinels[param]
+            s_dec = decoded_sentinel[param]
+            b = decoded_reset.get(param)
+            tolerance = vocab.default_tolerance("colorbalancergb", param, fallback=1e-6)
+            # The sentinel only needs to prove the slot is LIVE (not dead,
+            # not zero-filled, not a different slot) -- 1e-4 mirrors the
+            # sentinel-slot match tolerance `sentinel_slots` uses elsewhere
+            # in this file, well inside any of these rows' own step.
+            sentinel_ok = isinstance(s_dec, (int, float)) and abs(s_dec - s_req) <= 1e-4
+            reset_ok = (isinstance(a, (int, float)) and isinstance(b, (int, float))
+                        and abs(a - b) <= tolerance)
+            verified = sentinel_ok and reset_ok
+            lines.append(f"| colorbalancergb.{param} | {a!r} | {s_req!r}/{s_dec!r} | {b!r} | "
+                         f"{'yes' if verified else 'NO'} |")
+            if not verified:
+                failures.append(
+                    f"colorbalancergb.{param}: sentinel_ok={sentinel_ok} "
+                    f"(requested {s_req!r} decoded {s_dec!r}), reset_ok={reset_ok} "
+                    f"(oracle A={a!r} oracle B={b!r}, tolerance={tolerance!r})")
+        _record("\n".join(lines) + "\n")
+
+        self.assertFalse(
+            failures,
+            "colorbalancergb rows failed host verification (never verified by loosening "
+            "tolerance -- these stay neutral-only):\n" + "\n".join(failures))
+
+
 @unittest.skipUnless(RUN, REASON)
 @pytest.mark.host
 class Phase3LiveHostTest(unittest.TestCase):
