@@ -128,18 +128,31 @@ class LateFlushNoopIntentTest(unittest.TestCase):
         EXAMPLES["genuine_early_noop_stays_a_noop"]  # documents the case
         # Oracle A: no history movement at all -- the scope guard's own
         # contract, not a recorded case (see the JSON's "source").
-        # Oracle B: replay with NO sidecar mutation in the mocked `_commit`.
-        # `enable`, not `nudge`: `enable` knows its real target (the module
-        # is already enabled in the fixture), so its early-noop confirmation
-        # is a genuine XMP readback, unaffected by t_fcf77055 (`nudge` has
-        # no known target and no longer resolves an unconfirmed timeout at
-        # all -- see `test_a_nudge_whose_status_echoes_the_already_on_disk_
-        # value_still_raises` in test_darkroom_core.py).
+        # Oracle B, `enable`: it knows its real target (the module is
+        # already enabled in the fixture), so its early-noop confirmation
+        # is a genuine XMP readback, unaffected by t_fcf77055.
         with mock.patch("scouter.core.darkroom._commit",
                         side_effect=CommitTimeout("darktable did not write the sidecar in time")):
             result = darkroom.enable(module="exposure")
         self.assertTrue(result.committed)
         self.assertTrue(any("no new sidecar" in w for w in result.warnings), result.warnings)
+
+    def test_a_nudge_has_no_known_target_so_its_own_timeout_now_raises(self):
+        """t_fcf77055 (row 548): `nudge` (unlike `enable`) has no known
+        target -- darktable picks a step's destination, not Scouter -- so it
+        cannot tell a genuine early noop from a `status` coincidence without
+        trusting `status` as a value, which the Lua plugin and design spec
+        7.3 both forbid. A commit timeout with no real XMP movement must now
+        raise, not fall back to today's honest-noop text; the old nudge
+        shape of `test_genuine_early_noop_stays_a_noop` above (status
+        matching the fixture's own unchanged value) is this test."""
+        self.bridge.responses["darkroom.action"] = lambda p: {
+            "nan": False, "status": 1.5500002, "view": "darkroom", **p,
+        }
+        with mock.patch("scouter.core.darkroom._commit",
+                        side_effect=CommitTimeout("darktable did not write the sidecar in time")):
+            with self.assertRaises(CommitTimeout):
+                darkroom.nudge(module="exposure", param="exposure", steps=1)
 
     def test_scenario_and_guide_late_flush_cases_are_the_same_root_cause(self):
         # Documentary examples (row 523): both are the same `set_param`
