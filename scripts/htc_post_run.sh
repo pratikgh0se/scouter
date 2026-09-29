@@ -58,20 +58,16 @@ SCRIPT_HOME="${HTC_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # its own `.venv` -- resolve, in order: an explicit $SCOUTER_PYTHON, this
 # repo's own `.venv`, then the MAIN checkout's `.venv` (found via git's
 # common dir, which a worktree always has and a plain checkout's own root
-# equals), before falling back to a bare `python3` on PATH.
-if [[ -n "${SCOUTER_PYTHON:-}" && -x "${SCOUTER_PYTHON}" ]]; then
-  PY="$SCOUTER_PYTHON"
-elif [[ -x "$SCRIPT_HOME/.venv/bin/python3" ]]; then
-  PY="$SCRIPT_HOME/.venv/bin/python3"
-else
-  GIT_COMMON_DIR="$(git -C "$SCRIPT_HOME" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-  MAIN_ROOT="$([[ -n "$GIT_COMMON_DIR" ]] && dirname "$GIT_COMMON_DIR" || true)"
-  if [[ -n "$MAIN_ROOT" && -x "$MAIN_ROOT/.venv/bin/python3" ]]; then
-    PY="$MAIN_ROOT/.venv/bin/python3"
-  else
-    PY=python3
-  fi
-fi
+# equals), before falling back to a bare `python3` on PATH. Now the SAME
+# CODE as scripts/mutation_check.sh (card t_7a05352a): both source
+# scripts/_python.sh, which also adds the `.git`-basename guard this chain
+# lacked (excludes a bare-repo sibling venv / a submodule's nested common
+# dir -- neither is this repo's main checkout).
+THIS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./_python.sh
+source "$THIS_SCRIPT_DIR/_python.sh"
+resolve_scouter_python "$SCRIPT_HOME"
+PY="$PYTHON"
 
 say() { echo "[$(date '+%F %T')] $*"; }
 

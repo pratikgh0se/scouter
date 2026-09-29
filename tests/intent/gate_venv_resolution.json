@@ -1,36 +1,62 @@
 {
-  "about": "Zenkai Rules Z1 intent examples: card t_0f1197e6 (row 478). scripts/mutation_check.sh resolved the venv from the script's OWN checkout (SCRIPT_HOME) only, so a linked git worktree added without its own `.venv` symlink fell through to a bare `python3` on PATH -- usually one with no pytest, so `make gate` failed the B0 precheck (exit 2) everywhere except the main checkout. Fix round 1 (Opus review) adopts the same order as the sibling scripts/htc_post_run.sh: $SCOUTER_PYTHON, then this checkout's own venv, then the MAIN checkout's venv found via `git rev-parse --git-common-dir` (guarded to a `.git` basename, so it never picks a bare-repo sibling's venv or a submodule's nested common dir), before falling back to bare `python3` on PATH. Run by tests/intent/test_gate_venv_resolution_intent.py against the real scripts/mutation_check.sh, copied byte-for-byte into a throwaway fixture git repo (never rewritten -- production code, not a mock) with real venvs built by `python3 -m venv --without-pip` (real interpreters, not stub executables) and a linked worktree, exactly mirroring the bug's reproduction. Two real oracles per example (Z2): the resolved interpreter's own reported path (identity-compared without chasing a venv's `bin/python3` symlink back to its base interpreter), AND that interpreter's own `sys.prefix` when actually run.",
-  "subject": "scripts/mutation_check.sh (the PYTHON resolution chain)",
+  "about": "Zenkai Rules Z1 intent examples: card t_0f1197e6 (row 478) and its follow-up t_7a05352a. scripts/mutation_check.sh and scripts/htc_post_run.sh used to each hand-roll the same $SCOUTER_PYTHON -> own .venv -> MAIN checkout's .venv (via git's common dir) -> bare python3 chain, but only mutation_check.sh's copy guarded the common-dir lookup to a `.git` basename -- htc_post_run.sh's copy would wrongly pick a bare-repo sibling's `.venv` (a directory beside `repo.git`, not this repo's own main checkout) or a submodule's nested common dir. t_7a05352a extracts the one guarded chain into scripts/_python.sh (resolve_scouter_python), sourced by both scripts, so the duplication and the gap are both gone. Examples with target 'direct' exercise resolve_scouter_python itself (the real, unmodified scripts/_python.sh, sourced fresh per example via a tiny bash -c harness -- never rewritten or stubbed); examples with target 'mutation_check_sh' / 'htc_post_run_sh' are wiring checks confirming each script really sources the shared file and surfaces its result, run against a byte-for-byte copy of the real script. Two real oracles per example (Z2): the resolved interpreter's own reported path (identity-compared without chasing a venv's `bin/python3` symlink back to its base interpreter), AND that interpreter's own `sys.prefix` when actually run.",
+  "subject": "scripts/_python.sh (resolve_scouter_python), sourced by scripts/mutation_check.sh and scripts/htc_post_run.sh",
   "examples": [
     {
       "id": "worktree-without-own-venv-uses-main-checkouts-venv",
       "input": {"scenario": "main_venv", "scouter_python": null, "own_venv": false},
-      "expect": {"resolved_is": "main_venv", "prefix_is": "main_venv"},
+      "expect": {"resolved_is": "main_venv"},
+      "target": "direct",
       "source": "row 478: a bare `git worktree add` (no .venv symlink, no venv of its own) must still find the main checkout's real venv via git's common dir, not fall back to a pytest-less system python3"
     },
     {
       "id": "scouter_python-env-var-overrides-everything",
       "input": {"scenario": "main_venv", "scouter_python": "override", "own_venv": false},
-      "expect": {"resolved_is": "override", "prefix_is": "override"},
+      "expect": {"resolved_is": "override"},
+      "target": "direct",
       "source": "explicit $SCOUTER_PYTHON must win even when a main-checkout venv is also resolvable, so a caller can always point at a specific interpreter; the override target is a dedicated second venv, distinct from both the main venv and the test's own interpreter (review I1)"
     },
     {
       "id": "no-venv-anywhere-falls-back-to-system-python3-unchanged",
       "input": {"scenario": "no_venv", "scouter_python": null, "own_venv": false},
-      "expect": {"resolved_is": "system", "prefix_is": "system"},
+      "expect": {"resolved_is": "system"},
+      "target": "direct",
       "source": "row 478 done-when is additive only: with no override, no venv of the worktree's own, and no main-checkout venv at all, the pre-existing SCRIPT_HOME/.venv-then-bare-python3 fallback must be unchanged"
     },
     {
       "id": "worktree-with-its-own-venv-uses-its-own-not-mains",
       "input": {"scenario": "main_venv", "scouter_python": null, "own_venv": true},
-      "expect": {"resolved_is": "own_venv", "prefix_is": "own_venv"},
+      "expect": {"resolved_is": "own_venv"},
+      "target": "direct",
       "source": "review I3: this repo's other resolver (scripts/htc_post_run.sh) checks the checkout's own venv BEFORE the main checkout's, and mutation_check.sh must match -- a worktree with its own real venv (e.g. for a dependency bump) must not be shadowed by the main checkout's"
     },
     {
       "id": "ambient-PYTHON-env-is-ignored",
       "input": {"scenario": "main_venv", "scouter_python": null, "own_venv": false, "ambient_python": true},
-      "expect": {"resolved_is": "main_venv", "prefix_is": "main_venv"},
+      "expect": {"resolved_is": "main_venv"},
+      "target": "direct",
       "source": "review R2-I1: round 1's `[[ -z \"${PYTHON:-}\" ]]` guard never cleared PYTHON first, so any pre-existing PYTHON in the environment (including `make gate ... PYTHON=x`, common in CI and dev shells) bypassed the whole resolution chain -- PYTHON must be reset to empty before the chain runs, so only $SCOUTER_PYTHON and the venv lookups ever set it"
+    },
+    {
+      "id": "bare-repo-sibling-venv-is-excluded-by-git-guard",
+      "input": {"scenario": "bare_repo_sibling", "scouter_python": null, "own_venv": false},
+      "expect": {"resolved_is": "system"},
+      "target": "direct",
+      "source": "t_0f1197e6 F0 / t_7a05352a: a worktree of a BARE repo (repo.git) has a git-common-dir whose basename is 'repo.git', not '.git' -- a `.venv` sitting beside that bare repo (repo.git's sibling, not this repo's own main checkout) must be excluded by the `.git`-basename guard (M1), the same way a submodule's nested common dir is excluded, and fall through to a bare system python3 instead"
+    },
+    {
+      "id": "mutation-check-sh-sources-the-shared-resolver-worktree-without-own-venv",
+      "input": {"scenario": "main_venv", "scouter_python": null, "own_venv": false},
+      "expect": {"resolved_is": "main_venv"},
+      "target": "mutation_check_sh",
+      "source": "wiring check: scripts/mutation_check.sh must actually source scripts/_python.sh and use its result, not just define the same chain twice -- run against a byte-for-byte copy of the real script"
+    },
+    {
+      "id": "htc-post-run-sh-sources-the-shared-resolver-and-gains-the-git-guard",
+      "input": {"scenario": "bare_repo_sibling", "scouter_python": null, "own_venv": false},
+      "expect": {"resolved_is": "system"},
+      "target": "htc_post_run_sh",
+      "source": "t_0f1197e6 F0 / t_7a05352a done-when: scripts/htc_post_run.sh:58-73 had the SAME chain as mutation_check.sh but without the `.git`-basename guard, so it would wrongly pick a bare-repo sibling's `.venv`. RED against htc_post_run.sh's pre-t_7a05352a chain (no guard -> wrongly resolves 'main_venv'-shaped, i.e. the bare-repo-sibling venv); GREEN once it sources the shared, guarded resolve_scouter_python. Run against a byte-for-byte copy of the real script, print-only mode (no --execute), reading the printed gate command's interpreter path"
     }
   ]
 }

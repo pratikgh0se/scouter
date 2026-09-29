@@ -54,31 +54,14 @@ ROOT="${3:-$SCRIPT_HOME}"
 # working directory's venv by accident), falling back to PATH only when
 # there is none - so the whole chain is self-sufficient from any checkout.
 #
-# Same chain as scripts/htc_post_run.sh (Z8, card t_0f1197e6/row 478):
-# $SCOUTER_PYTHON, then this checkout's own venv, then the MAIN checkout's
-# venv via git's common dir -- so a bare worktree still finds pytest.
-PYTHON=""
-if [[ -n "${SCOUTER_PYTHON:-}" ]]; then
-  if [[ -x "$SCOUTER_PYTHON" ]]; then
-    PYTHON="$SCOUTER_PYTHON"
-  else
-    echo "WARN: SCOUTER_PYTHON=$SCOUTER_PYTHON is not executable; ignoring" >&2
-  fi
-fi
-if [[ -z "${PYTHON:-}" ]]; then
-  if [[ -x "$SCRIPT_HOME/.venv/bin/python3" ]]; then
-    PYTHON="$SCRIPT_HOME/.venv/bin/python3"
-  else
-    # .git basename guard (M1): excludes a bare-repo sibling venv
-    # ($COMMON_DIR/.. beside repo.git) and a submodule's nested common dir
-    # (.git/modules/<name>), neither of which is this repo's main checkout.
-    COMMON_DIR="$(git -C "$SCRIPT_HOME" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-    if [[ "${COMMON_DIR##*/}" == .git && -x "${COMMON_DIR%/.git}/.venv/bin/python3" ]]; then
-      PYTHON="${COMMON_DIR%/.git}/.venv/bin/python3"
-    else
-      PYTHON=python3
-    fi
-  fi
-fi
+# Same chain as scripts/htc_post_run.sh (Z8, card t_0f1197e6/row 478), now
+# the SAME CODE (card t_7a05352a): both source scripts/_python.sh, which
+# defines resolve_scouter_python -- $SCOUTER_PYTHON, then this checkout's
+# own venv, then the MAIN checkout's venv via git's common dir -- so a bare
+# worktree still finds pytest.
+THIS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./_python.sh
+source "$THIS_SCRIPT_DIR/_python.sh"
+resolve_scouter_python "$SCRIPT_HOME"
 
 exec "$PYTHON" "$SCRIPT_HOME/tests/mutation_check.py" --base "$BASE" --head "$HEAD" --repo "$ROOT" $ALLOW_DIRTY

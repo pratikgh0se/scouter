@@ -122,6 +122,9 @@ def copy_gate_scaffolding(dest, repo_root):
     shutil.copy2(repo_root / "Makefile", dest / "Makefile")
     shutil.copy2(repo_root / "scripts" / "merge_gate.sh", dest / "scripts" / "merge_gate.sh")
     shutil.copy2(repo_root / "scripts" / "mutation_check.sh", dest / "scripts" / "mutation_check.sh")
+    # card t_7a05352a: mutation_check.sh now sources its interpreter
+    # resolver from a sibling file rather than inlining the chain.
+    shutil.copy2(repo_root / "scripts" / "_python.sh", dest / "scripts" / "_python.sh")
     shutil.copy2(repo_root / "tests" / "mutation_check.py", dest / "tests" / "mutation_check.py")
     (dest / "scripts" / "merge_gate.sh").chmod(0o755)
     (dest / "scripts" / "mutation_check.sh").chmod(0o755)
