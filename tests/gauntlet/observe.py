@@ -43,12 +43,27 @@ def defaults() -> dict[str, float]:
     return out
 
 
+def verified_defaults() -> dict[str, float]:
+    """{key: darktable module default} from vocab's `default` field ONLY --
+    never `neutral` (review round 1, I1). `default` is declared "only once a
+    real check has established it" (scouter/core/vocab.py); `neutral` is
+    merely the product's own "no effect" belief, not a host measurement.
+    `_m1_default_fallback` (gauntlet/evaluate.py) reads this, not the wider
+    `defaults()` above, so it can only credit a row darktable's own default
+    was actually probed for (e.g. colorzones.strength, rows 548/549)."""
+    from scouter.core import vocab
+
+    return {f"{s.module}.{s.param}": s.default for s in vocab.PARAMS if s.default is not None}
+
+
 def param_meta() -> dict:
     """Product param knowledge the evaluator reads off each snapshot
-    (gauntlet/evaluate.py docstring): defaults, derived keys, null equivalents.
-    `coeff_g2` is inf/unused on these bodies: it decodes 0.0 on a fresh
-    history and None (inf) after a WB write, which is not a change."""
+    (gauntlet/evaluate.py docstring): defaults, verified_defaults, derived
+    keys, null equivalents. `coeff_g2` is inf/unused on these bodies: it
+    decodes 0.0 on a fresh history and None (inf) after a WB write, which is
+    not a change."""
     return {"defaults": defaults(),
+            "verified_defaults": verified_defaults(),
             "derived": {"temperature.temperature": [*WB_STORED, "temperature.tint"],
                         "temperature.tint": [*WB_STORED, "temperature.temperature"]},
             "null_equiv": {"temperature.coeff_g2": 0.0}}

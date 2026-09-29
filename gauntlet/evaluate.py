@@ -9,6 +9,10 @@ Product param knowledge rides on the before/after snapshot dicts next to
 the product):
   `defaults`   {key: module default}; a key the adapter does not know has no
                default and never compares equal to an absent module.
+  `verified_defaults` {key: module default} -- the SUBSET of `defaults` a real
+               host check has established (review round 1, I1; never a
+               product "no effect" belief). `_m1_default_fallback` reads only
+               this narrower table, never the wider `defaults`.
   `derived`    {reported key: [stored keys it is decoded from]}; a move reported
                on the key owns those keys (e.g. a Kelvin read from WB coeffs).
   `null_equiv` {key: value}; an undecodable reading (None) of the key and this
@@ -224,37 +228,44 @@ def _absent_equiv(before: dict, after: dict, key: str, defaults: dict) -> bool:
         and _module_absent(before, m) and _module_at_default(after, m, defaults)
 
 
-def _m1_default_fallback(key: str, unit: str, after: dict, defaults: dict,
+def _m1_default_fallback(key: str, unit: str, after: dict, verified_defaults: dict,
                           obs: Observation) -> float | None:
     """M1's declared-default fallback (decision rows 548, 554): a scored key
     absent from `after` reads as the module's own declared default IF (a)
-    the key has a host-verified default (`after.defaults`) and (b) the
-    module carries no history entry in `after` at all -- together those mean
-    the default is what darktable actually applies, not a guess. A second
-    oracle (Z2) must then agree before the fallback is trusted: the
-    product's own envelope needs a matching call reporting `noop` with
-    `applied` equal to the default (the sidecar side of that same call --
+    the key has a REAL, host-probed default (`verified_defaults`, vocab's
+    `default` field only -- never `neutral`, which is only the product's own
+    "no effect" belief, not a measurement of darktable; review round 1, I1)
+    and (b) the module carries no history entry in `after` at all -- together
+    those mean the default is what darktable actually applies, not a guess.
+
+    A second oracle (Z2) must then agree before the fallback is trusted: the
+    product's own envelope needs EVERY call matching this key (review round
+    1, I2 -- not just the last one, which a real, unverified write earlier in
+    the same case could hide behind) to report `ok` and a `noop` whose
+    `applied` equals the default (the sidecar side of that same evidence --
     "no history entry" -- is condition (b) already). Any disagreement -- a
-    history entry in `after`, no matching call, a call that did not report
-    noop, or an `applied` that does not match -- fails loudly: returns None,
-    same as the key staying absent today."""
-    if key not in defaults:
+    history entry in `after`, no matching call, a call that is not `ok`, did
+    not report noop, or whose `applied` does not match -- fails loudly:
+    returns None, same as the key staying absent today."""
+    if key not in verified_defaults:
         return None
     module = _module(key)
     if not _module_absent(after, module):
         return None
-    default_val = defaults[key]
+    default_val = verified_defaults[key]
     param = key.split(".", 1)[1] if "." in key else key
     matched = [c for c in obs.calls
                if (c.args or {}).get("module") == module and (c.args or {}).get("param") == param]
     if not matched:
         return None
-    data = (matched[-1].envelope or {}).get("data") or {}
-    if not data.get("noop"):
-        return None
-    applied = _num(data.get("applied"))
-    if applied is None or not _same(unit, applied, default_val):
-        return None
+    for c in matched:
+        env = c.envelope or {}
+        data = env.get("data") or {}
+        if not env.get("ok") or not data.get("noop"):
+            return None
+        applied = _num(data.get("applied"))
+        if applied is None or not _same(unit, applied, default_val):
+            return None
     return default_val
 
 
@@ -296,7 +307,7 @@ def _check_m1(i: int, ch: Check, obs: Observation) -> CheckResult:
         got = after.get(t["key"])
         note = ""
         if got is None:
-            got = _m1_default_fallback(t["key"], unit, after, _meta(obs, "defaults"), obs)
+            got = _m1_default_fallback(t["key"], unit, after, _meta(obs, "verified_defaults"), obs)
             if got is not None:
                 note = "declared_default"
         ok = got is not None and _same(unit, got, t["value"], t.get("tol"))

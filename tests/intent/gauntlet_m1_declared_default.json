@@ -1,27 +1,80 @@
 {
-  "about": "Zenkai Rules Z1 intent examples for M1's declared-default fallback in gauntlet/evaluate.py's `_check_m1` (decision rows 548, 554: colorzones.strength got a host-verified declared default 0.0). Before this fix, a scored key absent from `observation.after.params` (no history entry for its module) always read `measured: null` and failed, even when `observation.after.defaults` carried a host-verified default for it and the product's own envelope proved the write was an honest noop at that default -- proof4-20260929's cov-colorzones.strength-{olympus,sony_a7}-set_lo cases. Two independent oracles per example (Z2), mirroring tests/intent/batch3_c5_evaluator_fixtures.json: oracle A reads the raw recorded facts (the envelope's own noop/applied fields, the module's absence from after.params) that a correct evaluator should honour; oracle B is the fixed `evaluate()` scoring the SAME observation. Run by tests/intent/test_gauntlet_m1_declared_default_intent.py.",
-  "subject": "gauntlet/evaluate.py::_check_m1 / _m1_default_fallback",
+  "about": "Zenkai Rules Z1 intent examples for M1's declared-default fallback in gauntlet/evaluate.py's `_check_m1` (decision rows 548, 554: colorzones.strength got a host-verified declared default 0.0). Before this fix, a scored key absent from `observation.after.params` (no history entry for its module) always read `measured: null` and failed, even when the current adapter's `verified_defaults` (tests/gauntlet/observe.py::verified_defaults -- vocab's `default` field ONLY, never `neutral`; review round 1, I1) carried a real, host-probed default for it and the product's own envelope proved EVERY call touching it was an honest noop at that default (review round 1, I2). Two independent oracles per example (Z2), mirroring tests/intent/batch3_c5_evaluator_fixtures.json: oracle A reads the raw recorded/constructed facts (the envelope's own noop/applied/ok fields, the module's absence from after.params, membership in `verified_defaults`) that a correct evaluator should honour; oracle B is the fixed `evaluate()` actually scoring that observation. `tests/intent/test_gauntlet_m1_declared_default_intent.py` loads and RUNS every example below (review round 2, Minor M2) -- `case` examples replay the real proof4-20260929 evidence through the generated case + today's adapter meta; `synthetic` examples build a minimal Case/Observation directly from the fields here and call `evaluate()` on it, the same way `gauntlet/tests/test_evaluate.py`'s unit tests do.",
+  "subject": "gauntlet/evaluate.py::_check_m1 / _m1_default_fallback, tests/gauntlet/observe.py::verified_defaults",
   "examples": [
     {
       "id": "declared-default-with-noop-envelope-scores-pass",
+      "kind": "case",
       "case": "cov-colorzones.strength-olympus-set_lo",
-      "expect": {"score": "pass", "outcome": "verified"},
-      "source": "real proof4-20260929 evidence (tests/fixtures/proof4-20260929/cov-colorzones.strength-olympus-set_lo.json, now mirrored at gauntlet/tests/fixtures/proof4-20260929/): after.params has no colorzones.* key at all (no history entry), after.defaults['colorzones.strength'] == 0.0, and the call's own envelope reports data.noop=true, data.applied=0.0 -- both oracles agree the declared default is what darktable applied, so the fallback measures 0.0 and the M1 equals-0.0 check passes."
+      "expect": {"score": "pass", "outcome": "verified", "measured": 0.0},
+      "source": "real proof4-20260929 evidence (tests/fixtures/proof4-20260929/cov-colorzones.strength-olympus-set_lo.json, now mirrored at gauntlet/tests/fixtures/proof4-20260929/): after.params has no colorzones.* key at all (no history entry), colorzones.strength is in the current adapter's verified_defaults at 0.0 (vocab's `default` field, host-probed -- commit 9ae3978), and the call's own envelope reports data.ok=true, data.noop=true, data.applied=0.0 -- both oracles agree the verified default is what darktable applied, so the fallback measures 0.0 and the M1 equals-0.0 check passes."
     },
     {
-      "id": "key-absent-and-not-in-defaults-still-fails",
+      "id": "key-absent-and-not-in-verified-defaults-still-fails",
+      "kind": "synthetic",
+      "key": "colorzones.strength", "target": 0.0, "unit": "%",
+      "verified_defaults": {},
+      "calls": [{"noop": true, "applied": 0.0, "ok": true}],
       "expect": {"score": "fail", "measured": null},
-      "source": "condition (a) of the fallback: a key with no entry in after.defaults at all (the adapter never declared a host-verified default for it) must not be guessed at -- measured stays null and the case fails exactly as it did before this fix."
+      "source": "condition (a) of the fallback: a key with no entry in the adapter's verified_defaults at all must not be guessed at -- measured stays null and the case fails exactly as it did before this fix."
+    },
+    {
+      "id": "neutral-only-key-not-in-verified-defaults-still-fails",
+      "kind": "synthetic",
+      "key": "grain.strength", "target": 0.0, "unit": "%",
+      "verified_defaults": {},
+      "calls": [{"module": "grain", "param": "strength", "noop": true, "applied": 0.0, "ok": true}],
+      "expect": {"score": "fail", "measured": null},
+      "source": "review round 1, I1's own negative example: grain.strength declares a vocab `neutral` of 0.0 but no `default` -- verified_defaults (tests/gauntlet/observe.py) never includes it, so even an absent module with a fully agreeing noop envelope must not score a pass. This is the case that made the wider `defaults()` table unsafe to use directly."
     },
     {
       "id": "key-absent-but-module-has-a-history-entry-still-fails",
+      "kind": "synthetic",
+      "key": "colorzones.strength", "target": 0.0, "unit": "%",
+      "verified_defaults": {"colorzones.strength": 0.0},
+      "after_extra_params": {"colorzones.curves": 0.5},
+      "calls": [{"noop": true, "applied": 0.0, "ok": true}],
       "expect": {"score": "fail", "measured": null},
-      "source": "condition (b) of the fallback: when the module DOES carry a history entry in after.params (just not for this one key), the default is not necessarily what darktable applied for this key -- the fallback refuses and measured stays null."
+      "source": "condition (b) of the fallback: when the module DOES carry a history entry in after.params (a sibling key of the same module present), the default is not necessarily what darktable applied for THIS key -- the fallback refuses and measured stays null."
     },
     {
-      "id": "non-default-value-with-key-absent-fails-loudly",
+      "id": "non-noop-envelope-with-key-absent-fails-loudly",
+      "kind": "synthetic",
+      "key": "colorzones.strength", "target": 0.0, "unit": "%",
+      "verified_defaults": {"colorzones.strength": 0.0},
+      "calls": [{"noop": false, "applied": 0.0, "ok": true}],
       "expect": {"score": "fail", "measured": null},
-      "source": "the second oracle (Z2): even with the key in defaults and its module absent from after.params, an envelope that does NOT report noop==true with applied==the default (e.g. it claims a real edit, or applied a different value) disagrees with the params-side evidence -- the fallback refuses rather than silently trusting either oracle alone, and the case fails loudly instead of a false pass."
+      "source": "the second oracle (Z2), guard 1: the envelope claims a real, non-noop write even though its applied value happens to equal the default -- the fallback must not trust the params side alone."
+    },
+    {
+      "id": "applied-mismatch-with-key-absent-fails-loudly",
+      "kind": "synthetic",
+      "key": "colorzones.strength", "target": 0.0, "unit": "%",
+      "verified_defaults": {"colorzones.strength": 0.0},
+      "calls": [{"noop": true, "applied": 0.5, "ok": true}],
+      "expect": {"score": "fail", "measured": null},
+      "source": "the second oracle (Z2), guard 2: the envelope reports noop=true but applied does not match the declared default -- a distinct disagreement from guard 1, isolated so either guard alone catches a mutant that drops the other (review round 2, Minor M1)."
+    },
+    {
+      "id": "earlier-unverified-write-then-noop-at-default-still-fails",
+      "kind": "synthetic",
+      "key": "colorzones.strength", "target": 0.0, "unit": "%",
+      "verified_defaults": {"colorzones.strength": 0.0},
+      "calls": [
+        {"noop": false, "applied": 0.5, "ok": true},
+        {"noop": true, "applied": 0.0, "ok": true}
+      ],
+      "expect": {"score": "fail", "measured": null},
+      "source": "review round 1, I2: a real, non-noop write earlier in the same case (claims it committed 0.5, but the module ends up with zero history entries at all -- it never actually landed) followed by a noop set back to the default must not pass just because the LAST matching call agrees. Every matching call must be ok+noop+at-default."
+    },
+    {
+      "id": "envelope-not-ok-with-key-absent-fails-loudly",
+      "kind": "synthetic",
+      "key": "colorzones.strength", "target": 0.0, "unit": "%",
+      "verified_defaults": {"colorzones.strength": 0.0},
+      "calls": [{"noop": true, "applied": 0.0, "ok": false}],
+      "expect": {"score": "fail", "measured": null},
+      "source": "review round 1, I2's \"also\": an ok:false envelope whose data still carries noop:true / a matching applied must not count -- the call itself was refused, so its data is not a trustworthy read of what darktable applied."
     }
   ]
 }

@@ -1563,51 +1563,70 @@ def test_c5_rule_c_nested_clamp_synthetic():
 # evidence: tests/intent/gauntlet_m1_declared_default_fixtures.json /
 # tests/intent/test_gauntlet_m1_declared_default_intent.py) showed a key
 # absent from after.params (no history entry for its module) always read
-# `measured: null` and failed, even when after.defaults carried a
-# host-verified default the product's own envelope confirmed it applied.
-# These four synthetic cases pin the fallback's own conditions directly.
+# `measured: null` and failed, even when a REAL, host-probed vocab default
+# (`verified_defaults`, never `neutral` -- review round 1, I1) existed for it
+# and the product's own envelope confirmed every call touching it applied
+# that default (review round 1, I2: EVERY matching call, not just the last).
 
 
-def _cz_chk():
-    return Check("M1", kind="equals", target={"key": "colorzones.strength", "value": 0.0,
-                                               "unit": "%"})
+def _cz_chk(target=0.0, key="colorzones.strength"):
+    return Check("M1", kind="equals", target={"key": key, "value": target, "unit": "%"})
 
 
-def _cz_case(steps=None):
-    return _edit_case([_cz_chk()], {"changed": False, "key": "colorzones.strength",
-                                    "units": {"colorzones.strength": "%"}},
+def _cz_case(chk=None, steps=None, key="colorzones.strength"):
+    chk = chk or _cz_chk()
+    return _edit_case([chk], {"changed": False, "key": key, "units": {key: "%"}},
                       steps=steps or [Step("darkroom_set", {}, budget_s=3.5, write=True)])
 
 
-def _cz_snap(fp, params=None, defaults=None):
+def _cz_snap(fp, params=None, verified_defaults=None):
     return {"fingerprint": fp, "history_end": 1, "params": params or {},
-            "defaults": defaults or {}}
+            "verified_defaults": verified_defaults or {}}
+
+
+def _cz_call(value, noop, applied, ok=True, module="colorzones", param="strength"):
+    return CallRecord("darkroom_set", {"module": module, "param": param, "value": value},
+                      _ok({"module": module, "param": param, "noop": noop, "applied": applied,
+                          "committed": True}) if ok else
+                      {"ok": False, "outcome": "error:usage",
+                       "error": {"code": "usage", "fix": "x", "message": "no"}},
+                      write=True)
 
 
 def test_m1_declared_default_fallback_scores_pass():
-    """(a) the key is in after.defaults, (b) its module has no history
-    entry in after -- and the envelope's own noop/applied agree with the
-    default: the fallback measures the default and the check passes."""
-    env = _ok({"module": "colorzones", "param": "strength", "noop": True, "applied": 0.0,
-              "committed": True})
-    args = {"module": "colorzones", "param": "strength", "value": 0.0}
-    obs = Observation(calls=[CallRecord("darkroom_set", args, env, write=True)],
-                      before=_cz_snap("a", defaults={"colorzones.strength": 0.0}),
-                      after=_cz_snap("a", defaults={"colorzones.strength": 0.0}))
+    """(a) the key is in verified_defaults (a REAL, host-probed vocab
+    default), (b) its module has no history entry in after -- and the
+    envelope's own noop/applied agree with the default: the fallback
+    measures the default and the check passes."""
+    obs = Observation(calls=[_cz_call(0.0, True, 0.0)],
+                      before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+                      after=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}))
     v = evaluate(_cz_case(), obs, POLICY)
     assert (v.score, v.outcome) == ("pass", "verified")
     assert v.checks[0].measured == 0.0
 
 
-def test_m1_declared_default_fallback_key_not_in_defaults_still_fails():
-    """Condition (a) missing: no declared default for the key at all --
-    measured stays null, exactly as before this fix."""
-    env = _ok({"module": "colorzones", "param": "strength", "noop": True, "applied": 0.0,
-              "committed": True})
-    args = {"module": "colorzones", "param": "strength", "value": 0.0}
-    obs = Observation(calls=[CallRecord("darkroom_set", args, env, write=True)],
-                      before=_cz_snap("a"), after=_cz_snap("a"))
+def test_m1_declared_default_fallback_key_not_in_verified_defaults_still_fails():
+    """Condition (a) missing: no REAL host-probed default for the key at
+    all -- measured stays null, exactly as before this fix."""
+    obs = Observation(calls=[_cz_call(0.0, True, 0.0)], before=_cz_snap("a"), after=_cz_snap("a"))
     v = evaluate(_cz_case(), obs, POLICY)
+    assert v.checks[0].measured is None
+    assert POINTS[v.score] == 0.0
+
+
+def test_m1_declared_default_fallback_neutral_only_key_still_fails():
+    """Review round 1, I1's own negative test: `grain.strength`'s vocab row
+    declares a `neutral` of 0.0 but no `default` at all (darktable's real
+    module default for grain is not known to be 0 -- neutral is only the
+    product's own "no effect" belief). Even absent, in `defaults()`, and
+    with a noop envelope agreeing at 0.0, it must NOT score a pass: this key
+    is never in `verified_defaults`, so condition (a) always fails it."""
+    chk = _cz_chk(target=0.0, key="grain.strength")
+    case = _cz_case(chk=chk, key="grain.strength")
+    obs = Observation(calls=[_cz_call(0.0, True, 0.0, module="grain", param="strength")],
+                      before=_cz_snap("a"), after=_cz_snap("a"))
+    v = evaluate(case, obs, POLICY)
     assert v.checks[0].measured is None
     assert POINTS[v.score] == 0.0
 
@@ -1617,30 +1636,71 @@ def test_m1_declared_default_fallback_module_has_history_still_fails():
     after (a sibling key of the same module is present) -- the default is
     not necessarily what darktable applied for THIS key, so the fallback
     refuses."""
-    env = _ok({"module": "colorzones", "param": "strength", "noop": True, "applied": 0.0,
-              "committed": True})
-    args = {"module": "colorzones", "param": "strength", "value": 0.0}
-    obs = Observation(calls=[CallRecord("darkroom_set", args, env, write=True)],
-                      before=_cz_snap("a", defaults={"colorzones.strength": 0.0}),
+    obs = Observation(calls=[_cz_call(0.0, True, 0.0)],
+                      before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
                       after=_cz_snap("a", params={"colorzones.curves": 0.5},
-                                    defaults={"colorzones.strength": 0.0}))
+                                    verified_defaults={"colorzones.strength": 0.0}))
     v = evaluate(_cz_case(), obs, POLICY)
     assert v.checks[0].measured is None
     assert POINTS[v.score] == 0.0
 
 
-def test_m1_declared_default_fallback_envelope_disagreement_fails_loudly():
-    """Two oracles (Z2): the key is absent and in defaults, and the module
-    has no history entry, but the envelope does NOT confirm a noop at the
-    default (it claims a real, non-default edit) -- the fallback must not
-    trust the params side alone. Fails loudly, same shape as an unpatched
-    absent key."""
-    env = _ok({"module": "colorzones", "param": "strength", "noop": False, "applied": 0.5,
-              "committed": True})
+def test_m1_declared_default_fallback_noop_false_fails_loudly():
+    """Two oracles (Z2), guard 1: the envelope claims a real, non-noop
+    write (even though `applied` happens to equal the default) -- the
+    fallback must not trust the params side alone. Isolated from the
+    `applied`-mismatch guard below (review round 2, Minor M1) so either
+    guard alone catches a mutant that drops the other."""
+    obs = Observation(calls=[_cz_call(0.0, False, 0.0)],
+                      before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+                      after=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}))
+    v = evaluate(_cz_case(), obs, POLICY)
+    assert v.checks[0].measured is None
+    assert POINTS[v.score] == 0.0
+
+
+def test_m1_declared_default_fallback_envelope_not_ok_fails_loudly():
+    """Review round 1, I2's "also": an `ok: false` envelope whose `data`
+    still carries `noop: true`/a matching `applied` must not count -- the
+    call itself was refused, so its `data` is not a trustworthy read of what
+    darktable applied. Requires `env.get("ok")` on top of `data.get("noop")`."""
+    env = {"ok": False, "outcome": "error:usage",
+          "error": {"code": "usage", "fix": "x", "message": "no"},
+          "data": {"module": "colorzones", "param": "strength", "noop": True, "applied": 0.0,
+                    "committed": True}}
     args = {"module": "colorzones", "param": "strength", "value": 0.0}
     obs = Observation(calls=[CallRecord("darkroom_set", args, env, write=True)],
-                      before=_cz_snap("a", defaults={"colorzones.strength": 0.0}),
-                      after=_cz_snap("a", defaults={"colorzones.strength": 0.0}))
+                      before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+                      after=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}))
     v = evaluate(_cz_case(), obs, POLICY)
+    assert v.checks[0].measured is None
+    assert POINTS[v.score] == 0.0
+
+
+def test_m1_declared_default_fallback_applied_mismatch_fails_loudly():
+    """Two oracles (Z2), guard 2: the envelope reports noop=True but
+    `applied` does NOT match the declared default -- isolated from the
+    `noop`-false guard above (review round 2, Minor M1)."""
+    obs = Observation(calls=[_cz_call(0.0, True, 0.5)],
+                      before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+                      after=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}))
+    v = evaluate(_cz_case(), obs, POLICY)
+    assert v.checks[0].measured is None
+    assert POINTS[v.score] == 0.0
+
+
+def test_m1_declared_default_fallback_earlier_unverified_write_fails_loudly():
+    """Review round 1, I2: a real, non-noop write earlier in the SAME case
+    (claims it committed 0.5, but the module ends up with zero history
+    entries at all -- the write never actually landed) followed by a noop
+    set back to the default must not score a pass just because the LAST
+    matching call agrees. Every matching call must be ok+noop+at-default, or
+    the fallback refuses (proof4 review round 1's constructed S1 probe)."""
+    calls = [_cz_call(0.5, False, 0.5), _cz_call(0.0, True, 0.0)]
+    obs = Observation(calls=calls,
+                      before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+                      after=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}))
+    v = evaluate(_cz_case(steps=[Step("darkroom_set", {}, budget_s=3.5, write=True),
+                                 Step("darkroom_set", {}, budget_s=3.5, write=True)]), obs, POLICY)
     assert v.checks[0].measured is None
     assert POINTS[v.score] == 0.0
