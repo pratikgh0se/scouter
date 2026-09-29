@@ -54,21 +54,30 @@ ROOT="${3:-$SCRIPT_HOME}"
 # working directory's venv by accident), falling back to PATH only when
 # there is none - so the whole chain is self-sufficient from any checkout.
 #
-# Fix round 10 (card t_0f1197e6, row 478): SCRIPT_HOME is this file's own
-# checkout, which in a bare worktree (added via `git worktree add`, no
-# `.venv` symlink of its own) has no venv at all, so the chain above fell
-# straight through to a system python3 with no pytest installed - `make
-# gate` failed the B0 precheck everywhere except the main checkout. Two
-# escape hatches ahead of that, both usability, not honesty (B0 still fires
-# loudly on a real miss): an explicit $SCOUTER_PYTHON override, then the
-# MAIN checkout's venv found via git's common dir (shared by every
-# worktree, so this is never a guess at a sibling directory's layout).
-PYTHON="${SCOUTER_PYTHON:-}"
-if [[ -z "$PYTHON" || ! -x "$PYTHON" ]]; then
-  COMMON_DIR="$(git -C "$SCRIPT_HOME" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-  PYTHON="${COMMON_DIR:+$COMMON_DIR/../.venv/bin/python3}"
+# Same chain as scripts/htc_post_run.sh (Z8, card t_0f1197e6/row 478):
+# $SCOUTER_PYTHON, then this checkout's own venv, then the MAIN checkout's
+# venv via git's common dir -- so a bare worktree still finds pytest.
+if [[ -n "${SCOUTER_PYTHON:-}" ]]; then
+  if [[ -x "$SCOUTER_PYTHON" ]]; then
+    PYTHON="$SCOUTER_PYTHON"
+  else
+    echo "WARN: SCOUTER_PYTHON=$SCOUTER_PYTHON is not executable; ignoring" >&2
+  fi
 fi
-[[ -n "$PYTHON" && -x "$PYTHON" ]] || PYTHON="$SCRIPT_HOME/.venv/bin/python3"
-[[ -x "$PYTHON" ]] || PYTHON="python3"
+if [[ -z "${PYTHON:-}" ]]; then
+  if [[ -x "$SCRIPT_HOME/.venv/bin/python3" ]]; then
+    PYTHON="$SCRIPT_HOME/.venv/bin/python3"
+  else
+    # .git basename guard (M1): excludes a bare-repo sibling venv
+    # ($COMMON_DIR/.. beside repo.git) and a submodule's nested common dir
+    # (.git/modules/<name>), neither of which is this repo's main checkout.
+    COMMON_DIR="$(git -C "$SCRIPT_HOME" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    if [[ "${COMMON_DIR##*/}" == .git && -x "${COMMON_DIR%/.git}/.venv/bin/python3" ]]; then
+      PYTHON="${COMMON_DIR%/.git}/.venv/bin/python3"
+    else
+      PYTHON=python3
+    fi
+  fi
+fi
 
 exec "$PYTHON" "$SCRIPT_HOME/tests/mutation_check.py" --base "$BASE" --head "$HEAD" --repo "$ROOT" $ALLOW_DIRTY
