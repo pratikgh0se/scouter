@@ -667,6 +667,20 @@ class ScouterAdapter:
     def policy(self):
         return POLICY
 
+    def retain_keep(self, layer: str) -> tuple[str, ...]:
+        """(t_90e75c20): the engine's per-case retention policy
+        (gauntlet.runner.Runner._retain / gauntlet.store.RunDir.retain).
+        bulk (import_and_cull and the rest, `tests/gauntlet/exec_bulk.py`)
+        is score-only -- the incident this closes (disk filled at 21/40
+        cases, 2026-09-28 13:58) came entirely from bulk's own real library
+        imports and exports, never cleaned up within a session; nothing
+        under a bulk case's workdir is needed after its verdict is written.
+        Any other layer that ever routes disk-heavy writes through a case
+        workdir keeps its sidecar/XMP (the card's general policy); none
+        does today, so this is a no-op for them (retain() is a no-op on a
+        workdir that was never created)."""
+        return () if layer == "bulk" else ("*.xmp",)
+
 
 def make() -> ScouterAdapter:
     return ScouterAdapter()

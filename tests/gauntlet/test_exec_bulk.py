@@ -6,6 +6,7 @@ import pytest
 
 from gauntlet.adapter import CallRecord
 from gauntlet.case import Case, Expect, Step
+from gauntlet.store import case_workdir
 from tests.gauntlet import exec_bulk
 from tests.gauntlet.corpus import Corpus
 from tests.gauntlet.session import SessionBlocked
@@ -51,6 +52,91 @@ def test_relaunch_session_blocked_is_returned_as_observation(tmp_path):
     assert obs.blocked == "session: darktable did not quit"
     assert "session: darktable did not quit" in obs.hang_evidence
     assert not (session.root / "bulk" / case.id / "card").exists()
+
+
+# -- t_90e75c20 round 2: per-case disk routing ------------------------------
+
+def test_run_bulk_case_routes_out_dir_and_library_root_under_the_case_workdir(tmp_path):
+    """A session that offers `point_library_root` (the real ScouterSession,
+    round 2) gets its per-case disk-heavy writes redirected under the run's
+    own `case_workdir(case.id)` -- a session double without it (every
+    FakeSession above) is left exactly as before."""
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "H.ORF").write_bytes(b"raw")
+    corpus = Corpus({"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {}}, trial)
+    pointed = []
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.root = tmp_path / "run"
+            self.run_root = tmp_path / "rundir"
+            self.corpus = corpus
+            self.staged = SimpleNamespace(
+                vars={"out_dir": str(tmp_path / "run" / "exports"),
+                      "relocate_root": str(tmp_path / "run" / "relocated")},
+                env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")},
+                job_frames=[],
+            )
+
+        def point_library_root(self, new_root) -> None:
+            pointed.append(Path(new_root))
+
+        def call(self, tool, args, budget_s, write=False):
+            return CallRecord(tool=tool, args=args, envelope={"ok": True, "outcome": "ok",
+                                                              "data": {}}, write=write)
+
+        def relaunch(self, frame=None) -> None:
+            pass
+
+    session = FakeSession()
+    case = Case(id="blk-import-and-cull-olympus-card", layer="bulk", tier="P1", mode="tool",
+                steps=[Step("library_import", {"source": "{card}", "confirm": True}, 6.0, True)],
+                expect=Expect("workflow", []), body="olympus", frame_role="card",
+                meta={"frames": 2})
+
+    exec_bulk.run_bulk_case(session, case)
+
+    work = case_workdir(session.run_root, case.id)
+    assert session.staged.vars["out_dir"] == str(work / "exports")
+    assert pointed == [work / "jobs"]
+
+
+def test_run_bulk_case_without_point_library_root_keeps_the_old_shared_out_dir(tmp_path):
+    """The un-migrated fixtures above must never break: no `point_library_root`
+    on the session double means `out_dir` stays whatever the fixture set."""
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "H.ORF").write_bytes(b"raw")
+    corpus = Corpus({"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {}}, trial)
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.root = tmp_path / "run"
+            self.corpus = corpus
+            self.staged = SimpleNamespace(
+                vars={"out_dir": str(tmp_path / "run" / "exports"),
+                      "relocate_root": str(tmp_path / "run" / "relocated")},
+                env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")},
+                job_frames=[],
+            )
+
+        def call(self, tool, args, budget_s, write=False):
+            return CallRecord(tool=tool, args=args, envelope={"ok": True, "outcome": "ok",
+                                                              "data": {}}, write=write)
+
+        def relaunch(self, frame=None) -> None:
+            pass
+
+    session = FakeSession()
+    case = Case(id="blk-import-and-cull-olympus-card", layer="bulk", tier="P1", mode="tool",
+                steps=[Step("library_import", {"source": "{card}", "confirm": True}, 6.0, True)],
+                expect=Expect("workflow", []), body="olympus", frame_role="card",
+                meta={"frames": 2})
+
+    exec_bulk.run_bulk_case(session, case)
+
+    assert session.staged.vars["out_dir"] == str(tmp_path / "run" / "exports")
 
 
 # -- Batch 3 / night-2 triage C2 + C12 (bulk hero-open half, row 462) -------

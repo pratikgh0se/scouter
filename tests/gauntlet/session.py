@@ -420,6 +420,20 @@ class ScouterSession:
     def relative(self, path: Path) -> str:
         return str(Path(path).relative_to(self.run_root))
 
+    def point_library_root(self, new_root: Path) -> None:
+        """(t_90e75c20 round 2): redirect this session's OWN config file so
+        the product's NEXT verb call writes future library imports under
+        `new_root` instead of the shared session library -- `scouter.config.
+        load()` re-reads the config file fresh on every call (no caching),
+        so this takes effect on the very next MCP call, no relaunch needed.
+        Mutates only `library_root`; every other key (and any `_comment`)
+        survives untouched, mirroring `scouter.core.library.
+        _rewrite_library_root`'s own contract, without importing that
+        private helper across modules."""
+        raw = json.loads(self.staged.config.read_text(encoding="utf-8"))
+        raw["library_root"] = str(new_root)
+        self.staged.config.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+
     def _raise_library_locked(self, pid: int) -> None:
         """Quit -- or, mid-session, abort -- whatever THIS launch started
         before raising, so a locked library never leaves an owned darktable

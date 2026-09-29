@@ -1,6 +1,7 @@
 """Session + tool-mode execution against fakes: no darktable, no MCP server."""
 
 
+import json
 import time
 
 import pytest
@@ -116,6 +117,37 @@ def test_launch_retries_once_then_blocks(corpus, tmp_path):
     assert dt.launches == 2
     with pytest.raises(sess.SessionBlocked):
         _session(corpus, tmp_path, FakeDt(ready=(False, False))).open()
+
+
+# -- t_90e75c20 round 2: redirecting the session's own library_root -------
+
+def test_point_library_root_rewrites_only_that_key(corpus, tmp_path):
+    s = _session(corpus, tmp_path).open()
+    raw_before = json.loads(s.staged.config.read_text())
+    raw_before["_comment"] = "keep me"
+    s.staged.config.write_text(json.dumps(raw_before))
+    new_root = tmp_path / "case-work" / "c1" / "jobs"
+
+    s.point_library_root(new_root)
+
+    raw_after = json.loads(s.staged.config.read_text())
+    assert raw_after["library_root"] == str(new_root)
+    assert raw_after["_comment"] == "keep me"  # every other key survives
+    assert raw_after["cameras"] == raw_before["cameras"]
+    assert raw_after["backup"] == raw_before["backup"]
+
+
+def test_point_library_root_takes_effect_on_the_next_config_load(corpus, tmp_path):
+    """The whole point: `scouter.config.load()` re-reads the file fresh, so a
+    verb the product runs AFTER this call sees the new root with no session
+    relaunch."""
+    import scouter.config as scouter_config
+
+    s = _session(corpus, tmp_path).open()
+    new_root = tmp_path / "case-work" / "c1" / "jobs"
+    s.point_library_root(new_root)
+    cfg = scouter_config.load(str(s.staged.config))
+    assert cfg.root() == new_root
 
 
 def test_session_env_is_isolated(corpus, tmp_path, monkeypatch):

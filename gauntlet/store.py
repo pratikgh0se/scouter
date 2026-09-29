@@ -99,7 +99,7 @@ class RunDir:
                 for p in sorted(self.cases_dir.glob("*.json"))]
 
     def case_workdir(self, case_id: str) -> Path:
-        return self.work_dir / case_id
+        return case_workdir(self.root, case_id)
 
     def retain(self, case_id: str, keep: tuple[str, ...] = ()) -> int:
         """Per-case retention (t_90e75c20): delete everything under this
@@ -139,6 +139,15 @@ class RunDir:
             if n:
                 totals[c.layer] = totals.get(c.layer, 0) + n
         return totals
+
+
+def case_workdir(run_root: Path, case_id: str) -> Path:
+    """(t_90e75c20 round 2): the per-case scratch dir under a run root, as a
+    free function -- callers that only have the run's root path (a product
+    adapter's own session code, never a full RunDir instance) can compute
+    the same location `RunDir.case_workdir` does, with no RunDir import
+    cycle and no duplicated `"work"` literal to drift out of sync."""
+    return Path(run_root) / "work" / case_id
 
 
 def _dir_size(path: Path) -> int:
