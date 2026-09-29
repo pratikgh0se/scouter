@@ -61,7 +61,9 @@ ROOT="${3:-$SCRIPT_HOME}"
 # worktree still finds pytest.
 THIS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./_python.sh
-source "$THIS_SCRIPT_DIR/_python.sh"
+# M4 (review): fail loud (not just on `set -e`, so this reads the same as
+# the other caller) if this file is ever missing.
+source "$THIS_SCRIPT_DIR/_python.sh" || { echo "missing $THIS_SCRIPT_DIR/_python.sh" >&2; exit 2; }
 resolve_scouter_python "$SCRIPT_HOME"
 
 exec "$PYTHON" "$SCRIPT_HOME/tests/mutation_check.py" --base "$BASE" --head "$HEAD" --repo "$ROOT" $ALLOW_DIRTY

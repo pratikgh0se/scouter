@@ -65,7 +65,9 @@ SCRIPT_HOME="${HTC_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # dir -- neither is this repo's main checkout).
 THIS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./_python.sh
-source "$THIS_SCRIPT_DIR/_python.sh"
+# M4 (review): fail loud, not on a later unbound-$PYTHON or a leaked
+# ambient $PYTHON, if this file is ever missing (e.g. a partial copy).
+source "$THIS_SCRIPT_DIR/_python.sh" || { echo "missing $THIS_SCRIPT_DIR/_python.sh" >&2; exit 2; }
 resolve_scouter_python "$SCRIPT_HOME"
 PY="$PYTHON"
 
@@ -271,12 +273,7 @@ if [[ "$EXECUTE" -eq 1 ]]; then
     exit 0
   fi
   say "--execute: running step 1 (the merge-time gate + pytest) for real; steps 2-5 stay print-only"
-  # R3b (re-review): call tests/mutation_check.py directly, not `make gate`
-  # -- `make gate` execs scripts/mutation_check.sh, which resolves its own
-  # python only from `$SCRIPT_HOME/.venv` (falling back to a bare python3
-  # with no pytest from a worktree, the exact gap PY's own resolution above
-  # already fixed for this script); calling the same file directly with
-  # this script's own already-resolved $PY sidesteps that wrapper entirely.
+  # R3b (re-review): call tests/mutation_check.py directly with this script's resolved $PY, not `make gate`.
   GATE_CMD=${GATE_CMD:-"\"$PY\" \"$SCRIPT_HOME/tests/mutation_check.py\" --base \"$MERGE_BASE\" --head \"$BATCH_SHA\" --repo \"$SCRIPT_HOME\""}
   say "+ $GATE_CMD"
   # A subshell, not a bare `eval`: GATE_CMD/PYTEST_CMD may themselves be (or
