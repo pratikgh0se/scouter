@@ -53,7 +53,22 @@ ROOT="${3:-$SCRIPT_HOME}"
 # repo's own venv (resolved from SCRIPT_HOME, so it is never the CALLER's
 # working directory's venv by accident), falling back to PATH only when
 # there is none - so the whole chain is self-sufficient from any checkout.
-PYTHON="$SCRIPT_HOME/.venv/bin/python3"
+#
+# Fix round 10 (card t_0f1197e6, row 478): SCRIPT_HOME is this file's own
+# checkout, which in a bare worktree (added via `git worktree add`, no
+# `.venv` symlink of its own) has no venv at all, so the chain above fell
+# straight through to a system python3 with no pytest installed - `make
+# gate` failed the B0 precheck everywhere except the main checkout. Two
+# escape hatches ahead of that, both usability, not honesty (B0 still fires
+# loudly on a real miss): an explicit $SCOUTER_PYTHON override, then the
+# MAIN checkout's venv found via git's common dir (shared by every
+# worktree, so this is never a guess at a sibling directory's layout).
+PYTHON="${SCOUTER_PYTHON:-}"
+if [[ -z "$PYTHON" || ! -x "$PYTHON" ]]; then
+  COMMON_DIR="$(git -C "$SCRIPT_HOME" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  PYTHON="${COMMON_DIR:+$COMMON_DIR/../.venv/bin/python3}"
+fi
+[[ -n "$PYTHON" && -x "$PYTHON" ]] || PYTHON="$SCRIPT_HOME/.venv/bin/python3"
 [[ -x "$PYTHON" ]] || PYTHON="python3"
 
 exec "$PYTHON" "$SCRIPT_HOME/tests/mutation_check.py" --base "$BASE" --head "$HEAD" --repo "$ROOT" $ALLOW_DIRTY

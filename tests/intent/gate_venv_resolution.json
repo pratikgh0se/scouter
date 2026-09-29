@@ -1,0 +1,24 @@
+{
+  "about": "Zenkai Rules Z1 intent examples: card t_0f1197e6 (row 478). scripts/mutation_check.sh resolves the venv from the script's OWN checkout (SCRIPT_HOME), so a linked git worktree added without its own `.venv` symlink fell through to a bare `python3` on PATH -- usually one with no pytest, so `make gate` fails the B0 precheck (exit 2) everywhere except the main checkout. Fix round 10 adds two preferences ahead of the existing SCRIPT_HOME/.venv-then-PATH chain: an explicit $SCOUTER_PYTHON override, then the MAIN checkout's venv found via `git rev-parse --git-common-dir` (shared by every worktree of the same repo, so this is never a guess at a sibling directory's layout). Run by tests/intent/test_gate_venv_resolution_intent.py against the real scripts/mutation_check.sh, copied byte-for-byte into a throwaway fixture git repo (never rewritten -- production code, not a mock) with a real venv built by `python3 -m venv` (a real interpreter, not a stub executable) and a linked worktree with no venv of its own, exactly mirroring the bug's reproduction. Two oracles per example (Z2): the resolved interpreter path the script would exec, AND that interpreter's own `sys.prefix` when actually run -- a resolver that names the right path but would fail to execute, or names a real interpreter at the wrong prefix, both count as wrong.",
+  "subject": "scripts/mutation_check.sh (the PYTHON resolution chain)",
+  "examples": [
+    {
+      "id": "worktree-without-own-venv-uses-main-checkouts-venv",
+      "input": {"scenario": "main_venv", "scouter_python": null},
+      "expect": {"resolved_is": "main_venv", "prefix_is": "main_venv"},
+      "source": "row 478: a bare `git worktree add` (no .venv symlink) must still find the main checkout's real venv via git's common dir, not fall back to a pytest-less system python3"
+    },
+    {
+      "id": "scouter_python-env-var-overrides-everything",
+      "input": {"scenario": "main_venv", "scouter_python": "override"},
+      "expect": {"resolved_is": "override", "prefix_is": "override"},
+      "source": "explicit $SCOUTER_PYTHON must win even when a main-checkout venv is also resolvable, so a caller can always point at a specific interpreter"
+    },
+    {
+      "id": "no-venv-anywhere-falls-back-to-system-python3-unchanged",
+      "input": {"scenario": "no_venv", "scouter_python": null},
+      "expect": {"resolved_is": "system", "prefix_is": "system"},
+      "source": "row 478 done-when is additive only: with no override and no main-checkout venv at all, the pre-existing SCRIPT_HOME/.venv-then-bare-python3 fallback must be unchanged"
+    }
+  ]
+}
