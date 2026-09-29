@@ -1,6 +1,7 @@
 import json
 
 from gauntlet.cli import EXIT_PARKED, main
+from gauntlet.store import RunDir
 
 
 def _args(tmp_path):
@@ -48,6 +49,18 @@ def test_prefix_and_where_filters(tmp_path):
                                    "--where", "sleep_s=5"]) == 0
     done = sorted(p.stem for p in (tmp_path / "s" / "cases").glob("*.json"))
     assert done == ["beta-0", "beta-1"]
+
+
+def test_du_reports_bytes_per_layer(tmp_path, capsys):
+    main(_args(tmp_path) + ["generate", "--stamp", "s"])
+    assert main(_args(tmp_path) + ["run", "--stamp", "s", "--case", "alpha-0"]) == 0
+    run = RunDir(tmp_path, "s")
+    d = run.case_workdir("alpha-0")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "leftover.bin").write_bytes(b"x" * 300)
+    assert main(_args(tmp_path) + ["du", "--stamp", "s"]) == 0
+    out = capsys.readouterr().out
+    assert "alpha:" in out and "total:" in out
 
 
 def test_rerun_runs_done_cases_again(tmp_path):

@@ -42,6 +42,12 @@ class RunDir:
         self.cases_dir = self.root / "cases"
         self.previews_dir = self.root / "previews"
         self.sessions_dir = self.root / "sessions"
+        #: (t_90e75c20): scratch space a session may stage a case's heavy
+        #: disk artifacts under (imported originals, library copies, full-size
+        #: renders) -- `retain()` prunes this per case after scoring, and
+        #: nothing else in the run dir (verdict json, log, previews) lives
+        #: here, so retention can never reach them.
+        self.work_dir = self.root / "work"
         self.cases_jsonl = self.root / "cases.jsonl"
         self.generation_md = self.root / "generation.md"
         self.log_md = self.root / "log.md"
@@ -91,3 +97,53 @@ class RunDir:
             return []
         return [json.loads(p.read_text(encoding="utf-8"))
                 for p in sorted(self.cases_dir.glob("*.json"))]
+
+    def case_workdir(self, case_id: str) -> Path:
+        return self.work_dir / case_id
+
+    def retain(self, case_id: str, keep: tuple[str, ...] = ()) -> int:
+        """Per-case retention (t_90e75c20): delete everything under this
+        case's workdir except files matching a `keep` glob pattern (relative
+        to the workdir), and any directory left empty by that. Only ever
+        touches paths under `case_workdir(case_id)` -- the verdict json, the
+        log and the previews all live elsewhere in the run dir and this never
+        walks above the workdir root. Returns bytes freed."""
+        d = self.case_workdir(case_id)
+        if not d.exists():
+            return 0
+        keep_paths = {p for pattern in keep for p in d.rglob(pattern)}
+        freed = 0
+        # Deepest paths first, so a directory is only removed once everything
+        # under it (kept files included) has already been decided.
+        for p in sorted(d.rglob("*"), key=lambda x: len(x.parts), reverse=True):
+            if p in keep_paths:
+                continue
+            if p.is_dir():
+                if not any(p.iterdir()):
+                    p.rmdir()
+            else:
+                freed += p.stat().st_size
+                p.unlink()
+        return freed
+
+    def du(self) -> dict[str, int]:
+        """Bytes on disk per layer (`gauntlet du`): each case's workdir, its
+        verdict json and its previews, summed by `case.layer`. A run with no
+        cases.jsonl yet reports {}."""
+        if not self.cases_jsonl.exists():
+            return {}
+        totals: dict[str, int] = {}
+        for c in self.read_cases():
+            n = _dir_size(self.case_workdir(c.id)) + _dir_size(self.case_path(c.id)) + \
+                sum(p.stat().st_size for p in self.previews_dir.glob(f"{c.id}.*"))
+            if n:
+                totals[c.layer] = totals.get(c.layer, 0) + n
+        return totals
+
+
+def _dir_size(path: Path) -> int:
+    if not path.exists():
+        return 0
+    if path.is_file():
+        return path.stat().st_size
+    return sum(p.stat().st_size for p in path.rglob("*") if p.is_file())

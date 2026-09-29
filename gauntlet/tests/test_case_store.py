@@ -113,6 +113,86 @@ def test_engine_is_stdlib_only_and_imports_no_product():
     assert bad == []
 
 
+def test_retain_deletes_all_but_keep_globs_and_reports_bytes_freed(tmp_path):
+    run = RunDir(tmp_path, "s").ensure()
+    d = run.case_workdir("c1")
+    (d / "nested").mkdir(parents=True)
+    (d / "sidecar.xmp").write_bytes(b"a" * 10)
+    (d / "nested" / "big.raw").write_bytes(b"b" * 2048)
+    freed = run.retain("c1", keep=("*.xmp",))
+    assert freed == 2048
+    assert (d / "sidecar.xmp").exists()
+    assert not (d / "nested" / "big.raw").exists()
+    assert not (d / "nested").exists()  # emptied by the prune
+
+
+def test_retain_score_only_empties_the_whole_workdir(tmp_path):
+    run = RunDir(tmp_path, "s").ensure()
+    d = run.case_workdir("c1")
+    d.mkdir(parents=True)
+    (d / "import.raw").write_bytes(b"x" * 4096)
+    freed = run.retain("c1")
+    assert freed == 4096
+    assert list(d.iterdir()) == []
+
+
+def test_retain_missing_workdir_is_a_noop(tmp_path):
+    run = RunDir(tmp_path, "s").ensure()
+    assert run.retain("never-ran") == 0
+
+
+def test_retain_never_touches_the_verdict_json_or_the_log(tmp_path):
+    run = RunDir(tmp_path, "s").ensure()
+    run.write_result("c1", {"id": "c1", "score": "pass"})
+    run.log_md.write_text("- **c1**: verified\n")
+    d = run.case_workdir("c1")
+    (d / "junk").mkdir(parents=True)
+    (d / "junk" / "f.bin").write_bytes(b"x" * 100)
+    run.retain("c1")
+    assert run.read_result("c1") == {"id": "c1", "score": "pass"}
+    assert "c1" in run.log_md.read_text()
+
+
+def test_retain_never_touches_paths_outside_the_case_workdir(tmp_path):
+    run = RunDir(tmp_path, "s").ensure()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("keep me")
+    sibling = run.case_workdir("c2")
+    sibling.mkdir(parents=True)
+    (sibling / "keep.bin").write_bytes(b"y" * 10)
+    d = run.case_workdir("c1")
+    d.mkdir(parents=True)
+    (d / "junk.bin").write_bytes(b"z" * 10)
+    run.retain("c1")
+    assert outside.read_text() == "keep me"
+    assert (sibling / "keep.bin").exists()
+
+
+def test_du_reports_bytes_per_layer_from_the_workdir(tmp_path):
+    run = RunDir(tmp_path, "s").ensure()
+    c = _case("a")
+    run.write_cases([c])
+    d = run.case_workdir(c.id)
+    d.mkdir(parents=True)
+    (d / "f.bin").write_bytes(b"x" * 500)
+    assert run.du() == {"coverage": 500}
+
+
+def test_du_includes_verdict_json_and_preview_bytes(tmp_path):
+    run = RunDir(tmp_path, "s").ensure()
+    c = _case("a")
+    run.write_cases([c])
+    run.write_result(c.id, {"id": c.id, "score": "pass"})
+    (run.previews_dir / f"{c.id}.jpg").write_bytes(b"p" * 40)
+    want = run.case_path(c.id).stat().st_size + 40
+    assert run.du() == {"coverage": want}
+
+
+def test_du_before_generation_is_empty(tmp_path):
+    run = RunDir(tmp_path, "s")
+    assert run.du() == {}
+
+
 def test_budget_cap_honours_a_case_declared_cap():
     """(final fix C1): a case whose work is not expressed as steps (an agent
     conversation) declares its own cap in meta["cap_s"]; the engine uses the

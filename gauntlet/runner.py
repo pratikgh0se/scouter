@@ -4,9 +4,12 @@ park-and-resume. Product behaviour lives in the adapter's Session."""
 from __future__ import annotations
 
 import inspect
+import shutil
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable
 
 from gauntlet.adapter import Adapter, Observation, Park, RefuseRun
 from gauntlet.case import Case
@@ -30,6 +33,19 @@ SESSION_CLOSE_CAP_S = 30.0
 #: (fix round 1, I1): after this many consecutive open failures the layer
 #: stops (status "blocked") instead of retrying forever.
 MAX_CONSECUTIVE_OPEN_FAILURES = 3
+#: (t_90e75c20): the run-level disk guard -- below this many decimal GB free
+#: (as `df -H` reports: 1000-based, not 1024-based) the runner refuses to
+#: start the next case and parks the rest of the layer, reason "disk", the
+#: same shape as the existing usage-meter parker (Park raised before any
+#: session work for the case begins).
+DISK_MIN_GB = 25.0
+
+
+def free_disk_gb(path: Path) -> float:
+    """Decimal GB free on `path`'s filesystem, matching `df -H`. The real
+    default for Runner's `free_disk_gb` seam; tests inject a fake callable
+    instead of mocking `shutil.disk_usage` itself."""
+    return shutil.disk_usage(path).free / 1_000_000_000
 
 
 @dataclass
@@ -86,7 +102,9 @@ class Runner:
                  session_max_cases: int = SESSION_MAX_CASES,
                  session_max_s: float = SESSION_MAX_S,
                  session_open_cap_s: float | None = None,
-                 max_consecutive_open_failures: int = MAX_CONSECUTIVE_OPEN_FAILURES) -> None:
+                 max_consecutive_open_failures: int = MAX_CONSECUTIVE_OPEN_FAILURES,
+                 free_disk_gb: Callable[[Path], float] = free_disk_gb,
+                 disk_min_gb: float = DISK_MIN_GB) -> None:
         self.adapter = adapter
         self.run = run.ensure()
         self.commit = commit
@@ -101,6 +119,8 @@ class Runner:
             session_open_cap_s = getattr(adapter, "session_open_cap_s", SESSION_OPEN_CAP_S)
         self.session_open_cap_s = float(session_open_cap_s)
         self.max_consecutive_open_failures = max_consecutive_open_failures
+        self.free_disk_gb = free_disk_gb
+        self.disk_min_gb = disk_min_gb
 
     def _select(self, cases: list[Case], layer: str, *, resume: bool, only_failed: bool,
                 case_ids: set[str] | None, tiers: set[str] | None = None,
@@ -254,6 +274,12 @@ class Runner:
         try:
             while i < len(todo):
                 case = todo[i]
+                free_gb = self.free_disk_gb(self.run.root)
+                if free_gb < self.disk_min_gb:
+                    reason = f"disk: {free_gb:.1f} GB free < {self.disk_min_gb:.0f} GB"
+                    self.progress.park(layer, case.id, reason)
+                    summary.parked.extend(c.id for c in todo[i:])
+                    return "parked"
                 if session is None or count >= self.session_max_cases or \
                         self.clock() - started > self.session_max_s:
                     if session is not None:
@@ -267,6 +293,7 @@ class Runner:
                         t_wall = self.wall()
                         verdict = evaluate(case, obs, self.policy)
                         self._write(case, obs, verdict, t_wall)
+                        self._retain(case)
                         summary.ran += 1
                         i += 1
                         if consecutive_open_failures >= self.max_consecutive_open_failures:
@@ -313,6 +340,7 @@ class Runner:
                         [*obs.crash_reports, *self.adapter.crash_reports_since(t_wall)]))
                 verdict = evaluate(case, obs, self.policy)
                 self._write(case, obs, verdict, t_wall)
+                self._retain(case)
                 summary.ran += 1
                 count += 1
                 i += 1
@@ -324,6 +352,21 @@ class Runner:
             if session is not None:
                 old, session = session, None
                 self._safe_close(old)
+
+    def _retain(self, case: Case) -> None:
+        """(t_90e75c20): per-case retention after scoring -- the adapter opts
+        in with an optional `retain_keep(layer) -> tuple[str, ...]` of glob
+        patterns (relative to the case's workdir) to keep; everything else
+        under the workdir is deleted (bulk's own policy is score-only: an
+        empty tuple). An adapter that does not define `retain_keep` gets no
+        retention (unchanged behaviour). The verdict json, the log and the
+        previews live outside the workdir, so this can never reach them."""
+        retain_keep = getattr(self.adapter, "retain_keep", None)
+        if retain_keep is None:
+            return
+        freed = self.run.retain(case.id, tuple(retain_keep(case.layer)))
+        if freed:
+            self.progress.log(f"- retained {case.id}: freed {freed} bytes")
 
     def _write(self, case: Case, obs: Observation, verdict: Verdict, t_wall: float) -> None:
         from dataclasses import asdict

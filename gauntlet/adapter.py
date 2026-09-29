@@ -104,7 +104,13 @@ class Adapter(Protocol):
     exceeds that cap; kills only what the in-flight open launched and
     returns a typed result ({"ok", "killed", ...}) for the evidence.
     `open_session(layer, run, next_case=None)` (N2): when accepted, the
-    runner passes the case the session opens for."""
+    runner passes the case the session opens for.
+    `retain_keep(layer) -> tuple[str, ...]` (t_90e75c20): opts a layer into
+    per-case disk retention -- glob patterns (relative to the case's
+    `RunDir.case_workdir(case_id)`) to keep; everything else under that
+    workdir is deleted once the case is scored. An empty tuple means
+    score-only (delete the whole workdir). Not defining this method leaves
+    retention off."""
 
     name: str
 

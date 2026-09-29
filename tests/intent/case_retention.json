@@ -1,0 +1,24 @@
+{
+  "about": "Zenkai Rules Z1 intent examples: card t_90e75c20, per-case disk retention. gauntlet.store.RunDir.retain(case_id, keep) deletes everything under that case's workdir except files matching a `keep` glob pattern, and reports bytes freed; an empty keep tuple (bulk's own policy: score-only) empties the whole workdir; a case with no workdir is a no-op. Run by tests/intent/test_case_retention_intent.py directly against gauntlet.store.RunDir -- no darktable, no real gauntlet run. Two oracles per example: whether the kept file still exists afterward, and the exact byte count freed -- a retention pass that frees the right number of bytes but deletes the wrong file (or vice versa) is as wrong as one that does nothing.",
+  "subject": "gauntlet/store.py:RunDir.retain",
+  "examples": [
+    {
+      "id": "keeps-the-sidecar-deletes-the-import",
+      "input": {"files": {"sidecar.xmp": 128, "import.raw": 2097152}, "keep": ["*.xmp"]},
+      "expect": {"kept_exists": true, "freed_bytes": 2097152},
+      "source": "card t_90e75c20: keep only the sidecar/XMP, delete imported originals/copies"
+    },
+    {
+      "id": "score-only-layer-empties-the-workdir",
+      "input": {"files": {"render.tif": 1048576}, "keep": []},
+      "expect": {"kept_exists": false, "freed_bytes": 1048576},
+      "source": "bulk (import_and_cull) = score-only: nothing survives after the verdict is written"
+    },
+    {
+      "id": "a-case-with-no-workdir-is-a-noop",
+      "input": {"files": {}, "keep": []},
+      "expect": {"kept_exists": false, "freed_bytes": 0},
+      "source": "a case whose session never staged anything must never error or fabricate bytes freed"
+    }
+  ]
+}

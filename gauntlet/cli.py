@@ -5,6 +5,7 @@
       [--where KEY=VALUE ...] [--resume] [--rerun] [--only-failed] [--wait-on-park]
   report --stamp S|latest
   progress-html --stamp S|latest [--out PATH] [--title T]
+  du --stamp S|latest
 
 The adapter and runs root come from ./gauntlet.json ({"adapter":
 "module:factory", "runs_root": "...", "title": "..."}) unless given as flags."""
@@ -115,6 +116,8 @@ def main(argv: list[str] | None = None) -> int:
     h.add_argument("--stamp")
     h.add_argument("--out")
     h.add_argument("--title")
+    du_p = sub.add_parser("du")
+    du_p.add_argument("--stamp")
     args = p.parse_args(argv)
     cfg = _config(args)
     runs_root = Path(cfg["runs_root"]).expanduser()
@@ -157,6 +160,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "report":
         rep = report_mod.write(run, adapter, {"commit": _commit()})
         print(f"{run.report_md} (release bar met: {rep['S8_signoff']['release_bar_met']})")
+        return 0
+    if args.cmd == "du":
+        totals = run.du()
+        for layer_name in sorted(totals):
+            print(f"{layer_name}: {totals[layer_name]} bytes")
+        print(f"total: {sum(totals.values())} bytes")
         return 0
     if args.cmd == "progress-html":
         prog = json.loads(run.progress_json.read_text(encoding="utf-8"))

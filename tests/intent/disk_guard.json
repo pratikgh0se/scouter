@@ -1,0 +1,24 @@
+{
+  "about": "Zenkai Rules Z1 intent examples: card t_90e75c20, the run-level disk guard. gauntlet.runner.Runner refuses to start the next case and parks the rest of the layer, reason 'disk', once free disk (decimal GB, as `df -H` reports) is below DISK_MIN_GB (25.0) -- the same shape as the existing usage-meter parker (Park raised before any session work for the case begins, no case result written for it). The free-space reading is injected through the Runner's own `free_disk_gb` parameter (never by mocking shutil.disk_usage, the subject). Run by tests/intent/test_disk_guard_intent.py, a real tiny run of the engine (gauntlet.runner.Runner) over the toy adapter (gauntlet.tests.toy) in a temp dir -- no darktable, no real gauntlet run. Two oracles per example: the run's own status, and whether the first case in the layer got a written result at all -- a guard that parks the run but still lets a case sneak a result through is as wrong as one that never triggers.",
+  "subject": "gauntlet/runner.py:Runner (the disk guard added in _run_layer)",
+  "examples": [
+    {
+      "id": "below-25gb-parks-with-reason-disk",
+      "input": {"free_gb": 24.9},
+      "expect": {"status": "parked", "first_case_has_result": false},
+      "source": "card t_90e75c20: incident 2026-09-28 13:58, disk filled at 21/40 cases -- the guard must refuse before a case even starts, not after ENOSPC"
+    },
+    {
+      "id": "exactly-25gb-is-not-below-the-threshold-and-runs",
+      "input": {"free_gb": 25.0},
+      "expect": {"status": "done", "first_case_has_result": true},
+      "source": "'below 25 GB' is a strict less-than; the boundary itself must never park"
+    },
+    {
+      "id": "plenty-of-headroom-runs",
+      "input": {"free_gb": 100.0},
+      "expect": {"status": "done", "first_case_has_result": true},
+      "source": "the common case: the guard must stay silent when disk is not actually tight"
+    }
+  ]
+}

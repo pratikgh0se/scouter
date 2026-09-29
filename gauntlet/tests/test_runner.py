@@ -1,5 +1,8 @@
 import json
 import time
+from pathlib import Path
+
+import pytest
 
 from gauntlet.adapter import Park
 from gauntlet.generate import write_generation
@@ -388,6 +391,138 @@ def test_a_failing_abort_open_is_folded_into_the_evidence(tmp_path):
     Runner(a, run, max_consecutive_open_failures=1).run_layers(layers=["alpha"])
     ev = run.read_result("alpha-0")["observation"]["hang_evidence"]
     assert any("abort_open failed" in e for e in ev)
+
+
+# -- t_90e75c20: per-case retention and the run-level disk guard --------
+
+
+def test_retention_deletes_case_workdir_except_the_layers_keep_globs(tmp_path):
+    a, run = _setup(tmp_path)
+    orig_run_case = ToySession.run_case
+    n_mb = 2
+
+    def rc(self, case):
+        obs = orig_run_case(self, case)
+        d = run.case_workdir(case.id)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "sidecar.xmp").write_bytes(b"s" * 128)
+        (d / "import.raw").write_bytes(b"i" * (n_mb * 1024 * 1024))
+        return obs
+    ToySession.run_case = rc
+    a.retain_keep = lambda layer: ("*.xmp",)
+    try:
+        Runner(a, run).run_layers(layers=["alpha"])
+    finally:
+        ToySession.run_case = orig_run_case
+    d = run.case_workdir("alpha-0")
+    assert (d / "sidecar.xmp").exists()
+    assert not (d / "import.raw").exists()
+    assert run.read_result("alpha-0") is not None
+    assert "alpha-0" in run.log_md.read_text()
+
+
+def test_retention_score_only_layer_deletes_the_whole_workdir(tmp_path):
+    """bulk's own policy (card t_90e75c20): an empty keep tuple -- nothing
+    survives scoring, since bulk needs no artifact after the verdict."""
+    a, run = _setup(tmp_path)
+    orig_run_case = ToySession.run_case
+
+    def rc(self, case):
+        obs = orig_run_case(self, case)
+        d = run.case_workdir(case.id)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "render.tif").write_bytes(b"r" * (1024 * 1024))
+        return obs
+    ToySession.run_case = rc
+    a.retain_keep = lambda layer: ()
+    try:
+        Runner(a, run).run_layers(layers=["alpha"])
+    finally:
+        ToySession.run_case = orig_run_case
+    assert list(run.case_workdir("alpha-0").iterdir()) == []
+    assert run.read_result("alpha-0") is not None
+
+
+def test_retention_is_off_when_the_adapter_declares_no_policy(tmp_path):
+    a, run = _setup(tmp_path)
+    orig_run_case = ToySession.run_case
+
+    def rc(self, case):
+        obs = orig_run_case(self, case)
+        d = run.case_workdir(case.id)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "import.raw").write_bytes(b"i" * 1024)
+        return obs
+    ToySession.run_case = rc
+    try:
+        Runner(a, run).run_layers(layers=["alpha"])
+    finally:
+        ToySession.run_case = orig_run_case
+    assert (run.case_workdir("alpha-0") / "import.raw").exists()
+
+
+def test_retention_never_touches_anything_outside_the_case_workdir(tmp_path):
+    a, run = _setup(tmp_path)
+    outside = Path(tmp_path) / "outside.txt"
+    outside.write_text("keep me")
+    orig_run_case = ToySession.run_case
+
+    def rc(self, case):
+        obs = orig_run_case(self, case)
+        d = run.case_workdir(case.id)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "junk.bin").write_bytes(b"j" * 1024)
+        return obs
+    ToySession.run_case = rc
+    a.retain_keep = lambda layer: ()
+    try:
+        s = Runner(a, run).run_layers(layers=["alpha"])
+    finally:
+        ToySession.run_case = orig_run_case
+    assert s.status == "done"
+    assert outside.read_text() == "keep me"
+    for cid in a.ran:
+        assert run.read_result(cid) is not None  # verdicts untouched
+
+
+def test_disk_guard_parks_before_starting_a_case_below_the_threshold(tmp_path):
+    """A real tiny run of the runner over a fake adapter in a temp dir (no
+    darktable): the free-space reading is injected through the `free_disk_gb`
+    parameter, never by mocking shutil.disk_usage itself."""
+    a, run = _setup(tmp_path)
+    s = Runner(a, run, free_disk_gb=lambda root: 24.9).run_layers(layers=["alpha"])
+    assert s.status == "parked"
+    assert a.ran == [] and a.sessions == 0
+    assert run.read_results() == []
+    assert set(s.parked) == {"alpha-0", "alpha-1", "alpha-2", "alpha-3"}
+    assert "disk" in run.log_md.read_text()
+    prog = json.loads(run.progress_json.read_text())
+    assert "alpha-0" in prog["parked"] and prog["status"] == "parked"
+
+
+def test_disk_guard_runs_at_exactly_the_threshold(tmp_path):
+    a, run = _setup(tmp_path)
+    s = Runner(a, run, free_disk_gb=lambda root: 25.0).run_layers(layers=["alpha"])
+    assert s.status == "done"
+    assert a.ran != []
+
+
+def test_disk_guard_receives_the_run_root(tmp_path):
+    a, run = _setup(tmp_path)
+    seen = []
+
+    def reading(root):
+        seen.append(root)
+        return 100.0
+    Runner(a, run, free_disk_gb=reading).run_layers(layers=["alpha"])
+    assert seen and seen[0] == run.root
+
+
+def test_free_disk_gb_default_matches_shutil_disk_usage(tmp_path):
+    import shutil
+
+    from gauntlet.runner import free_disk_gb
+    assert free_disk_gb(tmp_path) == pytest.approx(shutil.disk_usage(tmp_path).free / 1e9)
 
 
 def test_open_session_is_told_the_case_it_opens_for(tmp_path):
