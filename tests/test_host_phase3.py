@@ -325,12 +325,17 @@ class ProbeExposureBlackDefaultHostTest(unittest.TestCase):
             install.restore()
 
 
-#: A private raw file for `ProbeColorzonesStrengthDefaultHostTest`, never
-#: shared with `SCRATCH`: this probe needs a frame with NO colorzones
-#: history entry at all, so it copies its own raw file and deletes any
-#: leftover sidecar before launch (same reasoning as
-#: `_BLACK_DEFAULT_SCRATCH` above).
-_COLORZONES_STRENGTH_SCRATCH = hs.SCRATCH_DIR / "phase3-colorzones-strength-default.ORF"
+#: Two PRIVATE raw files for `ProbeColorzonesStrengthDefaultHostTest`,
+#: never shared with `SCRATCH` or with each other: this probe needs a frame
+#: with NO colorzones history entry at all (same reasoning as
+#: `_BLACK_DEFAULT_SCRATCH` above), and -- fix round 2, host run
+#: 2026-09-29: a shared scratch copy/session let oracle A's "fresh enable"
+#: read back a sidecar oracle B's sentinel had already rewritten, so the
+#: two readings agreed for a reason that proved nothing -- oracle A and
+#: oracle B now each get their OWN copy and their OWN darktable launch, so
+#: neither can observe the other's write.
+_COLORZONES_STRENGTH_SCRATCH_A = hs.SCRATCH_DIR / "phase3-colorzones-strength-default-a.ORF"
+_COLORZONES_STRENGTH_SCRATCH_B = hs.SCRATCH_DIR / "phase3-colorzones-strength-default-b.ORF"
 
 
 @unittest.skipUnless(RUN, REASON)
@@ -348,15 +353,23 @@ class ProbeColorzonesStrengthDefaultHostTest(unittest.TestCase):
     430/461 class; see `ProbeExposureBlackDefaultHostTest`'s docstring and
     b3-item9-review.md finding 1 for why that echo is not a value oracle):
 
-    - Oracle A: enable colorzones with no other change, commit, decode the
-      newest `colorzones` history entry's `strength` slot (xmp.py:148,
-      colorzones v5 named slot 127 -- the same slot the phase 3 task 10 host
-      run's 0.16 sentinel pinned, docs/measurements.md:440).
-    - Oracle B: first prove slot 127 is live on THIS host/darktable build by
+    - Oracle A: on its OWN fresh scratch copy and its OWN darktable launch,
+      enable colorzones with no other change, commit, decode the newest
+      `colorzones` history entry's `strength` slot (xmp.py:148, colorzones
+      v5 named slot 127 -- the same slot the phase 3 task 10 host run's
+      0.16 sentinel pinned, docs/measurements.md:440).
+    - Oracle B: on a SEPARATE fresh scratch copy and a SEPARATE darktable
+      launch, first prove slot 127 is live on THIS host/darktable build by
       setting the same 0.16 sentinel, committing, and asserting it decodes
-      back as 0.16 (a dead or zero-filled slot would silently agree with a
+      back as ~0.16 (a dead or zero-filled slot would silently agree with a
       0.0 default reading in oracle A without this check). Then reset
       colorzones to its defaults, commit, and decode `strength` again.
+
+    Fix round 2 (host run 2026-09-29): the first two-oracles-one-session
+    design had oracle A read back EXACTLY the sentinel value -- a shared
+    scratch copy/session meant "fresh enable" was not actually fresh by the
+    time it was read. Splitting into two independent copies/launches fixes
+    the cause; an explicit guard (below) fails loudly if it ever recurs.
 
     PASS requires oracle A's reading and oracle B's post-reset reading to
     agree (within `vocab.default_tolerance`, fixed at 1e-6 here -- no
@@ -376,11 +389,8 @@ class ProbeColorzonesStrengthDefaultHostTest(unittest.TestCase):
         from scouter.core import dtbridge, history, vocab
 
         hs.SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
-        shutil.copy(hs.HERO, _COLORZONES_STRENGTH_SCRATCH)
-        Path(str(_COLORZONES_STRENGTH_SCRATCH) + ".xmp").unlink(missing_ok=True)
-        image = str(_COLORZONES_STRENGTH_SCRATCH)
 
-        def newest_strength() -> float:
+        def newest_strength(image: str) -> float:
             entries = [e for e in history.read(image).entries if e.operation == "colorzones"]
             self.assertTrue(entries, "no colorzones history entry")
             entry = max(entries, key=lambda e: e.num)
@@ -389,72 +399,93 @@ class ProbeColorzonesStrengthDefaultHostTest(unittest.TestCase):
 
         install = hs.PluginInstall()
         install.install()
-        proc = hs.launch(_COLORZONES_STRENGTH_SCRATCH)
         try:
-            hs.wait_ready()
-            self.assertTrue(settle(dtbridge.call),
-                            f"control path {CONTROL_PATH} did not answer after settle")
+            # Oracle A: its own scratch copy, its own launch, quit before
+            # oracle B's copy even exists -- nothing it does can touch A.
+            shutil.copy(hs.HERO, _COLORZONES_STRENGTH_SCRATCH_A)
+            Path(str(_COLORZONES_STRENGTH_SCRATCH_A) + ".xmp").unlink(missing_ok=True)
+            image_a = str(_COLORZONES_STRENGTH_SCRATCH_A)
+            proc = hs.launch(_COLORZONES_STRENGTH_SCRATCH_A)
+            try:
+                hs.wait_ready()
+                self.assertTrue(settle(dtbridge.call),
+                                f"control path {CONTROL_PATH} did not answer after settle")
+                enabled = registry.call("darkroom.enable", "cli", module="colorzones")
+                self.assertTrue(enabled.ok, enabled.error)
+                committed = registry.call("history.commit", "cli", image=image_a)
+                self.assertTrue(committed.ok, committed.error)
+                strength_a = newest_strength(image_a)
+            finally:
+                hs.quit_darktable(proc)
 
-            # Oracle A: fresh enable, no other change.
-            enabled = registry.call("darkroom.enable", "cli", module="colorzones")
-            self.assertTrue(enabled.ok, enabled.error)
-            committed = registry.call("history.commit", "cli", image=image)
-            self.assertTrue(committed.ok, committed.error)
-            strength_a = newest_strength()
+            # Oracle B: a separate scratch copy, a separate launch. Sentinel
+            # first (mandatory), then reset.
+            shutil.copy(hs.HERO, _COLORZONES_STRENGTH_SCRATCH_B)
+            Path(str(_COLORZONES_STRENGTH_SCRATCH_B) + ".xmp").unlink(missing_ok=True)
+            image_b = str(_COLORZONES_STRENGTH_SCRATCH_B)
+            proc = hs.launch(_COLORZONES_STRENGTH_SCRATCH_B)
+            try:
+                hs.wait_ready()
+                self.assertTrue(settle(dtbridge.call),
+                                f"control path {CONTROL_PATH} did not answer after settle")
+                sentinel = registry.call("darkroom.set", "cli", module="colorzones",
+                                          param="strength", value=0.16)
+                self.assertTrue(sentinel.ok, sentinel.error)
+                committed = registry.call("history.commit", "cli", image=image_b)
+                self.assertTrue(committed.ok, committed.error)
+                strength_sentinel = newest_strength(image_b)
 
-            # Oracle B, mandatory: prove slot 127 is live with a non-zero
-            # sentinel before trusting a 0.0 reset reading.
-            sentinel = registry.call("darkroom.set", "cli", module="colorzones",
-                                      param="strength", value=0.16)
-            self.assertTrue(sentinel.ok, sentinel.error)
-            committed = registry.call("history.commit", "cli", image=image)
-            self.assertTrue(committed.ok, committed.error)
-            strength_sentinel = newest_strength()
-
-            reset = registry.call("darkroom.reset", "cli", module="colorzones", confirm=True)
-            self.assertTrue(reset.ok, reset.error)
-            committed = registry.call("history.commit", "cli", image=image)
-            self.assertTrue(committed.ok, committed.error)
-            strength_reset = newest_strength()
-
-            # All three decoded values, printed BEFORE any value assertion
-            # below can fail, so one host run always yields the
-            # measurement even on a FAIL (host run 2026-09-29: the sentinel
-            # assertion failed at 1e-6, which meant action A and the reset
-            # read never ran and never got recorded).
-            _record("\n## Phase 3 colorzones.strength default probe "
-                    f"({time.strftime('%Y-%m-%d %H:%M')})\n\n"
-                    f"oracle A (fresh enable) strength={strength_a!r}; "
-                    f"sentinel (0.16 requested) strength={strength_sentinel!r}; "
-                    f"oracle B (post-reset) strength={strength_reset!r} "
-                    "(internal units 0..2, display_scale 100 i.e. GUI 100% == internal 1.0)\n")
-
-            # The sentinel only needs to prove slot 127 is LIVE (not dead,
-            # not zero-filled, not a different slot) -- it passes through
-            # darktable's float32 param storage and the GTK slider's own
-            # quantisation, the same floor row 502 hit for exposure.black's
-            # host-measured value. 1e-5 is two orders of magnitude looser
-            # than that floor (host run 2026-09-29 measured 0.16 as
-            # 0.1600027084350586, delta 2.7e-6) while staying far below any
-            # real slider step (colorzones.strength's own step is 0.1), so
-            # a dead or moved slot (which decodes 0.0 or garbage) still
-            # fails this check.
-            self.assertAlmostEqual(strength_sentinel, 0.16, delta=1e-5,
-                                    msg="slot 127 did not decode the 0.16 sentinel -- "
-                                        "either the slot moved or it is dead")
-
-            # The default comparison (oracle A vs the post-reset read) stays
-            # at the tight 1e-6: both sides are darktable running the
-            # module's REAL default (no live user value in play), not a
-            # sentinel run through the slider's quantisation, so there is no
-            # float32-floor reason to widen it here.
-            tolerance = vocab.default_tolerance("colorzones", "strength", fallback=1e-6)
-            self.assertAlmostEqual(strength_a, strength_reset, delta=tolerance,
-                                    msg="oracle A (fresh enable) and oracle B (post-reset) "
-                                        "disagree on colorzones.strength's default")
+                reset = registry.call("darkroom.reset", "cli", module="colorzones", confirm=True)
+                self.assertTrue(reset.ok, reset.error)
+                committed = registry.call("history.commit", "cli", image=image_b)
+                self.assertTrue(committed.ok, committed.error)
+                strength_reset = newest_strength(image_b)
+            finally:
+                hs.quit_darktable(proc)
         finally:
-            hs.quit_darktable(proc)
             install.restore()
+
+        # All three decoded values, printed BEFORE any value assertion
+        # below can fail, so one host run always yields the measurement
+        # even on a FAIL.
+        _record("\n## Phase 3 colorzones.strength default probe "
+                f"({time.strftime('%Y-%m-%d %H:%M')})\n\n"
+                f"oracle A (fresh enable) strength={strength_a!r}; "
+                f"sentinel (0.16 requested) strength={strength_sentinel!r}; "
+                f"oracle B (post-reset) strength={strength_reset!r} "
+                "(internal units 0..2, display_scale 100 i.e. GUI 100% == internal 1.0)\n")
+
+        # Contamination guard (fix round 2, host run 2026-09-29): oracle A
+        # must never read a sidecar the sentinel already touched. With the
+        # two-copy/two-launch split above this should be structurally
+        # impossible; this fails loudly, not silently, if it ever recurs.
+        self.assertFalse(
+            abs(strength_a - 0.16) <= 1e-5,
+            f"oracle A read a post-sentinel sidecar (strength_a={strength_a!r} "
+            "matches the 0.16 sentinel) -- the two oracles are contaminated")
+
+        # The sentinel only needs to prove slot 127 is LIVE (not dead, not
+        # zero-filled, not a different slot) -- it passes through
+        # darktable's float32 param storage and the GTK slider's own
+        # quantisation, the same floor row 502 hit for exposure.black's
+        # host-measured value. 1e-5 is two orders of magnitude looser than
+        # that floor (host run 2026-09-29 measured 0.16 as
+        # 0.1600027084350586, delta 2.7e-6) while staying far below any
+        # real slider step (colorzones.strength's own step is 0.1), so a
+        # dead or moved slot (which decodes 0.0 or garbage) still fails
+        # this check.
+        self.assertAlmostEqual(strength_sentinel, 0.16, delta=1e-5,
+                                msg="slot 127 did not decode the 0.16 sentinel -- "
+                                    "either the slot moved or it is dead")
+
+        # The default comparison (oracle A vs the post-reset read) stays at
+        # the tight 1e-6: both sides are darktable running the module's
+        # REAL default (no live user value in play, no sentinel involved),
+        # so there is no float32-floor reason to widen it here.
+        tolerance = vocab.default_tolerance("colorzones", "strength", fallback=1e-6)
+        self.assertAlmostEqual(strength_a, strength_reset, delta=tolerance,
+                                msg="oracle A (fresh enable) and oracle B (post-reset) "
+                                    "disagree on colorzones.strength's default")
 
 
 @unittest.skipUnless(RUN, REASON)
