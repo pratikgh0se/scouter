@@ -1104,9 +1104,14 @@ class CommitReadbackTest(unittest.TestCase):
     def _timeout(self) -> CommitTimeout:
         return CommitTimeout("darktable did not write the sidecar in time")
 
-    def test_a_nudge_whose_value_is_already_on_disk_is_committed_honestly(self) -> None:
-        # The fixture's exposure is 1.5500002; the bridge reports that as the
-        # value the last step landed on, so the XMP already agrees.
+    def test_a_nudge_whose_status_echoes_the_already_on_disk_value_still_raises(self) -> None:
+        """t_fcf77055: `status` is a post-write GUI echo, never a value
+        (design 7.3) -- so a status that happens to equal the fixture's own
+        `exposure.exposure` (1.5500002) is not evidence the step landed, it
+        is a coincidence. `nudge` no longer trusts `status` at all: with no
+        real movement on disk, a commit timeout must raise, not be dressed
+        up as an honest noop. Formerly `..._is_committed_honestly` -- that
+        was the false-success bug this card diagnosed and fixed."""
         self.bridge.responses["darkroom.action"] = lambda p: {
             "nan": False,
             "status": 1.5500002,
@@ -1114,9 +1119,8 @@ class CommitReadbackTest(unittest.TestCase):
             **p,
         }
         with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
-            result = darkroom.nudge(module="exposure", param="exposure", steps=1)
-        self.assertTrue(result.committed)
-        self.assertTrue(any("no new sidecar" in w for w in result.warnings))
+            with self.assertRaises(CommitTimeout):
+                darkroom.nudge(module="exposure", param="exposure", steps=1)
 
     def test_a_nudge_that_did_not_land_still_raises_commit_timeout(self) -> None:
         self.bridge.responses["darkroom.action"] = lambda p: {
@@ -1124,6 +1128,48 @@ class CommitReadbackTest(unittest.TestCase):
             "status": 9.0,
             "view": "darkroom",
             **p,
+        }
+        with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
+            with self.assertRaises(CommitTimeout):
+                darkroom.nudge(module="exposure", param="exposure", steps=1)
+
+    def _rewrite_exposure_value(self, value: float) -> None:
+        sidecar = self._sidecar_path()
+        sidecar.write_text(with_param_value(sidecar.read_text(), "exposure", "exposure", value))
+
+    def test_status_echoing_the_request_must_not_falsely_confirm_an_unlanded_nudge(self) -> None:
+        """Diagnosis (t_fcf77055): the Lua plugin's `darkroom.action` `status`
+        is a post-write GUI echo, not the param's real absolute value (design
+        7.3; `darktable_mcp/lua/darktable_mcp.lua` 1657-1668). `nudge` always
+        sends `value=1` for an up/down step, so a bridge that (honestly, per
+        the default `FakeBridge` in this module) echoes the request back as
+        `status` reports 1.0 -- with no relationship at all to
+        `exposure.exposure`'s real units. The fixture is rewritten so the
+        REAL on-disk value is 1.0 too, purely by coincidence, and `_commit`
+        is mocked to time out with no other side effect: the sidecar never
+        actually changes. Honest behaviour is a `CommitTimeout` (nothing on
+        disk confirms a landed write); deciding success from the status
+        echo instead reports `committed=True` for a nudge that never
+        touched the sidecar."""
+        self._rewrite_exposure_value(1.0)
+        # Bridge default already echoes the request (`status: p.get("value")`,
+        # set in `setUp`), and nudge's own bridge call always sends `value=1`.
+        with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
+            with self.assertRaises(CommitTimeout):
+                darkroom.nudge(module="exposure", param="exposure", steps=1)
+
+    def test_status_as_a_normalised_position_must_not_falsely_confirm_an_unlanded_nudge(
+            self) -> None:
+        """Same failure, the other documented shape of `status` (design 7.3:
+        "a normalised position in the slider's visible range"). The fixture's
+        real on-disk value is rewritten to 0.5 (a value plausible as BOTH a
+        real `exposure.exposure` EV and a normalised slider position), the
+        bridge reports `status=0.5`, and `_commit` times out with no other
+        side effect -- the sidecar never changes. Deciding success from that
+        coincidence is the same bug as the request-echo case above."""
+        self._rewrite_exposure_value(0.5)
+        self.bridge.responses["darkroom.action"] = lambda p: {
+            "nan": False, "status": 0.5, "view": "darkroom", **p,
         }
         with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
             with self.assertRaises(CommitTimeout):
@@ -1255,18 +1301,20 @@ class CommitReadbackTest(unittest.TestCase):
         self.assertTrue(any("no new sidecar" in w for w in result.warnings), result.warnings)
         self.assertFalse(any("late flush" in w for w in result.warnings), result.warnings)
 
-    def test_a_timeout_with_no_history_movement_is_still_the_honest_noop(self) -> None:
-        """Control: a timeout where the sidecar genuinely never changes (no
-        late flush at all) must still fall through to the ordinary
-        value-readback noop -- this fix must not turn EVERY timeout into a
-        reported edit."""
+    def test_a_timeout_with_no_history_movement_still_raises(self) -> None:
+        """Control, updated for t_fcf77055: a timeout where the sidecar
+        genuinely never changes (no late flush at all) must raise
+        `CommitTimeout`, not be resolved from `status` -- `status` is a
+        post-write GUI echo (design 7.3), not a value, so a status that
+        happens to equal the fixture's own unchanged value proves nothing
+        landed. Formerly asserted the opposite (`committed=True`, "honest
+        noop"); that was this card's false-success bug."""
         self.bridge.responses["darkroom.action"] = lambda p: {
             "nan": False, "status": 1.5500002, "view": "darkroom", **p,
         }
         with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
-            result = darkroom.nudge(module="exposure", param="exposure", steps=1)
-        self.assertTrue(result.committed)
-        self.assertTrue(any("no new sidecar" in w for w in result.warnings), result.warnings)
+            with self.assertRaises(CommitTimeout):
+                darkroom.nudge(module="exposure", param="exposure", steps=1)
 
     def test_a_concurrent_change_to_the_same_module_is_not_credited_late_flush(self) -> None:
         """Z2: history moving for `expect_module` is not by itself a second

@@ -1,0 +1,30 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for t_fcf77055 (capsule-corp board, decision row 548): `darkroom.nudge` treated `dt.gui.action`'s returned `status` as an absolute applied value. `darktable_mcp/lua/darktable_mcp.lua` (`darkroom.action`/`darkroom.status`, lines ~1645-1681, comment 1676-1677) and `docs/superpowers/specs/2026-09-13-scouter-phase1-design.md` section 7.3 ('Values, not positions') both say `status` is a normalised 0..1 slider position / post-write GUI echo, never relabelled as a value -- real values come only from the XMP. Same failure class as rows 430/461 and the rejected b3-item9 fix: a write reported as landed that did not land. Run by tests/test_darkroom_core.py::CommitReadbackTest's status-diagnosis and status-echo tests.",
+  "subject": "scouter/core/darkroom.py nudge, _confirm_nudge (the `_commit_with_readback` confirm callback)",
+  "examples": [
+    {
+      "id": "status-echoing-the-request-does-not-confirm-an-unlanded-nudge",
+      "input": {"module": "exposure", "param": "exposure", "steps": 1,
+                "bridge_status": "echoes the request's own `value` field (always 1 for an up/down step)",
+                "real_disk_value": "unchanged, coincidentally 1.0"},
+      "expect": {"raises": "CommitTimeout", "committed": null},
+      "source": "diagnosis: darktable_mcp.lua's darkroom.action returns `status = value` from `gui_action`, which design 7.3 says is a normalised position, not a value; a status that happens to equal the (unchanged) real value is a numeric coincidence, not confirmation that anything landed"
+    },
+    {
+      "id": "status-as-a-normalised-position-does-not-confirm-an-unlanded-nudge",
+      "input": {"module": "exposure", "param": "exposure", "steps": 1,
+                "bridge_status": "0.5 (a plausible normalised 0..1 slider position)",
+                "real_disk_value": "unchanged, coincidentally 0.5"},
+      "expect": {"raises": "CommitTimeout", "committed": null},
+      "source": "diagnosis: same coincidence as above, the other documented shape of `status` (design 7.3)"
+    },
+    {
+      "id": "a-genuine-landed-nudge-after-a-timeout-is-still-reported-applied",
+      "input": {"module": "exposure", "param": "exposure", "steps": 1,
+                "real_disk_value": "moves from 1.5500002 to 9.0 (a real new history entry, cloned and rewritten)"},
+      "expect": {"raises": null, "committed": true, "noop": false,
+                "warning": "mentions the sidecar changing after the timeout, not 'no new sidecar'"},
+      "source": "fix's own scope guard: the XMP-only oracle (history fingerprint advanced for the module AND the readback moved in the requested up/down direction) must still credit a write that genuinely landed after `_commit` timed out -- this must not regress to always raising on every timeout"
+    }
+  ]
+}

@@ -50,6 +50,7 @@ class LateFlushNoopIntentTest(unittest.TestCase):
             "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
             "darkroom.action": lambda p: {"nan": False, "status": p.get("value"),
                                           "view": "darkroom", **p},
+            "module.enable": {"nan": False, "view": "darkroom"},
         })
         dtbridge.set_bridge(self.bridge)
 
@@ -128,12 +129,15 @@ class LateFlushNoopIntentTest(unittest.TestCase):
         # Oracle A: no history movement at all -- the scope guard's own
         # contract, not a recorded case (see the JSON's "source").
         # Oracle B: replay with NO sidecar mutation in the mocked `_commit`.
-        self.bridge.responses["darkroom.action"] = lambda p: {
-            "nan": False, "status": 1.5500002, "view": "darkroom", **p,
-        }
+        # `enable`, not `nudge`: `enable` knows its real target (the module
+        # is already enabled in the fixture), so its early-noop confirmation
+        # is a genuine XMP readback, unaffected by t_fcf77055 (`nudge` has
+        # no known target and no longer resolves an unconfirmed timeout at
+        # all -- see `test_a_nudge_whose_status_echoes_the_already_on_disk_
+        # value_still_raises` in test_darkroom_core.py).
         with mock.patch("scouter.core.darkroom._commit",
                         side_effect=CommitTimeout("darktable did not write the sidecar in time")):
-            result = darkroom.nudge(module="exposure", param="exposure", steps=1)
+            result = darkroom.enable(module="exposure")
         self.assertTrue(result.committed)
         self.assertTrue(any("no new sidecar" in w for w in result.warnings), result.warnings)
 

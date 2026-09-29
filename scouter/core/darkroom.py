@@ -1384,11 +1384,13 @@ def nudge(
         code = e.code if isinstance(e, ScouterError) else "error"
         journal.fail(job, entry.seq, outcome=f"error:{code}")
         raise
-    # `dt.gui.action` returns the resulting absolute value for effect up/down
-    # (not just "set") -- phase 0 finding 1 applies here too, so this is a
-    # real bridge-reported number, not a guessed one. Recording it in `after`
-    # (fix round 2, blocker 6) is what lets `_last_journal_write` treat a
-    # nudge the same as a `set` for the commit=False fallback.
+    # `dt.gui.action`'s `status` is a post-write GUI echo -- a normalised
+    # 0..1 slider position, undocumented for effect up/down, and NEVER the
+    # param's real value in its own units (design 7.3; the Lua plugin's
+    # `darkroom.action`/`darkroom.status`). `after["value"]` still records it
+    # (fix round 2, blocker 6: it is the only signal available for a later
+    # commit=False fallback, before anything has reached the sidecar), but
+    # nothing below trusts it as a value -- the XMP is the only value source.
     after: dict = {"steps": steps, "steps_landed": landed}
     if last_status is not None:
         after["value"] = last_status
@@ -1396,52 +1398,47 @@ def nudge(
 
     committed, applied, warnings = False, None, []
     if commit:
-        # Same commit-timeout resolution `set` has (should-fix 6): the honest
-        # confirmation for a nudge is the value darktable itself reported for
-        # the last step (`after["value"]`) already being in the sidecar.
-        landed_value = after.get("value")
-
+        # Nudge has no known target -- darktable, not Scouter, picks a
+        # step's destination -- so it cannot confirm a landed step against
+        # an absolute value the way `set` does. The honest confirmation
+        # available without `status` is Z2's two independent, XMP-derived
+        # oracles: `_commit_with_readback`'s own history-fingerprint check,
+        # and this readback showing the value moved AWAY from `before_state`
+        # in the direction `effect` actually asked for. The direction check
+        # (not `status`) is what keeps a concurrent, unrelated edit to the
+        # same param from being credited as this nudge's own landed step --
+        # see `test_a_concurrent_change_to_the_same_module_is_not_credited`.
         def _confirm_nudge() -> bool:
-            if landed_value is None:
+            current = _read_value(resolved.path, module, param, instance)
+            before_value = before_state.get("value")
+            if current is None or before_value is None or _close(current, before_value):
                 return False
-            return _close(_read_value(resolved.path, module, param, instance), landed_value)
+            return current > before_value if effect == "up" else current < before_value
 
-        # The step already had nowhere to go (a boundary nudge): darktable's
-        # own reported landing value was already the RAW before-value.
-        matched_before = landed_value is not None and _close(
-            before_state.get("value"), landed_value
-        )
-
-        committed, warnings, _noop = _commit_with_readback(
+        committed, warnings, noop = _commit_with_readback(
             job,
             resolved.image_id,
             xmp_path=resolved.xmp_path,
             confirm=_confirm_nudge,
             what=f"{module}.{param}",
-            matched_before=matched_before,
             expect_module=module,
         )
         applied = _read_value(resolved.path, module, param, instance)
-        # Row 433: darktable itself reported where the last step landed; a
-        # committed sidecar that says something else is not a landed nudge.
-        if (
-            landed_value is not None
-            and applied is not None
-            and not vocab.values_match(
-                module, param, applied, landed_value, previous=before_state.get("value")
-            )
-        ):
-            _raise_unverified(
-                f"{module}.{param}",
-                module=module,
-                param=param,
-                requested=landed_value,
-                expected=landed_value,
-                applied=applied,
-                previous=before_state.get("value"),
-                history_end_before=raw_state.get("history_end"),
-                path=resolved.path,
-                instance=instance,
+        # Row 433, restated without `status`: a landed (non-noop) commit
+        # whose own before/after XMP readback shows no movement is not a
+        # landed nudge -- raise rather than report it as one.
+        if committed and not noop and _close(applied, before_state.get("value")):
+            raise WriteUnverified(
+                f"{module}.{param}: darktable's commit reported done, but the sidecar "
+                f"still reads {applied!r}, unchanged from before ({before_state.get('value')!r})",
+                detail={
+                    "module": module,
+                    "param": param,
+                    "applied": applied,
+                    "previous": before_state.get("value"),
+                    "path": resolved.path,
+                    "instance": instance,
+                },
             )
     return SetResult(
         image_id=resolved.image_id,
