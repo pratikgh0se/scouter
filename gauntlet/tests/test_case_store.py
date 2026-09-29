@@ -204,8 +204,9 @@ def test_case_workdir_rejects_unsafe_ids(tmp_path, bad):
     """I1: an empty, `.`/`..`, absolute-looking or separator-carrying id must
     never resolve to a workdir outside `<run>/work`."""
     run = RunDir(tmp_path, "s").ensure()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError) as exc_info:
         run.case_workdir(bad)
+    assert repr(bad) in str(exc_info.value)
 
 
 @pytest.mark.parametrize("bad", UNSAFE_IDS)
