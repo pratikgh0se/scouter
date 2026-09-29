@@ -8,7 +8,14 @@ from pathlib import Path
 from unittest import mock
 
 from scouter.core import darkroom, dtbridge, journal, vocab, xmp
-from scouter.errors import CommitTimeout, NotInDarkroom, ScouterError, UsageError, WrongView
+from scouter.errors import (
+    CommitTimeout,
+    NotInDarkroom,
+    ScouterError,
+    UsageError,
+    WriteUnverified,
+    WrongView,
+)
 from scouter.types import CommitResult
 from tests.scouter_fakes import FakeBridge, TempCache, with_new_history_hash, with_param_value
 
@@ -1336,6 +1343,77 @@ class CommitReadbackTest(unittest.TestCase):
             "nan": False, "status": 9.0, "view": "darkroom", **p,
         }
         with mock.patch("scouter.core.darkroom._commit", side_effect=_concurrent_edit):
+            with self.assertRaises(CommitTimeout):
+                darkroom.nudge(module="exposure", param="exposure", steps=1)
+
+    def test_a_pending_uncommitted_nudges_status_must_not_leak_into_the_next_nudges_confirm(
+            self) -> None:
+        """Fix round 1, C1 (review Critical): `_confirm_nudge` and the
+        post-check must measure movement from what is actually ON DISK
+        (`raw_state`), never from `before_state` -- after a `commit=False`
+        nudge, `before_state`'s value is THAT nudge's own bridge `status`
+        (`_raw_and_before_state`'s `pending_uncommitted` fallback), which
+        design 7.3 says is a normalised position, not a value. Reviewer
+        probe `test_one`: nudge #1 (`commit=False`) reports a status of
+        0.6, well below the fixture's real on-disk 1.5500002; nudge #2
+        (`commit=True`, up) times out with NO sidecar change at all. Using
+        `before_state` (0.6) as the baseline makes `1.5500002 > 0.6` read
+        as "moved up," a write that never reached disk reported as landed
+        -- the exact false-success bug this branch was meant to remove.
+        Using `raw_state` (1.5500002, genuinely unchanged) is not confirmed,
+        so the timeout must propagate."""
+        self.bridge.responses["darkroom.action"] = lambda p: {
+            "nan": False, "status": 0.6, "view": "darkroom", **p,
+        }
+        darkroom.nudge(module="exposure", param="exposure", steps=1, commit=False)
+        with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
+            with self.assertRaises(CommitTimeout):
+                darkroom.nudge(module="exposure", param="exposure", steps=1)
+
+    def test_a_successful_commit_that_moved_the_wrong_way_is_not_credited(self) -> None:
+        """Fix round 1, I1 (review Important): the post-commit check must
+        test DIRECTION, not just "unchanged" -- a successful (non-timeout)
+        commit whose readback moved the WRONG way (an up-nudge whose XMP
+        reads 1.5500002 -> 0.1, a concurrent drag landing in the other
+        direction) must not be credited as this nudge's own landed step.
+        Reviewer probe `test_four`."""
+        sidecar = self._sidecar_path()
+        before_text = sidecar.read_text()
+
+        def _opposite_direction(*_a, **_kw):
+            landed = self._clone_exposure_entry(before_text)
+            landed = with_param_value(landed, "exposure", "exposure", 0.1)
+            sidecar.write_text(landed)
+            return mock.Mock(committed=True, warnings=[])
+
+        with mock.patch("scouter.core.darkroom._commit", side_effect=_opposite_direction):
+            with self.assertRaises(WriteUnverified):
+                darkroom.nudge(module="exposure", param="exposure", steps=1)
+
+    def test_a_value_that_moved_without_history_advancing_is_not_an_honest_noop(self) -> None:
+        """Fix round 1, I2 (review Important): a `commit=True` nudge whose
+        timeout resolution sees the value move (`confirm()` true) but the
+        module's OWN history not advance past `before_fp` is unconfirmed,
+        not an honest "the state requested is the one the XMP already
+        carried" noop -- that text is only true for a caller with a real,
+        known target (`set`, `enable`), never for `nudge`. Reviewer probe
+        `test_two`: the bridge action itself writes a new exposure entry
+        (2.0) DURING the call, before `_commit` captures its own
+        `before_fp` snapshot and raises the timeout -- so by the time
+        `_resolve_timeout` runs, the readback shows 2.0 (confirmed=True,
+        moved up) but `_history_advanced_for` sees no advance past that
+        already-later fingerprint. `allow_noop=False` must turn this into a
+        propagated `CommitTimeout`, not a false noop."""
+        sidecar = self._sidecar_path()
+
+        def _early_flush(p):
+            landed = self._clone_exposure_entry(sidecar.read_text())
+            landed = with_param_value(landed, "exposure", "exposure", 2.0)
+            sidecar.write_text(landed)
+            return {"nan": False, "status": 0.7, "view": "darkroom", **p}
+
+        self.bridge.responses["darkroom.action"] = _early_flush
+        with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
             with self.assertRaises(CommitTimeout):
                 darkroom.nudge(module="exposure", param="exposure", steps=1)
 

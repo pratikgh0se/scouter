@@ -175,6 +175,7 @@ def _commit_with_readback(
     predicted_noop: bool = False,
     matched_before: bool = False,
     expect_module: str | None = None,
+    allow_noop: bool = True,
 ) -> tuple[bool, list[str], bool]:
     """`_commit`, with a commit timeout resolved by reading the XMP back.
 
@@ -187,6 +188,15 @@ def _commit_with_readback(
     `matched_before` is the caller's own knowledge that the pre-write state
     already matched the target (`_do_module_action`'s `predicted_noop`,
     `nudge`'s before value vs. the step's landed value).
+
+    `allow_noop=False` (nudge's own call, fix round 1, I2): a `confirm()`
+    that is true but did NOT come with history advancing for `expect_module`
+    is never resolved as "the state requested is the one the XMP already
+    carried" -- for a caller with no real target (like `nudge`, where
+    `confirm()` true just means the value moved), that text is a lie, not a
+    noop. `_late_flush_landed` (both oracles: history advanced AND the
+    readback confirms) is unaffected; only the single-oracle noop fallback
+    below is gated.
     """
     from scouter.core import history
 
@@ -208,7 +218,7 @@ def _commit_with_readback(
         if _late_flush_landed(matched_before, confirmed, advanced):
             history.watermark_write(job, image_id, xmp_path)
             return True, [late_flush_warning], False
-        if confirmed:
+        if confirmed and allow_noop:
             history.watermark_write(job, image_id, xmp_path)
             return True, [noop_warning], True
         return None
@@ -226,7 +236,7 @@ def _commit_with_readback(
                 return resolved
         if first is not None and first.committed:
             return True, list(first.warnings), False
-        if confirm():
+        if allow_noop and confirm():
             history.watermark_write(job, image_id, xmp_path)
             return True, [noop_warning], True
     try:
@@ -288,6 +298,19 @@ def _close(a: float | None, b: float | None, tol: float = 1e-4) -> bool:
     if a is None or b is None:
         return a is None and b is None
     return abs(a - b) < tol
+
+
+def _moved_as_asked(baseline: float | None, applied: float | None, effect: str) -> bool:
+    """Z2, no `status`: whether a readback genuinely moved away from
+    `baseline` in the direction `effect` ("up"/"down") asked for. `nudge`
+    uses this for both halves of its own confirmation -- a commit-timeout
+    readback (`_confirm_nudge`) and its post-commit check -- so a
+    successful commit that lands the WRONG direction (a concurrent,
+    opposite-direction edit credited to this nudge) is rejected the same
+    way an unconfirmed timeout is."""
+    if baseline is None or applied is None or _close(applied, baseline):
+        return False
+    return applied > baseline if effect == "up" else applied < baseline
 
 
 def _read_sidecar_parsed(path: str) -> xmp.ParsedXmp | None:
@@ -1387,10 +1410,15 @@ def nudge(
     # `dt.gui.action`'s `status` is a post-write GUI echo -- a normalised
     # 0..1 slider position, undocumented for effect up/down, and NEVER the
     # param's real value in its own units (design 7.3; the Lua plugin's
-    # `darkroom.action`/`darkroom.status`). `after["value"]` still records it
-    # (fix round 2, blocker 6: it is the only signal available for a later
-    # commit=False fallback, before anything has reached the sidecar), but
-    # nothing below trusts it as a value -- the XMP is the only value source.
+    # `darkroom.action`/`darkroom.status`). Nothing in THIS nudge's own
+    # commit=True success/applied decision below trusts it any more -- but
+    # `after["value"]` still records it (fix round 2, blocker 6), and that
+    # value keeps feeding `before_state` for a LATER write to this same key
+    # (`_raw_and_before_state`'s `pending_uncommitted` fallback, `:8xx`) and
+    # `undo_last`'s restore -- a pre-existing leak this branch did not
+    # introduce and does not fix; tracked as a follow-up card (fix round 1,
+    # I3: a nudge's `after` should mark the key `value_unknown`, not carry a
+    # position dressed up as a value).
     after: dict = {"steps": steps, "steps_landed": landed}
     if last_status is not None:
         after["value"] = last_status
@@ -1403,17 +1431,24 @@ def nudge(
         # an absolute value the way `set` does. The honest confirmation
         # available without `status` is Z2's two independent, XMP-derived
         # oracles: `_commit_with_readback`'s own history-fingerprint check,
-        # and this readback showing the value moved AWAY from `before_state`
-        # in the direction `effect` actually asked for. The direction check
-        # (not `status`) is what keeps a concurrent, unrelated edit to the
-        # same param from being credited as this nudge's own landed step --
-        # see `test_a_concurrent_change_to_the_same_module_is_not_credited`.
+        # and `_moved_as_asked` showing the readback moved AWAY from the
+        # value that was ACTUALLY ON DISK before this nudge (`raw_state`,
+        # never `before_state` -- fix round 1, C1: after a `commit=False`
+        # nudge, `before_state`'s value is that nudge's own `status`, and
+        # comparing against it reintroduces the same false-success bug this
+        # branch removed) in the direction `effect` actually asked for.
+        # `allow_noop=False` (fix round 1, I2): a value that moved without
+        # the module's history advancing is not an honest "already there"
+        # noop for a caller with no known target -- it is unconfirmed,
+        # raise. Concurrent-edit rejection (`_moved_as_asked`, same
+        # direction only -- an opposite-direction concurrent edit is caught
+        # by the post-check below; a same-direction one is inherently
+        # indistinguishable from this nudge's own step without a known
+        # target) -- see `test_a_concurrent_change_to_the_same_module_is_
+        # not_credited`.
         def _confirm_nudge() -> bool:
             current = _read_value(resolved.path, module, param, instance)
-            before_value = before_state.get("value")
-            if current is None or before_value is None or _close(current, before_value):
-                return False
-            return current > before_value if effect == "up" else current < before_value
+            return _moved_as_asked(raw_state.get("value"), current, effect)
 
         committed, warnings, noop = _commit_with_readback(
             job,
@@ -1422,20 +1457,25 @@ def nudge(
             confirm=_confirm_nudge,
             what=f"{module}.{param}",
             expect_module=module,
+            allow_noop=False,
         )
         applied = _read_value(resolved.path, module, param, instance)
-        # Row 433, restated without `status`: a landed (non-noop) commit
-        # whose own before/after XMP readback shows no movement is not a
-        # landed nudge -- raise rather than report it as one.
-        if committed and not noop and _close(applied, before_state.get("value")):
+        # Row 433, restated without `status` (fix round 1, I1): a landed
+        # (non-noop) commit whose own before/after XMP readback did not
+        # move in the requested direction -- unchanged, OR moved the wrong
+        # way (a concurrent, opposite-direction edit credited to this
+        # nudge) -- is not a landed nudge. Same `_moved_as_asked` oracle as
+        # the confirm above, same `raw_state` baseline.
+        if committed and not noop and not _moved_as_asked(raw_state.get("value"), applied, effect):
             raise WriteUnverified(
                 f"{module}.{param}: darktable's commit reported done, but the sidecar "
-                f"still reads {applied!r}, unchanged from before ({before_state.get('value')!r})",
+                f"reads {applied!r}, not moved {effect} from the value on disk before this "
+                f"nudge ({raw_state.get('value')!r})",
                 detail={
                     "module": module,
                     "param": param,
                     "applied": applied,
-                    "previous": before_state.get("value"),
+                    "previous": raw_state.get("value"),
                     "path": resolved.path,
                     "instance": instance,
                 },

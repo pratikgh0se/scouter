@@ -1,11 +1,13 @@
 """Runs tests/intent/nudge_status_not_a_value.json (Zenkai Rules Z1; t_fcf77055).
 
-Two independent oracles per example (Z2): oracle A is the JSON's own recorded
-facts about where `status` comes from (the Lua plugin source text and the
-phase 1 design spec, quoted -- not re-derived from the fix under test) against
-oracle B, a live replay of `darkroom.nudge` through the same `FakeBridge`/
-`_commit`-timeout seam `tests/test_darkroom_core.py::CommitReadbackTest`
-uses. Oracle A never calls `darkroom.nudge`; oracle B never reads the JSON.
+Two independent oracles per example (Z2): oracle A is a fact never derived
+from `nudge`'s own return value -- either the Lua plugin source / phase 1
+design spec text (examples 1-2), or a direct `xmp.parse` of the sidecar
+(example 3) -- against oracle B, a live replay of `darkroom.nudge` through
+the same `FakeBridge`/`_commit`-timeout seam
+`tests/test_darkroom_core.py::CommitReadbackTest` uses. Oracle A never calls
+`darkroom.nudge`; oracle B reads the JSON's `input` only (to parametrize the
+replay -- module/param/steps), never its `expect` verdict.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scouter.core import darkroom, dtbridge
+from scouter.core import darkroom, dtbridge, xmp
 from scouter.errors import CommitTimeout
 from tests.scouter_fakes import FakeBridge, TempCache, with_param_value
 
@@ -98,10 +100,17 @@ class NudgeStatusNotAValueIntentTest(unittest.TestCase):
             with self.assertRaises(CommitTimeout):
                 darkroom.nudge(module=fx["input"]["module"], param=fx["input"]["param"],
                                steps=fx["input"]["steps"])
-        self.assertEqual(fx["expect"]["raises"], "CommitTimeout")
 
     def test_status_as_a_normalised_position_does_not_confirm_an_unlanded_nudge(self) -> None:
         fx = EXAMPLES["status-as-a-normalised-position-does-not-confirm-an-unlanded-nudge"]
+        # Oracle A, same as example 1: the design spec's own text -- `status`
+        # is a normalised position, never relabelled as a value.
+        spec_text = SPEC_PATH.read_text()
+        self.assertIn("normalised position", spec_text)
+        self.assertIn("never relabelled as a value", spec_text)
+
+        # Oracle B: live replay, this time with `status` set to a plausible
+        # normalised 0..1 position rather than the request echo.
         self._rewrite_exposure_value(0.5)
         self.bridge.responses["darkroom.action"] = lambda p: {
             "nan": False, "status": 0.5, "view": "darkroom", **p,
@@ -110,10 +119,10 @@ class NudgeStatusNotAValueIntentTest(unittest.TestCase):
             with self.assertRaises(CommitTimeout):
                 darkroom.nudge(module=fx["input"]["module"], param=fx["input"]["param"],
                                steps=fx["input"]["steps"])
-        self.assertEqual(fx["expect"]["raises"], "CommitTimeout")
 
     def test_a_genuine_landed_nudge_after_a_timeout_is_still_reported_applied(self) -> None:
         fx = EXAMPLES["a-genuine-landed-nudge-after-a-timeout-is-still-reported-applied"]
+        before_end = self._history_end()
 
         def _late_flush(*_a, **_kw):
             self._clone_and_rewrite_exposure(9.0)
@@ -122,6 +131,16 @@ class NudgeStatusNotAValueIntentTest(unittest.TestCase):
         with mock.patch("scouter.core.darkroom._commit", side_effect=_late_flush):
             result = darkroom.nudge(module=fx["input"]["module"], param=fx["input"]["param"],
                                     steps=fx["input"]["steps"])
+
+        # Oracle A: a direct `xmp.parse` of the sidecar, independent of
+        # `nudge`'s own return value -- the history genuinely advanced and
+        # the newest active exposure entry genuinely holds 9.0.
+        parsed = xmp.parse(self.sidecar.read_text())
+        self.assertGreater(parsed.history_end, before_end)
+        self.assertAlmostEqual(
+            xmp.latest_value(parsed, "exposure", "exposure", instance=0), 9.0, places=4)
+
+        # Oracle B: the live nudge call's own report.
         self.assertEqual(result.committed, fx["expect"]["committed"])
         self.assertFalse(any("no new sidecar" in w for w in result.warnings), result.warnings)
         self.assertTrue(
