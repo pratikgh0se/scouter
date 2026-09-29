@@ -25,6 +25,12 @@
       "input": {"scenario": "main_venv", "scouter_python": null, "own_venv": true},
       "expect": {"resolved_is": "own_venv", "prefix_is": "own_venv"},
       "source": "review I3: this repo's other resolver (scripts/htc_post_run.sh) checks the checkout's own venv BEFORE the main checkout's, and mutation_check.sh must match -- a worktree with its own real venv (e.g. for a dependency bump) must not be shadowed by the main checkout's"
+    },
+    {
+      "id": "ambient-PYTHON-env-is-ignored",
+      "input": {"scenario": "main_venv", "scouter_python": null, "own_venv": false, "ambient_python": true},
+      "expect": {"resolved_is": "main_venv", "prefix_is": "main_venv"},
+      "source": "review R2-I1: round 1's `[[ -z \"${PYTHON:-}\" ]]` guard never cleared PYTHON first, so any pre-existing PYTHON in the environment (including `make gate ... PYTHON=x`, common in CI and dev shells) bypassed the whole resolution chain -- PYTHON must be reset to empty before the chain runs, so only $SCOUTER_PYTHON and the venv lookups ever set it"
     }
   ]
 }

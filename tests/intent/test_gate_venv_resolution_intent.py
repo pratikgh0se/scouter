@@ -91,10 +91,12 @@ def _remove_worktree(repo: Path, dest: Path) -> None:
 def _resolve(worktree: Path, env_extra: dict) -> tuple[str, str]:
     """Runs the subject script from `worktree` and returns
     (resolved_pyexe, resolved_pyprefix) as reported by the stub it execs.
-    Never inherits the CALLING shell's own $SCOUTER_PYTHON (I2): each
-    example controls that variable explicitly via env_extra."""
+    Never inherits the CALLING shell's own $SCOUTER_PYTHON or $PYTHON (I2,
+    R2-I1): each example controls those variables explicitly via
+    env_extra."""
     env = os.environ.copy()
     env.pop("SCOUTER_PYTHON", None)
+    env.pop("PYTHON", None)
     env.update(env_extra)
     proc = subprocess.run(
         ["scripts/mutation_check.sh", "x", "y", str(worktree)],
@@ -113,9 +115,11 @@ def _resolve(worktree: Path, env_extra: dict) -> tuple[str, str]:
 def _python3_via_path(env_extra: dict) -> tuple[str, str]:
     """What a bare `python3` resolves to via PATH, computed independently
     (never assumed) so the fallback example doesn't hardcode a path. Also
-    never inherits the caller's own $SCOUTER_PYTHON (I2)."""
+    never inherits the caller's own $SCOUTER_PYTHON or $PYTHON (I2,
+    R2-I1)."""
     env = os.environ.copy()
     env.pop("SCOUTER_PYTHON", None)
+    env.pop("PYTHON", None)
     env.update(env_extra)
     proc = subprocess.run(
         ["python3", "-c", "import sys; print(sys.executable); print(sys.prefix)"],
@@ -175,6 +179,15 @@ class GateVenvResolutionIntentTest(unittest.TestCase):
             env_extra = {}
             if inp["scouter_python"] == "override":
                 env_extra["SCOUTER_PYTHON"] = str(self.override_venv / "bin" / "python3")
+            if inp.get("ambient_python"):
+                # R2-I1: an ambient $PYTHON (e.g. `make gate ... PYTHON=x`,
+                # or just a variable left set in a dev shell) must be
+                # ignored -- the script's own resolution chain always
+                # decides PYTHON, never the caller's pre-existing value.
+                # Pointed at the override venv precisely so this example
+                # fails loudly (picks the wrong, distinguishable venv) if
+                # the ambient value ever leaks through again.
+                env_extra["PYTHON"] = str(self.override_venv / "bin" / "python3")
             pyexe, pyprefix = _resolve(wt, env_extra)
 
             if want["resolved_is"] == "main_venv":

@@ -57,6 +57,7 @@ ROOT="${3:-$SCRIPT_HOME}"
 # Same chain as scripts/htc_post_run.sh (Z8, card t_0f1197e6/row 478):
 # $SCOUTER_PYTHON, then this checkout's own venv, then the MAIN checkout's
 # venv via git's common dir -- so a bare worktree still finds pytest.
+PYTHON=""
 if [[ -n "${SCOUTER_PYTHON:-}" ]]; then
   if [[ -x "$SCOUTER_PYTHON" ]]; then
     PYTHON="$SCOUTER_PYTHON"
