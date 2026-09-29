@@ -165,7 +165,7 @@
   {
     "candidate_paths": [],
     "concept": "color_balance",
-    "default": null,
+    "default": 0.0,
     "default_candidate": null,
     "display_scale": 100.0,
     "hi": 0.5,
@@ -188,7 +188,7 @@
   {
     "candidate_paths": [],
     "concept": "chroma_saturation",
-    "default": null,
+    "default": 0.0,
     "default_candidate": null,
     "display_scale": 100.0,
     "hi": 0.5,
@@ -213,7 +213,7 @@
       "iop/colorbalancergb/global vibrance"
     ],
     "concept": "chroma_saturation",
-    "default": null,
+    "default": 0.0,
     "default_candidate": null,
     "display_scale": 100.0,
     "hi": 0.5,
@@ -238,7 +238,7 @@
       "iop/colorbalancergb/global chroma"
     ],
     "concept": "chroma_saturation",
-    "default": null,
+    "default": 0.0,
     "default_candidate": null,
     "display_scale": 100.0,
     "hi": 0.5,
@@ -265,7 +265,7 @@
       "iop/colorbalancergb/shadows luminance"
     ],
     "concept": "color_balance",
-    "default": null,
+    "default": 0.0,
     "default_candidate": null,
     "display_scale": 100.0,
     "hi": 0.25,
@@ -319,7 +319,7 @@
       "iop/colorbalancergb/shadows chroma"
     ],
     "concept": "grading",
-    "default": null,
+    "default": 0.0,
     "default_candidate": null,
     "display_scale": 100.0,
     "hi": 0.3,
@@ -345,7 +345,7 @@
       "iop/colorbalancergb/midtones luminance"
     ],
     "concept": "color_balance",
-    "default": null,
+    "default": 0.0,
     "default_candidate": null,
     "display_scale": 100.0,
     "hi": 0.25,
@@ -397,7 +397,7 @@
       "iop/colorbalancergb/midtones chroma"
     ],
     "concept": "grading",
-    "default": null,
+    "default": 0.0,
     "default_candidate": null,
     "display_scale": 100.0,
     "hi": 0.3,
@@ -424,7 +424,7 @@
       "iop/colorbalancergb/highlights luminance"
     ],
     "concept": "color_balance",
-    "default": null,
+    "default": 0.0,
     "default_candidate": null,
     "display_scale": 100.0,
     "hi": 0.25,
@@ -478,7 +478,7 @@
       "iop/colorbalancergb/highlights chroma"
     ],
     "concept": "grading",
-    "default": null,
+    "default": 0.0,
     "default_candidate": null,
     "display_scale": 100.0,
     "hi": 0.3,

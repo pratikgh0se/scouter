@@ -461,6 +461,41 @@ earlier same-day run (18:41, one shared scratch copy/session for both oracles) r
 as the sentinel itself -- a contaminated measurement, discarded; the design was fixed to give each
 oracle its own copy/launch before the 18:49 run above.
 
+### colorbalancergb neutral-only defaults (card t_cc03dcb4, decision row 560, 2026-09-29)
+
+`tests/test_host_phase3.py::ProbeColorbalancergbNeutralDefaultsHostTest` (host run 2026-09-29
+21:19, darktable exited cleanly, 175 s), two independent oracles each on their own scratch copy
+and darktable launch, batched across all 10 rows of the module that carried only `neutral` (the
+26 gauntlet coverage cases `m1-default-report.md`'s "Fix round 1" M4 section lists as staying
+failed after the M1 declared-default fix, b2edf66/row 549). The `shadows_hue`/`midtones_hue`/
+`highlights_hue` rows already had a host-verified `default` (`_CB_HUE_DEFAULT`, task 10) and were
+not part of this probe.
+
+| row | oracle A (fresh enable) | sentinel requested/decoded | oracle B (post-reset) | verified |
+| --- | --- | --- | --- | --- |
+| colorbalancergb.shadows_luminance | 0.0 | 0.17 / 0.16999995708465576 | 0.0 | yes |
+| colorbalancergb.shadows_chroma | 0.0 | 0.16 / 0.1599999964237213 | 0.0 | yes |
+| colorbalancergb.midtones_luminance | 0.0 | 0.15 / 0.15000000596046448 | 0.0 | yes |
+| colorbalancergb.midtones_chroma | 0.0 | 0.14 / 0.14000000059604645 | 0.0 | yes |
+| colorbalancergb.highlights_luminance | 0.0 | 0.13 / 0.12999999523162842 | 0.0 | yes |
+| colorbalancergb.highlights_chroma | 0.0 | 0.12 / 0.11999999731779099 | 0.0 | yes |
+| colorbalancergb.global_chroma | 0.0 | 0.11 / 0.11000001430511475 | 0.0 | yes |
+| colorbalancergb.global_saturation | 0.0 | 0.1 / 0.10000002384185791 | 0.0 | yes |
+| colorbalancergb.global_vibrance | 0.0 | 0.09 / 0.09000003337860107 | 0.0 | yes |
+| colorbalancergb.contrast | 0.0 | 0.08 / 0.07999998331069946 | 0.0 | yes |
+
+Every sentinel read back within 1e-4 of its requested value (proving its slot is live on this
+host/build, per xmp.py's `("colorbalancergb", 5)` named-slot layout), and every row's oracle A
+(fresh-enable) reading agreed with oracle B's post-reset reading within `vocab.default_tolerance`
+(1e-6 fallback). All 10 rows verified at exactly 0.0 -- the same value each row's `neutral` already
+declared. Promoted `default=neutral` (i.e. `0.0`) for these 10 rows in `scouter/core/vocab.py`'s
+`_cb()`, citing this run; the hue rows are unaffected (already declared `_CB_HUE_DEFAULT`). This
+unblocks the M1 declared-default fallback (`gauntlet/evaluate.py`) for the matching coverage
+cases (`cov-colorbalancergb.{contrast,global_chroma,global_saturation,global_vibrance,
+highlights_chroma,highlights_luminance,midtones_chroma,midtones_luminance,shadows_chroma,
+shadows_luminance}-{olympus,sony_a7}-{set_lo,set_neutral}`, 26 cases total) on their next gauntlet
+run.
+
 ### Signs (scout.stats, 512 px)
 
 | move | measured | expected | verdict |

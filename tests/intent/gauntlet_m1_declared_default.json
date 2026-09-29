@@ -82,6 +82,42 @@
       "calls": [{"noop": true, "applied": 0.0, "ok": false}],
       "expect": {"score": "fail", "measured": null},
       "source": "review round 1, I2's \"also\": an ok:false envelope whose data still carries noop:true / a matching applied must not count -- the call itself was refused, so its data is not a trustworthy read of what darktable applied."
+    },
+    {
+      "id": "declared-default-colorbalancergb-contrast-scores-pass",
+      "kind": "synthetic",
+      "key": "colorbalancergb.contrast", "target": 0.0, "unit": "%",
+      "verified_defaults": {"colorbalancergb.contrast": 0.0},
+      "calls": [{"module": "colorbalancergb", "param": "contrast", "noop": true, "applied": 0.0, "ok": true}],
+      "expect": {"score": "pass", "outcome": "verified", "measured": 0.0},
+      "source": "card t_cc03dcb4 (decision row 560, follows t_29a9ef47/rows 548/549/554): colorbalancergb.contrast was `neutral`-only (excluded from verified_defaults by I1) until the host probe (tests/test_host_phase3.py::ProbeColorbalancergbNeutralDefaultsHostTest, host run 2026-09-29 21:19, docs/measurements.md) verified its darktable default at 0.0 and it was promoted in scouter/core/vocab.py. Same shape as colorzones.strength's positive example: no colorbalancergb history entry, verified default 0.0, envelope noop/applied 0.0."
+    },
+    {
+      "id": "declared-default-colorbalancergb-global_chroma-scores-pass",
+      "kind": "synthetic",
+      "key": "colorbalancergb.global_chroma", "target": 0.0, "unit": "%",
+      "verified_defaults": {"colorbalancergb.global_chroma": 0.0},
+      "calls": [{"module": "colorbalancergb", "param": "global_chroma", "noop": true, "applied": 0.0, "ok": true}],
+      "expect": {"score": "pass", "outcome": "verified", "measured": 0.0},
+      "source": "same host probe and promotion as the contrast example above, for the master/global row family (global_chroma; global_saturation and global_vibrance were verified the same way in the same run)."
+    },
+    {
+      "id": "declared-default-colorbalancergb-shadows_luminance-scores-pass",
+      "kind": "synthetic",
+      "key": "colorbalancergb.shadows_luminance", "target": 0.0, "unit": "%",
+      "verified_defaults": {"colorbalancergb.shadows_luminance": 0.0},
+      "calls": [{"module": "colorbalancergb", "param": "shadows_luminance", "noop": true, "applied": 0.0, "ok": true}],
+      "expect": {"score": "pass", "outcome": "verified", "measured": 0.0},
+      "source": "same host probe and promotion as the contrast example above, for the 4-ways zone luminance row family (shadows_luminance; midtones_luminance and highlights_luminance were verified the same way in the same run)."
+    },
+    {
+      "id": "declared-default-colorbalancergb-midtones_chroma-scores-pass",
+      "kind": "synthetic",
+      "key": "colorbalancergb.midtones_chroma", "target": 0.0, "unit": "%",
+      "verified_defaults": {"colorbalancergb.midtones_chroma": 0.0},
+      "calls": [{"module": "colorbalancergb", "param": "midtones_chroma", "noop": true, "applied": 0.0, "ok": true}],
+      "expect": {"score": "pass", "outcome": "verified", "measured": 0.0},
+      "source": "same host probe and promotion as the contrast example above, for the 4-ways zone chroma row family (midtones_chroma; shadows_chroma and highlights_chroma were verified the same way in the same run)."
     }
   ]
 }

@@ -138,7 +138,18 @@ def _cb(param: str, ui: str, unit: str, lo: float, hi: float, step: float, conce
         # colorbalancergb.xmp slots 2/5/8), so "warm the highlights" can set
         # a hue on an image with no colour-balance history and still be
         # undone to what the module really held.
-        default=_CB_HUE_DEFAULT if wraps else None,
+        #
+        # Card t_cc03dcb4 (decision row 560, follows t_29a9ef47/rows
+        # 548/549/554), host run 2026-09-29 21:19:
+        # `tests/test_host_phase3.py::ProbeColorbalancergbNeutralDefaultsHostTest`
+        # host-verified darktable's default for every non-hue row of this
+        # family (contrast, global_chroma/saturation/vibrance, and each
+        # zone's luminance/chroma) at exactly 0.0 -- the same value this
+        # row's own `neutral` already declared, now backed by a host
+        # measurement rather than only the product's own "no effect"
+        # belief. See docs/measurements.md "colorbalancergb neutral-only
+        # defaults" for the full per-row table.
+        default=_CB_HUE_DEFAULT if wraps else neutral,
     )
 
 

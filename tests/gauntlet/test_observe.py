@@ -76,3 +76,39 @@ def test_m1_declared_default_fallback_accepts_a_real_verified_default_via_real_a
     v = evaluate(_cz_case(), obs, POLICY)
     assert (v.score, v.outcome) == ("pass", "verified")
     assert v.checks[0].measured == 0.0
+
+
+def test_m1_declared_default_fallback_accepts_the_colorbalancergb_neutral_promotions():
+    """Card t_cc03dcb4 (decision row 560, follows t_29a9ef47/rows 548/549/554):
+    mirror of the colorzones test above for the 10 colorbalancergb rows that
+    were `neutral`-only (excluded from `verified_defaults()` by design, I1
+    of the M1 fix) until the host probe in
+    `tests/test_host_phase3.py::ProbeColorbalancergbNeutralDefaultsHostTest`
+    (host run 2026-09-29 21:19, docs/measurements.md "colorbalancergb
+    neutral-only defaults") verified each at 0.0 and promoted `default` in
+    `scouter/core/vocab.py`. One row per family named in the card
+    (contrast, a global row, and one zone luminance/chroma pair) driven
+    through the REAL `observe.verified_defaults()`, not a hard-coded dict,
+    so a regression that drops the promotion (or reverts to `defaults()`,
+    the round-1 false-pass bug) fails this test."""
+    vd = observe.verified_defaults()
+    for module, param in (
+        ("colorbalancergb", "contrast"),
+        ("colorbalancergb", "global_chroma"),
+        ("colorbalancergb", "shadows_luminance"),
+        ("colorbalancergb", "midtones_chroma"),
+        ("colorbalancergb", "highlights_luminance"),
+        ("colorbalancergb", "highlights_chroma"),
+    ):
+        key = f"{module}.{param}"
+        # oracle A: the raw vocab fact this whole example depends on.
+        assert vd.get(key) == 0.0, key
+        obs = Observation(
+            calls=[_cz_call(0.0, True, 0.0, module=module, param=param)],
+            before=_cz_snap("a", verified_defaults=vd),
+            after=_cz_snap("a", verified_defaults=vd),
+        )
+        # oracle B: the fixed evaluator, on the real adapter's own table.
+        v = evaluate(_cz_case(chk=_cz_chk(target=0.0, key=key), key=key), obs, POLICY)
+        assert (v.score, v.outcome) == ("pass", "verified"), key
+        assert v.checks[0].measured == 0.0, key
