@@ -1370,6 +1370,72 @@ class CommitReadbackTest(unittest.TestCase):
             with self.assertRaises(CommitTimeout):
                 darkroom.nudge(module="exposure", param="exposure", steps=1)
 
+    def _pending_uncommitted_nudge_with_status(self, status: float) -> None:
+        self.bridge.responses["darkroom.action"] = lambda p: {
+            "nan": False, "status": status, "view": "darkroom", **p,
+        }
+        darkroom.nudge(module="exposure", param="exposure", steps=1, commit=False)
+
+    def test_a_pending_uncommitted_nudge_then_a_real_late_flush_below_status_still_honest(
+            self) -> None:
+        """Fix round 2, R2-I1 (review Important): the C1 test above passes
+        even with `before_state` put back as the baseline, because it never
+        exercises a second oracle -- with no history movement, I2's
+        `allow_noop=False` alone forces `CommitTimeout` regardless of which
+        baseline decided `confirm()`. C1 is only observable when the SECOND
+        oracle (history advanced, or the commit itself succeeds) agrees.
+        Reviewer probe `test_six`: a pending `commit=False` nudge reports
+        status 0.6; the next nudge's `_commit` then writes a REAL new
+        exposure history entry at 1.0 (below the true on-disk 1.5500002,
+        above the pending status 0.6) and raises `CommitTimeout` (a late
+        flush). With the `before_state` (0.6) baseline, `1.0 > 0.6` reads
+        as "moved up" and history genuinely advanced, so `_late_flush_
+        landed` would credit it -- a write whose real destination (1.0) is
+        BELOW the true starting value (1.5500002) reported as a landed
+        up-nudge. With the `raw_state` (1.5500002) baseline, `1.0` is NOT
+        above it, so this must stay unconfirmed -- `CommitTimeout`
+        propagates (no oracle agrees it moved up)."""
+        self._pending_uncommitted_nudge_with_status(0.6)
+        sidecar = self._sidecar_path()
+        before_text = sidecar.read_text()
+
+        def _late_flush_below_raw(*_a, **_kw):
+            landed = self._clone_exposure_entry(before_text)
+            landed = with_param_value(landed, "exposure", "exposure", 1.0)
+            sidecar.write_text(landed)
+            raise self._timeout()
+
+        with mock.patch("scouter.core.darkroom._commit", side_effect=_late_flush_below_raw):
+            with self.assertRaises(CommitTimeout):
+                darkroom.nudge(module="exposure", param="exposure", steps=1)
+
+    def test_a_pending_uncommitted_nudge_then_a_real_successful_commit_below_status_raises(
+            self) -> None:
+        """Fix round 2, R2-I1 (review Important), the successful-commit
+        twin of the test above. Reviewer probe `test_seven`: same pending
+        `commit=False` nudge (status 0.6), but this time `_commit` itself
+        returns `committed=True` (no timeout at all) after writing the same
+        real new exposure entry at 1.0. With the `before_state` (0.6)
+        baseline, the post-commit check's `_moved_as_asked(0.6, 1.0, "up")`
+        is true (1.0 > 0.6), crediting a write whose real destination is
+        BELOW the true on-disk value before this nudge. With the
+        `raw_state` (1.5500002) baseline, `_moved_as_asked(1.5500002, 1.0,
+        "up")` is false (1.0 is not above 1.5500002), so the post-check
+        must raise `WriteUnverified`."""
+        self._pending_uncommitted_nudge_with_status(0.6)
+        sidecar = self._sidecar_path()
+        before_text = sidecar.read_text()
+
+        def _ok_below_raw(*_a, **_kw):
+            landed = self._clone_exposure_entry(before_text)
+            landed = with_param_value(landed, "exposure", "exposure", 1.0)
+            sidecar.write_text(landed)
+            return mock.Mock(committed=True, warnings=[])
+
+        with mock.patch("scouter.core.darkroom._commit", side_effect=_ok_below_raw):
+            with self.assertRaises(WriteUnverified):
+                darkroom.nudge(module="exposure", param="exposure", steps=1)
+
     def test_a_successful_commit_that_moved_the_wrong_way_is_not_credited(self) -> None:
         """Fix round 1, I1 (review Important): the post-commit check must
         test DIRECTION, not just "unchanged" -- a successful (non-timeout)
