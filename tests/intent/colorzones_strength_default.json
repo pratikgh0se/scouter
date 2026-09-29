@@ -1,6 +1,6 @@
 {
   "about": "Zenkai Rules Z1 intent examples for colorzones.strength's promoted default=0.0 (card t_29a9ef47, decision rows 548/549, tests/test_host_phase3.py::ProbeColorzonesStrengthDefaultHostTest host run 2026-09-29 18:49, chief of staff: two independent oracles, each on its own scratch copy/darktable launch, both read strength=0.0; see docs/measurements.md's \"colorzones.strength default\" section). Two independent oracles per example here too (Z2), mirroring tests/intent/exposure_black_default_tolerance.json: external raw arithmetic against vocab.default_tolerance, plus darkroom's own production helpers (_effective_current / _close), never derived from each other. Run by tests/intent/test_colorzones_strength_default_intent.py.",
-  "subject": "scouter/core/vocab.py colorzones.strength default, scouter/core/darkroom.py's _effective_current / _close",
+  "subject": "scouter/core/vocab.py colorzones.strength default, scouter/core/darkroom.py's _effective_current / _close / _module_at_defaults",
   "examples": [
     {
       "id": "no-history-entry-resolves-through-the-declared-default",
@@ -19,6 +19,12 @@
       "strength": 0.0,
       "expect": {"at_default": true},
       "source": "the plain case: a live value that already reads exactly the declared default must pass under both oracles, with or without a tolerance"
+    },
+    {
+      "id": "strength-at-default-does-not-put-colorzones-at-defaults",
+      "sidecar": "tests/fixtures/phase3-host.xmp with colorzones.strength set to its declared default",
+      "expect": {"module_at_defaults": false},
+      "source": "review finding 1 on 9ae3978: colorzones' zone curves (value_source \"none\") cannot be decoded, so strength reading its default must not let a reset that wrote nothing be confirmed as a noop (row 430/461 shape)"
     }
   ]
 }

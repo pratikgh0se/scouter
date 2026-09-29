@@ -366,8 +366,8 @@ def with_param_value(text: str, operation: str, param: str, value: float) -> str
     Row 433: a commit double that only bumps the history hash (and keeps the
     old value) now models a write that did NOT land, which `set`/`adjust`
     report as `write_unverified`. Only fixed-offset layouts (exposure) and
-    named float slots (sigmoid) are supported; the params are re-emitted as
-    plain hex, which `xmp.decode_params` reads like darktable's own.
+    float slots, named or "f<index>" (sigmoid, colorzones), are supported;
+    the params are re-emitted as plain hex, which `xmp.decode_params` reads like darktable's own.
     """
     import re
     import struct
@@ -387,7 +387,9 @@ def with_param_value(text: str, operation: str, param: str, value: float) -> str
     if "fields" in layout:
         fmt, offset = next((f, o) for n, f, o in layout["fields"] if n == param)
     else:
-        slot = next(i for i, n in layout["named_slots"].items() if n == param)
+        named = {n: i for i, n in layout["named_slots"].items()}
+        # An unnamed slot goes by the name decode_module gives it: "f<index>".
+        slot = named[param] if param in named else int(param.removeprefix("f"))
         fmt, offset = "<f", slot * 4
     struct.pack_into(fmt, blob, offset, value)
     new_hex = bytes(blob).hex()

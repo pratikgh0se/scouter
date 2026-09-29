@@ -7,12 +7,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scouter.core import darkroom, dtbridge, journal
+from scouter.core import darkroom, dtbridge, journal, vocab, xmp
 from scouter.errors import CommitTimeout, NotInDarkroom, ScouterError, UsageError, WrongView
 from scouter.types import CommitResult
 from tests.scouter_fakes import FakeBridge, TempCache, with_new_history_hash, with_param_value
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "P6281348.ORF.xmp"
+HOST_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "phase3-host.xmp"
 
 
 class _DarkroomFixture(unittest.TestCase):
@@ -218,6 +219,25 @@ class DarkroomCoreTest(_DarkroomFixture):
         ):
             with self.assertRaises(CommitTimeout):
                 darkroom.set_param(module="colorzones", param="strength", value=37.0)
+        self._commit_patcher.start()
+
+    def test_commit_timeout_on_a_row_with_no_declared_default_still_raises(self) -> None:
+        """The status-oracle guard (review finding 2 on 9ae3978). The test
+        above lost it when colorzones.strength got a declared default:
+        `_effective_current` now answers 0.0 there, so ed903f3's
+        `current is None` branch that trusted the echoed status is never
+        reached. This row is picked for having NO declared default and no
+        history entry in the fixture, so the echo is all there is to go on,
+        and it must not confirm anything. If a later promotion gives this
+        row a default, move the test to another row that still has none."""
+        self.assertIsNone(darkroom._declared_default("filmicrgb", "contrast"))
+        self._commit_patcher.stop()
+        with mock.patch(
+            "scouter.core.darkroom._commit",
+            side_effect=CommitTimeout("darktable did not write the sidecar"),
+        ):
+            with self.assertRaises(CommitTimeout):
+                darkroom.set_param(module="filmicrgb", param="contrast", value=1.3)
         self._commit_patcher.start()
 
     def test_commit_timeout_for_the_declared_default_resolves_as_a_noop(self) -> None:
@@ -1343,6 +1363,27 @@ class CommitReadbackTest(unittest.TestCase):
         with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
             with self.assertRaises(CommitTimeout):
                 darkroom.reset(module="exposure", confirm=True)
+
+    def test_a_colorzones_reset_that_never_landed_is_not_a_noop(self) -> None:
+        """Review finding 1 on 9ae3978 (row 430/461 shape). colorzones.strength
+        has a declared default, but its zone curves (value_source "none")
+        cannot be decoded, so strength reading its default says nothing about
+        whether the module is at defaults. The sidecar is the real host
+        fixture with strength at the default and one curve slot moved; a
+        reset whose commit wrote nothing must report committed=False, as on
+        main, not a confirmed noop."""
+        text = HOST_FIXTURE.read_text()
+        strength_default = vocab.spec("colorzones", "strength").default
+        text = with_param_value(text, "colorzones", "strength", strength_default)
+        curve = xmp.latest_params(xmp.parse(text), "colorzones", 0)["f10"]
+        text = with_param_value(text, "colorzones", "f10", curve + 0.37)
+        self._sidecar_path().write_text(text)
+        self.assertFalse(darkroom._module_at_defaults(str(self.raw), "colorzones", 0))
+        not_landed = CommitResult(committed=False, changed=False, warnings=[])
+        with mock.patch("scouter.core.darkroom._commit", return_value=not_landed):
+            result = darkroom.reset(module="colorzones", confirm=True)
+        self.assertFalse(result.committed)
+        self.assertFalse(result.noop)
 
 
 class DarkroomCommitSeamTest(unittest.TestCase):

@@ -650,9 +650,15 @@ def _module_at_defaults(path: str, module: str, instance: int) -> bool:
     unconfirmable, and a timeout stays a timeout. Checking only the rows
     that happen to declare a default would silently ignore whatever the
     UNDECLARED rows hold, which is exactly what a reset changes too.
+    For the same reason a module with any row Scouter cannot decode
+    (value_source "none", e.g. colorzones' zone curves) is never "known at
+    defaults" either: those rows are exactly what a reset changes and what
+    the sidecar cannot show.
     """
     rows = [s for s in vocab.PARAMS if s.module == module and s.value_source == "xmp"]
     if not rows:
+        return False
+    if any(s.module == module and s.value_source == "none" for s in vocab.PARAMS):
         return False
     if any(_declared_default(module, s.param) is None for s in rows):
         return False

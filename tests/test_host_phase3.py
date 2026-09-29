@@ -486,6 +486,9 @@ class ProbeColorzonesStrengthDefaultHostTest(unittest.TestCase):
         self.assertAlmostEqual(strength_a, strength_reset, delta=tolerance,
                                 msg="oracle A (fresh enable) and oracle B (post-reset) "
                                     "disagree on colorzones.strength's default")
+        self.assertAlmostEqual(strength_a, vocab.spec("colorzones", "strength").default,
+                               delta=tolerance,
+                               msg="host default disagrees with vocab.py's declared default")
 
 
 @unittest.skipUnless(RUN, REASON)

@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from scouter.core import darkroom, vocab
+from tests.scouter_fakes import with_param_value
 
 EXAMPLES_PATH = Path(__file__).parent / "colorzones_strength_default.json"
 _DOC = json.loads(EXAMPLES_PATH.read_text())
@@ -54,10 +55,28 @@ def test_colorzones_strength_default_tolerance(ex: dict) -> None:
     want = ex["expect"]["at_default"]
     tol = vocab.default_tolerance("colorzones", "strength")
 
-    # Oracle 1 (external): raw arithmetic, no call into darkroom._close.
-    got_1 = abs(strength - 0.0) <= tol
+    # Oracle 1 (external): raw arithmetic against vocab's row, no darkroom call.
+    got_1 = abs(strength - vocab.spec("colorzones", "strength").default) <= tol
     assert got_1 is want, (ex["id"], strength, tol)
 
-    # Oracle 2 (production): the actual helper _module_at_defaults uses.
-    got_2 = darkroom._close(strength, 0.0, tol=tol)
+    # Oracle 2 (production): the helper and default lookup _module_at_defaults uses.
+    got_2 = darkroom._close(strength, darkroom._declared_default("colorzones", "strength"), tol=tol)
     assert got_2 is want, (ex["id"], strength, tol)
+
+
+def test_strength_at_default_does_not_put_colorzones_at_defaults(tmp_path: Path) -> None:
+    ex = next(e for e in EXAMPLES if e["id"] == "strength-at-default-does-not-put-colorzones-at-defaults")
+    want = ex["expect"]["module_at_defaults"]
+
+    # Oracle 1 (structural, external to darkroom): colorzones has a row
+    # Scouter cannot decode, so no sidecar read can show it at defaults.
+    undecodable = [s for s in vocab.PARAMS if s.module == "colorzones" and s.value_source == "none"]
+    assert (not undecodable) is want, undecodable
+
+    # Oracle 2 (production): the real host sidecar with strength at its default.
+    fixture = Path(__file__).parent.parent / "fixtures" / "phase3-host.xmp"
+    default = vocab.spec("colorzones", "strength").default
+    raw = tmp_path / "phase3-host.ORF"
+    (tmp_path / "phase3-host.ORF.xmp").write_text(
+        with_param_value(fixture.read_text(), "colorzones", "strength", default))
+    assert darkroom._module_at_defaults(str(raw), "colorzones", 0) is want
