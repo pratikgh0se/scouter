@@ -224,6 +224,40 @@ def _absent_equiv(before: dict, after: dict, key: str, defaults: dict) -> bool:
         and _module_absent(before, m) and _module_at_default(after, m, defaults)
 
 
+def _m1_default_fallback(key: str, unit: str, after: dict, defaults: dict,
+                          obs: Observation) -> float | None:
+    """M1's declared-default fallback (decision rows 548, 554): a scored key
+    absent from `after` reads as the module's own declared default IF (a)
+    the key has a host-verified default (`after.defaults`) and (b) the
+    module carries no history entry in `after` at all -- together those mean
+    the default is what darktable actually applies, not a guess. A second
+    oracle (Z2) must then agree before the fallback is trusted: the
+    product's own envelope needs a matching call reporting `noop` with
+    `applied` equal to the default (the sidecar side of that same call --
+    "no history entry" -- is condition (b) already). Any disagreement -- a
+    history entry in `after`, no matching call, a call that did not report
+    noop, or an `applied` that does not match -- fails loudly: returns None,
+    same as the key staying absent today."""
+    if key not in defaults:
+        return None
+    module = _module(key)
+    if not _module_absent(after, module):
+        return None
+    default_val = defaults[key]
+    param = key.split(".", 1)[1] if "." in key else key
+    matched = [c for c in obs.calls
+               if (c.args or {}).get("module") == module and (c.args or {}).get("param") == param]
+    if not matched:
+        return None
+    data = (matched[-1].envelope or {}).get("data") or {}
+    if not data.get("noop"):
+        return None
+    applied = _num(data.get("applied"))
+    if applied is None or not _same(unit, applied, default_val):
+        return None
+    return default_val
+
+
 def _env_ok(c: CallRecord) -> bool:
     env = c.envelope or {}
     return bool(env.get("ok")) and env.get("outcome", "ok") not in NOOP_OUTCOMES \
@@ -260,8 +294,13 @@ def _check_m1(i: int, ch: Check, obs: Observation) -> CheckResult:
     kind = ch.kind
     if kind in ("delta", "equals", "within") and "value" in t:
         got = after.get(t["key"])
+        note = ""
+        if got is None:
+            got = _m1_default_fallback(t["key"], unit, after, _meta(obs, "defaults"), obs)
+            if got is not None:
+                note = "declared_default"
         ok = got is not None and _same(unit, got, t["value"], t.get("tol"))
-        return CheckResult(i, "M1", ok, got, t["value"])
+        return CheckResult(i, "M1", ok, got, t["value"], note=note)
     if kind == "delta" and "delta" in t:
         b = _num(snaps[t.get("from", 0)].get(t["key"]))
         a = _num(snaps[t.get("to", -1)].get(t["key"]))

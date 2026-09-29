@@ -1,0 +1,27 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for M1's declared-default fallback in gauntlet/evaluate.py's `_check_m1` (decision rows 548, 554: colorzones.strength got a host-verified declared default 0.0). Before this fix, a scored key absent from `observation.after.params` (no history entry for its module) always read `measured: null` and failed, even when `observation.after.defaults` carried a host-verified default for it and the product's own envelope proved the write was an honest noop at that default -- proof4-20260929's cov-colorzones.strength-{olympus,sony_a7}-set_lo cases. Two independent oracles per example (Z2), mirroring tests/intent/batch3_c5_evaluator_fixtures.json: oracle A reads the raw recorded facts (the envelope's own noop/applied fields, the module's absence from after.params) that a correct evaluator should honour; oracle B is the fixed `evaluate()` scoring the SAME observation. Run by tests/intent/test_gauntlet_m1_declared_default_intent.py.",
+  "subject": "gauntlet/evaluate.py::_check_m1 / _m1_default_fallback",
+  "examples": [
+    {
+      "id": "declared-default-with-noop-envelope-scores-pass",
+      "case": "cov-colorzones.strength-olympus-set_lo",
+      "expect": {"score": "pass", "outcome": "verified"},
+      "source": "real proof4-20260929 evidence (tests/fixtures/proof4-20260929/cov-colorzones.strength-olympus-set_lo.json, now mirrored at gauntlet/tests/fixtures/proof4-20260929/): after.params has no colorzones.* key at all (no history entry), after.defaults['colorzones.strength'] == 0.0, and the call's own envelope reports data.noop=true, data.applied=0.0 -- both oracles agree the declared default is what darktable applied, so the fallback measures 0.0 and the M1 equals-0.0 check passes."
+    },
+    {
+      "id": "key-absent-and-not-in-defaults-still-fails",
+      "expect": {"score": "fail", "measured": null},
+      "source": "condition (a) of the fallback: a key with no entry in after.defaults at all (the adapter never declared a host-verified default for it) must not be guessed at -- measured stays null and the case fails exactly as it did before this fix."
+    },
+    {
+      "id": "key-absent-but-module-has-a-history-entry-still-fails",
+      "expect": {"score": "fail", "measured": null},
+      "source": "condition (b) of the fallback: when the module DOES carry a history entry in after.params (just not for this one key), the default is not necessarily what darktable applied for this key -- the fallback refuses and measured stays null."
+    },
+    {
+      "id": "non-default-value-with-key-absent-fails-loudly",
+      "expect": {"score": "fail", "measured": null},
+      "source": "the second oracle (Z2): even with the key in defaults and its module absent from after.params, an envelope that does NOT report noop==true with applied==the default (e.g. it claims a real edit, or applied a different value) disagrees with the params-side evidence -- the fallback refuses rather than silently trusting either oracle alone, and the case fails loudly instead of a false pass."
+    }
+  ]
+}
