@@ -525,6 +525,54 @@ def test_free_disk_gb_default_matches_shutil_disk_usage(tmp_path):
     assert free_disk_gb(tmp_path) == pytest.approx(shutil.disk_usage(tmp_path).free / 1e9)
 
 
+# -- fix round 1 (Opus review, t_90e75c20) ----------------------------------
+
+def test_free_disk_gb_resolves_at_call_time_not_bind_time(tmp_path, monkeypatch):
+    """I3: the default must not be bound once when Runner.__init__ is
+    defined -- monkeypatching gauntlet.runner.free_disk_gb (as the conftest
+    fixtures do globally) must reach a Runner that never passed its own
+    free_disk_gb, the way 45 existing `Runner(...)` calls in this suite do."""
+    import gauntlet.runner as runner_mod
+
+    a, run = _setup(tmp_path)
+    monkeypatch.setattr(runner_mod, "free_disk_gb", lambda root: 1.0)  # far below the floor
+    s = Runner(a, run).run_layers(layers=["alpha"])
+    assert s.status == "parked"
+    assert a.ran == []
+
+
+def test_retain_error_is_logged_not_fatal(tmp_path):
+    """I2: a retention failure (e.g. an OSError from the filesystem) must
+    reach the log, never the run -- this card exists to keep a night ALIVE,
+    so retention itself must never be what kills one."""
+    a, run = _setup(tmp_path)
+    a.retain_keep = lambda layer: ()
+
+    def boom(case_id, keep=()):
+        raise OSError("disk gone")
+    run.retain = boom
+
+    s = Runner(a, run).run_layers(layers=["alpha"])
+
+    assert s.status == "done"
+    assert a.ran == ["alpha-0", "alpha-1", "alpha-2", "alpha-3"]
+    assert run.read_result("alpha-0") is not None
+    assert "retain alpha-0 failed" in run.log_md.read_text()
+
+
+def test_disk_park_stops_the_run_without_opening_later_layers(tmp_path):
+    """M3: once the guard parks one layer, every later layer would just
+    immediately re-park its own first case on the same disk floor -- the
+    run stops there instead of doing that once per remaining layer."""
+    a, run = _setup(tmp_path)  # alpha (P0 first) + beta, per ToyAdapter.layers()
+    s = Runner(a, run, free_disk_gb=lambda root: 24.9).run_layers()
+    assert s.status == "parked"
+    assert a.sessions == 0
+    prog = json.loads(run.progress_json.read_text())
+    assert prog["layers"]["alpha"]["status"] == "parked"
+    assert "beta" not in prog["layers"]  # never even registered
+
+
 def test_open_session_is_told_the_case_it_opens_for(tmp_path):
     """N2: under --case / --only-failed the adapter cannot guess the next case."""
     a, run = _setup(tmp_path)

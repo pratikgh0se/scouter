@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import tempfile
@@ -42,12 +43,6 @@ class RunDir:
         self.cases_dir = self.root / "cases"
         self.previews_dir = self.root / "previews"
         self.sessions_dir = self.root / "sessions"
-        #: (t_90e75c20): scratch space a session may stage a case's heavy
-        #: disk artifacts under (imported originals, library copies, full-size
-        #: renders) -- `retain()` prunes this per case after scoring, and
-        #: nothing else in the run dir (verdict json, log, previews) lives
-        #: here, so retention can never reach them.
-        self.work_dir = self.root / "work"
         self.cases_jsonl = self.root / "cases.jsonl"
         self.generation_md = self.root / "generation.md"
         self.log_md = self.root / "log.md"
@@ -103,50 +98,71 @@ class RunDir:
 
     def retain(self, case_id: str, keep: tuple[str, ...] = ()) -> int:
         """Per-case retention (t_90e75c20): delete everything under this
-        case's workdir except files matching a `keep` glob pattern (relative
-        to the workdir), and any directory left empty by that. Only ever
-        touches paths under `case_workdir(case_id)` -- the verdict json, the
-        log and the previews all live elsewhere in the run dir and this never
-        walks above the workdir root. Returns bytes freed."""
+        case's workdir except files matching a `keep` glob pattern (by
+        basename, matching every depth), and any directory left empty by
+        that. `case_workdir` already refuses an unsafe `case_id`; this also
+        asserts the resolved target is really one child of `<run>/work`
+        before touching anything (fix round 1, I1: defense in depth against
+        a future `case_workdir` change). Walks with `os.walk(followlinks=
+        False)`, never `Path.rglob` (which follows symlinked directories),
+        so a symlink is always deleted as itself -- never resolved, never
+        recursed into (fix round 1, I2) -- and a path that vanishes under us
+        (a race with the case's own still-finishing writes) is skipped, not
+        fatal. Returns bytes freed."""
         d = self.case_workdir(case_id)
         if not d.exists():
             return 0
-        keep_paths = {p for pattern in keep for p in d.rglob(pattern)}
+        work_root = (self.root / "work").resolve()
+        assert d.resolve().parent == work_root, f"retain refuses a workdir outside {work_root}: {d}"  # noqa: E501
         freed = 0
-        # Deepest paths first, so a directory is only removed once everything
-        # under it (kept files included) has already been decided.
-        for p in sorted(d.rglob("*"), key=lambda x: len(x.parts), reverse=True):
-            if p in keep_paths:
-                continue
-            if p.is_dir():
-                if not any(p.iterdir()):
-                    p.rmdir()
-            else:
-                freed += p.stat().st_size
-                p.unlink()
+        for dirpath, dirnames, filenames in os.walk(d, topdown=False, followlinks=False):
+            base = Path(dirpath)
+            for name in filenames:
+                if any(fnmatch.fnmatch(name, pattern) for pattern in keep):
+                    continue
+                try:
+                    size = (base / name).lstat().st_size
+                    (base / name).unlink()
+                    freed += size
+                except FileNotFoundError:
+                    pass
+            for name in dirnames:
+                p = base / name
+                try:
+                    if p.is_symlink():
+                        p.unlink()
+                    elif not any(p.iterdir()):
+                        p.rmdir()
+                except (FileNotFoundError, OSError):
+                    pass
         return freed
 
     def du(self) -> dict[str, int]:
         """Bytes on disk per layer (`gauntlet du`): each case's workdir, its
-        verdict json and its previews, summed by `case.layer`. A run with no
+        verdict json and its previews -- both the `<id>.*` file shape and
+        Scouter's own real `previews/<id>/before.png`+`after.png` directory
+        shape (fix round 1, I4) -- summed by `case.layer`. A run with no
         cases.jsonl yet reports {}."""
         if not self.cases_jsonl.exists():
             return {}
         totals: dict[str, int] = {}
         for c in self.read_cases():
-            n = _dir_size(self.case_workdir(c.id)) + _dir_size(self.case_path(c.id)) + \
-                sum(p.stat().st_size for p in self.previews_dir.glob(f"{c.id}.*"))
+            n = (_dir_size(self.case_workdir(c.id)) + _dir_size(self.case_path(c.id)) +
+                 _dir_size(self.previews_dir / c.id) +
+                 sum(p.stat().st_size for p in self.previews_dir.glob(f"{c.id}.*")))
             if n:
                 totals[c.layer] = totals.get(c.layer, 0) + n
         return totals
 
 
 def case_workdir(run_root: Path, case_id: str) -> Path:
-    """(t_90e75c20 round 2): the per-case scratch dir under a run root, as a
-    free function -- callers that only have the run's root path (a product
-    adapter's own session code, never a full RunDir instance) can compute
-    the same location `RunDir.case_workdir` does, with no RunDir import
-    cycle and no duplicated `"work"` literal to drift out of sync."""
+    """The per-case scratch dir under a run root, as a free function so code
+    that only has the run's root (a product adapter's own session code) can
+    compute the same location `RunDir.case_workdir` does. Refuses (fix
+    round 1, I1) a `case_id` that could ever point `retain()` outside
+    `<run_root>/work`: empty, `.`/`..`, or carrying a path separator."""
+    if not case_id or case_id in (".", "..") or "/" in case_id or os.sep in case_id:
+        raise ValueError(f"unsafe case id for a workdir: {case_id!r}")
     return Path(run_root) / "work" / case_id
 
 

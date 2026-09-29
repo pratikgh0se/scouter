@@ -1,5 +1,6 @@
 import ast
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -191,6 +192,96 @@ def test_du_includes_verdict_json_and_preview_bytes(tmp_path):
 def test_du_before_generation_is_empty(tmp_path):
     run = RunDir(tmp_path, "s")
     assert run.du() == {}
+
+
+# -- fix round 1 (Opus review, t_90e75c20) ----------------------------------
+
+UNSAFE_IDS = ("", ".", "..", "/etc", "a/b", os.sep.join(("a", "b")))
+
+
+@pytest.mark.parametrize("bad", UNSAFE_IDS)
+def test_case_workdir_rejects_unsafe_ids(tmp_path, bad):
+    """I1: an empty, `.`/`..`, absolute-looking or separator-carrying id must
+    never resolve to a workdir outside `<run>/work`."""
+    run = RunDir(tmp_path, "s").ensure()
+    with pytest.raises(ValueError):
+        run.case_workdir(bad)
+
+
+@pytest.mark.parametrize("bad", UNSAFE_IDS)
+def test_retain_rejects_unsafe_ids_and_deletes_nothing(tmp_path, bad):
+    """I1: retain() must refuse before it ever walks anything -- probed with
+    the exact `".."`/absolute shapes the review found deleted the run's own
+    evidence (cases/, log.md, previews)."""
+    run = RunDir(tmp_path, "s").ensure()
+    run.write_result("c1", {"id": "c1", "score": "pass"})
+    run.log_md.write_text("- **c1**: verified\n")
+    kept = run.case_workdir("c1")
+    kept.mkdir(parents=True)
+    (kept / "keep.bin").write_bytes(b"x" * 10)
+
+    with pytest.raises(ValueError):
+        run.retain(bad)
+
+    assert run.read_result("c1") == {"id": "c1", "score": "pass"}
+    assert "c1" in run.log_md.read_text()
+    assert (kept / "keep.bin").exists()
+
+
+def test_retain_unlinks_a_dangling_symlink_without_following_it(tmp_path):
+    """I2: a dangling symlink used to raise FileNotFoundError from stat()."""
+    run = RunDir(tmp_path, "s").ensure()
+    d = run.case_workdir("c1")
+    d.mkdir(parents=True)
+    (d / "ghost").symlink_to(tmp_path / "does-not-exist")
+    run.retain("c1")
+    assert not (d / "ghost").exists()
+    assert list(d.iterdir()) == []
+
+
+def test_retain_unlinks_a_symlink_to_a_directory_without_touching_its_target(tmp_path):
+    """I2: a symlink to a directory used to raise NotADirectoryError from
+    rmdir(); the target itself must never be entered or deleted."""
+    run = RunDir(tmp_path, "s").ensure()
+    target = tmp_path / "real-dir"
+    target.mkdir()
+    (target / "untouched.bin").write_bytes(b"x" * 10)
+    d = run.case_workdir("c1")
+    d.mkdir(parents=True)
+    (d / "link").symlink_to(target)
+    run.retain("c1")
+    assert not (d / "link").exists()
+    assert (target / "untouched.bin").exists()  # the real content is never touched
+
+
+def test_retain_tolerates_a_path_vanishing_mid_walk(tmp_path, monkeypatch):
+    """I2: a race with the case's own still-finishing writes (unlink/rmdir
+    racing a FileNotFoundError) must not blow up the whole retain() call."""
+    run = RunDir(tmp_path, "s").ensure()
+    d = run.case_workdir("c1")
+    d.mkdir(parents=True)
+    (d / "f.bin").write_bytes(b"x" * 10)
+    orig_unlink = Path.unlink
+
+    def flaky_unlink(self, *a, **k):
+        if self.name == "f.bin":
+            raise FileNotFoundError("vanished")
+        return orig_unlink(self, *a, **k)
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+    assert run.retain("c1") == 0  # freed nothing for the path that vanished, but never raised
+
+
+def test_du_counts_a_real_scouter_preview_directory(tmp_path):
+    """I4: Scouter's own previews are `previews/<id>/before.png` + `after.png`
+    directories, never a bare `<id>.*` file -- `du()` must count both."""
+    run = RunDir(tmp_path, "s").ensure()
+    c = _case("a")
+    run.write_cases([c])
+    pd = run.previews_dir / c.id
+    pd.mkdir(parents=True)
+    (pd / "before.png").write_bytes(b"b" * 30)
+    (pd / "after.png").write_bytes(b"a" * 20)
+    assert run.du() == {"coverage": 50}
 
 
 def test_budget_cap_honours_a_case_declared_cap():

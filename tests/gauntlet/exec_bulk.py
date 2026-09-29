@@ -53,15 +53,10 @@ def run_bulk_case(session, case: Case) -> Observation:
     session.staged.vars["job_slug"] = job_slug_for(case.id)
     point_library_root = getattr(session, "point_library_root", None)
     if point_library_root is not None:
-        #: (t_90e75c20 round 2): this case's own library imports and exports
-        #: land under the RUN's per-case workdir, not the shared session
-        #: root -- `RunDir.retain()` (the generic engine mechanism, wired
-        #: through `ScouterAdapter.retain_keep`) prunes exactly this case's
-        #: real footprint after scoring, never another case's (a fresh
-        #: `job_slug`/`library_root` pair every case, even within one
-        #: reused session). A session double with no `point_library_root`
-        #: (existing FakeSession test fixtures) keeps the old, session-wide
-        #: `out_dir` -- unchanged behaviour.
+        #: (t_90e75c20): route this case's imports/exports under the run's
+        #: own case workdir, so retain() can prune exactly this case's
+        #: footprint. A session double with no point_library_root (the
+        #: existing FakeSession fixtures) is unchanged.
         work = case_workdir(session.run_root, case.id)
         session.staged.vars["out_dir"] = str(work / "exports")
         point_library_root(work / "jobs")

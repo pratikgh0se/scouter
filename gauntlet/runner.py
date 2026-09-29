@@ -103,7 +103,7 @@ class Runner:
                  session_max_s: float = SESSION_MAX_S,
                  session_open_cap_s: float | None = None,
                  max_consecutive_open_failures: int = MAX_CONSECUTIVE_OPEN_FAILURES,
-                 free_disk_gb: Callable[[Path], float] = free_disk_gb,
+                 free_disk_gb: Callable[[Path], float] | None = None,
                  disk_min_gb: float = DISK_MIN_GB) -> None:
         self.adapter = adapter
         self.run = run.ensure()
@@ -119,6 +119,11 @@ class Runner:
             session_open_cap_s = getattr(adapter, "session_open_cap_s", SESSION_OPEN_CAP_S)
         self.session_open_cap_s = float(session_open_cap_s)
         self.max_consecutive_open_failures = max_consecutive_open_failures
+        #: (fix round 1, I3): stored possibly `None` -- resolved against the
+        #: MODULE's own `free_disk_gb` at call time (`_run_layer`), never
+        #: bound here, so a test that monkeypatches `gauntlet.runner.
+        #: free_disk_gb` (never the real host disk) reaches every Runner,
+        #: not just ones constructed after the patch.
         self.free_disk_gb = free_disk_gb
         self.disk_min_gb = disk_min_gb
 
@@ -179,9 +184,15 @@ class Runner:
                 self.progress.log(f"- layer {spec.name}: run refused -- {refused}")
                 self.progress.end_layer(spec.name, "blocked")
                 break
-            self.progress.end_layer(spec.name, status)
+            #: (fix round 1, M3): "parked_disk" is "parked" for progress/report
+            #: purposes -- the distinct string only tells THIS loop to stop
+            #: opening later layers, each of which would otherwise immediately
+            #: re-park its own first case on the same disk floor.
+            self.progress.end_layer(spec.name, "parked" if status == "parked_disk" else status)
             if status == "stopped_crash":
                 summary.stopped_layers.append(spec.name)
+            if status == "parked_disk":
+                break
         if refused is not None:
             summary.status = f"blocked: {refused}"
         else:
@@ -274,12 +285,12 @@ class Runner:
         try:
             while i < len(todo):
                 case = todo[i]
-                free_gb = self.free_disk_gb(self.run.root)
+                free_gb = (self.free_disk_gb or free_disk_gb)(self.run.root)
                 if free_gb < self.disk_min_gb:
                     reason = f"disk: {free_gb:.1f} GB free < {self.disk_min_gb:.0f} GB"
                     self.progress.park(layer, case.id, reason)
                     summary.parked.extend(c.id for c in todo[i:])
-                    return "parked"
+                    return "parked_disk"
                 if session is None or count >= self.session_max_cases or \
                         self.clock() - started > self.session_max_s:
                     if session is not None:
@@ -354,17 +365,19 @@ class Runner:
                 self._safe_close(old)
 
     def _retain(self, case: Case) -> None:
-        """(t_90e75c20): per-case retention after scoring -- the adapter opts
-        in with an optional `retain_keep(layer) -> tuple[str, ...]` of glob
-        patterns (relative to the case's workdir) to keep; everything else
-        under the workdir is deleted (bulk's own policy is score-only: an
-        empty tuple). An adapter that does not define `retain_keep` gets no
-        retention (unchanged behaviour). The verdict json, the log and the
-        previews live outside the workdir, so this can never reach them."""
+        """Per-case retention after scoring: an adapter that opts in with
+        `retain_keep(layer)` gets its case workdir pruned to that keep list.
+        Best-effort like `_safe_close` (fix round 1, I2): a retention
+        failure only reaches the log, never the run -- this card exists to
+        keep a night ALIVE, so it must never be the thing that kills one."""
         retain_keep = getattr(self.adapter, "retain_keep", None)
         if retain_keep is None:
             return
-        freed = self.run.retain(case.id, tuple(retain_keep(case.layer)))
+        try:
+            freed = self.run.retain(case.id, tuple(retain_keep(case.layer)))
+        except Exception as e:  # noqa: BLE001 - never let retention kill the run
+            self.progress.log(f"- retain {case.id} failed: {type(e).__name__}: {e}")
+            return
         if freed:
             self.progress.log(f"- retained {case.id}: freed {freed} bytes")
 
