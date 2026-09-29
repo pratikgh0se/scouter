@@ -299,10 +299,23 @@ PARAMS: tuple[ParamSpec, ...] = (
               0.1, "xmp", None, False, "tone_mapper",
               "steepens or flattens the middle of the tone curve",
               "shadow and highlight detail at the two ends", ("iop/filmicrgb/contrast",)),
+    #: Batch 3 item 9, fix round 1 (row 531): NOT a `default=` -- this is a
+    #: `default_candidate` (see the field's own docstring: only
+    #: `exec_looks.py`'s `chart_golden` may read it; `darkroom.py`,
+    #: `moves.py` and the coverage/observe gauntlet layers may not). Evidence
+    #: is the proof3-20260929 gauntlet run, not a host probe: on two
+    #: cameras (olympus, sony_a7; cases cov-colorzones.strength-{olympus,
+    #: sony_a7}-set_lo), `darkroom.set colorzones.strength 0.0` produced no
+    #: `colorzones.*` key in the before/after params and `history_end`
+    #: unchanged (12 -> 12, fingerprints unchanged), consistent with
+    #: darktable already holding 0.0 -- but not yet a
+    #: `tests/test_host_phase3.py` host probe on a fresh, untouched frame,
+    #: so it stays a candidate. Both cases stay honestly `commit_timeout`
+    #: until a host probe promotes this to `default=`.
     ParamSpec("colorzones", "strength", "color zones › mix", "%", 100.0, 0.0, 2.0, 0.1,
               "xmp", None, False, "color_zones",
               "scales every colour-zone adjustment at once", "the zones you set in darktable",
-              ("iop/colorzones/mix",)),
+              ("iop/colorzones/mix",), default_candidate=0.0),
     ParamSpec("colorzones", "curves", "color zones › (zone curves)", "—", 1.0, 0.0, 0.0, 0.0,
               "none", None, False, "color_zones", "", "", (), False,
               "zones are curve nodes, not sliders: no dt.gui.action sets a zone value; "

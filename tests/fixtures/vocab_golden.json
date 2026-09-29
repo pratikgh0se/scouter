@@ -579,7 +579,7 @@
     ],
     "concept": "color_zones",
     "default": null,
-    "default_candidate": null,
+    "default_candidate": 0.0,
     "display_scale": 100.0,
     "hi": 2.0,
     "lo": 0.0,

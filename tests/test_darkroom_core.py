@@ -180,31 +180,40 @@ class DarkroomCoreTest(_DarkroomFixture):
                 darkroom.set_param(module="exposure", param="exposure", value=4.25)
         self._commit_patcher.start()
 
-    def test_commit_timeout_for_a_param_with_no_declared_default_still_resolves(self) -> None:
-        """Batch 3 item 9 (row 531): `colorzones.strength` declares neither
-        `neutral` nor `default` (vocab.py), so when the module has no active
-        history entry `_effective_current` cannot say what darktable already
-        holds -- `current` is `None`. Setting it to its own lower bound
-        (`s.lo` == 0.0, which is also the fixture frame's own baseline
-        reading, proof3 evidence) is the same "already at target" no-op
-        `test_commit_timeout_is_satisfied_by_a_confirming_readback` covers
-        for `exposure`, but here neither the pre-write `matched_before` nor
-        the post-timeout XMP readback can confirm it via the declared
-        default -- both are `None`. The bridge's own reported `status` for
-        the `set` action (the same signal `nudge` already trusts) is the
-        only oracle left, so a genuine no-op must resolve through it instead
-        of raising `commit_timeout` (proof3-20260929's
-        cov-colorzones.strength-olympus-set_lo/-sony_a7-set_lo)."""
+    def test_commit_timeout_for_a_param_with_no_declared_default_still_raises(self) -> None:
+        """Batch 3 item 9 (row 531), fix round 1 (reviewer finding 1):
+        `colorzones.strength` declares neither `neutral` nor `default`
+        (vocab.py), so when the module has no active history entry
+        `_effective_current` cannot say what darktable already holds --
+        `current` is `None`, and neither `matched_before` nor the
+        post-timeout XMP readback can confirm a no-op.
+
+        This is a NEGATIVE proof, not the positive one fix round 0 wrongly
+        shipped: `FakeBridge._action` (this file, `_action`) unconditionally
+        echoes `status = value` for every `set`, exactly like darktable's
+        own `dt.gui.action` echoes back a GUI report AFTER the write (spec
+        `docs/superpowers/specs/2026-09-13-scouter-phase1-design.md` §7.3:
+        "never relabelled as a value"; `darktable_mcp/lua/darktable_mcp.lua`
+        calls it a normalised slider position). An echoing status therefore
+        proves nothing about what the sidecar holds -- a `set` to 37 (well
+        past `colorzones.strength`'s own `hi=2.0`, and NOT the fixture's
+        baseline) that never lands (sidecar genuinely unchanged, exactly
+        the proof3 shape) must still raise `commit_timeout`, the same as
+        `test_commit_timeout_still_raises_when_the_readback_disagrees`
+        does for `exposure`. Fix round 0 (commit ed903f3) trusted that echo
+        as an oracle and returned `committed=True` for this exact call --
+        the row 430/461 failure class. This must pass on main and on this
+        branch, and fail (raise nothing / return committed) against
+        ed903f3."""
         self.assertIsNone(darkroom._declared_default("colorzones", "strength"))
         self._commit_patcher.stop()
         with mock.patch(
             "scouter.core.darkroom._commit",
             side_effect=CommitTimeout("darktable did not write the sidecar"),
         ):
-            result = darkroom.set_param(module="colorzones", param="strength", value=0.0)
+            with self.assertRaises(CommitTimeout):
+                darkroom.set_param(module="colorzones", param="strength", value=37.0)
         self._commit_patcher.start()
-        self.assertTrue(result.committed)
-        self.assertEqual(result.applied, 0.0)
 
     def test_dry_run_sends_no_action_and_resolves_nothing(self) -> None:
         result = darkroom.set_param(module="exposure", param="exposure", value=2.0, dry_run=True)
