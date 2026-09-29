@@ -1,0 +1,41 @@
+{
+  "about": "Zenkai Rules Z1 intent examples: tests/host_support.py::assert_no_concurrent_darktable, the Z5 detector added for card t_cc03dcb4 fix round 1 (I2), after incident inc_f9c5e8f5 (two overlapping darktable launches shared the plugin config, the bridge spool and fixed scratch paths, contaminating a host probe and destroying oracle A's on-disk evidence). Wired into PluginInstall.install() so every host test class gets it for free. Two independent checks: a second darktable process (pgrep -x darktable, injected here via `darktable_running` rather than mocking subprocess itself -- the real file-scanning half of the guard is exercised unmocked, against a real temp cache dir) and a pending bridge request/response file in the spool (darktable_mcp/bridge/client.py's request-<id>.json/response-<id>.json pair; the heartbeat file and cli-config/ directory are normal residents of a live spool per an `ls` of ~/.cache/darktable-mcp and must NOT trip the guard). Two oracles per example (Z2): whether the call raised at all, and (when it does) that the message names the actual cause, not a generic refusal -- a guard that raises for the wrong reason would still pass a raises-only check.",
+  "subject": "tests/host_support.py::assert_no_concurrent_darktable",
+  "examples": [
+    {
+      "id": "a-second-darktable-process-refuses",
+      "darktable_running": true,
+      "cache_files": [],
+      "expect": {"raises": true, "message_contains": "another darktable is running"},
+      "source": "incident inc_f9c5e8f5's actual root cause: a second darktable process already running. The file-spool side is irrelevant here and must not need to fail too for this to refuse."
+    },
+    {
+      "id": "a-pending-request-file-refuses",
+      "darktable_running": false,
+      "cache_files": ["request-abc123.json"],
+      "expect": {"raises": true, "message_contains": "request-abc123.json"},
+      "source": "the spool-side half of the incident: a request file still on disk means some darktable's Lua worker has not answered it yet -- another session may be mid-call. No darktable process check alone would have caught this if pgrep raced the process exiting."
+    },
+    {
+      "id": "a-pending-response-file-refuses",
+      "darktable_running": false,
+      "cache_files": ["response-def456.json"],
+      "expect": {"raises": true, "message_contains": "response-def456.json"},
+      "source": "the other half of one request/response pair: an unread response file is just as much evidence of an in-flight (or racing) call as the request file."
+    },
+    {
+      "id": "heartbeat_and_cli_config_are_normal_residents_and_do_not_refuse",
+      "darktable_running": false,
+      "cache_files": ["heartbeat", "cli-config/pinned.json"],
+      "expect": {"raises": false, "message_contains": null},
+      "source": "a live spool always has a heartbeat file and a cli-config/ directory (confirmed by ls ~/.cache/darktable-mcp on this host) -- the guard must not treat every non-empty cache dir as contaminated, only an actual pending request/response pair."
+    },
+    {
+      "id": "no_process_and_an_empty_or_absent_spool_runs_clean",
+      "darktable_running": false,
+      "cache_files": [],
+      "expect": {"raises": false, "message_contains": null},
+      "source": "the ordinary case every host test needs to keep passing: nothing running, nothing pending."
+    }
+  ]
+}

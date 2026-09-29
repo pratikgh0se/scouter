@@ -78,28 +78,34 @@ def test_m1_declared_default_fallback_accepts_a_real_verified_default_via_real_a
     assert v.checks[0].measured == 0.0
 
 
+#: The 10 colorbalancergb rows a host probe promoted from `neutral`-only to
+#: a verified `default` (card t_cc03dcb4, decision row 560); kept in sync by
+#: hand with `tests/test_host_phase3.py::_CB_NEUTRAL_ROWS`, which names the
+#: same 10 rows for the probe that measures them. Listing all 10 here (not a
+#: sample) matters (fix round 1, I3): reverting any ONE row's promotion in
+#: `scouter/core/vocab.py` must fail this test, not just the golden fixture.
+_CB_PROMOTED_ROWS = (
+    "contrast", "global_chroma", "global_saturation", "global_vibrance",
+    "shadows_luminance", "shadows_chroma",
+    "midtones_luminance", "midtones_chroma",
+    "highlights_luminance", "highlights_chroma",
+)
+
+
 def test_m1_declared_default_fallback_accepts_the_colorbalancergb_neutral_promotions():
     """Card t_cc03dcb4 (decision row 560, follows t_29a9ef47/rows 548/549/554):
-    mirror of the colorzones test above for the 10 colorbalancergb rows that
-    were `neutral`-only (excluded from `verified_defaults()` by design, I1
-    of the M1 fix) until the host probe in
-    `tests/test_host_phase3.py::ProbeColorbalancergbNeutralDefaultsHostTest`
-    (host run 2026-09-29 21:19, docs/measurements.md "colorbalancergb
-    neutral-only defaults") verified each at 0.0 and promoted `default` in
-    `scouter/core/vocab.py`. One row per family named in the card
-    (contrast, a global row, and one zone luminance/chroma pair) driven
-    through the REAL `observe.verified_defaults()`, not a hard-coded dict,
-    so a regression that drops the promotion (or reverts to `defaults()`,
-    the round-1 false-pass bug) fails this test."""
+    mirror of the colorzones test above for all 10 `_CB_PROMOTED_ROWS`
+    (were `neutral`-only, excluded from `verified_defaults()` by design, I1
+    of the M1 fix, until a host probe verified each at 0.0 and promoted
+    `default` in `scouter/core/vocab.py`; see docs/measurements.md
+    "colorbalancergb neutral-only defaults" for the run this pins to),
+    driven through the REAL `observe.verified_defaults()`, not a hard-coded
+    dict, so a regression that drops any ONE row's promotion (or reverts
+    the function to `defaults()`, the round-1 false-pass bug) fails this
+    test at that row."""
     vd = observe.verified_defaults()
-    for module, param in (
-        ("colorbalancergb", "contrast"),
-        ("colorbalancergb", "global_chroma"),
-        ("colorbalancergb", "shadows_luminance"),
-        ("colorbalancergb", "midtones_chroma"),
-        ("colorbalancergb", "highlights_luminance"),
-        ("colorbalancergb", "highlights_chroma"),
-    ):
+    for param in _CB_PROMOTED_ROWS:
+        module = "colorbalancergb"
         key = f"{module}.{param}"
         # oracle A: the raw vocab fact this whole example depends on.
         assert vd.get(key) == 0.0, key

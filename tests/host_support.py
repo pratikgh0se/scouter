@@ -23,6 +23,7 @@ import signal
 import subprocess
 import time
 from pathlib import Path
+from typing import Callable
 
 DARKTABLE = Path("/Applications/darktable.app/Contents/MacOS/darktable")
 EDITING_TRIAL = Path("/Users/pratik/Pictures/EditingTrial")
@@ -30,6 +31,71 @@ HERO = EDITING_TRIAL / "P6281348.ORF"
 PLUGIN_SRC = Path(__file__).resolve().parent.parent / "darktable_mcp" / "lua" / "darktable_mcp.lua"
 INSTALLED_PLUGIN = Path.home() / ".config" / "darktable" / "lua" / "darktable_mcp.lua"
 SCRATCH_DIR = Path.home() / "Pictures" / "ScouterScratch"
+
+
+def _bridge_cache_dir() -> Path:
+    """The bridge's file spool (`darktable_mcp/bridge/client.py::_cache_dir`),
+    recomputed here rather than imported so this module still imports with
+    no product dependency (matches this file's own "importing must never
+    launch darktable or touch a real path" rule above)."""
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "darktable-mcp"
+
+
+def _darktable_is_running() -> bool:
+    result = subprocess.run(["pgrep", "-x", "darktable"], capture_output=True, text=True)
+    return result.returncode == 0
+
+
+def _pending_bridge_files(cache_dir: Path) -> list[str]:
+    """Names of files in `cache_dir` that mean a request is IN FLIGHT: the
+    bridge's own `request-<id>.json` / `response-<id>.json` pair
+    (`darktable_mcp/bridge/client.py::Bridge.call`). The `heartbeat` file and
+    the `cli-config/` directory are always-present, normal residents of a
+    live spool (confirmed by `ls` of `~/.cache/darktable-mcp`) -- neither
+    means another session is mid-call, so neither counts here."""
+    if not cache_dir.is_dir():
+        return []
+    return sorted(
+        p.name for p in cache_dir.iterdir()
+        if p.is_file() and p.suffix == ".json"
+        and (p.name.startswith("request-") or p.name.startswith("response-"))
+    )
+
+
+def assert_no_concurrent_darktable(
+    cache_dir: Path | None = None,
+    darktable_running: Callable[[], bool] | None = None,
+) -> None:
+    """Z5 detector (incident inc_f9c5e8f5, card t_cc03dcb4 fix round 1, I2):
+    refuse BEFORE `PluginInstall.install()` touches anything if a second
+    darktable session could be sharing this one's plugin config, library.db
+    or bridge spool -- exactly the contamination the incident's overlapping
+    launches caused (two `hs.launch()` calls served from the same
+    `~/.cache/darktable-mcp` spool, one run's history landing on the other's
+    scratch copy). Two independent checks, either one enough to refuse:
+
+    - a second darktable process (`pgrep -x darktable`; `darktable_running`
+      lets a test inject a fake result without mocking `subprocess` itself),
+    - a pending bridge request/response file in the spool (`cache_dir`
+      defaults to the real one; a test passes a temp dir instead).
+
+    Raises `RuntimeError` naming which check failed; callers must call this
+    before any install/backup/launch so a failure here has touched nothing.
+    """
+    running = darktable_running or _darktable_is_running
+    if running():
+        raise RuntimeError(
+            "another darktable is running (pgrep -x darktable found a pid) -- "
+            "host probes run one darktable launch at a time; quit it first")
+    cache = cache_dir if cache_dir is not None else _bridge_cache_dir()
+    pending = _pending_bridge_files(cache)
+    if pending:
+        raise RuntimeError(
+            f"pending bridge request/response file(s) in {cache}: {pending} -- "
+            "another darktable session may still be using the spool "
+            "(the heartbeat file and cli-config/ directory are normal residents, "
+            "these are not)")
 
 
 class PluginInstall:
@@ -62,6 +128,10 @@ class PluginInstall:
         self.luarc_path: Path | None = None
 
     def install(self) -> None:
+        # ABSOLUTE FIRST (card t_cc03dcb4 fix round 1, I2 -- incident
+        # inc_f9c5e8f5): refuse before touching anything at all if a second
+        # darktable or a pending bridge request could contaminate this run.
+        assert_no_concurrent_darktable()
         # FIRST, before any mkdir (fix round 2, minor m1): `install`'s own
         # `except BaseException` calls `restore()`, and `restore()` UNLINKS
         # the plugin when `plugin_existed_before` is False. Reading these

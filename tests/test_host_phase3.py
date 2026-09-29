@@ -491,9 +491,6 @@ class ProbeColorzonesStrengthDefaultHostTest(unittest.TestCase):
                                msg="host default disagrees with vocab.py's declared default")
 
 
-_CB_NEUTRAL_SCRATCH_A = hs.SCRATCH_DIR / "phase3-colorbalancergb-neutral-default-a.ORF"
-_CB_NEUTRAL_SCRATCH_B = hs.SCRATCH_DIR / "phase3-colorbalancergb-neutral-default-b.ORF"
-
 #: The 10 colorbalancergb rows that carry only `neutral` today (no
 #: host-verified `default`) and gate the 26 coverage cases
 #: m1-default-report.md's "Fix round 1" M4 section lists as staying failed
@@ -548,6 +545,20 @@ class ProbeColorbalancergbNeutralDefaultsHostTest(unittest.TestCase):
     sentinel does not read back live, is recorded as NOT verified; this
     test never loosens the tolerance or the two-oracle design to force a
     pass -- it fails loudly instead, per row.
+
+    Fix round 1 (incident inc_f9c5e8f5, card t_cc03dcb4): the first run
+    used FIXED scratch names and no concurrency guard, so an accidental
+    second darktable launch overlapped this one, shared the plugin config
+    and bridge spool, and could read/write either oracle's copy through the
+    OTHER darktable's worker -- oracle A's own sidecar was overwritten
+    before it could be re-inspected. That run's table is discarded (see
+    docs/measurements.md); this version fixes the cause:
+    `hs.assert_no_concurrent_darktable()` (called first, inside
+    `PluginInstall.install()`) refuses before anything is touched if a
+    second darktable process or a pending bridge request/response file is
+    found, and every scratch path below is unique per run (timestamp +
+    pid), asserted absent before use, so a rerun can never open on a stale
+    `library.db` history from an earlier run on the same path (I1).
     """
 
     def test_fresh_colorbalancergb_module_defaults_rows_to_neutral(self) -> None:
@@ -556,8 +567,22 @@ class ProbeColorbalancergbNeutralDefaultsHostTest(unittest.TestCase):
 
         hs.SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
 
+        # I1: a unique name per run, so a rerun can never reopen a path
+        # `library.db` already has colorbalancergb history on.
+        stamp = f"{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+        scratch_a = hs.SCRATCH_DIR / f"phase3-cb-neutral-{stamp}-a.ORF"
+        scratch_b = hs.SCRATCH_DIR / f"phase3-cb-neutral-{stamp}-b.ORF"
+
+        def assert_fresh(scratch: Path) -> None:
+            self.assertFalse(scratch.exists(), f"{scratch} already exists")
+            xmp_path = Path(str(scratch) + ".xmp")
+            self.assertFalse(xmp_path.exists(), f"{xmp_path} already exists")
+
+        def colorbalancergb_entries(image: str) -> list:
+            return [e for e in history.read(image).entries if e.operation == "colorbalancergb"]
+
         def newest_decoded(image: str) -> dict:
-            entries = [e for e in history.read(image).entries if e.operation == "colorbalancergb"]
+            entries = colorbalancergb_entries(image)
             self.assertTrue(entries, "no colorbalancergb history entry")
             entry = max(entries, key=lambda e: e.num)
             self.assertIsNotNone(entry.decoded, entry.reason)
@@ -568,10 +593,10 @@ class ProbeColorbalancergbNeutralDefaultsHostTest(unittest.TestCase):
         try:
             # Oracle A: its own scratch copy, its own launch, quit before
             # oracle B's copy even exists -- nothing it does can touch A.
-            shutil.copy(hs.HERO, _CB_NEUTRAL_SCRATCH_A)
-            Path(str(_CB_NEUTRAL_SCRATCH_A) + ".xmp").unlink(missing_ok=True)
-            image_a = str(_CB_NEUTRAL_SCRATCH_A)
-            proc = hs.launch(_CB_NEUTRAL_SCRATCH_A)
+            assert_fresh(scratch_a)
+            shutil.copy(hs.HERO, scratch_a)
+            image_a = str(scratch_a)
+            proc = hs.launch(scratch_a)
             try:
                 hs.wait_ready()
                 self.assertTrue(settle(dtbridge.call),
@@ -580,16 +605,23 @@ class ProbeColorbalancergbNeutralDefaultsHostTest(unittest.TestCase):
                 self.assertTrue(enabled.ok, enabled.error)
                 committed = registry.call("history.commit", "cli", image=image_a)
                 self.assertTrue(committed.ok, committed.error)
+                # I1: a fresh path must carry exactly one colorbalancergb
+                # entry (the enable) -- more would mean stale library.db
+                # history leaked in, which breaks oracle A's independence.
+                a_entries = colorbalancergb_entries(image_a)
+                self.assertEqual(len(a_entries), 1,
+                                 f"oracle A: expected exactly one colorbalancergb history "
+                                 f"entry (fresh enable), found {len(a_entries)}")
                 decoded_a = newest_decoded(image_a)
             finally:
                 hs.quit_darktable(proc)
 
             # Oracle B: a separate scratch copy, a separate launch.
             # Sentinel first (mandatory, one row at a time), then reset.
-            shutil.copy(hs.HERO, _CB_NEUTRAL_SCRATCH_B)
-            Path(str(_CB_NEUTRAL_SCRATCH_B) + ".xmp").unlink(missing_ok=True)
-            image_b = str(_CB_NEUTRAL_SCRATCH_B)
-            proc = hs.launch(_CB_NEUTRAL_SCRATCH_B)
+            assert_fresh(scratch_b)
+            shutil.copy(hs.HERO, scratch_b)
+            image_b = str(scratch_b)
+            proc = hs.launch(scratch_b)
             sentinels: dict[str, float] = {}
             decoded_sentinel: dict[str, Any] = {}
             try:
@@ -598,31 +630,46 @@ class ProbeColorbalancergbNeutralDefaultsHostTest(unittest.TestCase):
                                 f"control path {CONTROL_PATH} did not answer after settle")
                 enabled = registry.call("darkroom.enable", "cli", module="colorbalancergb")
                 self.assertTrue(enabled.ok, enabled.error)
+                committed = registry.call("history.commit", "cli", image=image_b)
+                self.assertTrue(committed.ok, committed.error)
+                decoded_baseline_b = newest_decoded(image_b)
                 for k, param in enumerate(_CB_NEUTRAL_ROWS):
                     spec = vocab.spec("colorbalancergb", param)
                     self.assertIsNotNone(spec, f"no vocab row for colorbalancergb.{param}")
                     sentinel = sentinel_for(spec, k)
                     r = registry.call("darkroom.set", "cli", module="colorbalancergb",
                                       param=param, value=sentinel)
-                    if not r.ok and (r.error or {}).get("code") == "commit_timeout":
-                        # Slot already held this rounded value (an earlier
-                        # run's sentinel survived in this scratch copy's
-                        # base sidecar): one retry with a shifted sentinel,
-                        # same as Phase3LiveHostTest.test_1.
-                        sentinel = round(sentinel - 0.01, 2)
-                        r = registry.call("darkroom.set", "cli", module="colorbalancergb",
-                                          param=param, value=sentinel)
                     self.assertTrue(r.ok, f"colorbalancergb.{param}: sentinel set failed: {r.error}")
                     committed = registry.call("history.commit", "cli", image=image_b)
                     self.assertTrue(committed.ok, committed.error)
                     sentinels[param] = sentinel
-                    decoded_sentinel[param] = newest_decoded(image_b).get(param)
+                    current = newest_decoded(image_b)
+                    decoded_sentinel[param] = current.get(param)
+                    # M1: this set must land in ONE slot only -- every other
+                    # row of this probe must still read its own sentinel
+                    # (already set) or the fresh-enable baseline (not yet
+                    # set), never a value smeared in from this write.
+                    for other in _CB_NEUTRAL_ROWS:
+                        if other == param:
+                            continue
+                        expected = sentinels.get(other, decoded_baseline_b.get(other))
+                        self.assertAlmostEqual(
+                            current.get(other), expected, delta=1e-4,
+                            msg=f"setting colorbalancergb.{param}={sentinel!r} moved "
+                                f"colorbalancergb.{other} from {expected!r} to "
+                                f"{current.get(other)!r}")
 
                 reset = registry.call("darkroom.reset", "cli", module="colorbalancergb",
                                        confirm=True)
                 self.assertTrue(reset.ok, reset.error)
                 committed = registry.call("history.commit", "cli", image=image_b)
                 self.assertTrue(committed.ok, committed.error)
+                # I1: enable + 10 sentinel sets + reset == 12 entries.
+                b_entries = colorbalancergb_entries(image_b)
+                self.assertEqual(len(b_entries), 12,
+                                 f"oracle B: expected exactly 12 colorbalancergb history "
+                                 f"entries (1 enable + {len(_CB_NEUTRAL_ROWS)} sentinels + "
+                                 f"1 reset), found {len(b_entries)}")
                 decoded_reset = newest_decoded(image_b)
             finally:
                 hs.quit_darktable(proc)
@@ -631,10 +678,11 @@ class ProbeColorbalancergbNeutralDefaultsHostTest(unittest.TestCase):
 
         # Every row's three readings, printed BEFORE any value assertion
         # below can fail, so one host run always yields the measurement
-        # even on a FAIL.
+        # even on a FAIL. The stamp identifies exactly which scratch files
+        # this table's numbers came from (I1).
         lines = [
             "\n## Phase 3 colorbalancergb neutral-only defaults probe "
-            f"({time.strftime('%Y-%m-%d %H:%M')})\n",
+            f"({time.strftime('%Y-%m-%d %H:%M')}, run stamp {stamp})\n",
             "| row | oracle A (fresh enable) | sentinel requested/decoded | "
             "oracle B (post-reset) | verified |",
             "| --- | --- | --- | --- | --- |",
