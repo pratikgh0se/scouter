@@ -1,0 +1,55 @@
+"""tests/gauntlet/observe.py -- the adapter-side param-knowledge functions
+(`defaults`, `verified_defaults`, `param_meta`). Unlike `gauntlet/tests/
+test_evaluate.py` (the pure engine, which may import only stdlib +
+`gauntlet.*` -- `gauntlet/tests/test_case_store.py
+::test_engine_is_stdlib_only_and_imports_no_product`), this file sits on the
+adapter side of that boundary and can import the product directly."""
+
+from __future__ import annotations
+
+from gauntlet.adapter import Observation
+from gauntlet.evaluate import POINTS, evaluate
+from gauntlet.tests.test_evaluate import POLICY, _cz_call, _cz_case, _cz_chk, _cz_snap
+from scouter.core import vocab
+from tests.gauntlet import observe
+
+
+def test_observe_verified_defaults_matches_vocab_default_rows_exactly():
+    """Review round 2, Important R2-I1's stronger option: pin
+    `observe.verified_defaults()` itself, independent of any M1 fallback
+    test -- without this, mutating it to `return defaults()` (exactly the
+    round-1 false-pass bug, `neutral` rows counting as defaults) left every
+    M1 fallback test green, because none of them consulted the real
+    function. Two oracles: vocab's own `default is not None` predicate
+    (oracle A, never `verified_defaults()`'s own logic) against what the
+    function actually returns (oracle B)."""
+    want = {f"{s.module}.{s.param}": s.default for s in vocab.PARAMS if s.default is not None}
+    got = observe.verified_defaults()
+    assert got == want
+    assert want  # sanity: the vocab rows with a real default are not empty
+    # every neutral-only row (has neutral, no default) must be absent.
+    neutral_only = {f"{s.module}.{s.param}" for s in vocab.PARAMS
+                    if s.default is None and s.neutral is not None}
+    assert neutral_only and not (neutral_only & got.keys())
+
+
+def test_m1_declared_default_fallback_rejects_neutral_only_key_via_real_adapter():
+    """The same negative case as `gauntlet/tests/test_evaluate.py
+    ::test_m1_declared_default_fallback_neutral_only_key_still_fails`, but
+    driven through the REAL `observe.verified_defaults()` (review round 2,
+    Important R2-I1a) instead of a hard-coded `{}` that stays green even if
+    that function regresses to include `neutral` rows -- the exact round-1
+    bug the reviewer's mutation (`verified_defaults = defaults`) reproduced
+    against every round-1 test."""
+    vd = observe.verified_defaults()
+    # oracle A: the raw vocab fact this whole test depends on.
+    assert "grain.strength" not in vd and "grain.strength" in observe.defaults()
+    chk = _cz_chk(target=0.0, key="grain.strength")
+    case = _cz_case(chk=chk, key="grain.strength")
+    obs = Observation(calls=[_cz_call(0.0, True, 0.0, module="grain", param="strength")],
+                      before=_cz_snap("a", verified_defaults=vd),
+                      after=_cz_snap("a", verified_defaults=vd))
+    # oracle B: the fixed evaluator, on the real adapter's own table.
+    v = evaluate(case, obs, POLICY)
+    assert v.checks[0].measured is None
+    assert POINTS[v.score] == 0.0

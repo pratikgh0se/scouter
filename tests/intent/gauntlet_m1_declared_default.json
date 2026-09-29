@@ -3,11 +3,18 @@
   "subject": "gauntlet/evaluate.py::_check_m1 / _m1_default_fallback, tests/gauntlet/observe.py::verified_defaults",
   "examples": [
     {
-      "id": "declared-default-with-noop-envelope-scores-pass",
+      "id": "declared-default-with-noop-envelope-scores-pass-olympus",
       "kind": "case",
       "case": "cov-colorzones.strength-olympus-set_lo",
       "expect": {"score": "pass", "outcome": "verified", "measured": 0.0},
       "source": "real proof4-20260929 evidence (tests/fixtures/proof4-20260929/cov-colorzones.strength-olympus-set_lo.json, now mirrored at gauntlet/tests/fixtures/proof4-20260929/): after.params has no colorzones.* key at all (no history entry), colorzones.strength is in the current adapter's verified_defaults at 0.0 (vocab's `default` field, host-probed -- commit 9ae3978), and the call's own envelope reports data.ok=true, data.noop=true, data.applied=0.0 -- both oracles agree the verified default is what darktable applied, so the fallback measures 0.0 and the M1 equals-0.0 check passes."
+    },
+    {
+      "id": "declared-default-with-noop-envelope-scores-pass-sony_a7",
+      "kind": "case",
+      "case": "cov-colorzones.strength-sony_a7-set_lo",
+      "expect": {"score": "pass", "outcome": "verified", "measured": 0.0},
+      "source": "review round 2, Minor R2-M1: the second real proof4-20260929 evidence file (gauntlet/tests/fixtures/proof4-20260929/cov-colorzones.strength-sony_a7-set_lo.json) was copied into the worktree in round 0 but nothing read it until now. Same shape as the olympus example on a different body: no colorzones.* history entry, verified default 0.0, envelope noop/applied 0.0."
     },
     {
       "id": "key-absent-and-not-in-verified-defaults-still-fails",
@@ -22,10 +29,10 @@
       "id": "neutral-only-key-not-in-verified-defaults-still-fails",
       "kind": "synthetic",
       "key": "grain.strength", "target": 0.0, "unit": "%",
-      "verified_defaults": {},
+      "verified_defaults": "adapter",
       "calls": [{"module": "grain", "param": "strength", "noop": true, "applied": 0.0, "ok": true}],
       "expect": {"score": "fail", "measured": null},
-      "source": "review round 1, I1's own negative example: grain.strength declares a vocab `neutral` of 0.0 but no `default` -- verified_defaults (tests/gauntlet/observe.py) never includes it, so even an absent module with a fully agreeing noop envelope must not score a pass. This is the case that made the wider `defaults()` table unsafe to use directly."
+      "source": "review round 1, I1's own negative example: grain.strength declares a vocab `neutral` of 0.0 but no `default` -- verified_defaults (tests/gauntlet/observe.py) never includes it, so even an absent module with a fully agreeing noop envelope must not score a pass. This is the case that made the wider `defaults()` table unsafe to use directly. Review round 2, Important R2-I1: `verified_defaults: \"adapter\"` is a sentinel the runner resolves to the REAL `observe.verified_defaults()` call (not a hard-coded `{}`), so a regression in that function (e.g. it starts returning `defaults()`, the round-1 bug) makes this example go red on its own."
     },
     {
       "id": "key-absent-but-module-has-a-history-entry-still-fails",

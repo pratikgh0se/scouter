@@ -1560,13 +1560,15 @@ def test_c5_rule_c_nested_clamp_synthetic():
 
 # -- M1 declared-default fallback (decision rows 548, 554) -------------------
 # proof4-20260929's cov-colorzones.strength-{olympus,sony_a7}-set_lo (real
-# evidence: tests/intent/gauntlet_m1_declared_default_fixtures.json /
-# tests/intent/test_gauntlet_m1_declared_default_intent.py) showed a key
-# absent from after.params (no history entry for its module) always read
-# `measured: null` and failed, even when a REAL, host-probed vocab default
-# (`verified_defaults`, never `neutral` -- review round 1, I1) existed for it
-# and the product's own envelope confirmed every call touching it applied
-# that default (review round 1, I2: EVERY matching call, not just the last).
+# evidence: gauntlet/tests/fixtures/proof4-20260929/ -- byte-identical copies
+# of the run-dir files -- driven by tests/intent/gauntlet_m1_declared_default.json
+# / tests/intent/test_gauntlet_m1_declared_default_intent.py, review round 1
+# Minor M3) showed a key absent from after.params (no history entry for its
+# module) always read `measured: null` and failed, even when a REAL,
+# host-probed vocab default (`verified_defaults`, never `neutral` -- review
+# round 1, I1) existed for it and the product's own envelope confirmed every
+# call touching it applied that default (review round 1, I2: EVERY matching
+# call, not just the last).
 
 
 def _cz_chk(target=0.0, key="colorzones.strength"):
@@ -1621,7 +1623,18 @@ def test_m1_declared_default_fallback_neutral_only_key_still_fails():
     module default for grain is not known to be 0 -- neutral is only the
     product's own "no effect" belief). Even absent, in `defaults()`, and
     with a noop envelope agreeing at 0.0, it must NOT score a pass: this key
-    is never in `verified_defaults`, so condition (a) always fails it."""
+    is never in `verified_defaults`, so condition (a) always fails it.
+
+    This engine test file may import only stdlib + `gauntlet.*`
+    (`gauntlet/tests/test_case_store.py::test_engine_is_stdlib_only_and_imports_no_product`),
+    so `verified_defaults` here is the SAME literal shape
+    `tests.gauntlet.observe.verified_defaults()` actually produces for this
+    key (empty -- grain.strength is neutral-only), asserted by construction
+    rather than by importing vocab/observe directly. Review round 2,
+    Important R2-I1's stronger check -- that `observe.verified_defaults()`
+    itself only ever contains real `default` rows, never `neutral` ones --
+    lives in `tests/gauntlet/test_observe.py`, which sits on the adapter
+    side of this same boundary and CAN import the product."""
     chk = _cz_chk(target=0.0, key="grain.strength")
     case = _cz_case(chk=chk, key="grain.strength")
     obs = Observation(calls=[_cz_call(0.0, True, 0.0, module="grain", param="strength")],
