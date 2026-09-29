@@ -53,3 +53,26 @@ def test_m1_declared_default_fallback_rejects_neutral_only_key_via_real_adapter(
     v = evaluate(case, obs, POLICY)
     assert v.checks[0].measured is None
     assert POINTS[v.score] == 0.0
+
+
+def test_m1_declared_default_fallback_accepts_a_real_verified_default_via_real_adapter():
+    """Mirror of the test above, positive side: `colorzones.strength` IS a
+    real, host-probed vocab `default` (0.0, commit 9ae3978), driven through
+    `observe.verified_defaults()` -- the fallback must accept it and score a
+    pass. This is the test in this file that discriminates the mutation
+    engine's own revert-mutation check against `gauntlet/evaluate.py`
+    itself: with `_m1_default_fallback` reverted to base (no fallback at
+    all), the SAME observation would score `fail`/`measured: None` instead,
+    so this test -- unlike the negative one above, which fails identically
+    with or without the fallback -- actually goes red when the production
+    fix it names is undone."""
+    vd = observe.verified_defaults()
+    # oracle A: the raw vocab fact this whole test depends on.
+    assert vd.get("colorzones.strength") == 0.0
+    obs = Observation(calls=[_cz_call(0.0, True, 0.0)],
+                      before=_cz_snap("a", verified_defaults=vd),
+                      after=_cz_snap("a", verified_defaults=vd))
+    # oracle B: the fixed evaluator, on the real adapter's own table.
+    v = evaluate(_cz_case(), obs, POLICY)
+    assert (v.score, v.outcome) == ("pass", "verified")
+    assert v.checks[0].measured == 0.0
