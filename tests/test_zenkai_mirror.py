@@ -14,4 +14,4 @@ def test_zenkai_mirror_body_matches_header_sha():
     assert m, f"bad header line: {header!r}"
     assert blank == ""
     assert hashlib.sha256(body.encode("utf-8")).hexdigest() == m.group(1)
-    assert body.rstrip().endswith("Zenkai Rules v1 (2026-09-27)")
+    assert body.rstrip().endswith("Zenkai Rules v2 (2026-10-20)")
