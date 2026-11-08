@@ -1,0 +1,24 @@
+{
+  "about": "Zenkai Z1 intent examples: tests/host_support.py::assert_isolated_library, the guard that keeps a host probe's darktable off Pratik's real library.db and real photos (standing isolation rule, 2026-11-08). {scratch} is a throwaway stand-in for ~/Pictures/ScouterScratch and {real} for ~/.config/darktable/library.db. Two oracles (Z2): whether it raised, and that the message names the cause; accepted cases also check the launch argv carries --library with that exact path.",
+  "subject": "tests/host_support.py::assert_isolated_library",
+  "examples": [
+    {
+      "id": "a-library-under-the-scratch-run-dir-is-accepted",
+      "library": "{scratch}/colorcal-probe/run-1/library.db",
+      "expect": {"raises": false, "message_contains": null},
+      "source": "the probe's own layout: <scratch>/colorcal-probe/<run-id>/library.db."
+    },
+    {
+      "id": "the-real-default-library-is-refused",
+      "library": "{real}",
+      "expect": {"raises": true, "message_contains": "real darktable library"},
+      "source": "the one file this guard exists to protect: a host probe importing frames and writing history into Pratik's real library."
+    },
+    {
+      "id": "a-dotdot-escape-out-of-scratch-is-refused",
+      "library": "{scratch}/colorcal-probe/../../photos/library.db",
+      "expect": {"raises": true, "message_contains": "not under the scratch dir"},
+      "source": "a string prefix check would accept this path; resolving it shows it leaves the scratch dir."
+    }
+  ]
+}

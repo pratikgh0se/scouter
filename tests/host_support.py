@@ -261,10 +261,36 @@ def quit_darktable(proc: subprocess.Popen[bytes]) -> None:
             continue
 
 
-def launch(image: Path) -> subprocess.Popen:
+REAL_LIBRARY = Path.home() / ".config" / "darktable" / "library.db"
+
+
+def assert_isolated_library(library: Path, scratch: Path | None = None,
+                            real: Path | None = None) -> Path:
+    """Refuse (ValueError) any library path that is not strictly under the
+    scratch dir or that is the real default library. Returns the resolved path."""
+    root = (scratch or SCRATCH_DIR).resolve()
+    path = Path(library).resolve()
+    if path == (real or REAL_LIBRARY).resolve():
+        raise ValueError(f"refusing the real darktable library: {path}")
+    if root not in path.parents:
+        raise ValueError(f"isolated library {path} is not under the scratch dir {root}")
+    return path
+
+
+def launch_argv(image: Path, library: Path | None = None) -> list[str]:
+    """The darktable argv. `library` (default off) isolates the launch in its
+    own library.db, checked by `assert_isolated_library` first."""
+    if library is None:
+        return [str(DARKTABLE), str(image)]
+    return [str(DARKTABLE), "--library", str(assert_isolated_library(library)), str(image)]
+
+
+def launch(image: Path, library: Path | None = None) -> subprocess.Popen:
     """Start darktable on `image`, so it comes up in the darkroom (phase 2 host fact)."""
-    return subprocess.Popen([str(DARKTABLE), str(image)],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    argv = launch_argv(image, library)
+    if library is not None:
+        Path(library).parent.mkdir(parents=True, exist_ok=True)
+    return subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def wait_ready(budget_s: float = 120.0) -> str:
