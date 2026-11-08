@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest import mock
 
 from gauntlet.adapter import CallRecord, Observation
 from gauntlet.evaluate import evaluate
@@ -47,11 +48,24 @@ def _landed_obs() -> Observation:
 
 
 def run_example(ex: dict) -> None:
+    """Examples without `pinned` describe the pre-promotion world (route A not
+    pinned); `pinned: true` ones the live route (promoted 2026-11-08)."""
+    from tests.gauntlet import checkmap as checkmap_mod
+
+    pinned = ex["input"].get("pinned", False)
+    with mock.patch.object(checkmap_mod, "route_a_pinned", lambda cmap: pinned):
+        _run_example(ex)
+
+
+def _run_example(ex: dict) -> None:
     inp, want = ex["input"], ex["expect"]
     if inp["generator"] == "coverage":
         c = _coverage_case(inp["case_id"])
         assert c.expect.kind == want["kind"], ex["id"]
-        assert c.expect.codes == want["codes"], ex["id"]
+        if "codes" in want:
+            assert c.expect.codes == want["codes"], ex["id"]
+        if "m1_key" in want:
+            assert any(chk.target.get("key") == want["m1_key"] for chk in c.expect.checks), ex["id"]
     elif inp["generator"] == "guide":
         c = _guide_case(inp["case_id"])
         assert c.expect.kind == want["kind"], ex["id"]

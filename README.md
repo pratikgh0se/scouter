@@ -771,10 +771,11 @@ scouter preset save harbour-warm && scouter preset apply-job harbour-warm --job-
 **Warmer/cooler can refuse.** On a frame whose white balance is in
 darktable's "camera reference (late)" mode (the scene-referred default),
 moving warmth through the white balance module would switch off that
-correction. Once color calibration's own action path is host-pinned,
-Scouter routes warmer/cooler and Kelvin sets there instead; until then
-(and for tint or `darkroom nudge` on temperature, always, pinned or not —
-they have no color-calibration reroute) it refuses with `module_unavailable`,
+correction. Scouter routes warmer/cooler and Kelvin sets through color
+calibration's illuminant temperature instead (host-pinned 2026-11-08); it
+refuses with `module_unavailable` for tint and `darkroom nudge` on temperature
+(always, they have no color-calibration reroute), for another illuminant, and
+for a frame with no color calibration history,
 naming the module and the reason in `error.message` — never a silent no-op.
 `scouter vocab list` shows whether `warmer`/`cooler` are pinned right now.
 See "`26` `module_unavailable`" below for the full explanation.
@@ -807,8 +808,8 @@ white balance in darktable 5.4's "camera reference (late)" mode (the
 scene-referred default): moving temperature or tint through darktable's
 sliders would switch off the late D65 correction and turn the frame cooler
 whichever way you asked. In that mode darktable adjusts warmth in color
-calibration: once its route is host-pinned (see "Warmth in camera reference
-(late) mode" below), warmer/cooler and Kelvin sets go there instead and only
+calibration: warmer/cooler and Kelvin sets go there (see "Warmth in camera
+reference (late) mode" below) and only
 tint, nudges, or an image whose color calibration cannot take it still get
 `module_unavailable`.
 
@@ -1057,16 +1058,17 @@ answer is `module_unavailable` naming what is missing. `wb kelvin` reports
 which route is in effect (`route`: `white_balance`, `color_calibration` with
 `illuminant_kelvin` read from the sidecar, or `unavailable` with the reason);
 on a preset-4 image its `kelvin` is the white balance module's as-shot value,
-which warmth no longer moves. **Limit today:** the route's darktable action
-path (`iop/channelmixerrgb/temperature`) waits for its host probe
-(`tests/test_host_colorcal.py`), so the row is `candidate` and warmth on a
-preset-4 image still refuses `module_unavailable`. **Unverified:** that a
-higher illuminant temperature renders warmer (the same sign as the white
-balance slider) is assumed from darktable's chromatic adaptation, not
-measured; the host probe's r/b check confirms it before the pin. Only color
-calibration instance 0 is read and targeted (a second, masked instance is
-not considered), and cooler moves below 4000 K on a daylight illuminant rely
-on darktable extrapolating the daylight formula. Speed is the same as any
+which warmth no longer moves. **Live since 2026-11-08:** the route's darktable
+action path (`iop/channelmixerrgb/temperature`) was host-pinned by
+`tests/test_host_colorcal.py` (darktable 5.4.1, an isolated library, both
+hero bodies). Measured: the value lands exactly at the requested Kelvin, the
+illuminant stays daylight, the white balance stays at preset 4, and a higher
+illuminant temperature renders warmer (rendered r/b rose on both bodies; the
+Sony hero landed exactly 2000.0 K at the floor, no darktable clamp). Tint,
+`darkroom nudge` on temperature, another illuminant (as shot, custom...) and a
+frame with no color calibration history still refuse `module_unavailable`.
+Only color calibration instance 0 is read and targeted (a second, masked
+instance is not considered). Speed is the same as any
 one-move phrase: one sidecar read decides the route, no extra darktable call
 (a direct `darkroom set` pays one extra `darkroom.current` lookup).
 

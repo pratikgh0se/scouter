@@ -89,12 +89,14 @@ class VocabShapeTest(unittest.TestCase):
         # await a host probe.
         self.assertEqual(
             by.get("candidate"),
-            {"grain.strength", "vignette.brightness", "channelmixerrgb.temperature",
+            {"grain.strength", "vignette.brightness",
              "ashift.rotation", "crop.left", "crop.right", "crop.top", "crop.bottom",
              "denoiseprofile.strength", "sharpen.amount"},
         )
-        self.assertEqual(len(by["live"]), 23)
-        for row in ("colorbalancergb.shadows_hue", "colorbalancergb.highlights_chroma",
+        # channelmixerrgb.temperature went live with the 2026-11-08 route A
+        # host probe (docs/measurements.md), 23 -> 24.
+        self.assertEqual(len(by["live"]), 24)
+        for row in ("channelmixerrgb.temperature","colorbalancergb.shadows_hue", "colorbalancergb.highlights_chroma",
                     "sigmoid.skew", "filmicrgb.contrast", "colorzones.strength"):
             self.assertIn(row, by["live"])
 

@@ -21,3 +21,14 @@ def _ample_free_disk(monkeypatch):
     disk. Only `free` is inflated; `.total`/`.used` pass through."""
     real = shutil.disk_usage
     monkeypatch.setattr(shutil, "disk_usage", lambda path: real(path)._replace(free=10**15))
+
+
+@pytest.fixture
+def route_a_unpinned(monkeypatch):
+    """The pre-promotion world (route A's action path not pinned, before the
+    2026-11-08 host probe): the generators emit the typed refusal for warmth on
+    a preset-4 hero. Tests that pin that shape ask for this fixture; the
+    pinned world is the default and is covered by the pinned-edit tests."""
+    from tests.gauntlet import checkmap
+
+    monkeypatch.setattr(checkmap, "route_a_pinned", lambda cmap: False)

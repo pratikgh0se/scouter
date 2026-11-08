@@ -40,6 +40,12 @@
       "why": "the educative-level cases exercise the bare 'cooler' phrase directly (not a full sentence); the guide generator's own word-boundary match must catch this too, not only the README's 'a touch warmer' sentence"
     },
     {
+      "id": "coverage-warmer-phrase-edits-when-pinned",
+      "input": {"generator": "coverage", "case_id": "cov-phrase-warmer-olympus-bare", "pinned": true},
+      "expect": {"kind": "edit", "m1_key": "channelmixerrgb.temperature"},
+      "why": "route A promoted 2026-11-08 (host probe 44ef3bc, PROMOTE on both bodies): with the pair pinned, 'warmer' on the preset-4 hero is a real edit that moves color calibration's illuminant K, not the typed refusal"
+    },
+    {
       "id": "guide-touch-warmer-pinned",
       "input": {"generator": "guide", "case_id": "gd-12-guide_touch_warmer", "pinned": true},
       "expect": {"kind": "edit", "m1_key": "channelmixerrgb.temperature"},

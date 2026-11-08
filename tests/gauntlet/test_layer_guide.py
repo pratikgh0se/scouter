@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+import pytest
+
 from tests.gauntlet.layers import guide
 
 
@@ -39,6 +41,7 @@ def _by_id(cases, case_id):
     return next(c for c in cases if c.id == case_id)
 
 
+@pytest.mark.usefixtures("route_a_unpinned")
 def test_touch_warmer_expects_the_wb_route_a_refusal():
     """The corpus hero is darktable's temperature preset 4 (check_map.json's
     wb_route_a block, rows 458/461): every warmth move there honestly
@@ -62,6 +65,7 @@ def test_session_touch_brighter_is_an_ordinary_live_move():
     assert c.steps[0].args["argv"][-1] == "a touch brighter"
 
 
+@pytest.mark.usefixtures("route_a_unpinned")
 def test_edu_warmer_and_cooler_expect_the_wb_route_a_refusal():
     cases = guide.generate()
     for level in guide.LEVELS:

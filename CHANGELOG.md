@@ -5,6 +5,19 @@ branch, which fixes defects found by the E12 live evaluation against real
 darktable (`Knowledge/Scouter - E12 live evaluation 2026-09-24.md` in the
 vault; decision row 407).
 
+## Unreleased (fix/colorcal-route-probe)
+
+Route A is live: on a preset-4 ("camera reference (late)") frame, "warmer",
+"cooler", Kelvin adjusts and sets now move color calibration's illuminant
+temperature (`channelmixerrgb.temperature`) instead of refusing with
+`module_unavailable`. Host probe 2026-11-08 (`tests/test_host_colorcal.py`,
+an isolated library per launch, Olympus and Sony heroes): PROMOTE on both,
+sidecar slot 36 and rendered r/b agree, higher K renders warmer, no clamp at
+2000 K. `dtbridge.ACTION_PATHS` gains the pair; the vocab row is `live`.
+Tint, nudge, other illuminants and frames without color calibration history
+still refuse. The probe itself now runs in its own scratch library
+(`host_support.launch(image, library=...)`).
+
 ## Unreleased (fix/mcp-add-order)
 
 `scouter setup` and the README printed `claude mcp add --transport stdio

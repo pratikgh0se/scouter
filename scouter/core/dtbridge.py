@@ -57,6 +57,11 @@ ACTION_PATHS: dict[tuple[str, str], str] = {
     ("colorbalancergb", "highlights_luminance"): "iop/colorbalancergb/gain/luminance",
     ("colorbalancergb", "highlights_hue"): "iop/colorbalancergb/gain/hue",
     ("colorbalancergb", "highlights_chroma"): "iop/colorbalancergb/gain/chroma",
+    # route A host probe, 2026-11-08 (tests/test_host_colorcal.py at 44ef3bc,
+    # darktable 5.4.1, isolated library, PROMOTE on olympus and sony; sidecar
+    # slot 36 plus rendered r/b, docs/measurements.md "Route A colour calibration
+    # probe"). Illuminant temperature in K of color calibration's CAT.
+    ("channelmixerrgb", "temperature"): "iop/channelmixerrgb/temperature",
 }
 
 _DB_LOCKED_RE = re.compile(r"database is locked|could not get lock|another instance", re.I)

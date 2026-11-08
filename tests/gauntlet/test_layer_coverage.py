@@ -11,9 +11,9 @@ def _case(cid: str):
 
 def test_coverage_counts_and_p0_core():
     cases = coverage.generate()
-    assert len(cases) == coverage.expected_count() == 1596
-    assert len({c.id for c in cases}) == 1596
-    assert sum(c.tier == "P0" for c in cases) == 350
+    assert len(cases) == coverage.expected_count() == 1636
+    assert len({c.id for c in cases}) == 1636
+    assert sum(c.tier == "P0" for c in cases) == 362
     assert sum(c.body == "sony_nex5n" for c in cases) == 20
 
 
@@ -40,7 +40,7 @@ def test_touch_floor_residual_cases_target_hero_bright_on_olympus_only():
     for cid in unaffected:
         assert by_id[cid].frame_role == "hero", cid
     assert sum(c.frame_role == "hero_bright" for c in cases) == 6
-    assert len(cases) == coverage.expected_count() == 1596
+    assert len(cases) == coverage.expected_count() == 1636
 
 
 def test_boundary_accepts_refusal_but_not_a_silent_clamp():
@@ -58,6 +58,7 @@ def test_boundary_accepts_refusal_but_not_a_silent_clamp():
     assert c.steps[-1].args["value"] == chk.target["request"]
 
 
+@pytest.mark.usefixtures("route_a_unpinned")
 def test_kelvin_cases_no_longer_reset_tint_first_on_a_wb_route_a_refusal():
     """Superseded by rows 458/461 (COV-WB-preset4-expectation): the corpus
     hero's preset 4 refuses every temperature.temperature write outright
@@ -143,6 +144,7 @@ def test_phrase_explicit_beyond_range_uses_the_boundary_check():
 # the boundary CHECK itself no longer applies to a refused write.
 
 
+@pytest.mark.usefixtures("route_a_unpinned")
 def test_temperature_adjust_refuses_on_every_body_preset_4():
     for body in ("sony_a7", "olympus"):
         c = _case(f"cov-temperature.temperature-{body}-adjust_up1")
@@ -151,6 +153,7 @@ def test_temperature_adjust_refuses_on_every_body_preset_4():
         assert not c.meta.get("accept_refusal")  # a strict refusal, not a permissive one
 
 
+@pytest.mark.usefixtures("route_a_unpinned")
 def test_warmer_phrase_refuses_on_every_body_preset_4():
     for body in ("sony_a7", "olympus"):
         for label in ("bare", "touch", "lot", "explicit"):
@@ -159,6 +162,7 @@ def test_warmer_phrase_refuses_on_every_body_preset_4():
             assert c.expect.codes == ["module_unavailable"], (body, label)
 
 
+@pytest.mark.usefixtures("route_a_unpinned")
 def test_temperature_boundary_probe_requests_stay_inside_the_calibration_sample_range():
     for label in ("set_lo", "set_hi"):
         c = _case(f"cov-temperature.temperature-olympus-{label}")
@@ -254,6 +258,7 @@ def test_relative_tint_moves_expect_value_unknown_not_module_unavailable():
     assert absolute.expect.codes == ["module_unavailable"]
 
 
+@pytest.mark.usefixtures("route_a_unpinned")
 def test_undo_after_a_refused_wb_write_keeps_the_antecedent_and_expects_noop():
     """Review I2: the undo_after_set/undo_after_adjust cases must keep the
     refused set/adjust as a real step (it is what leaves the journal empty
@@ -267,6 +272,7 @@ def test_undo_after_a_refused_wb_write_keeps_the_antecedent_and_expects_noop():
     assert c2.expect.kind == "typed_error" and c2.expect.codes == ["noop"]
 
 
+@pytest.mark.usefixtures("route_a_unpinned")
 def test_mixed_commutative_p2_pair_stays_an_honest_property_not_a_deterministic_fail():
     """Review I3: cov-p2-brighter-warmer's "warmer" half refuses on the
     corpus hero's preset 4, but "brighter" (the non-WB half) still lands

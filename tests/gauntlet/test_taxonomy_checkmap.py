@@ -81,7 +81,7 @@ def test_wb_route_a_block_loads_and_resolves(tax):
     warmth expectations as data, and they resolve both before and after the
     pin."""
     cmap = tax.check_map
-    assert checkmap.route_a_pinned(cmap) is False  # candidate until the host probe
+    assert checkmap.route_a_pinned(cmap) is True  # pinned by the 2026-11-08 host probe
     before = checkmap.wb_route_a_expect(cmap, "warmer", 4, pinned=False)
     assert before == {"expect": "typed_error", "codes": ["module_unavailable"]}
     after = checkmap.wb_route_a_expect(cmap, "temperature.temperature", 4, pinned=True)

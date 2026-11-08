@@ -1,5 +1,5 @@
 {
-  "about": "Zenkai Rules Z1 intent examples for route A (warmth through colour calibration). Each example is a real input on the committed fixture tests/fixtures/P6281348.ORF.xmp (E-M10 III, darktable 5.4 sidecar) with the outcome a human calls right. Run by tests/intent/test_colorcal_warmth_intent.py. Enforced by review until mechanised by t_450535e2. The direction values (+1 warmer / -1 cooler on the illuminant K) are the brief's semantics and are UNVERIFIED on the render until tests/test_host_colorcal.py step 3 passes. Cross-linked from tests/gauntlet/data/check_map.json's `wb_route_a.intent_examples`, which also carries the XMP v3 byte offsets, the NO_WB_REROUTE guard and the 0.03 WB verify tolerance these examples exercise.",
+  "about": "Zenkai Rules Z1 intent examples for route A (warmth through colour calibration). Each example is a real input on the committed fixture tests/fixtures/P6281348.ORF.xmp (E-M10 III, darktable 5.4 sidecar) with the outcome a human calls right. Run by tests/intent/test_colorcal_warmth_intent.py. Enforced by review until mechanised by t_450535e2. The direction values (+1 warmer / -1 cooler on the illuminant K) were VERIFIED on the render by the 2026-11-08 host probe (tests/test_host_colorcal.py, 44ef3bc, rendered r/b rose for higher K on both bodies). Cross-linked from tests/gauntlet/data/check_map.json's `wb_route_a.intent_examples`, which also carries the XMP v3 byte offsets, the NO_WB_REROUTE guard and the 0.03 WB verify tolerance these examples exercise.",
   "subject": "scouter/core/darkroom.py wb_route + moves.say/adjust + darkroom.set_param + wb.kelvin",
   "examples": [
     {
@@ -19,6 +19,12 @@
       "input": {"verb": "set", "module": "temperature", "param": "temperature", "value": 5500.0, "temperature_preset": 4, "colorcal_pinned": true, "illuminant": 2},
       "expect": {"outcome": "ok", "sent_path": "iop/channelmixerrgb/temperature", "sent_value": 5500.0, "wb_preset_after": 4},
       "source": "editor benchmark W4 'Match daylight.' (tests/gauntlet/benchmark/editor_tasks.json: an absolute 5500 K target); decision rows 458/461 route kelvin-set phrases"
+    },
+    {
+      "id": "cooler-at-the-2000k-floor-reports-the-clamp",
+      "input": {"verb": "adjust", "module": "temperature", "param": "temperature", "delta": -300.0, "temperature_preset": 4, "colorcal_pinned": true, "illuminant": 2, "temperature_k": 2100.0},
+      "expect": {"outcome": "ok", "sent_path": "iop/channelmixerrgb/temperature", "sent_value": 2000.0, "clamped": true, "wb_preset_after": 4},
+      "source": "route A host probe 2026-11-08 (44ef3bc): darktable landed exactly 2000.0 K on the Sony hero, so the product's 2000 K clamp is reachable and honest; a move that stops at it must say so (row 471), not pretend it moved the full step"
     },
     {
       "id": "warmer-preset2",

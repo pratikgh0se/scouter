@@ -71,6 +71,15 @@ class _RouteFixture(_MovesFixture):
         self.addCleanup(p.stop)
         self.assertEqual(vocab.status(vocab.spec(*darkroom.COLORCAL_WB)), "live")
 
+    def unpin(self) -> None:
+        """The pre-promotion state (the pair absent from ACTION_PATHS), to keep
+        the candidate branch of `wb_route` covered."""
+        p = mock.patch.dict(dtbridge.ACTION_PATHS)
+        p.start()
+        self.addCleanup(p.stop)
+        del dtbridge.ACTION_PATHS[darkroom.COLORCAL_WB]
+        self.assertEqual(vocab.status(vocab.spec(*darkroom.COLORCAL_WB)), "candidate")
+
     def assert_wb_untouched(self) -> None:
         self.assertNotIn("iop/temperature/temperature", [s["path"] for s in self.sets()])
         self.assertEqual(darkroom.wb_preset(str(self.raw)), 4)
@@ -88,13 +97,18 @@ class LayoutAndRowTest(_RouteFixture):
         cct = 449 * n ** 3 + 3525 * n ** 2 + 6823.3 * n + 5520.33
         self.assertAlmostEqual(cct, params["temperature"], delta=15)
 
-    def test_the_row_is_a_candidate_until_the_host_probe(self) -> None:
+    def test_the_row_is_live_since_the_host_probe(self) -> None:
         s = vocab.spec("channelmixerrgb", "temperature")
         self.assertEqual((s.unit, s.lo, s.hi, s.step), ("K", 2000.0, 12000.0, 300.0))
         self.assertEqual(s.candidate_paths, (COLORCAL_PATH,))
-        self.assertNotIn(darkroom.COLORCAL_WB, dtbridge.ACTION_PATHS)
-        self.assertEqual(vocab.status(s), "candidate")
+        # Pinned by the 2026-11-08 host probe (tests/test_host_colorcal.py, 44ef3bc).
+        self.assertEqual(dtbridge.ACTION_PATHS[darkroom.COLORCAL_WB], COLORCAL_PATH)
+        self.assertEqual(vocab.status(s), "live")
         self.assertTrue(vocab.xmp_named("channelmixerrgb", "temperature"))
+
+    def test_without_its_pin_the_row_is_a_candidate_again(self) -> None:
+        self.unpin()
+        self.assertNotIn(darkroom.COLORCAL_WB, dtbridge.ACTION_PATHS)
 
 
 class RouteSelectionTest(_RouteFixture):
@@ -104,14 +118,14 @@ class RouteSelectionTest(_RouteFixture):
 
     def test_preset_4_candidate_row_is_unavailable(self) -> None:
         self.preset_4()
+        self.unpin()
         r = darkroom.wb_route(str(self.raw))
         self.assertEqual(r["route"], "unavailable")
         self.assertEqual(r["colorcal_status"], "candidate")
         self.assertIn("host probe", r["reason"])
 
-    def test_preset_4_pinned_row_routes_to_color_calibration(self) -> None:
+    def test_preset_4_default_routes_to_color_calibration(self) -> None:
         self.preset_4()
-        self.pin()
         r = darkroom.wb_route(str(self.raw))
         self.assertEqual(r["route"], "color_calibration")
         self.assertEqual(r["illuminant"], "daylight")
@@ -303,6 +317,7 @@ class NeitherRouteTest(_RouteFixture):
 
     def test_candidate_row_refuses_with_the_host_probe_reason(self) -> None:
         self.preset_4()
+        self.unpin()
         with self.assertRaises(ModuleUnavailable) as cm:
             moves.say.__wrapped__("warmer", job="job-test")
         self.assertIn("host probe", cm.exception.fix)
@@ -344,6 +359,7 @@ class KelvinReadbackTest(_RouteFixture):
 
     def test_preset_4_candidate_reports_unavailable(self) -> None:
         self.preset_4()
+        self.unpin()
         r = wb.kelvin_verb.__wrapped__(str(self.raw), job="job-test")
         self.assertEqual(r.route["route"], "unavailable")
         self.assertTrue(any("cannot move warmth" in w for w in r.warnings), r.warnings)

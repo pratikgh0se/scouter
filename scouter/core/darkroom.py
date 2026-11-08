@@ -469,9 +469,9 @@ def wb_preset(path: str, instance: int = 0) -> int | None:
 #: through colour calibration"): on a preset-4 image, Kelvin moves go to
 #: color calibration's CAT illuminant temperature and the white balance
 #: module is left untouched, so the late D65 correction stays on.
-#: UNVERIFIED: the direction (a higher illuminant K renders warmer, the same
-#: sign as the WB slider) is assumed from darktable's CAT semantics until
-#: tests/test_host_colorcal.py step 3 (measured r/b) passes on the host.
+#: VERIFIED on the host 2026-11-08 (tests/test_host_colorcal.py at 44ef3bc,
+#: measured r/b on both bodies): a higher illuminant K renders warmer, the
+#: same sign as the WB slider.
 #: Limit: only color calibration instance 0 is read and targeted; a second
 #: (masked) instance is not considered.
 COLORCAL_WB: tuple[str, str] = ("channelmixerrgb", "temperature")

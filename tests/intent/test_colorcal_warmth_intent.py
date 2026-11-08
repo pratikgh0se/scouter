@@ -21,13 +21,18 @@ class ColorCalWarmthIntentTest(_RouteFixture):
         inp, want = ex["input"], ex["expect"]
         if inp["temperature_preset"] == 4:
             self.preset_4()
-        if inp["illuminant"] != 2:
-            self.colorcal(illuminant=inp["illuminant"])
-        if inp["colorcal_pinned"]:
-            self.pin()
+        if inp["illuminant"] != 2 or "temperature_k" in inp:
+            self.colorcal(illuminant=inp["illuminant"],
+                          temperature=inp.get("temperature_k", FIXTURE_ILLUMINANT_K))
+        if not inp["colorcal_pinned"]:
+            self.unpin()
         error = None
+        result = None
         try:
-            if inp["verb"] == "say":
+            if inp["verb"] == "adjust":
+                result = moves.adjust.__wrapped__(inp["module"], inp["param"], inp["delta"],
+                                                  commit=False, job="job-test")
+            elif inp["verb"] == "say":
                 moves.say.__wrapped__(inp["phrase"], commit=False, job="job-test")
             else:
                 darkroom.set_param.__wrapped__(inp["module"], inp["param"], inp["value"],
@@ -49,6 +54,8 @@ class ColorCalWarmthIntentTest(_RouteFixture):
         if "direction" in want and want["sent_path"].startswith("iop/channelmixerrgb"):
             delta = sent[0]["value"] - FIXTURE_ILLUMINANT_K
             self.assertEqual((delta > 0) - (delta < 0), want["direction"])
+        if "clamped" in want:
+            self.assertEqual(result.clamped, want["clamped"], ex["id"])
         if "wb_preset_after" in want:
             self.assertEqual(darkroom.wb_preset(str(self.raw)), want["wb_preset_after"])
 

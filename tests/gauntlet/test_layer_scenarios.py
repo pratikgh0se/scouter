@@ -28,6 +28,7 @@ def test_out_impossible_partial_carry_roadmap_key():
             assert c.meta.get("roadmap_key"), c.id
 
 
+@pytest.mark.usefixtures("route_a_unpinned")
 def test_wb_only_request_becomes_a_typed_error_tool_and_agent_case():
     """Rows 458/461 (COV-WB-preset4-expectation, wired into scenarios):
     r0089's only capability is "warmer" -- on the corpus hero's preset 4
@@ -48,6 +49,7 @@ def test_wb_only_request_becomes_a_typed_error_tool_and_agent_case():
     assert a.meta["codes"] == ["module_unavailable"]
 
 
+@pytest.mark.usefixtures("route_a_unpinned")
 def test_mixed_wb_and_other_capability_drops_only_the_wb_stat_check():
     """r0005 combines "brighter" (unaffected) with "warmer" (refused on the
     corpus hero's preset 4): the case stays an edit (brighter still moves),
@@ -72,6 +74,7 @@ def test_mixed_wb_and_other_capability_drops_only_the_wb_stat_check():
     assert t.meta["roadmap_key"] == "wb_route_a"
 
 
+@pytest.mark.usefixtures("route_a_unpinned")
 def test_mixed_wb_agent_case_requires_the_refusal_named_in_the_agent_text():
     """Fix round 1 (review I5): r0372's agent case mixes a WB-refused
     capability with a working one -- the agent must name the refusal in its
