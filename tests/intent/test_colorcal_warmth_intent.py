@@ -33,9 +33,9 @@ class ColorCalWarmthIntentTest(_RouteFixture):
                 result = moves.adjust.__wrapped__(inp["module"], inp["param"], inp["delta"],
                                                   commit=False, job="job-test")
             elif inp["verb"] == "say":
-                moves.say.__wrapped__(inp["phrase"], commit=False, job="job-test")
+                result = moves.say.__wrapped__(inp["phrase"], commit=False, job="job-test")
             else:
-                darkroom.set_param.__wrapped__(inp["module"], inp["param"], inp["value"],
+                result = darkroom.set_param.__wrapped__(inp["module"], inp["param"], inp["value"],
                                                commit=False, job="job-test")
         except ScouterError as e:
             error = e
@@ -54,6 +54,11 @@ class ColorCalWarmthIntentTest(_RouteFixture):
         if "direction" in want and want["sent_path"].startswith("iop/channelmixerrgb"):
             delta = sent[0]["value"] - FIXTURE_ILLUMINANT_K
             self.assertEqual((delta > 0) - (delta < 0), want["direction"])
+        # Oracle for the word the user is told: "ok" for a full move, "moved_to_limit"
+        # (row 471) for one that stopped at a clamp.
+        self.assertEqual(result.outcome, want["outcome"], ex["id"])
+        if "cap" in want:
+            self.assertEqual(result.cap, want["cap"], ex["id"])
         if "clamped" in want:
             self.assertEqual(result.clamped, want["clamped"], ex["id"])
         if "wb_preset_after" in want:

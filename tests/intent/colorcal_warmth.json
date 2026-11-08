@@ -23,7 +23,7 @@
     {
       "id": "cooler-at-the-2000k-floor-reports-the-clamp",
       "input": {"verb": "adjust", "module": "temperature", "param": "temperature", "delta": -300.0, "temperature_preset": 4, "colorcal_pinned": true, "illuminant": 2, "temperature_k": 2100.0},
-      "expect": {"outcome": "ok", "sent_path": "iop/channelmixerrgb/temperature", "sent_value": 2000.0, "clamped": true, "wb_preset_after": 4},
+      "expect": {"outcome": "moved_to_limit", "cap": 2000.0, "sent_path": "iop/channelmixerrgb/temperature", "sent_value": 2000.0, "clamped": true, "wb_preset_after": 4},
       "source": "route A host probe 2026-11-08 (44ef3bc): darktable landed exactly 2000.0 K on the Sony hero, so the product's 2000 K clamp is reachable and honest; a move that stops at it must say so (row 471), not pretend it moved the full step"
     },
     {

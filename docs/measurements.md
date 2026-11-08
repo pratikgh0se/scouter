@@ -616,7 +616,8 @@ out the 5 s readback poll before resolving.
 
 ## Route A colour calibration probe (2026-11-08, branch sha 44ef3bc)
 
-Host probe `tests/test_host_colorcal.py`, darktable 5.4.1, isolated library per
+Host probe `tests/test_host_colorcal.py`, darktable 5.4.1 (the installed app's
+Info.plist CFBundleShortVersionString; the probe itself does not log it), isolated library per
 launch under `~/Pictures/ScouterScratch/colorcal-probe/20261108T151559-32290`,
 263.97 s, 1 passed. Raw log: `docs/measurements-generated.md` (git-ignored).
 

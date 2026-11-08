@@ -1060,7 +1060,7 @@ which route is in effect (`route`: `white_balance`, `color_calibration` with
 on a preset-4 image its `kelvin` is the white balance module's as-shot value,
 which warmth no longer moves. **Live since 2026-11-08:** the route's darktable
 action path (`iop/channelmixerrgb/temperature`) was host-pinned by
-`tests/test_host_colorcal.py` (darktable 5.4.1, an isolated library, both
+`tests/test_host_colorcal.py` (the installed darktable 5.4.1, an isolated library, both
 hero bodies). Measured: the value lands exactly at the requested Kelvin, the
 illuminant stays daylight, the white balance stays at preset 4, and a higher
 illuminant temperature renders warmer (rendered r/b rose on both bodies; the

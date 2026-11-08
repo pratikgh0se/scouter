@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from scouter import errors
-from scouter.core import darkroom, dtbridge, journal, moves, phrases
+from scouter.core import darkroom, dtbridge, journal, moves, phrases, vocab
 from scouter.errors import ModuleUnavailable
 from scouter.types import CommitResult
 from tests import test_wb as _test_wb
@@ -30,16 +30,21 @@ _PRESET_2_HEX = "06ce00400000803f9246da3f0000807f02000000"
 _PRESET_4_HEX = "06ce00400000803f9246da3f0000807f04000000"
 
 
+def unpin_route_a(case) -> None:
+    """The pre-promotion state: route A's pair absent from ACTION_PATHS (pinned
+    since the 2026-11-08 host probe), so the candidate/refusal paths of
+    `wb_route` stay covered. Restored on cleanup."""
+    p = mock.patch.dict(dtbridge.ACTION_PATHS)
+    p.start()
+    case.addCleanup(p.stop)
+    del dtbridge.ACTION_PATHS[darkroom.COLORCAL_WB]
+    case.assertEqual(vocab.status(vocab.spec(*darkroom.COLORCAL_WB)), "candidate")
+
+
 class _WbLateFixture(_MovesFixture):
     def setUp(self) -> None:
         super().setUp()
-        # Route A is pinned since the 2026-11-08 host probe; this suite covers
-        # the refusal that stands when it is NOT available (other illuminant,
-        # no colour calibration history), so take the pin away here.
-        p = mock.patch.dict(dtbridge.ACTION_PATHS)
-        p.start()
-        self.addCleanup(p.stop)
-        del dtbridge.ACTION_PATHS[darkroom.COLORCAL_WB]
+        unpin_route_a(self)
 
     def set_preset(self, preset_hex: str) -> None:
         sidecar = Path(str(self.raw) + ".xmp")

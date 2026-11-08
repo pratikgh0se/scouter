@@ -27,7 +27,7 @@ from scouter.core import darkroom, dtbridge, journal, moves, vocab, wb, xmp
 from scouter.errors import ModuleUnavailable
 from scouter.types import CommitResult
 from tests.test_moves import _MovesFixture
-from tests.test_wb_late_guard import _PRESET_2_HEX, _PRESET_4_HEX
+from tests.test_wb_late_guard import _PRESET_2_HEX, _PRESET_4_HEX, unpin_route_a
 
 COLORCAL_PATH = "iop/channelmixerrgb/temperature"
 _FIXTURE_COLORCAL = "gz04eJxjYGiwZ8AAxIqRD5igmAWIGYH4MtcRO5vS/XbrskpdQXYxQuUBodMIaA=="
@@ -72,13 +72,7 @@ class _RouteFixture(_MovesFixture):
         self.assertEqual(vocab.status(vocab.spec(*darkroom.COLORCAL_WB)), "live")
 
     def unpin(self) -> None:
-        """The pre-promotion state (the pair absent from ACTION_PATHS), to keep
-        the candidate branch of `wb_route` covered."""
-        p = mock.patch.dict(dtbridge.ACTION_PATHS)
-        p.start()
-        self.addCleanup(p.stop)
-        del dtbridge.ACTION_PATHS[darkroom.COLORCAL_WB]
-        self.assertEqual(vocab.status(vocab.spec(*darkroom.COLORCAL_WB)), "candidate")
+        unpin_route_a(self)
 
     def assert_wb_untouched(self) -> None:
         self.assertNotIn("iop/temperature/temperature", [s["path"] for s in self.sets()])
@@ -107,8 +101,7 @@ class LayoutAndRowTest(_RouteFixture):
         self.assertTrue(vocab.xmp_named("channelmixerrgb", "temperature"))
 
     def test_without_its_pin_the_row_is_a_candidate_again(self) -> None:
-        self.unpin()
-        self.assertEqual(vocab.status(vocab.spec(*darkroom.COLORCAL_WB)), "candidate")
+        self.unpin()  # asserts the row is a candidate
         self.assertNotIn(darkroom.COLORCAL_WB, dtbridge.ACTION_PATHS)
 
 
