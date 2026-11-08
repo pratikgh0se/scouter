@@ -371,7 +371,7 @@ def test_honest_tool_refusal_passes():
 def test_refusal_with_half_applied_edit_fails():
     case = _edit_case(kind="refuse", steps=[Step("darkroom_say", write=True)])
     v = evaluate(case, _obs(_err("usage"), _snap("a"), _snap("b")), POLICY)
-    assert v.score != "pass"
+    assert v.score == "fail"
 
 
 def test_refusal_code_outside_the_set_fails_and_transient_blocks():
@@ -570,7 +570,7 @@ def test_c1_sidecar_expectation_is_enforced_without_checks():
     agent = _edit_case([], {"changed": True}, mode="agent", steps=[])
     v = evaluate(agent, Observation(agent_text="Brightened it by a stop.", before=_snap("a"),
                                     after=_snap("a")), POLICY)
-    assert v.score != "pass"
+    assert v.score == "fail"
 
 
 def test_c1_edit_without_checks_or_sidecar_needs_review():
@@ -591,7 +591,7 @@ def test_i1_substitute_that_fails_its_checks_fails():
     case = _edit_case([chk], kind="refuse", mode="agent", steps=[], meta={"substitute_ok": True})
     v = evaluate(case, Observation(agent_text="I can't do that.", before=_snap("a", k=0.0),
                                    after=_snap("b", k=1.0)), POLICY)
-    assert v.score != "pass"
+    assert v.score == "fail"
     good = evaluate(case, Observation(agent_text="I can't do that.", before=_snap("a", k=0.0),
                                       after=_snap("b", k=5.0)), POLICY)
     assert good.outcome == "correct_refusal"
@@ -632,7 +632,7 @@ def test_i5_missing_measurements_fail():
                 Check("text", target={"regex": "error", "present": False})):
         v = evaluate(_edit_case([chk], None, kind="workflow", steps=undo),
                      Observation(**base), POLICY)
-        assert v.score != "pass" and v.checks[0].note == "unmeasured", chk
+        assert v.score == "fail" and v.checks[0].note == "unmeasured", chk
 
 
 def test_c3_property_kind_with_accept_refusal_scores_the_honest_refusal_a_pass():
@@ -1179,7 +1179,7 @@ def test_fix4_derived_key_is_restored_only_when_its_coefficients_are():
             _err("unsupported_undo")]
     v = evaluate(case, _steps_obs(envs, [s0, s1, s2, s2], before_meta=WB_META, tools=tools),
                  POLICY)
-    assert v.score != "pass" and not v.checks[0].ok, v
+    assert v.score == "fail" and not v.checks[0].ok, v
     # an undo that put the coefficients back is restored (coeff_g2 None == None)
     ok_undo = [*envs[:2], _ok({})]
     v = evaluate(case, _steps_obs(ok_undo, [s0, s1, s2, s1], before_meta=WB_META, tools=tools),
@@ -1719,43 +1719,66 @@ def test_m1_declared_default_fallback_earlier_unverified_write_fails_loudly():
     assert POINTS[v.score] == 0.0
 
 
-def _chroma_delta_case(lo=0.0, hi=0.3):
-    key = "colorbalancergb.shadows_chroma"
-    chk = Check("M1", kind="delta", target={"key": key, "delta": -0.225, "unit": "%", "tol": 0.0075,
+KEY = "colorbalancergb.shadows_chroma"
+#: the product's real clamp envelope (scouter/core/moves.py `_adjust_core`:
+#: outcome moved_to_limit, so registry.call answers ok:false), hand-built
+MOVED_TO_LIMIT = {"ok": False, "outcome": "moved_to_limit",
+                  "data": {"clamped": True, "cap": 0.0, "applied": 0.0, "requested": -0.075}}
+
+
+def _chroma_delta_case(delta=-0.225, lo=0.0, hi=0.3):
+    chk = Check("M1", kind="delta", target={"key": KEY, "delta": delta, "unit": "%", "tol": 0.0075,
                                             "step": 0.075, "from": 1, "lo": lo, "hi": hi})
-    return _edit_case([chk], {"changed": True, "key": key, "units": {key: "%"}},
+    return _edit_case([chk], {"changed": True, "key": KEY, "units": {KEY: "%"}},
                       steps=[Step("darkroom_set", {}, budget_s=3.5, write=True),
-                             Step("darkroom_adjust", {}, budget_s=3.5, write=True)]), key
+                             Step("darkroom_adjust", {}, budget_s=3.5, write=True)])
 
 
-def _chroma_obs(key, committed, clamped):
-    snaps = [_snap(fp, **{key: v}) for fp, v in (("a", None), ("b", 0.15), ("c", committed))]
-    calls = [CallRecord("darkroom_set", {}, _ok(), write=True),
-             CallRecord("darkroom_adjust", {}, _ok({"clamped": clamped}), write=True)]
+def _chroma_obs(committed, adjust_env, set_env=None):
+    snaps = [_snap(fp, **{KEY: v}) for fp, v in (("a", None), ("b", 0.15), ("c", committed))]
+    calls = [CallRecord("darkroom_set", {}, set_env or _ok(), write=True),
+             CallRecord("darkroom_adjust", {}, adjust_env, write=True)]
     return Observation(calls=calls, before=snaps[0], after=snaps[2],
                        extra={"snapshots": [x["params"] for x in snaps]})
 
 
-def test_delta_stopping_at_bound_with_reported_clamp_is_credited():
-    case, key = _chroma_delta_case()
-    v = evaluate(case, _chroma_obs(key, 0.0, True), POLICY)
+def test_delta_stopping_at_lower_bound_with_real_moved_to_limit_is_credited():
+    v = evaluate(_chroma_delta_case(), _chroma_obs(0.0, MOVED_TO_LIMIT), POLICY)
     assert (v.score, v.outcome) == ("pass", "verified")
     assert v.checks[0].note == "clamped_at_bound"
 
 
-def test_delta_stopping_at_bound_without_clamp_report_still_fails():
-    case, key = _chroma_delta_case()
-    v = evaluate(case, _chroma_obs(key, 0.0, False), POLICY)
+def test_delta_stopping_at_lower_bound_with_ok_plus_clamped_is_credited():
+    v = evaluate(_chroma_delta_case(), _chroma_obs(0.0, _ok({"clamped": True})), POLICY)
+    assert (v.score, v.outcome) == ("pass", "verified")
+
+
+def test_delta_stopping_at_upper_bound_with_reported_clamp_is_credited():
+    case = _chroma_delta_case(delta=0.225)
+    v = evaluate(case, _chroma_obs(0.3, MOVED_TO_LIMIT), POLICY)
+    assert (v.score, v.outcome) == ("pass", "verified")
+
+
+def test_delta_at_bound_without_clamp_report_is_not_credited():
+    v = evaluate(_chroma_delta_case(), _chroma_obs(0.0, _ok({"clamped": False})), POLICY)
     assert v.score != "pass"
 
 
-def test_delta_stopping_short_of_bound_still_fails_even_with_clamp_claim():
-    case, key = _chroma_delta_case()
-    v = evaluate(case, _chroma_obs(key, 0.05, True), POLICY)
+def test_delta_short_of_bound_with_clamp_claim_is_not_credited():
+    v = evaluate(_chroma_delta_case(), _chroma_obs(0.05, MOVED_TO_LIMIT), POLICY)
     assert v.score != "pass"
+
+
+def test_delta_at_the_opposite_bound_with_clamp_claim_is_not_credited():
+    v = evaluate(_chroma_delta_case(), _chroma_obs(0.3, MOVED_TO_LIMIT), POLICY)
+    assert v.score != "pass"
+
+
+def test_delta_clamp_flag_on_the_wrong_call_is_not_credited():
+    obs = _chroma_obs(0.0, _ok({"clamped": False}), set_env={**MOVED_TO_LIMIT})
+    assert evaluate(_chroma_delta_case(), obs, POLICY).score != "pass"
 
 
 def test_delta_without_declared_bounds_is_never_credited():
-    case, key = _chroma_delta_case(lo=None, hi=None)
-    v = evaluate(case, _chroma_obs(key, 0.0, True), POLICY)
-    assert v.score != "pass"
+    case = _chroma_delta_case(lo=None, hi=None)
+    assert evaluate(case, _chroma_obs(0.0, MOVED_TO_LIMIT), POLICY).score != "pass"

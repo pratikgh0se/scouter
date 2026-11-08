@@ -14,13 +14,13 @@
     {
       "id": "clamp-at-bound-but-not-reported-is-a-failure",
       "start": 0.15, "committed": 0.0, "clamped": false,
-      "expect": {"outcome": "not_verified", "score": "not_pass"},
+      "expect": {"outcome": "partial", "score": "not_pass"},
       "source": "control: the same landing with no clamp report is the silent-clamp bug the check exists to catch"
     },
     {
       "id": "stop-short-of-the-bound-is-a-failure-even-if-clamp-claimed",
       "start": 0.15, "committed": 0.05, "clamped": true,
-      "expect": {"outcome": "not_verified", "score": "not_pass"},
+      "expect": {"outcome": "partial", "score": "not_pass"},
       "source": "control: a reported clamp does not excuse stopping before the bound"
     }
   ]
