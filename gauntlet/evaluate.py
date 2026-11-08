@@ -771,6 +771,20 @@ def _is_noop(c: CallRecord) -> bool:
     return bool(env.get("ok")) and bool((env.get("data") or {}).get("noop"))
 
 
+def _noop_case_unchanged(case: Case, obs: Observation) -> bool:
+    """Nothing changed in a noop case. Whole case (fingerprint) when no step is
+    marked `setup`; otherwise only the action steps' own snapshot diffs, since a
+    prep set legitimately changes the sidecar before the action under test."""
+    if not any(st.setup for st in case.steps):
+        return not _fingerprint_changed(obs)
+    snaps = _step_snaps(obs)
+    if snaps is None:
+        return False  # cannot attribute the change to a step: do not credit the noop
+    units = _units(obs)
+    return not any(_step_changed(obs, snaps, i, units)
+                   for i, st in enumerate(case.steps) if not st.setup and i < len(obs.calls))
+
+
 def _noop_rule(case: Case, obs: Observation, units: dict) -> str | None:
     """Spec 1 (f), attributed per step (night-1 fix, bug 1). With per-step
     snapshots a noop answer is a silent failure only when ITS OWN step changed
@@ -1333,8 +1347,13 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     if blocked and (miss or not all(r.ok for r in results)):
         return Verdict(FAIL, "blocked", results, notes=[blocked])
     if kind == "noop":
-        noop = any(((c.envelope or {}).get("data") or {}).get("noop") for c in obs.calls)
-        if noop and not _fingerprint_changed(obs) and all(r.ok for r in results):
+        noops = [c for c in _action_writes(case, obs) + [c for c in obs.calls if not c.write]
+                 if ((c.envelope or {}).get("data") or {}).get("noop")]
+        reason_ok = not case.expect.codes or any(
+            ((c.envelope or {}).get("data") or {}).get("reason") in case.expect.codes
+            for c in noops)
+        if noops and reason_ok and _noop_case_unchanged(case, obs) and \
+                all(r.ok for r in results):
             return Verdict(PASS, "verified", results)
         return Verdict(FAIL, "failed", results, notes=["expected an honest noop"])
 

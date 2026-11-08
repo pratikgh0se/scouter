@@ -176,7 +176,19 @@ NUDGE_PRECONDITION_OVERRIDE_DN: dict[tuple[str, str], str] = {
 }
 
 
+def _soft_range(s: vocab.ParamSpec) -> tuple[float, float] | None:
+    """The slider's declared soft range (`vocab.DT_SOFT_BOUNDS`, N12), where a
+    GUI nudge stops; `None` for a slider with no narrower soft range."""
+    lo, hi = vocab.DT_SOFT_BOUNDS.get((s.module, s.param), (None, None))
+    return (lo, hi) if lo is not None and hi is not None else None
+
+
 def _nudge_precondition(s: vocab.ParamSpec, n: int) -> float:
+    soft = _soft_range(s)
+    if soft is not None:
+        # a nudge test needs a real step: start inside the soft range, never at
+        # its end (`_mid` is 7000 K for the CAT temperature, its soft max)
+        return round((soft[0] + soft[1]) / 2)
     if n < 0:
         which = NUDGE_PRECONDITION_OVERRIDE_DN.get((s.module, s.param))
         if which:
@@ -399,6 +411,15 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
                              [step("darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param,
                                    steps=n)],
                              Expect("edit", []), meta={"accept_refusal": True}))
+    soft = _soft_range(s)
+    if soft is not None and relative_ok and not wb_refused and not wb_pinned_live:
+        #: N12: at the soft max a GUI step cannot move, so the honest answer is
+        #: a typed noop (`reason: soft_limit`), and the sidecar must not change.
+        out.append(_case(cid("nudge_up_soft_max"), body, "P1",
+                         [*pre, _prep(s, soft[1]),
+                          step("darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param,
+                               steps=1)],
+                         Expect("noop", codes=["soft_limit"])))
     units = {k: s.unit}
     if wb_refused:
         # Fix round 1 (review I2): keep the antecedent's own refused
@@ -916,6 +937,7 @@ def expected_count() -> int:
     syns = sum(len(p.synonyms) for p in phrases.PHRASES)
     hues = sum(p.wraps for p in live_params())
     mods = len({p.module for p in live_params()})
-    per_body = (live * (6 + 4 + 1 + 2 + 2 + 2) + hues * 2 + mods * 3 + 6 + 2 + keys * 4 + syns
+    softs = sum(_soft_range(p) is not None for p in live_params())  # N12
+    per_body = (softs + live * (6 + 4 + 1 + 2 + 2 + 2) + hues * 2 + mods * 3 + 6 + 2 + keys * 4 + syns
                 + keys + len(OPPOSED) + len(COMMUTATIVE))
     return 2 * per_body + 20

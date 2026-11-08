@@ -11,8 +11,8 @@ def _case(cid: str):
 
 def test_coverage_counts_and_p0_core():
     cases = coverage.generate()
-    assert len(cases) == coverage.expected_count() == 1636
-    assert len({c.id for c in cases}) == 1636
+    assert len(cases) == coverage.expected_count() == 1638
+    assert len({c.id for c in cases}) == 1638
     assert sum(c.tier == "P0" for c in cases) == 362
     assert sum(c.body == "sony_nex5n" for c in cases) == 20
 
@@ -40,7 +40,7 @@ def test_touch_floor_residual_cases_target_hero_bright_on_olympus_only():
     for cid in unaffected:
         assert by_id[cid].frame_role == "hero", cid
     assert sum(c.frame_role == "hero_bright" for c in cases) == 6
-    assert len(cases) == coverage.expected_count() == 1636
+    assert len(cases) == coverage.expected_count() == 1638
 
 
 def test_boundary_accepts_refusal_but_not_a_silent_clamp():

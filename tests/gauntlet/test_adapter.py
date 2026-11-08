@@ -20,10 +20,10 @@ def test_generation_passes_the_engine_gates(tmp_path):
     a = ScouterAdapter(tmp_path)
     cases, counts, _ = generate_all(a)
     got = {c.spec.name: c.got for c in counts}
-    assert got == {"offline": 3214, "coverage": 1636, "scenarios": 701, "scenarios_agent": 160,
+    assert got == {"offline": 3214, "coverage": 1638, "scenarios": 701, "scenarios_agent": 160,
                    "bulk": 40, "looks": 469, "robustness": 32, "parity": 92, "install": 10,
                    "guide": 35}
-    assert sum(got.values()) == 6389
+    assert sum(got.values()) == 6391
 
 
 def test_notes_and_signoff_without_live_layers(tmp_path):
