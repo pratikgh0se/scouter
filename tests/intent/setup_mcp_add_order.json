@@ -1,0 +1,24 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for the `claude mcp add` line that `scouter setup` prints. The current Claude Code CLI's --env flag takes several values, so `--env KEY=V scouter -- ...` swallowed the server name and failed with 'Invalid environment variable format: scouter'. The name must come right after `mcp add`. Run by tests/intent/test_setup_mcp_add_order_intent.py.",
+  "subject": "scouter/cli/setup.py mcp_command / mcp_json / run",
+  "examples": [
+    {
+      "id": "name-follows-add-before-env",
+      "input": {"repo_root": "/r/scouter", "python": "/r/scouter/.venv/bin/python"},
+      "expect": {"token_after_add": "scouter", "name_before_env": true, "separator_before_server": true},
+      "source": "verified 2026-11-08: `claude mcp add scouter --transport stdio --scope user --env PYTHONPATH=... -- python -m scouter.mcp.server` works; the old order errored"
+    },
+    {
+      "id": "json_block_matches_the_command",
+      "input": {"repo_root": "/r/scouter", "python": "/r/scouter/.venv/bin/python"},
+      "expect": {"env_value_in_json": "/r/scouter", "command_in_json": "/r/scouter/.venv/bin/python", "args_in_json": ["-m", "scouter.mcp.server"]},
+      "source": "the printed command and the mcpServers JSON describe the same server; reordering must not change the JSON"
+    },
+    {
+      "id": "setup_report_prints_the_working_order",
+      "input": {"verb": "setup --check"},
+      "expect": {"startswith": "claude mcp add scouter --transport stdio"},
+      "source": "the report's claude_mcp_add field is what users copy"
+    }
+  ]
+}

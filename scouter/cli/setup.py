@@ -57,11 +57,12 @@ def mcp_command(*, repo_root: Path, python: str) -> str:
     """The `claude mcp add` line: a stdio server, user scope, absolute paths.
 
     `PYTHONPATH` pins the checkout, so the server imports THIS tree even if
-    the venv's editable install points at another worktree.
+    the venv's editable install points at another worktree. The name comes
+    first: `--env` takes several values and would swallow it.
     """
     return (
-        f"claude mcp add --transport stdio --scope user --env PYTHONPATH={repo_root} "
-        f"{SERVER_NAME} -- {python} -m scouter.mcp.server"
+        f"claude mcp add {SERVER_NAME} --transport stdio --scope user --env PYTHONPATH={repo_root} "
+        f"-- {python} -m scouter.mcp.server"
     )
 
 

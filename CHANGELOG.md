@@ -5,6 +5,14 @@ branch, which fixes defects found by the E12 live evaluation against real
 darktable (`Knowledge/Scouter - E12 live evaluation 2026-09-24.md` in the
 vault; decision row 407).
 
+## Unreleased (fix/mcp-add-order)
+
+`scouter setup` and the README printed `claude mcp add --transport stdio
+--scope user --env PYTHONPATH=... scouter -- ...`, which the current Claude
+Code CLI rejects ("Invalid environment variable format: scouter"): `--env`
+takes several values and swallowed the server name. The name now comes right
+after `mcp add`. (Earlier entries below quote the old order as history.)
+
 ## Unreleased (fix/htc-applied-verify)
 
 Row 433, night-1 gauntlet (`night1-20260926`): write verbs reported what

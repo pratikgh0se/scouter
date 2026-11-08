@@ -122,9 +122,14 @@ class SetupTest(unittest.TestCase):
         cmd = setup.mcp_command(repo_root=Path("/r/scouter"), python="/r/scouter/.venv/bin/python")
         self.assertEqual(
             cmd,
-            "claude mcp add --transport stdio --scope user --env PYTHONPATH=/r/scouter "
-            "scouter -- /r/scouter/.venv/bin/python -m scouter.mcp.server",
+            "claude mcp add scouter --transport stdio --scope user --env PYTHONPATH=/r/scouter "
+            "-- /r/scouter/.venv/bin/python -m scouter.mcp.server",
         )
+        # Second oracle: the name must precede `--env` (it takes several values
+        # and would swallow the name on the current Claude Code CLI).
+        toks = cmd.split()
+        self.assertEqual(toks[toks.index("add") + 1], "scouter")
+        self.assertLess(toks.index("scouter"), toks.index("--env"))
         snippet = setup.mcp_json(repo_root=Path("/r/scouter"), python="/r/scouter/.venv/bin/python")
         self.assertEqual(
             snippet,
@@ -138,7 +143,7 @@ class SetupTest(unittest.TestCase):
 
     def test_report_carries_the_command_and_the_snippet(self) -> None:
         report = setup.run(check=True)
-        self.assertTrue(report["claude_mcp_add"].startswith("claude mcp add --transport stdio"))
+        self.assertTrue(report["claude_mcp_add"].startswith("claude mcp add scouter --transport stdio"))
         self.assertIn("mcpServers", report["mcp_json"])
         self.assertTrue(Path(report["mcp_json"]["mcpServers"]["scouter"]["command"]).is_absolute())
 

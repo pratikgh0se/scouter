@@ -981,7 +981,7 @@ works on the whole image (global edits). It does not paint masks.
    paths; from this checkout it is:
 
 ```
-claude mcp add --transport stdio --scope user --env PYTHONPATH=/Users/pratik/CodeBase/scouter scouter -- /Users/pratik/CodeBase/scouter/.venv/bin/python -m scouter.mcp.server
+claude mcp add scouter --transport stdio --scope user --env PYTHONPATH=/Users/pratik/CodeBase/scouter -- /Users/pratik/CodeBase/scouter/.venv/bin/python -m scouter.mcp.server
 ```
 
 A stdio server, user scope (every project sees it), the repo's own venv
