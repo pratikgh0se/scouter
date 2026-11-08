@@ -1,0 +1,2530 @@
+{
+ "cov-p4-brighter_highlights-olympus": {
+  "case": {
+   "body": "olympus",
+   "expect": {
+    "checks": [
+     {
+      "kind": "monotonic",
+      "metric": "M1",
+      "region": "frame",
+      "sign": 0,
+      "stat": null,
+      "step": null,
+      "tags": {},
+      "target": {
+       "key": "colorbalancergb.highlights_luminance",
+       "pairs": [
+        [
+         0,
+         1
+        ],
+        [
+         2,
+         3
+        ],
+        [
+         4,
+         5
+        ]
+       ]
+      }
+     }
+    ],
+    "codes": [],
+    "kind": "property",
+    "property": "P4",
+    "sidecar": null
+   },
+   "followups": [],
+   "frame_role": "hero",
+   "id": "cov-p4-brighter_highlights-olympus",
+   "layer": "coverage",
+   "meta": {},
+   "mode": "tool",
+   "repro": "python -m gauntlet run --case cov-p4-brighter_highlights-olympus --stamp <stamp>",
+   "schema": "gauntlet-case/1",
+   "source": {
+    "file": "vocab.py"
+   },
+   "steps": [
+    {
+     "args": {
+      "phrase": "brighter highlights a touch"
+     },
+     "budget_s": 8.0,
+     "tool": "darkroom_say",
+     "write": true
+    },
+    {
+     "args": {},
+     "budget_s": 3.5,
+     "tool": "darkroom_undo_last",
+     "write": true
+    },
+    {
+     "args": {
+      "phrase": "brighter highlights"
+     },
+     "budget_s": 8.0,
+     "tool": "darkroom_say",
+     "write": true
+    },
+    {
+     "args": {},
+     "budget_s": 3.5,
+     "tool": "darkroom_undo_last",
+     "write": true
+    },
+    {
+     "args": {
+      "phrase": "brighter highlights a lot"
+     },
+     "budget_s": 8.0,
+     "tool": "darkroom_say",
+     "write": true
+    }
+   ],
+   "tier": "P1"
+  },
+  "observation": {
+   "after": {
+    "defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    },
+    "fingerprint": "15f30142462aec7a",
+    "history_end": 12,
+    "null_equiv": {
+     "temperature.coeff_g2": 0.0
+    },
+    "params": {
+     "colorbalancergb.__enabled": 1,
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.19999998807907104,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0,
+     "exposure.__enabled": 1,
+     "exposure.black": -0.000244140625,
+     "exposure.exposure": 0.699999988079071,
+     "sigmoid.contrast": 1.5
+    },
+    "units": {
+     "colorbalancergb.__enabled": "bool",
+     "colorbalancergb.contrast": "%",
+     "colorbalancergb.global_chroma": "%",
+     "colorbalancergb.global_saturation": "%",
+     "colorbalancergb.global_vibrance": "%",
+     "colorbalancergb.highlights_chroma": "%",
+     "colorbalancergb.highlights_hue": "\u00b0",
+     "colorbalancergb.highlights_luminance": "%",
+     "colorbalancergb.midtones_chroma": "%",
+     "colorbalancergb.midtones_hue": "\u00b0",
+     "colorbalancergb.midtones_luminance": "%",
+     "colorbalancergb.shadows_chroma": "%",
+     "colorbalancergb.shadows_hue": "\u00b0",
+     "colorbalancergb.shadows_luminance": "%"
+    },
+    "verified_defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    }
+   },
+   "before": {
+    "defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    },
+    "fingerprint": "bb7075c8802f749c",
+    "history_end": 11,
+    "null_equiv": {
+     "temperature.coeff_g2": 0.0
+    },
+    "params": {
+     "exposure.__enabled": 1,
+     "exposure.black": -0.000244140625,
+     "exposure.exposure": 0.699999988079071,
+     "sigmoid.contrast": 1.5
+    },
+    "units": {
+     "colorbalancergb.contrast": "%",
+     "colorbalancergb.global_chroma": "%",
+     "colorbalancergb.global_saturation": "%",
+     "colorbalancergb.global_vibrance": "%",
+     "colorbalancergb.highlights_chroma": "%",
+     "colorbalancergb.highlights_hue": "\u00b0",
+     "colorbalancergb.highlights_luminance": "%",
+     "colorbalancergb.midtones_chroma": "%",
+     "colorbalancergb.midtones_hue": "\u00b0",
+     "colorbalancergb.midtones_luminance": "%",
+     "colorbalancergb.shadows_chroma": "%",
+     "colorbalancergb.shadows_hue": "\u00b0",
+     "colorbalancergb.shadows_luminance": "%"
+    },
+    "verified_defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    }
+   },
+   "calls": [
+    {
+     "args": {
+      "phrase": "brighter highlights a touch"
+     },
+     "envelope": {
+      "data": {
+       "moves": [
+        {
+         "applied": 0.050000011920928955,
+         "cap": null,
+         "clamped": false,
+         "committed": true,
+         "delta": 0.05,
+         "explain": [],
+         "image_id": 3,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "highlights_luminance",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/017-olympus/frames/hero-fresh2/P6281348.ORF",
+         "plan": [
+          {
+           "action": "darkroom.adjust",
+           "ms_precommit": 0,
+           "ms_read": 0,
+           "ms_set": 1269
+          }
+         ],
+         "previous": 0.0,
+         "reason": null,
+         "requested": 0.05,
+         "source": "neutral",
+         "summary": "color balance rgb \u203a 4 ways \u203a highlights gain \u203a luminance: +5% (0% \u2192 5%)",
+         "target": 0.05,
+         "unit": "%",
+         "warnings": []
+        }
+       ],
+       "noop": false,
+       "refused": []
+      },
+      "ok": true,
+      "outcome": "ok"
+     },
+     "error": null,
+     "tool": "darkroom_say",
+     "wall_s": 4.004,
+     "write": true
+    },
+    {
+     "args": {},
+     "envelope": {
+      "data": {},
+      "ok": true,
+      "outcome": "ok"
+     },
+     "error": null,
+     "tool": "darkroom_undo_last",
+     "wall_s": 1.216,
+     "write": true
+    },
+    {
+     "args": {
+      "phrase": "brighter highlights"
+     },
+     "envelope": {
+      "data": {
+       "moves": [
+        {
+         "applied": 0.10000002384185791,
+         "cap": null,
+         "clamped": false,
+         "committed": true,
+         "delta": 0.1,
+         "explain": [],
+         "image_id": 3,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "highlights_luminance",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/017-olympus/frames/hero-fresh2/P6281348.ORF",
+         "plan": [
+          {
+           "action": "darkroom.adjust",
+           "ms_precommit": 0,
+           "ms_read": 0,
+           "ms_set": 1438
+          }
+         ],
+         "previous": 0.0,
+         "reason": null,
+         "requested": 0.1,
+         "source": "xmp",
+         "summary": "color balance rgb \u203a 4 ways \u203a highlights gain \u203a luminance: +10% (0% \u2192 10%)",
+         "target": 0.1,
+         "unit": "%",
+         "warnings": []
+        }
+       ],
+       "noop": false,
+       "refused": []
+      },
+      "ok": true,
+      "outcome": "ok"
+     },
+     "error": null,
+     "tool": "darkroom_say",
+     "wall_s": 1.673,
+     "write": true
+    },
+    {
+     "args": {},
+     "envelope": {
+      "data": {},
+      "ok": true,
+      "outcome": "ok"
+     },
+     "error": null,
+     "tool": "darkroom_undo_last",
+     "wall_s": 1.257,
+     "write": true
+    },
+    {
+     "args": {
+      "phrase": "brighter highlights a lot"
+     },
+     "envelope": {
+      "data": {
+       "moves": [
+        {
+         "applied": 0.19999998807907104,
+         "cap": null,
+         "clamped": false,
+         "committed": true,
+         "delta": 0.2,
+         "explain": [],
+         "image_id": 3,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "highlights_luminance",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/017-olympus/frames/hero-fresh2/P6281348.ORF",
+         "plan": [
+          {
+           "action": "darkroom.adjust",
+           "ms_precommit": 0,
+           "ms_read": 0,
+           "ms_set": 1575
+          }
+         ],
+         "previous": 0.0,
+         "reason": null,
+         "requested": 0.2,
+         "source": "xmp",
+         "summary": "color balance rgb \u203a 4 ways \u203a highlights gain \u203a luminance: +20% (0% \u2192 20%)",
+         "target": 0.2,
+         "unit": "%",
+         "warnings": []
+        }
+       ],
+       "noop": false,
+       "refused": []
+      },
+      "ok": true,
+      "outcome": "ok"
+     },
+     "error": null,
+     "tool": "darkroom_say",
+     "wall_s": 1.8,
+     "write": true
+    }
+   ],
+   "extra": {
+    "snapshots": [
+     {
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     },
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.0,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.0,
+      "colorbalancergb.highlights_hue": 0.0,
+      "colorbalancergb.highlights_luminance": 0.050000011920928955,
+      "colorbalancergb.midtones_chroma": 0.0,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.0,
+      "colorbalancergb.shadows_hue": 0.0,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     },
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.0,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.0,
+      "colorbalancergb.highlights_hue": 0.0,
+      "colorbalancergb.highlights_luminance": 0.0,
+      "colorbalancergb.midtones_chroma": 0.0,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.0,
+      "colorbalancergb.shadows_hue": 0.0,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     },
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.0,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.0,
+      "colorbalancergb.highlights_hue": 0.0,
+      "colorbalancergb.highlights_luminance": 0.10000002384185791,
+      "colorbalancergb.midtones_chroma": 0.0,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.0,
+      "colorbalancergb.shadows_hue": 0.0,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     },
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.0,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.0,
+      "colorbalancergb.highlights_hue": 0.0,
+      "colorbalancergb.highlights_luminance": 0.0,
+      "colorbalancergb.midtones_chroma": 0.0,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.0,
+      "colorbalancergb.shadows_hue": 0.0,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     },
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.0,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.0,
+      "colorbalancergb.highlights_hue": 0.0,
+      "colorbalancergb.highlights_luminance": 0.19999998807907104,
+      "colorbalancergb.midtones_chroma": 0.0,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.0,
+      "colorbalancergb.shadows_hue": 0.0,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     }
+    ]
+   }
+  },
+  "recorded_verdict": {
+   "outcome": "failed",
+   "silent_failure": null
+  }
+ },
+ "cov-phrase-more_chroma-sony_a7-explicit": {
+  "case": {
+   "body": "sony_a7",
+   "expect": {
+    "checks": [
+     {
+      "kind": "delta",
+      "metric": "boundary",
+      "region": "frame",
+      "sign": 0,
+      "stat": null,
+      "step": null,
+      "tags": {
+       "silent_if_fail": true,
+       "why": "value moved away from the request without reporting a clamp"
+      },
+      "target": {
+       "delta": 0.05,
+       "hi": 0.5,
+       "key": "colorbalancergb.global_chroma",
+       "lo": -0.5,
+       "unit": "%"
+      }
+     }
+    ],
+    "codes": [],
+    "kind": "edit",
+    "property": null,
+    "sidecar": {
+     "allowed": [],
+     "changed": true,
+     "key": "colorbalancergb.global_chroma",
+     "units": {
+      "colorbalancergb.global_chroma": "%"
+     }
+    }
+   },
+   "followups": [],
+   "frame_role": "hero",
+   "id": "cov-phrase-more_chroma-sony_a7-explicit",
+   "layer": "coverage",
+   "meta": {},
+   "mode": "tool",
+   "repro": "python -m gauntlet run --case cov-phrase-more_chroma-sony_a7-explicit --stamp <stamp>",
+   "schema": "gauntlet-case/1",
+   "source": {
+    "file": "vocab.py"
+   },
+   "steps": [
+    {
+     "args": {
+      "phrase": "more chroma by 5%"
+     },
+     "budget_s": 8.0,
+     "tool": "darkroom_say",
+     "write": true
+    }
+   ],
+   "tier": "P1"
+  },
+  "observation": {
+   "after": {
+    "defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    },
+    "fingerprint": "f3af8a40e3fba157",
+    "history_end": 12,
+    "null_equiv": {
+     "temperature.coeff_g2": 0.0
+    },
+    "params": {
+     "colorbalancergb.__enabled": 1,
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.050000011920928955,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0,
+     "exposure.__enabled": 1,
+     "exposure.black": -0.000244140625,
+     "exposure.exposure": 0.699999988079071,
+     "sigmoid.contrast": 1.5
+    },
+    "units": {
+     "colorbalancergb.__enabled": "bool",
+     "colorbalancergb.contrast": "%",
+     "colorbalancergb.global_chroma": "%",
+     "colorbalancergb.global_saturation": "%",
+     "colorbalancergb.global_vibrance": "%",
+     "colorbalancergb.highlights_chroma": "%",
+     "colorbalancergb.highlights_hue": "\u00b0",
+     "colorbalancergb.highlights_luminance": "%",
+     "colorbalancergb.midtones_chroma": "%",
+     "colorbalancergb.midtones_hue": "\u00b0",
+     "colorbalancergb.midtones_luminance": "%",
+     "colorbalancergb.shadows_chroma": "%",
+     "colorbalancergb.shadows_hue": "\u00b0",
+     "colorbalancergb.shadows_luminance": "%"
+    },
+    "verified_defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    }
+   },
+   "before": {
+    "defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    },
+    "fingerprint": "3a2065a9e22a15eb",
+    "history_end": 11,
+    "null_equiv": {
+     "temperature.coeff_g2": 0.0
+    },
+    "params": {
+     "exposure.__enabled": 1,
+     "exposure.black": -0.000244140625,
+     "exposure.exposure": 0.699999988079071,
+     "sigmoid.contrast": 1.5
+    },
+    "units": {
+     "colorbalancergb.contrast": "%",
+     "colorbalancergb.global_chroma": "%",
+     "colorbalancergb.global_saturation": "%",
+     "colorbalancergb.global_vibrance": "%",
+     "colorbalancergb.highlights_chroma": "%",
+     "colorbalancergb.highlights_hue": "\u00b0",
+     "colorbalancergb.highlights_luminance": "%",
+     "colorbalancergb.midtones_chroma": "%",
+     "colorbalancergb.midtones_hue": "\u00b0",
+     "colorbalancergb.midtones_luminance": "%",
+     "colorbalancergb.shadows_chroma": "%",
+     "colorbalancergb.shadows_hue": "\u00b0",
+     "colorbalancergb.shadows_luminance": "%"
+    },
+    "verified_defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    }
+   },
+   "calls": [
+    {
+     "args": {
+      "phrase": "more chroma by 5%"
+     },
+     "envelope": {
+      "data": {
+       "moves": [
+        {
+         "applied": 0.050000011920928955,
+         "cap": null,
+         "clamped": false,
+         "committed": true,
+         "delta": 0.05,
+         "explain": [],
+         "image_id": 2,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "global_chroma",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW",
+         "plan": [
+          {
+           "action": "darkroom.adjust",
+           "ms_precommit": 0,
+           "ms_read": 1,
+           "ms_set": 1308
+          }
+         ],
+         "previous": 0.0,
+         "reason": null,
+         "requested": 0.05,
+         "source": "neutral",
+         "summary": "color balance rgb \u203a master \u203a global chroma: +5% (0% \u2192 5%)",
+         "target": 0.05,
+         "unit": "%",
+         "warnings": []
+        }
+       ],
+       "noop": false,
+       "refused": []
+      },
+      "ok": true,
+      "outcome": "ok"
+     },
+     "error": null,
+     "tool": "darkroom_say",
+     "wall_s": 4.231,
+     "write": true
+    }
+   ],
+   "extra": {
+    "snapshots": [
+     {
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     },
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.050000011920928955,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.0,
+      "colorbalancergb.highlights_hue": 0.0,
+      "colorbalancergb.highlights_luminance": 0.0,
+      "colorbalancergb.midtones_chroma": 0.0,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.0,
+      "colorbalancergb.shadows_hue": 0.0,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     }
+    ]
+   }
+  },
+  "recorded_verdict": {
+   "outcome": "silent_failure",
+   "silent_failure": "c: value moved away from the request without reporting a clamp"
+  }
+ },
+ "cov-phrase-teal_orange-sony_a7-lot": {
+  "case": {
+   "body": "sony_a7",
+   "expect": {
+    "checks": [
+     {
+      "kind": "equals",
+      "metric": "M1",
+      "region": "frame",
+      "sign": 0,
+      "stat": null,
+      "step": null,
+      "tags": {},
+      "target": {
+       "key": "colorbalancergb.shadows_hue",
+       "unit": "\u00b0",
+       "value": 200.0
+      }
+     },
+     {
+      "kind": "changed",
+      "metric": "M1",
+      "region": "frame",
+      "sign": 1,
+      "stat": null,
+      "step": null,
+      "tags": {},
+      "target": {
+       "from": 0,
+       "key": "colorbalancergb.shadows_chroma",
+       "unit": "%"
+      }
+     },
+     {
+      "kind": "equals",
+      "metric": "M1",
+      "region": "frame",
+      "sign": 0,
+      "stat": null,
+      "step": null,
+      "tags": {},
+      "target": {
+       "key": "colorbalancergb.highlights_hue",
+       "unit": "\u00b0",
+       "value": 55.0
+      }
+     },
+     {
+      "kind": "changed",
+      "metric": "M1",
+      "region": "frame",
+      "sign": 1,
+      "stat": null,
+      "step": null,
+      "tags": {},
+      "target": {
+       "from": 0,
+       "key": "colorbalancergb.highlights_chroma",
+       "unit": "%"
+      }
+     },
+     {
+      "kind": "delta",
+      "metric": "M4",
+      "region": "shadows",
+      "sign": -1,
+      "stat": "b",
+      "step": null,
+      "tags": {},
+      "target": null
+     }
+    ],
+    "codes": [],
+    "kind": "edit",
+    "property": null,
+    "sidecar": {
+     "changed": true
+    }
+   },
+   "followups": [],
+   "frame_role": "hero",
+   "id": "cov-phrase-teal_orange-sony_a7-lot",
+   "layer": "coverage",
+   "meta": {},
+   "mode": "tool",
+   "repro": "python -m gauntlet run --case cov-phrase-teal_orange-sony_a7-lot --stamp <stamp>",
+   "schema": "gauntlet-case/1",
+   "source": {
+    "file": "vocab.py"
+   },
+   "steps": [
+    {
+     "args": {
+      "phrase": "teal and orange a lot"
+     },
+     "budget_s": 8.0,
+     "tool": "darkroom_say",
+     "write": true
+    }
+   ],
+   "tier": "P1"
+  },
+  "observation": {
+   "after": {
+    "defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    },
+    "fingerprint": "873c91ef002945d3",
+    "history_end": 175,
+    "null_equiv": {
+     "temperature.coeff_g2": 0.0
+    },
+    "params": {
+     "colorbalancergb.__enabled": 1,
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 55.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.15000000596046448,
+     "colorbalancergb.shadows_hue": 200.00001525878906,
+     "colorbalancergb.shadows_luminance": 0.0,
+     "exposure.__enabled": 1,
+     "exposure.black": -0.000244140625,
+     "exposure.exposure": 0.699999988079071,
+     "sigmoid.contrast": 1.5
+    },
+    "units": {
+     "colorbalancergb.__enabled": "bool",
+     "colorbalancergb.contrast": "%",
+     "colorbalancergb.global_chroma": "%",
+     "colorbalancergb.global_saturation": "%",
+     "colorbalancergb.global_vibrance": "%",
+     "colorbalancergb.highlights_chroma": "%",
+     "colorbalancergb.highlights_hue": "\u00b0",
+     "colorbalancergb.highlights_luminance": "%",
+     "colorbalancergb.midtones_chroma": "%",
+     "colorbalancergb.midtones_hue": "\u00b0",
+     "colorbalancergb.midtones_luminance": "%",
+     "colorbalancergb.shadows_chroma": "%",
+     "colorbalancergb.shadows_hue": "\u00b0",
+     "colorbalancergb.shadows_luminance": "%"
+    },
+    "verified_defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    }
+   },
+   "before": {
+    "defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    },
+    "fingerprint": "ef33980105d3ddf7",
+    "history_end": 173,
+    "null_equiv": {
+     "temperature.coeff_g2": 0.0
+    },
+    "params": {
+     "colorbalancergb.__enabled": 1,
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0,
+     "exposure.__enabled": 1,
+     "exposure.black": -0.000244140625,
+     "exposure.exposure": 0.699999988079071,
+     "sigmoid.contrast": 1.5
+    },
+    "units": {
+     "colorbalancergb.__enabled": "bool",
+     "colorbalancergb.contrast": "%",
+     "colorbalancergb.global_chroma": "%",
+     "colorbalancergb.global_saturation": "%",
+     "colorbalancergb.global_vibrance": "%",
+     "colorbalancergb.highlights_chroma": "%",
+     "colorbalancergb.highlights_hue": "\u00b0",
+     "colorbalancergb.highlights_luminance": "%",
+     "colorbalancergb.midtones_chroma": "%",
+     "colorbalancergb.midtones_hue": "\u00b0",
+     "colorbalancergb.midtones_luminance": "%",
+     "colorbalancergb.shadows_chroma": "%",
+     "colorbalancergb.shadows_hue": "\u00b0",
+     "colorbalancergb.shadows_luminance": "%"
+    },
+    "verified_defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    }
+   },
+   "calls": [
+    {
+     "args": {
+      "phrase": "teal and orange a lot"
+     },
+     "envelope": {
+      "data": {
+       "moves": [
+        {
+         "applied": 200.00001525878906,
+         "clamped": false,
+         "committed": true,
+         "image_id": 2,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "shadows_hue",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW",
+         "plan": [],
+         "previous": 0.0,
+         "reason": null,
+         "requested": 200.0,
+         "source": "xmp",
+         "summary": "color balance rgb \u203a 4 ways \u203a shadows lift \u203a hue: set to 200\u00b0",
+         "target": 200.0,
+         "warnings": []
+        },
+        {
+         "applied": 0.15000000596046448,
+         "cap": null,
+         "clamped": false,
+         "committed": true,
+         "delta": 0.15,
+         "explain": [],
+         "image_id": 2,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "shadows_chroma",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW",
+         "plan": [
+          {
+           "action": "darkroom.adjust",
+           "ms_precommit": 0,
+           "ms_read": 3,
+           "ms_set": 1907
+          }
+         ],
+         "previous": 0.0,
+         "reason": null,
+         "requested": 0.15,
+         "source": "xmp",
+         "summary": "color balance rgb \u203a 4 ways \u203a shadows lift \u203a chroma: +15% (0% \u2192 15%)",
+         "target": 0.15,
+         "unit": "%",
+         "warnings": []
+        },
+        {
+         "applied": 55.0,
+         "clamped": false,
+         "committed": true,
+         "image_id": 2,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "highlights_hue",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW",
+         "plan": [],
+         "previous": 0.0,
+         "reason": null,
+         "requested": 55.0,
+         "source": "xmp",
+         "summary": "color balance rgb \u203a 4 ways \u203a highlights gain \u203a hue: set to 55\u00b0",
+         "target": 55.0,
+         "warnings": []
+        }
+       ],
+       "noop": false,
+       "refused": [
+        {
+         "code": "commit_timeout",
+         "detail": {
+          "image_id": 2,
+          "ms": 883,
+          "sidecar_end_now": 175,
+          "stale_rewrite": "stale_rewrite: history_end went back from 175 to 137: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored",
+          "stale_rewrite_healed": false,
+          "stale_rewrite_restored": true,
+          "strategy_used": "view_bounce_action",
+          "xmp": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW.xmp"
+         },
+         "message": "stale_rewrite: darktable rewrote /Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW.xmp with an older history, not this edit (stale_rewrite: history_end went back from 175 to 137: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored); the pre-commit sidecar was restored",
+         "module": "colorbalancergb",
+         "param": "highlights_chroma"
+        }
+       ]
+      },
+      "ok": false,
+      "outcome": "partial"
+     },
+     "error": "partial",
+     "tool": "darkroom_say",
+     "wall_s": 6.863,
+     "write": true
+    }
+   ],
+   "extra": {
+    "snapshots": [
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.0,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.0,
+      "colorbalancergb.highlights_hue": 0.0,
+      "colorbalancergb.highlights_luminance": 0.0,
+      "colorbalancergb.midtones_chroma": 0.0,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.0,
+      "colorbalancergb.shadows_hue": 0.0,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     },
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.0,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.0,
+      "colorbalancergb.highlights_hue": 55.0,
+      "colorbalancergb.highlights_luminance": 0.0,
+      "colorbalancergb.midtones_chroma": 0.0,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.15000000596046448,
+      "colorbalancergb.shadows_hue": 200.00001525878906,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     }
+    ]
+   }
+  },
+  "recorded_verdict": {
+   "outcome": "partial",
+   "silent_failure": null
+  }
+ },
+ "cov-phrase-warm_highlights-olympus-bare": {
+  "case": {
+   "body": "olympus",
+   "expect": {
+    "checks": [
+     {
+      "kind": "equals",
+      "metric": "M1",
+      "region": "frame",
+      "sign": 0,
+      "stat": null,
+      "step": null,
+      "tags": {},
+      "target": {
+       "key": "colorbalancergb.highlights_hue",
+       "unit": "\u00b0",
+       "value": 60.0
+      }
+     },
+     {
+      "kind": "changed",
+      "metric": "M1",
+      "region": "frame",
+      "sign": 1,
+      "stat": null,
+      "step": null,
+      "tags": {},
+      "target": {
+       "from": 0,
+       "key": "colorbalancergb.highlights_chroma",
+       "unit": "%"
+      }
+     },
+     {
+      "kind": "delta",
+      "metric": "M4",
+      "region": "highlights",
+      "sign": 1,
+      "stat": "b",
+      "step": null,
+      "tags": {},
+      "target": null
+     }
+    ],
+    "codes": [],
+    "kind": "edit",
+    "property": null,
+    "sidecar": {
+     "changed": true
+    }
+   },
+   "followups": [],
+   "frame_role": "hero",
+   "id": "cov-phrase-warm_highlights-olympus-bare",
+   "layer": "coverage",
+   "meta": {},
+   "mode": "tool",
+   "repro": "python -m gauntlet run --case cov-phrase-warm_highlights-olympus-bare --stamp <stamp>",
+   "schema": "gauntlet-case/1",
+   "source": {
+    "file": "vocab.py"
+   },
+   "steps": [
+    {
+     "args": {
+      "phrase": "warm the highlights"
+     },
+     "budget_s": 8.0,
+     "tool": "darkroom_say",
+     "write": true
+    }
+   ],
+   "tier": "P0"
+  },
+  "observation": {
+   "after": {
+    "defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    },
+    "fingerprint": "366cd857edb9572b",
+    "history_end": 144,
+    "null_equiv": {
+     "temperature.coeff_g2": 0.0
+    },
+    "params": {
+     "colorbalancergb.__enabled": 1,
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 60.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0,
+     "exposure.__enabled": 1,
+     "exposure.black": -0.000244140625,
+     "exposure.exposure": 0.699999988079071,
+     "sigmoid.contrast": 1.5
+    },
+    "units": {
+     "colorbalancergb.__enabled": "bool",
+     "colorbalancergb.contrast": "%",
+     "colorbalancergb.global_chroma": "%",
+     "colorbalancergb.global_saturation": "%",
+     "colorbalancergb.global_vibrance": "%",
+     "colorbalancergb.highlights_chroma": "%",
+     "colorbalancergb.highlights_hue": "\u00b0",
+     "colorbalancergb.highlights_luminance": "%",
+     "colorbalancergb.midtones_chroma": "%",
+     "colorbalancergb.midtones_hue": "\u00b0",
+     "colorbalancergb.midtones_luminance": "%",
+     "colorbalancergb.shadows_chroma": "%",
+     "colorbalancergb.shadows_hue": "\u00b0",
+     "colorbalancergb.shadows_luminance": "%"
+    },
+    "verified_defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    }
+   },
+   "before": {
+    "defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    },
+    "fingerprint": "2d14548b95d88ac4",
+    "history_end": 143,
+    "null_equiv": {
+     "temperature.coeff_g2": 0.0
+    },
+    "params": {
+     "colorbalancergb.__enabled": 1,
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0,
+     "exposure.__enabled": 1,
+     "exposure.black": -0.000244140625,
+     "exposure.exposure": 0.699999988079071,
+     "sigmoid.contrast": 1.5
+    },
+    "units": {
+     "colorbalancergb.__enabled": "bool",
+     "colorbalancergb.contrast": "%",
+     "colorbalancergb.global_chroma": "%",
+     "colorbalancergb.global_saturation": "%",
+     "colorbalancergb.global_vibrance": "%",
+     "colorbalancergb.highlights_chroma": "%",
+     "colorbalancergb.highlights_hue": "\u00b0",
+     "colorbalancergb.highlights_luminance": "%",
+     "colorbalancergb.midtones_chroma": "%",
+     "colorbalancergb.midtones_hue": "\u00b0",
+     "colorbalancergb.midtones_luminance": "%",
+     "colorbalancergb.shadows_chroma": "%",
+     "colorbalancergb.shadows_hue": "\u00b0",
+     "colorbalancergb.shadows_luminance": "%"
+    },
+    "verified_defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    }
+   },
+   "calls": [
+    {
+     "args": {
+      "phrase": "warm the highlights"
+     },
+     "envelope": {
+      "data": {
+       "moves": [
+        {
+         "applied": 60.0,
+         "clamped": false,
+         "committed": true,
+         "image_id": 4,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "highlights_hue",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/011-olympus/frames/hero-fresh2/P6281348.ORF",
+         "plan": [],
+         "previous": 0.0,
+         "reason": null,
+         "requested": 60.0,
+         "source": "xmp",
+         "summary": "color balance rgb \u203a 4 ways \u203a highlights gain \u203a hue: set to 60\u00b0",
+         "target": 60.0,
+         "warnings": []
+        }
+       ],
+       "noop": false,
+       "refused": [
+        {
+         "code": "commit_timeout",
+         "detail": {
+          "image_id": 4,
+          "ms": 1120,
+          "sidecar_end_now": 144,
+          "stale_rewrite": "stale_rewrite: history_end went back from 144 to 92: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored",
+          "stale_rewrite_healed": false,
+          "stale_rewrite_restored": true,
+          "strategy_used": "view_bounce_action",
+          "xmp": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/011-olympus/frames/hero-fresh2/P6281348.ORF.xmp"
+         },
+         "message": "stale_rewrite: darktable rewrote /Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/011-olympus/frames/hero-fresh2/P6281348.ORF.xmp with an older history, not this edit (stale_rewrite: history_end went back from 144 to 92: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored); the pre-commit sidecar was restored",
+         "module": "colorbalancergb",
+         "param": "highlights_chroma"
+        }
+       ]
+      },
+      "ok": false,
+      "outcome": "partial"
+     },
+     "error": "partial",
+     "tool": "darkroom_say",
+     "wall_s": 3.152,
+     "write": true
+    }
+   ],
+   "extra": {
+    "snapshots": [
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.0,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.0,
+      "colorbalancergb.highlights_hue": 0.0,
+      "colorbalancergb.highlights_luminance": 0.0,
+      "colorbalancergb.midtones_chroma": 0.0,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.0,
+      "colorbalancergb.shadows_hue": 0.0,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     },
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.0,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.0,
+      "colorbalancergb.highlights_hue": 60.0,
+      "colorbalancergb.highlights_luminance": 0.0,
+      "colorbalancergb.midtones_chroma": 0.0,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.0,
+      "colorbalancergb.shadows_hue": 0.0,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     }
+    ]
+   }
+  },
+  "recorded_verdict": {
+   "outcome": "failed",
+   "silent_failure": null
+  }
+ },
+ "cov-phrase-weaker_grade-olympus-lot": {
+  "case": {
+   "body": "olympus",
+   "expect": {
+    "checks": [
+     {
+      "kind": "changed",
+      "metric": "M1",
+      "region": "frame",
+      "sign": -1,
+      "stat": null,
+      "step": null,
+      "tags": {},
+      "target": {
+       "from": 1,
+       "key": "colorbalancergb.shadows_chroma",
+       "unit": "%"
+      }
+     },
+     {
+      "kind": "changed",
+      "metric": "M1",
+      "region": "frame",
+      "sign": -1,
+      "stat": null,
+      "step": null,
+      "tags": {},
+      "target": {
+       "from": 1,
+       "key": "colorbalancergb.midtones_chroma",
+       "unit": "%"
+      }
+     },
+     {
+      "kind": "changed",
+      "metric": "M1",
+      "region": "frame",
+      "sign": -1,
+      "stat": null,
+      "step": null,
+      "tags": {},
+      "target": {
+       "from": 1,
+       "key": "colorbalancergb.highlights_chroma",
+       "unit": "%"
+      }
+     }
+    ],
+    "codes": [],
+    "kind": "edit",
+    "property": null,
+    "sidecar": {
+     "changed": true
+    }
+   },
+   "followups": [],
+   "frame_role": "hero",
+   "id": "cov-phrase-weaker_grade-olympus-lot",
+   "layer": "coverage",
+   "meta": {},
+   "mode": "tool",
+   "repro": "python -m gauntlet run --case cov-phrase-weaker_grade-olympus-lot --stamp <stamp>",
+   "schema": "gauntlet-case/1",
+   "source": {
+    "file": "vocab.py"
+   },
+   "steps": [
+    {
+     "args": {
+      "phrase": "stronger colour grade a lot"
+     },
+     "budget_s": 8.0,
+     "tool": "darkroom_say",
+     "write": true
+    },
+    {
+     "args": {
+      "phrase": "weaker colour grade a lot"
+     },
+     "budget_s": 8.0,
+     "tool": "darkroom_say",
+     "write": true
+    }
+   ],
+   "tier": "P1"
+  },
+  "observation": {
+   "after": {
+    "defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    },
+    "fingerprint": "781d44ccbec3102c",
+    "history_end": 162,
+    "null_equiv": {
+     "temperature.coeff_g2": 0.0
+    },
+    "params": {
+     "colorbalancergb.__enabled": 1,
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.15000000596046448,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0,
+     "exposure.__enabled": 1,
+     "exposure.black": -0.000244140625,
+     "exposure.exposure": 0.699999988079071,
+     "sigmoid.contrast": 1.5
+    },
+    "units": {
+     "colorbalancergb.__enabled": "bool",
+     "colorbalancergb.contrast": "%",
+     "colorbalancergb.global_chroma": "%",
+     "colorbalancergb.global_saturation": "%",
+     "colorbalancergb.global_vibrance": "%",
+     "colorbalancergb.highlights_chroma": "%",
+     "colorbalancergb.highlights_hue": "\u00b0",
+     "colorbalancergb.highlights_luminance": "%",
+     "colorbalancergb.midtones_chroma": "%",
+     "colorbalancergb.midtones_hue": "\u00b0",
+     "colorbalancergb.midtones_luminance": "%",
+     "colorbalancergb.shadows_chroma": "%",
+     "colorbalancergb.shadows_hue": "\u00b0",
+     "colorbalancergb.shadows_luminance": "%"
+    },
+    "verified_defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    }
+   },
+   "before": {
+    "defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    },
+    "fingerprint": "8785b9d352ad1bde",
+    "history_end": 161,
+    "null_equiv": {
+     "temperature.coeff_g2": 0.0
+    },
+    "params": {
+     "colorbalancergb.__enabled": 1,
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0,
+     "exposure.__enabled": 1,
+     "exposure.black": -0.000244140625,
+     "exposure.exposure": 0.699999988079071,
+     "sigmoid.contrast": 1.5
+    },
+    "units": {
+     "colorbalancergb.__enabled": "bool",
+     "colorbalancergb.contrast": "%",
+     "colorbalancergb.global_chroma": "%",
+     "colorbalancergb.global_saturation": "%",
+     "colorbalancergb.global_vibrance": "%",
+     "colorbalancergb.highlights_chroma": "%",
+     "colorbalancergb.highlights_hue": "\u00b0",
+     "colorbalancergb.highlights_luminance": "%",
+     "colorbalancergb.midtones_chroma": "%",
+     "colorbalancergb.midtones_hue": "\u00b0",
+     "colorbalancergb.midtones_luminance": "%",
+     "colorbalancergb.shadows_chroma": "%",
+     "colorbalancergb.shadows_hue": "\u00b0",
+     "colorbalancergb.shadows_luminance": "%"
+    },
+    "verified_defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    }
+   },
+   "calls": [
+    {
+     "args": {
+      "phrase": "stronger colour grade a lot"
+     },
+     "envelope": {
+      "data": {
+       "moves": [
+        {
+         "applied": 0.15000000596046448,
+         "cap": null,
+         "clamped": false,
+         "committed": true,
+         "delta": 0.15,
+         "explain": [],
+         "image_id": 2,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "shadows_chroma",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF",
+         "plan": [
+          {
+           "action": "darkroom.adjust",
+           "ms_precommit": 0,
+           "ms_read": 3,
+           "ms_set": 1305
+          }
+         ],
+         "previous": 0.0,
+         "reason": null,
+         "requested": 0.15,
+         "source": "xmp",
+         "summary": "color balance rgb \u203a 4 ways \u203a shadows lift \u203a chroma: +15% (0% \u2192 15%)",
+         "target": 0.15,
+         "unit": "%",
+         "warnings": []
+        },
+        {
+         "applied": 0.15000000596046448,
+         "cap": null,
+         "clamped": false,
+         "committed": true,
+         "delta": 0.15,
+         "explain": [],
+         "image_id": 2,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "midtones_chroma",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF",
+         "plan": [
+          {
+           "action": "darkroom.adjust",
+           "ms_precommit": 0,
+           "ms_read": 4,
+           "ms_set": 1324
+          }
+         ],
+         "previous": 0.0,
+         "reason": null,
+         "requested": 0.15,
+         "source": "xmp",
+         "summary": "color balance rgb \u203a 4 ways \u203a power \u203a chroma: +15% (0% \u2192 15%)",
+         "target": 0.15,
+         "unit": "%",
+         "warnings": []
+        },
+        {
+         "applied": 0.15000000596046448,
+         "cap": null,
+         "clamped": false,
+         "committed": true,
+         "delta": 0.15,
+         "explain": [],
+         "image_id": 2,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "highlights_chroma",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF",
+         "plan": [
+          {
+           "action": "darkroom.adjust",
+           "ms_precommit": 0,
+           "ms_read": 2,
+           "ms_set": 1258
+          }
+         ],
+         "previous": 0.0,
+         "reason": null,
+         "requested": 0.15,
+         "source": "xmp",
+         "summary": "color balance rgb \u203a 4 ways \u203a highlights gain \u203a chroma: +15% (0% \u2192 15%)",
+         "target": 0.15,
+         "unit": "%",
+         "warnings": []
+        }
+       ],
+       "noop": false,
+       "refused": []
+      },
+      "ok": true,
+      "outcome": "ok"
+     },
+     "error": null,
+     "tool": "darkroom_say",
+     "wall_s": 4.07,
+     "write": true
+    },
+    {
+     "args": {
+      "phrase": "weaker colour grade a lot"
+     },
+     "envelope": {
+      "data": {
+       "moves": [
+        {
+         "applied": 0.0,
+         "cap": null,
+         "clamped": false,
+         "committed": true,
+         "delta": -0.15,
+         "explain": [],
+         "image_id": 2,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "shadows_chroma",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF",
+         "plan": [
+          {
+           "action": "darkroom.adjust",
+           "ms_precommit": 0,
+           "ms_read": 4,
+           "ms_set": 1584
+          }
+         ],
+         "previous": 0.15000000596046448,
+         "reason": null,
+         "requested": 5.960464483090178e-09,
+         "source": "xmp",
+         "summary": "color balance rgb \u203a 4 ways \u203a shadows lift \u203a chroma: -15% (15% \u2192 0%)",
+         "target": 5.960464483090178e-09,
+         "unit": "%",
+         "warnings": []
+        },
+        {
+         "applied": 0.0,
+         "cap": null,
+         "clamped": false,
+         "committed": true,
+         "delta": -0.15,
+         "explain": [],
+         "image_id": 2,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "midtones_chroma",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF",
+         "plan": [
+          {
+           "action": "darkroom.adjust",
+           "ms_precommit": 0,
+           "ms_read": 3,
+           "ms_set": 1308
+          }
+         ],
+         "previous": 0.15000000596046448,
+         "reason": null,
+         "requested": 5.960464483090178e-09,
+         "source": "xmp",
+         "summary": "color balance rgb \u203a 4 ways \u203a power \u203a chroma: -15% (15% \u2192 0%)",
+         "target": 5.960464483090178e-09,
+         "unit": "%",
+         "warnings": []
+        }
+       ],
+       "noop": false,
+       "refused": [
+        {
+         "code": "commit_timeout",
+         "detail": {
+          "image_id": 2,
+          "ms": 921,
+          "sidecar_end_now": 162,
+          "stale_rewrite": "stale_rewrite: history_end went back from 162 to 107: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored",
+          "stale_rewrite_healed": false,
+          "stale_rewrite_restored": true,
+          "strategy_used": "view_bounce_action",
+          "xmp": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF.xmp"
+         },
+         "message": "stale_rewrite: darktable rewrote /Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF.xmp with an older history, not this edit (stale_rewrite: history_end went back from 162 to 107: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored); the pre-commit sidecar was restored",
+         "module": "colorbalancergb",
+         "param": "highlights_chroma"
+        }
+       ]
+      },
+      "ok": false,
+      "outcome": "partial"
+     },
+     "error": "partial",
+     "tool": "darkroom_say",
+     "wall_s": 4.405,
+     "write": true
+    }
+   ],
+   "extra": {
+    "snapshots": [
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.0,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.0,
+      "colorbalancergb.highlights_hue": 0.0,
+      "colorbalancergb.highlights_luminance": 0.0,
+      "colorbalancergb.midtones_chroma": 0.0,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.0,
+      "colorbalancergb.shadows_hue": 0.0,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     },
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.0,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.15000000596046448,
+      "colorbalancergb.highlights_hue": 0.0,
+      "colorbalancergb.highlights_luminance": 0.0,
+      "colorbalancergb.midtones_chroma": 0.15000000596046448,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.15000000596046448,
+      "colorbalancergb.shadows_hue": 0.0,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     },
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.0,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.15000000596046448,
+      "colorbalancergb.highlights_hue": 0.0,
+      "colorbalancergb.highlights_luminance": 0.0,
+      "colorbalancergb.midtones_chroma": 0.0,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.0,
+      "colorbalancergb.shadows_hue": 0.0,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     }
+    ]
+   }
+  },
+  "recorded_verdict": {
+   "outcome": "silent_failure",
+   "silent_failure": "a: reported ok but colorbalancergb.highlights_chroma did not change"
+  }
+ },
+ "cov-synonym-weaker_grade-weaker_colour_grade-olympus": {
+  "case": {
+   "body": "olympus",
+   "expect": {
+    "checks": [
+     {
+      "kind": "changed",
+      "metric": "M1",
+      "region": "frame",
+      "sign": -1,
+      "stat": null,
+      "step": null,
+      "tags": {},
+      "target": {
+       "from": 1,
+       "key": "colorbalancergb.shadows_chroma",
+       "unit": "%"
+      }
+     },
+     {
+      "kind": "changed",
+      "metric": "M1",
+      "region": "frame",
+      "sign": -1,
+      "stat": null,
+      "step": null,
+      "tags": {},
+      "target": {
+       "from": 1,
+       "key": "colorbalancergb.midtones_chroma",
+       "unit": "%"
+      }
+     },
+     {
+      "kind": "changed",
+      "metric": "M1",
+      "region": "frame",
+      "sign": -1,
+      "stat": null,
+      "step": null,
+      "tags": {},
+      "target": {
+       "from": 1,
+       "key": "colorbalancergb.highlights_chroma",
+       "unit": "%"
+      }
+     }
+    ],
+    "codes": [],
+    "kind": "edit",
+    "property": null,
+    "sidecar": {
+     "changed": true
+    }
+   },
+   "followups": [],
+   "frame_role": "hero",
+   "id": "cov-synonym-weaker_grade-weaker_colour_grade-olympus",
+   "layer": "coverage",
+   "meta": {},
+   "mode": "tool",
+   "repro": "python -m gauntlet run --case cov-synonym-weaker_grade-weaker_colour_grade-olympus --stamp <stamp>",
+   "schema": "gauntlet-case/1",
+   "source": {
+    "file": "vocab.py"
+   },
+   "steps": [
+    {
+     "args": {
+      "phrase": "stronger colour grade a lot"
+     },
+     "budget_s": 8.0,
+     "tool": "darkroom_say",
+     "write": true
+    },
+    {
+     "args": {
+      "phrase": "weaker colour grade"
+     },
+     "budget_s": 8.0,
+     "tool": "darkroom_say",
+     "write": true
+    }
+   ],
+   "tier": "P1"
+  },
+  "observation": {
+   "after": {
+    "defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    },
+    "fingerprint": "bf97763c8d1b9718",
+    "history_end": 155,
+    "null_equiv": {
+     "temperature.coeff_g2": 0.0
+    },
+    "params": {
+     "colorbalancergb.__enabled": 1,
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.15000000596046448,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.15000000596046448,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.07500000298023224,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0,
+     "exposure.__enabled": 1,
+     "exposure.black": -0.000244140625,
+     "exposure.exposure": 0.699999988079071,
+     "sigmoid.contrast": 1.5
+    },
+    "units": {
+     "colorbalancergb.__enabled": "bool",
+     "colorbalancergb.contrast": "%",
+     "colorbalancergb.global_chroma": "%",
+     "colorbalancergb.global_saturation": "%",
+     "colorbalancergb.global_vibrance": "%",
+     "colorbalancergb.highlights_chroma": "%",
+     "colorbalancergb.highlights_hue": "\u00b0",
+     "colorbalancergb.highlights_luminance": "%",
+     "colorbalancergb.midtones_chroma": "%",
+     "colorbalancergb.midtones_hue": "\u00b0",
+     "colorbalancergb.midtones_luminance": "%",
+     "colorbalancergb.shadows_chroma": "%",
+     "colorbalancergb.shadows_hue": "\u00b0",
+     "colorbalancergb.shadows_luminance": "%"
+    },
+    "verified_defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    }
+   },
+   "before": {
+    "defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    },
+    "fingerprint": "37af08b458653d57",
+    "history_end": 153,
+    "null_equiv": {
+     "temperature.coeff_g2": 0.0
+    },
+    "params": {
+     "colorbalancergb.__enabled": 1,
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0,
+     "exposure.__enabled": 1,
+     "exposure.black": -0.000244140625,
+     "exposure.exposure": 0.699999988079071,
+     "sigmoid.contrast": 1.5
+    },
+    "units": {
+     "colorbalancergb.__enabled": "bool",
+     "colorbalancergb.contrast": "%",
+     "colorbalancergb.global_chroma": "%",
+     "colorbalancergb.global_saturation": "%",
+     "colorbalancergb.global_vibrance": "%",
+     "colorbalancergb.highlights_chroma": "%",
+     "colorbalancergb.highlights_hue": "\u00b0",
+     "colorbalancergb.highlights_luminance": "%",
+     "colorbalancergb.midtones_chroma": "%",
+     "colorbalancergb.midtones_hue": "\u00b0",
+     "colorbalancergb.midtones_luminance": "%",
+     "colorbalancergb.shadows_chroma": "%",
+     "colorbalancergb.shadows_hue": "\u00b0",
+     "colorbalancergb.shadows_luminance": "%"
+    },
+    "verified_defaults": {
+     "colorbalancergb.contrast": 0.0,
+     "colorbalancergb.global_chroma": 0.0,
+     "colorbalancergb.global_saturation": 0.0,
+     "colorbalancergb.global_vibrance": 0.0,
+     "colorbalancergb.highlights_chroma": 0.0,
+     "colorbalancergb.highlights_hue": 0.0,
+     "colorbalancergb.highlights_luminance": 0.0,
+     "colorbalancergb.midtones_chroma": 0.0,
+     "colorbalancergb.midtones_hue": 0.0,
+     "colorbalancergb.midtones_luminance": 0.0,
+     "colorbalancergb.shadows_chroma": 0.0,
+     "colorbalancergb.shadows_hue": 0.0,
+     "colorbalancergb.shadows_luminance": 0.0
+    }
+   },
+   "calls": [
+    {
+     "args": {
+      "phrase": "stronger colour grade a lot"
+     },
+     "envelope": {
+      "data": {
+       "moves": [
+        {
+         "applied": 0.15000000596046448,
+         "cap": null,
+         "clamped": false,
+         "committed": true,
+         "delta": 0.15,
+         "explain": [],
+         "image_id": 3,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "shadows_chroma",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF",
+         "plan": [
+          {
+           "action": "darkroom.adjust",
+           "ms_precommit": 0,
+           "ms_read": 3,
+           "ms_set": 1292
+          }
+         ],
+         "previous": 0.0,
+         "reason": null,
+         "requested": 0.15,
+         "source": "xmp",
+         "summary": "color balance rgb \u203a 4 ways \u203a shadows lift \u203a chroma: +15% (0% \u2192 15%)",
+         "target": 0.15,
+         "unit": "%",
+         "warnings": []
+        },
+        {
+         "applied": 0.15000000596046448,
+         "cap": null,
+         "clamped": false,
+         "committed": true,
+         "delta": 0.15,
+         "explain": [],
+         "image_id": 3,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "midtones_chroma",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF",
+         "plan": [
+          {
+           "action": "darkroom.adjust",
+           "ms_precommit": 0,
+           "ms_read": 2,
+           "ms_set": 1295
+          }
+         ],
+         "previous": 0.0,
+         "reason": null,
+         "requested": 0.15,
+         "source": "xmp",
+         "summary": "color balance rgb \u203a 4 ways \u203a power \u203a chroma: +15% (0% \u2192 15%)",
+         "target": 0.15,
+         "unit": "%",
+         "warnings": []
+        },
+        {
+         "applied": 0.15000000596046448,
+         "cap": null,
+         "clamped": false,
+         "committed": true,
+         "delta": 0.15,
+         "explain": [],
+         "image_id": 3,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "highlights_chroma",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF",
+         "plan": [
+          {
+           "action": "darkroom.adjust",
+           "ms_precommit": 0,
+           "ms_read": 2,
+           "ms_set": 1842
+          }
+         ],
+         "previous": 0.0,
+         "reason": null,
+         "requested": 0.15,
+         "source": "xmp",
+         "summary": "color balance rgb \u203a 4 ways \u203a highlights gain \u203a chroma: +15% (0% \u2192 15%)",
+         "target": 0.15,
+         "unit": "%",
+         "warnings": []
+        }
+       ],
+       "noop": false,
+       "refused": []
+      },
+      "ok": true,
+      "outcome": "ok"
+     },
+     "error": null,
+     "tool": "darkroom_say",
+     "wall_s": 5.583,
+     "write": true
+    },
+    {
+     "args": {
+      "phrase": "weaker colour grade"
+     },
+     "envelope": {
+      "data": {
+       "moves": [
+        {
+         "applied": 0.07500000298023224,
+         "cap": null,
+         "clamped": false,
+         "committed": true,
+         "delta": -0.075,
+         "explain": [],
+         "image_id": 3,
+         "instance": 0,
+         "module": "colorbalancergb",
+         "noop": false,
+         "outcome": "ok",
+         "param": "shadows_chroma",
+         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF",
+         "plan": [
+          {
+           "action": "darkroom.adjust",
+           "ms_precommit": 0,
+           "ms_read": 2,
+           "ms_set": 1284
+          }
+         ],
+         "previous": 0.15000000596046448,
+         "reason": null,
+         "requested": 0.07500000596046448,
+         "source": "xmp",
+         "summary": "color balance rgb \u203a 4 ways \u203a shadows lift \u203a chroma: -7.5% (15% \u2192 7.5%)",
+         "target": 0.07500000596046448,
+         "unit": "%",
+         "warnings": []
+        }
+       ],
+       "noop": false,
+       "refused": [
+        {
+         "code": "commit_timeout",
+         "detail": {
+          "image_id": 3,
+          "ms": 947,
+          "sidecar_end_now": 155,
+          "stale_rewrite": "stale_rewrite: history_end went back from 155 to 40: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored",
+          "stale_rewrite_healed": false,
+          "stale_rewrite_restored": true,
+          "strategy_used": "view_bounce_action",
+          "xmp": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF.xmp"
+         },
+         "message": "stale_rewrite: darktable rewrote /Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF.xmp with an older history, not this edit (stale_rewrite: history_end went back from 155 to 40: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored); the pre-commit sidecar was restored",
+         "module": "colorbalancergb",
+         "param": "midtones_chroma"
+        }
+       ]
+      },
+      "ok": false,
+      "outcome": "partial"
+     },
+     "error": "partial",
+     "tool": "darkroom_say",
+     "wall_s": 2.768,
+     "write": true
+    }
+   ],
+   "extra": {
+    "snapshots": [
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.0,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.0,
+      "colorbalancergb.highlights_hue": 0.0,
+      "colorbalancergb.highlights_luminance": 0.0,
+      "colorbalancergb.midtones_chroma": 0.0,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.0,
+      "colorbalancergb.shadows_hue": 0.0,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     },
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.0,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.15000000596046448,
+      "colorbalancergb.highlights_hue": 0.0,
+      "colorbalancergb.highlights_luminance": 0.0,
+      "colorbalancergb.midtones_chroma": 0.15000000596046448,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.15000000596046448,
+      "colorbalancergb.shadows_hue": 0.0,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     },
+     {
+      "colorbalancergb.__enabled": 1,
+      "colorbalancergb.contrast": 0.0,
+      "colorbalancergb.global_chroma": 0.0,
+      "colorbalancergb.global_saturation": 0.0,
+      "colorbalancergb.global_vibrance": 0.0,
+      "colorbalancergb.highlights_chroma": 0.15000000596046448,
+      "colorbalancergb.highlights_hue": 0.0,
+      "colorbalancergb.highlights_luminance": 0.0,
+      "colorbalancergb.midtones_chroma": 0.15000000596046448,
+      "colorbalancergb.midtones_hue": 0.0,
+      "colorbalancergb.midtones_luminance": 0.0,
+      "colorbalancergb.shadows_chroma": 0.07500000298023224,
+      "colorbalancergb.shadows_hue": 0.0,
+      "colorbalancergb.shadows_luminance": 0.0,
+      "exposure.__enabled": 1,
+      "exposure.black": -0.000244140625,
+      "exposure.exposure": 0.699999988079071,
+      "sigmoid.contrast": 1.5
+     }
+    ]
+   }
+  },
+  "recorded_verdict": {
+   "outcome": "silent_failure",
+   "silent_failure": "a: reported ok but colorbalancergb.midtones_chroma did not change"
+  }
+ }
+}

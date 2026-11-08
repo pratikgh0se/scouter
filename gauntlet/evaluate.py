@@ -269,6 +269,48 @@ def _m1_default_fallback(key: str, unit: str, after: dict, verified_defaults: di
     return default_val
 
 
+def _first_move_previous(obs: Observation, key: str) -> float | None:
+    """The `previous` the FIRST envelope move for `key` reports (a later move's
+    `previous` is the earlier writes' landing, not the case-start state)."""
+    module, _, param = key.partition(".")
+    for c in obs.calls:
+        moves = ((c.envelope or {}).get("data") or {}).get("moves")
+        for m in moves if isinstance(moves, list) else ():
+            if isinstance(m, dict) and m.get("module") == module and m.get("param") == param:
+                return _num(m.get("previous"))
+    return None
+
+
+def _before_value(snap: dict, key: str, unit: str, obs: Observation) -> tuple[float | None, str]:
+    """A scored key's value in a `before`-side snapshot, or the module's
+    DECLARED default when the snapshot shows the module ABSENT (night 3: a frame
+    re-staged clean has no history entry for the module, so every key reads
+    None -- which is the module's default, not "unreadable").
+
+    Same trust as M1's declared-default fallback: only `verified_defaults` (the
+    vocab's real, host-probed `default`, never `neutral`), only when the
+    snapshot itself is readable (it holds values for OTHER modules, so an empty
+    or failed read never counts as "absent") and the module has no value in it
+    at all. A second oracle (Z2) must not disagree: the product's own first
+    reported `previous` for the key, when it reports one, must equal that
+    default. Anything else returns (None, "") exactly as before: unreadable."""
+    b = _num(snap.get(key)) if snap else None
+    if b is not None:
+        return b, ""
+    verified = _meta(obs, "verified_defaults")
+    if not snap or key not in verified or not any(v is not None for v in snap.values()):
+        return None, ""
+    if not _module_absent(snap, _module(key)):
+        return None, ""
+    default = _num(verified[key])
+    if default is None:
+        return None, ""
+    prev = _first_move_previous(obs, key)
+    if prev is not None and not _same(unit, prev, default):
+        return None, ""
+    return default, "declared_default_before"
+
+
 def _env_ok(c: CallRecord) -> bool:
     env = c.envelope or {}
     return bool(env.get("ok")) and env.get("outcome", "ok") not in NOOP_OUTCOMES \
@@ -313,7 +355,7 @@ def _check_m1(i: int, ch: Check, obs: Observation) -> CheckResult:
         ok = got is not None and _same(unit, got, t["value"], t.get("tol"))
         return CheckResult(i, "M1", ok, got, t["value"], note=note)
     if kind == "delta" and "delta" in t:
-        b = _num(snaps[t.get("from", 0)].get(t["key"]))
+        b, b_note = _before_value(snaps[t.get("from", 0)], t["key"], unit, obs)
         a = _num(snaps[t.get("to", -1)].get(t["key"]))
         if a is None or b is None:
             return CheckResult(i, "M1", False, None, t["delta"], note="param unreadable")
@@ -329,7 +371,7 @@ def _check_m1(i: int, ch: Check, obs: Observation) -> CheckResult:
                                magnitude_only=True)
         wrong = (d * t["delta"]) < 0
         return CheckResult(i, "M1", ok, d, t["delta"], wrong_direction=wrong,
-                           magnitude_only=not ok and not wrong and abs(d) > 0)
+                           magnitude_only=not ok and not wrong and abs(d) > 0, note=b_note)
     if kind == "changed":
         b = snaps[t.get("from", 0)].get(t["key"])
         a = snaps[t.get("to", -1)].get(t["key"])
@@ -378,7 +420,8 @@ def _check_m1(i: int, ch: Check, obs: Observation) -> CheckResult:
         k = t["key"]
         mags = []
         for pair in t["pairs"]:
-            x, y = _num(snaps[pair[0]].get(k)), _num(snaps[pair[1]].get(k))
+            x, _ = _before_value(snaps[pair[0]], k, unit, obs)
+            y = _num(snaps[pair[1]].get(k))
             mags.append(None if x is None or y is None else abs(y - x))
         ok = None not in mags and all(a < b for a, b in zip(mags, mags[1:]))
         return CheckResult(i, "M1", ok, mags, "strictly increasing")
@@ -530,7 +573,7 @@ def _check_boundary(i: int, ch: Check, obs: Observation) -> CheckResult:
     if "request" in t:
         requested = t["request"]
     else:
-        b = _num(before.get(key_))
+        b, _ = _before_value(before, key_, unit, obs)
         if b is None:
             return CheckResult(i, "boundary", False, got, t, note="before unreadable")
         requested = b + t["delta"]
@@ -1024,6 +1067,74 @@ def _action_writes(case: Case, obs: Observation) -> list[CallRecord]:
     return action or writes
 
 
+def _claimed_moves(c: CallRecord) -> list[tuple[str, float]] | None:
+    """(module.param, applied) for every committed, non-noop move an envelope
+    claims landed, or None when it claims something this cannot verify (an ok
+    write that names no numeric landing)."""
+    data = (c.envelope or {}).get("data") or {}
+    moves = data.get("moves")
+    if isinstance(moves, list):
+        out = []
+        for m in moves:
+            if not isinstance(m, dict) or m.get("noop") or m.get("committed") is False:
+                continue
+            applied = _num(m.get("applied"))
+            if applied is None or not isinstance(m.get("module"), str) \
+                    or not isinstance(m.get("param"), str):
+                return None
+            out.append((f"{m['module']}.{m['param']}", applied))
+        return out
+    if data.get("noop"):
+        return []
+    applied = _num(data.get("applied"))
+    if applied is None or not isinstance(data.get("module"), str) \
+            or not isinstance(data.get("param"), str):
+        return None
+    return [(f"{data['module']}.{data['param']}", applied)]
+
+
+def _honest_final_step(case: Case, obs: Observation) -> bool:
+    """Night 3 (weaker_grade-olympus-lot, weaker_colour_grade-olympus): a
+    multi-step case whose LAST action write answered an honest non-ok
+    (`partial` with the refused move named, or a typed error) must not be read
+    as "the product reported ok" because an EARLIER action write was ok -- the
+    same class as row 459's `undo_reported_ok` and `_action_writes`, for an
+    antecedent that is an action step (a phrase's "stronger" before "weaker").
+
+    True only when the final step's non-ok is its own answer AND the sidecar
+    (Z2's other oracle) agrees with everything the case's writes claimed: every
+    committed move any action write reported landed in that step's own
+    post-snapshot, and the final step changed nothing it did not claim. Without
+    per-step snapshots, or on any disagreement, False (the old reading)."""
+    acts = _action_writes(case, obs)
+    if len(acts) < 2:
+        return False
+    final = acts[-1]
+    env = final.envelope or {}
+    if env.get("ok") or env.get("outcome") in (*NOOP_OUTCOMES, "moved_to_limit", "ok"):
+        return False
+    if env.get("outcome") != "partial" and not _code(final):
+        return False
+    snaps = _step_snaps(obs)
+    if snaps is None:
+        return False
+    units = {**_units(obs), **((case.expect.sidecar or {}).get("units") or {})}
+    null_equiv = _meta(obs, "null_equiv")
+    idx = {id(c): i for i, c in enumerate(obs.calls)}
+    for c in acts:
+        claimed = _claimed_moves(c)
+        if claimed is None:
+            return False
+        snap = snaps[idx[id(c)] + 1] or {}
+        if any(not _same(units.get(k, "ratio"), snap.get(k), v) for k, v in claimed):
+            return False
+    i = idx[id(final)]
+    allowed = _owned([k for k, _ in _claimed_moves(final) or []], obs)
+    stray = [k for k in _diff_keys(snaps[i] or {}, snaps[i + 1] or {}, units, null_equiv)
+             if k not in allowed and not k.endswith(".__enabled")]
+    return not stray
+
+
 def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
                    policy: Policy) -> str | None:
     """Spec 1 conditions (a)-(f). Only asked when the product reported success."""
@@ -1038,7 +1149,11 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     # a start value) are not the product's claim about the action under test:
     # an ok setup must not make an honest action error look silent (same class
     # as row 459's `undo_reported_ok`, generalised).
-    reported = any(_env_ok(c) for c in _action_writes(case, obs)) or _any_moved_to_limit(obs)
+    #: Generalised again (night 3): an earlier ok action step does not make the
+    #: failing LAST step's honest partial/refusal look like a claim (see
+    #: `_honest_final_step`, which also re-verifies every claim in the sidecar).
+    reported = (any(_env_ok(c) for c in _action_writes(case, obs))
+                and not _honest_final_step(case, obs)) or _any_moved_to_limit(obs)
     # Row 459 (night-1, COV-undo-first-introduction): rule (e) below must ask
     # the undo call's OWN ok/refusal, not "was any write ok" -- an earlier ok
     # `set` (introducing the module) must not make an honestly-refused
@@ -1201,10 +1316,28 @@ def _refuse_write_failure(case: Case, results: list[CheckResult]) -> Verdict | N
     return None
 
 
+def _nested_codes(c: CallRecord) -> list[str]:
+    """Typed codes of the moves a NON-ok envelope refused inside itself: a
+    `darkroom_say` partial carries `data.refused[*].code` while its own
+    call-level code is just "partial"."""
+    env = c.envelope or {}
+    if env.get("ok"):
+        return []
+    out: list[str] = []
+    for src in (env.get("data") or {}, (env.get("error") or {}).get("detail") or {}):
+        for r in src.get("refused") or () if isinstance(src, dict) else ():
+            if isinstance(r, dict) and isinstance(r.get("code"), str):
+                out.append(r["code"])
+    return out
+
+
 def _transient_block(obs: Observation, policy: Policy) -> str | None:
     for c in obs.calls:
         if _code(c) in policy.transient_codes or c.error == "timeout":
             return _code(c) or "timeout"
+        for code in _nested_codes(c):
+            if code in policy.transient_codes:
+                return code
     return None
 
 
