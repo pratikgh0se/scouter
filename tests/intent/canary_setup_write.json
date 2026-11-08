@@ -1,0 +1,20 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for the evaluator's silent-failure rule with a setup write (canary-colorcal-20261108, group B2). A case's prep `darkroom_set` (Step.setup) only puts the frame at a start value; whether the product 'reported ok' is about the action under test. Run by tests/gauntlet/test_harness_canary.py. Generalises row 459 (undo_reported_ok).",
+  "subject": "gauntlet/evaluate.py silent_failure + gauntlet/case.py Step.setup",
+  "examples": [
+    {
+      "id": "setup-ok-action-commit-timeout-is-not-silent",
+      "case": "cov-channelmixerrgb.temperature-olympus-nudge_up1",
+      "input": {"setup": "ok", "action": "error:commit_timeout", "after_moved": false},
+      "expect": {"outcome": "blocked", "silent_failure": false},
+      "source": "canary-colorcal-20261108 cov-channelmixerrgb.temperature-*-nudge_up1: the product answered an explicit commit_timeout error and told the user the nudge was not confirmed; a human calls that an honest failure, not a false OK"
+    },
+    {
+      "id": "setup-ok-action-ok-sidecar-unchanged-is-silent",
+      "case": "cov-channelmixerrgb.temperature-olympus-nudge_up1",
+      "input": {"setup": "ok", "action": "ok", "after_moved": false},
+      "expect": {"outcome": "silent_failure", "silent_failure": true},
+      "source": "Z2: the oracle must keep catching the real thing, the user told OK for the action while the sidecar did not change"
+    }
+  ]
+}

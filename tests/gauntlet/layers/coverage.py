@@ -66,9 +66,9 @@ def _wb_refusal_expect(route: dict) -> Expect:
 _wb_route_a_pinned_edit = checkmap.wb_route_a_pinned_edit
 
 
-def _wb_route_a_pinned_restore(route: dict) -> Expect:
+def _wb_route_a_pinned_restore(route: dict, from_step: int = 0) -> Expect:
     to_key = route["m1_key"]
-    return Expect("workflow", [m1_restored([to_key], {to_key: route["unit"]})])
+    return Expect("workflow", [m1_restored([to_key], {to_key: route["unit"]}, from_step)])
 #: Cluster D / row 458 (2026-09-27): the olympus `hero` frame surveys near
 #: the darkest in the corpus, so these 6 "touch" phrase cases -- olympus-body
 #: rows of tests/test_touch_floor.py's KNOWN_RESIDUAL -- can't clear their
@@ -215,16 +215,35 @@ def _case(cid: str, body: str, tier: str, steps: list, expect: Expect, *,
                 body=body, frame_role=frame_role, source={"file": "vocab.py"}, meta=meta or {})
 
 
-def _set(s: vocab.ParamSpec, value: float):
-    return step("darkroom_set", BUDGET_MOVE, module=s.module, param=s.param, value=value)
+def _set(s: vocab.ParamSpec, value: float, *, setup: bool = False):
+    st = step("darkroom_set", BUDGET_MOVE, module=s.module, param=s.param, value=value)
+    st.setup = setup
+    return st
+
+
+def _prep(s: vocab.ParamSpec, value: float):
+    """A prep `darkroom_set` that only puts the frame at a start value (a
+    case must not inherit the state an earlier case left): marked `setup` so
+    the evaluator's silent-failure rule does not read its ok as the product's
+    claim about the action under test."""
+    return _set(s, value, setup=True)
 
 
 def _adjust(s: vocab.ParamSpec, delta: float):
     return step("darkroom_adjust", BUDGET_MOVE, module=s.module, param=s.param, delta=delta)
 
 
+def _derived_keys(s: vocab.ParamSpec) -> list[str]:
+    """Keys darktable recomputes when this param moves, declared in
+    check_map.json (`wb_route_a.derived_keys` for the route's own target,
+    channelmixerrgb.temperature: the illuminant x/y follow the CAT
+    temperature). Not collateral for a case on that param."""
+    r = _CMAP["wb_route_a"]
+    return list(r["derived_keys"]) if key(s.module, s.param) == r["m1_key"]["to"] else []
+
+
 def _side(s: vocab.ParamSpec, *, changed: bool = True) -> dict:
-    return sidecar(s.module, s.param, s.unit, changed=changed)
+    return sidecar(s.module, s.param, s.unit, changed=changed, allowed=_derived_keys(s))
 
 
 def _wb_relative_ok(s: vocab.ParamSpec, body: str) -> bool:
@@ -238,7 +257,9 @@ def _tint_reset() -> list:
     """W4: Kelvin is readable from the XMP only at the WB table's calibrated
     tint (1.0), so every white-balance Kelvin case first sets tint 1.0."""
     t = vocab.spec("temperature", "tint")
-    return [step("darkroom_set", BUDGET_MOVE, module=t.module, param=t.param, value=1.0)]
+    st = step("darkroom_set", BUDGET_MOVE, module=t.module, param=t.param, value=1.0)
+    st.setup = True
+    return [st]
 
 
 def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
@@ -312,14 +333,20 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
             out.append(_case(cid(_signed("adjust", n)), body, tier, [_adjust(s, n * s.step)],
                              _wb_refusal_expect(wb_route)))
         elif wb_pinned_live:
-            out.append(_case(cid(_signed("adjust", n)), body, tier, [_adjust(s, n * s.step)],
-                             _wb_route_a_pinned_edit(wb_route, sign=(1 if n > 0 else -1))))
+            #: Group B1 (canary-colorcal-20261108): self-contained. A relative
+            #: move on a frame an earlier case left at the 12000 K limit is a
+            #: noop; a mid-range prep set (routed to channelmixerrgb.temperature
+            #: like the action) fixes the start.
+            out.append(_case(cid(_signed("adjust", n)), body, tier,
+                             [_prep(s, _mid(s)), _adjust(s, n * s.step)],
+                             _wb_route_a_pinned_edit(wb_route, sign=(1 if n > 0 else -1),
+                                                     start=1)))
         elif relative_ok:
             chk = m1_delta(s.module, s.param, n * s.step, s.unit, s.step,
                            None if s.wraps else s.lo, None if s.wraps else s.hi)
             chk.target["from"] = 1 + o
             out.append(_case(cid(_signed("adjust", n)), body, tier,
-                             [*pre, _set(s, _mid(s)), _adjust(s, n * s.step)],
+                             [*pre, _prep(s, _mid(s)), _adjust(s, n * s.step)],
                              Expect("edit", [chk], _side(s))))
         else:
             # item 4a: no calibration table to read the current Kelvin from
@@ -332,16 +359,17 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
         over = _case(cid("adjust_overflow"), body, "P1", [_adjust(s, 3 * s.step)],
                      _wb_refusal_expect(wb_route))
     elif wb_pinned_live:
-        over = _case(cid("adjust_overflow"), body, "P1", [_adjust(s, 3 * s.step)],
-                     _wb_route_a_pinned_edit(wb_route, sign=1))
+        over = _case(cid("adjust_overflow"), body, "P1",
+                     [_prep(s, phi), _adjust(s, 3 * s.step)],
+                     _wb_route_a_pinned_edit(wb_route, sign=1, start=1))
     elif s.wraps:
         over = _case(cid("adjust_overflow"), body, "P1",
-                     [*pre, _set(s, s.hi - s.step), _adjust(s, 3 * s.step)],
+                     [*pre, _prep(s, s.hi - s.step), _adjust(s, 3 * s.step)],
                      Expect("edit", [m1_equals(s.module, s.param, (s.hi + 2 * s.step) % 360,
                                                s.unit)], _side(s)))
     elif relative_ok:
         over = _case(cid("adjust_overflow"), body, "P1",
-                     [*pre, _set(s, s.hi - s.step), _adjust(s, 3 * s.step)],
+                     [*pre, _prep(s, s.hi - s.step), _adjust(s, 3 * s.step)],
                      Expect("edit", [m1_equals(s.module, s.param, s.hi, s.unit),
                                      clamp_reported()], _side(s)))
     else:
@@ -362,7 +390,7 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
             chg = Check("M1", kind="changed", sign=n,
                        target={"key": k, "unit": s.unit, "from": 1 + o})
             out.append(_case(cid(_signed("nudge", n)), body, "P1",
-                             [*pre, _set(s, _nudge_precondition(s, n)),
+                             [*pre, _prep(s, _nudge_precondition(s, n)),
                               step("darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param,
                                    steps=n)],
                              Expect("edit", [chg], _side(s))))
@@ -395,13 +423,15 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
         out.append(_case(cid("undo_after_set"), body, "P0",
                          [_set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)], restore))
         out.append(_case(cid("undo_after_adjust"), body, "P1",
-                         [_adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)], restore))
+                         [_prep(s, _mid(s)), _adjust(s, s.step),
+                          step("darkroom_undo_last", BUDGET_MOVE)],
+                         _wb_route_a_pinned_restore(wb_route, 1)))
         out.append(_case(cid("repeat_set"), body, "P1",
                          [_set(s, _mid(s)), _set(s, _mid(s))],
                          _wb_route_a_pinned_edit(wb_route, value=_mid(s))))
         out.append(_case(cid("repeat_adjust"), body, "P1",
-                         [_adjust(s, s.step), _adjust(s, s.step)],
-                         _wb_route_a_pinned_edit(wb_route, sign=1)))
+                         [_prep(s, _mid(s)), _adjust(s, s.step), _adjust(s, s.step)],
+                         _wb_route_a_pinned_edit(wb_route, sign=1, start=1)))
     else:
         out.append(_case(cid("undo_after_set"), body, "P0",
                          [*pre, _set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)],
@@ -415,7 +445,7 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
                                                    target={"key": k, "a": 1 + o, "b": 2 + o,
                                                            "unit": s.unit})], property="P1")))
         out.append(_case(cid("repeat_adjust"), body, "P1",
-                         [*pre, _set(s, _mid(s)), _adjust(s, s.step), _adjust(s, s.step)],
+                         [*pre, _prep(s, _mid(s)), _adjust(s, s.step), _adjust(s, s.step)],
                          Expect("property", [Check("M1", kind="step_ratio",
                                                    target={"key": k, "base": [1 + o, 2 + o],
                                                            "double": [1 + o, 3 + o], "ratio": 2.0,

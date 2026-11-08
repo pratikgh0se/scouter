@@ -971,6 +971,20 @@ def _honest_noop_at_target(case: Case, obs: Observation) -> bool:
     return all(run_check(i, ch, synthetic).ok for i, ch in enumerate(checks))
 
 
+def _action_writes(case: Case, obs: Observation) -> list[CallRecord]:
+    """The case's own action writes: write calls whose step is not marked
+    `setup`. Calls align 1:1 with `case.steps` (tool mode). With no setup
+    step marked (or no step alignment, e.g. agent mode) this is every write,
+    so only cases that opt in change behaviour."""
+    writes = [c for c in obs.calls if c.write]
+    steps = case.steps
+    if not any(st.setup for st in steps):
+        return writes
+    action = [c for i, c in enumerate(obs.calls)
+              if c.write and not (i < len(steps) and steps[i].setup)]
+    return action or writes
+
+
 def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
                    policy: Policy) -> str | None:
     """Spec 1 conditions (a)-(f). Only asked when the product reported success."""
@@ -981,7 +995,11 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     # itself `ok: False`) and skip rules (a)-(f) entirely. `_any_moved_to_limit`
     # only says "something claimed a clamped move"; whether that claim
     # actually verifies is rule (c)'s job below, via `_verified_clamped_params`.
-    reported = any(_env_ok(c) for c in writes) or _any_moved_to_limit(obs)
+    # Setup writes (Step.setup, e.g. the `darkroom_set` that puts the frame at
+    # a start value) are not the product's claim about the action under test:
+    # an ok setup must not make an honest action error look silent (same class
+    # as row 459's `undo_reported_ok`, generalised).
+    reported = any(_env_ok(c) for c in _action_writes(case, obs)) or _any_moved_to_limit(obs)
     # Row 459 (night-1, COV-undo-first-introduction): rule (e) below must ask
     # the undo call's OWN ok/refusal, not "was any write ok" -- an earlier ok
     # `set` (introducing the module) must not make an honestly-refused

@@ -30,6 +30,10 @@ class Step:
     args: dict = field(default_factory=dict)
     budget_s: float = 8.0
     write: bool = False
+    #: A prep write that only puts the frame at a start value (not the action
+    #: under test). The evaluator's silent-failure rule asks "did the product
+    #: report ok" about the NON-setup writes only (gauntlet/evaluate.py).
+    setup: bool = False
 
 
 @dataclass
@@ -95,6 +99,9 @@ class Case:
 
     def to_dict(self) -> dict:
         d = asdict(self)
+        for st in d["steps"]:  # keep stored cases byte-stable unless a step is setup
+            if not st.get("setup"):
+                st.pop("setup", None)
         d["schema"] = SCHEMA
         return d
 

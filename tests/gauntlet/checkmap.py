@@ -183,7 +183,7 @@ def wb_route_a_expect(cmap: dict, case_key: str, preset: int | None, *,
 
 
 def wb_route_a_pinned_edit(route: dict, *, sign: int | None = None,
-                           value: float | None = None) -> Expect:
+                           value: float | None = None, start: int = 0) -> Expect:
     """Review round 2, finding 10 (GC-1): shared with `coverage.py` (its own
     `_wb_route_a_pinned_edit`, fix round 1 review I4) so every generator
     that wires `wb_route_a_expect`/`_expect_for_hero` scores the SAME way
@@ -219,6 +219,8 @@ def wb_route_a_pinned_edit(route: dict, *, sign: int | None = None,
     to_key = route["m1_key"]
     to_module, to_param = to_key.split(".", 1)
     unit = route["unit"]
+    #: `start`: snapshot index the move is measured from (0 = case start; 1
+    #: after one prep/setup step, so the move check does not span the prep).
     if value is not None:
         move = Check("M1", kind="equals", target={"key": to_key, "value": value, "unit": unit})
     else:
@@ -226,8 +228,10 @@ def wb_route_a_pinned_edit(route: dict, *, sign: int | None = None,
             "sign_unverified": "route A pinned but direction_verified is False in "
                                "check_map.json -- sign unverified until the host probe"}
         s = sign if route["direction_verified"] else 0
-        move = Check("M1", kind="changed", sign=s or 0, target={"key": to_key, "unit": unit},
-                     tags=tags)
+        target = {"key": to_key, "unit": unit}
+        if start:
+            target["from"] = start
+        move = Check("M1", kind="changed", sign=s or 0, target=target, tags=tags)
     unchanged = Check("M1", kind="unchanged", target={"keys": list(route["unchanged"])})
     side = {"changed": True, "key": to_key, "units": {to_key: unit},
            "allowed": list(route["allowed"])}

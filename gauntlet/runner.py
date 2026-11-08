@@ -96,6 +96,33 @@ def _accepts(fn, name: str) -> bool:
     return name in params or any(p.kind is p.VAR_KEYWORD for p in params.values())
 
 
+def with_walkthrough_prefix(chosen: list[Case], layer_cases: list[Case]) -> list[Case]:
+    """Group D (canary-colorcal-20261108): a walkthrough case (meta session
+    "walkthrough") is one stateful session in document order, so a subset
+    holding step N also needs steps 0..N-1 or it runs on state the script never
+    built (execute.py blocks it, which scored a harness gap as a product
+    fail). Add the missing earlier steps, in document order, so the selected
+    case is really tested rather than excluded. Runs after every other filter
+    (only_failed, resume): a prefix step that passed earlier still has to run
+    again in this session to rebuild the state."""
+    def order(c: Case):
+        return c.meta.get("order", 0) if c.meta.get("session") == "walkthrough" else None
+
+    top: dict = {}
+    for c in chosen:
+        o = order(c)
+        if o is not None and o > 0:
+            top[c.layer] = max(top.get(c.layer, 0), o)
+    if not top:
+        return chosen
+    have = {c.id for c in chosen}
+    need = {c.id for c in layer_cases
+            if order(c) is not None and c.layer in top and order(c) < top[c.layer]}
+    if not need - have:
+        return chosen
+    return [c for c in layer_cases if c.id in have | need]
+
+
 class Runner:
     def __init__(self, adapter: Adapter, run: RunDir, *, commit: str = "",
                  clock=time.monotonic, sleep=time.sleep, wall=time.time,
@@ -130,6 +157,15 @@ class Runner:
     def _select(self, cases: list[Case], layer: str, *, resume: bool, only_failed: bool,
                 case_ids: set[str] | None, tiers: set[str] | None = None,
                 prefixes: tuple[str, ...] = (), where: dict | None = None) -> list[Case]:
+        chosen = self._select_filtered(cases, layer, resume=resume, only_failed=only_failed,
+                                       case_ids=case_ids, tiers=tiers, prefixes=prefixes,
+                                       where=where)
+        return with_walkthrough_prefix(chosen, [c for c in cases if c.layer == layer])
+
+    def _select_filtered(self, cases: list[Case], layer: str, *, resume: bool,
+                         only_failed: bool, case_ids: set[str] | None,
+                         tiers: set[str] | None = None, prefixes: tuple[str, ...] = (),
+                         where: dict | None = None) -> list[Case]:
         chosen = [c for c in cases if c.layer == layer]
         if tiers:
             chosen = [c for c in chosen if c.tier in tiers]
