@@ -614,9 +614,9 @@ def test_merge_replaces_by_id_and_keeps_the_replaced(monkeypatch):
 
 def test_revision_2_changes_only_e2_and_adds_plan_v2_to_every_task():
     doc = rb.load_tasks()
-    assert doc["revision"] == 2 and doc["revisions"][-1]["invalidates"] == ["E2"]
+    assert doc["revisions"][1]["revision"] == 2 and doc["revisions"][1]["invalidates"] == ["E2"]
     assert all("plan_v2" in t for t in doc["tasks"])
-    revised = [t["id"] for t in doc["tasks"] if t.get("revised_in")]
+    revised = [t["id"] for t in doc["tasks"] if t.get("revised_in") == 2]
     assert revised == ["E2"]
     e2 = rb.tasks_by_id(doc)["E2"]
     assert e2["frames"] == ["blown"] and "{frame:bright}" not in json.dumps(e2)
@@ -642,11 +642,12 @@ def test_plan_v2_remaps_steps_and_never_changes_thresholds():
     assert e1["assertions"]["set_ok"]["step"] == 0
     assert e1["assertions"]["delta"] == by_id["E1"]["assertions"]["delta"]
     w1 = rb.effective_task(by_id["W1"], "v2")
-    assert w1["assertions"]["kelvin"]["step"] == 1
+    assert w1["assertions"]["kelvin"]["step"] == 2
     assert w1["assertions"]["kelvin"]["tol"] == 150
     assert w1["assertions"]["kelvin"]["value"] == {
-        "$env": {"step": 0, "path": "data.moves.0.target"}
+        "$env": {"step": 1, "path": "data.moves.0.target"}
     }
+    assert (w1["assertions"]["render"]["before_step"], w1["assertions"]["render"]["after_step"]) == (0, 3)
     c4 = rb.effective_task(by_id["C4"], "v2")
     assert c4["plan"] == by_id["C4"]["plan"] and c4["plan_used"] == "v2=v1"
     f1 = rb.effective_task(by_id["F1"], "v2")
@@ -724,7 +725,7 @@ def test_fake_v2_run_is_valid_and_records_the_plan(monkeypatch):
         plan_version="v2",
     ).run()
     assert rb.validate_result(result) == []
-    assert result["plan_version"] == "v2" and result["tasks_revision"] == 2
+    assert result["plan_version"] == "v2" and result["tasks_revision"] == 3
     by_id = {r["id"]: r for r in result["tasks"]}
     assert by_id["E1"]["plan_used"] == "v2" and by_id["E1"]["plan"][0]["tool"] == "darkroom_say"
     assert by_id["S2"]["plan_used"] == "v2=v1"
@@ -786,3 +787,131 @@ def test_a_hung_setup_is_relaunched_once_and_recorded(monkeypatch):
     assert "hung_first_launch" in ses and len(host.launched) == 2
     assert ses["setup"][0]["envelope"]["ok"] is True
     assert {r["outcome"] for r in result["tasks"]} != {"blocked"}
+
+
+# -- warmth through colour calibration (route A): two oracles that work for both routes ---------
+
+
+def _cc(temp):
+    return _mod(temperature=temp)
+
+
+def _cc_snap(temp, fp, **mods):
+    return _snap(fp=fp, channelmixerrgb=_cc(temp), **mods)
+
+
+def _stats_env(rg, bg):
+    return {"ok": True, "outcome": "ok", "data": {"stats": {"wb_ratio_rg": rg, "wb_ratio_bg": bg}}}
+
+
+def test_warmth_slot_route_a_checks_direction_and_amount():
+    a = {"type": "warmth_slot", "frame": "hero", "sign": 1, "value": 4527.0, "tol": 150,
+         "min_rel": 0.005}
+
+    def run(before_k, after_k, spec=a):
+        ctx = {"before": {"hero": _cc_snap(before_k, "a")},
+               "after": {"hero": _cc_snap(after_k, "b")}}
+        return rb.evaluate(spec, ctx)
+
+    assert run(3927.0, 4527.0)["ok"]
+    assert run(3927.0, 4600.0)["ok"]  # inside the step tolerance
+    assert not run(3927.0, 3327.0)["ok"]  # the wrong way, even to a nearby number
+    assert not run(3927.0, 4100.0)["ok"]  # right way, short of the asked amount
+    assert not run(3927.0, 3927.0)["ok"]  # nothing committed
+    assert run(4527.0, 3927.0, a | {"sign": -1, "value": 3927.0})["ok"]
+
+
+def test_warmth_slot_legacy_route_reads_the_wb_module():
+    warm = _snap(fp="b", temperature=_mod(coeff_r=2.2, coeff_g=1.0, coeff_b=1.5))
+    base = _snap(fp="a", temperature=_mod(coeff_r=2.0, coeff_g=1.0, coeff_b=1.7))
+    a = {"type": "warmth_slot", "frame": "hero", "sign": 1, "value": 5600.0, "tol": 150,
+         "min_rel": 0.005}
+    assert rb.evaluate(a, {"before": {"hero": base}, "after": {"hero": warm}})["ok"]
+    assert not rb.evaluate(a | {"sign": -1}, {"before": {"hero": base}, "after": {"hero": warm}})["ok"]
+    assert not rb.evaluate(a, {"before": {"hero": base}, "after": {"hero": base}})["ok"]
+
+
+def test_render_rb_delta_needs_a_move_beyond_the_noise_floor():
+    def run(after, sign=1, min_rel=0.005):
+        ctx = {"steps": [{"envelope": _stats_env(0.80, 0.50)}, {}, {"envelope": _stats_env(*after)}]}
+        return rb.evaluate({"type": "render_rb_delta", "before_step": 0, "after_step": 2,
+                            "sign": sign, "min_rel": min_rel}, ctx)
+
+    assert run((0.88, 0.48))["ok"]  # r/b 1.6 -> 1.833: warmer
+    assert not run((0.88, 0.48), sign=-1)["ok"]
+    assert not run((0.800, 0.4999))["ok"]  # r/b +0.02%: inside the noise floor
+    assert run((0.72, 0.52), sign=-1)["ok"]
+    assert not rb.evaluate({"type": "render_rb_delta", "before_step": 0, "after_step": 2,
+                            "sign": 1, "min_rel": 0.005}, {"steps": []})["ok"]
+
+
+def _warmth_ctx(tid, version, *, before_k, after_k, rb_after, effective, target, ok=True):
+    task = rb.effective_task(rb.tasks_by_id(rb.load_tasks())[tid], version)
+    steps, stats_seen = [], 0
+    for s in task["plan"]:
+        args = dict(s.get("args") or {})
+        if s["tool"] == "scout_stats":
+            env = _stats_env(0.80, 0.50) if stats_seen == 0 else _stats_env(*rb_after)
+            stats_seen += 1
+        elif s["tool"] == "wb_kelvin":
+            env = {"ok": True, "outcome": "ok", "data": {"kelvin": 5000.0,
+                                                         "effective_kelvin": effective}}
+        elif s["tool"] == "darkroom_say":
+            env = {"ok": True, "outcome": "ok", "data": {"moves": [{"target": target}]}}
+        else:
+            args["value"] = target
+            env = {"ok": ok, "outcome": "ok" if ok else "failed", "data": {}}
+        steps.append({"tool": s["tool"], "args": args, "envelope": env})
+    ctx = {"before": {"hero": _cc_snap(before_k, "a")}, "after": {"hero": _cc_snap(after_k, "b")},
+           "steps": steps}
+    results = {aid: rb.evaluate(a, ctx) | {"type": a["type"]}
+               for aid, a in task["assertions"].items()}
+    return rb.score_task(task["scoring"], results, wall_s=1, budget_s=99,
+                         category="white_balance", last_envelope_ok=ok), results
+
+
+def test_w1_w2_route_a_move_verifies_in_both_plan_versions():
+    for version in ("v1", "v2"):
+        score, res = _warmth_ctx("W1", version, before_k=3927.0, after_k=4527.0,
+                                 rb_after=(0.86, 0.46), effective=4527.0, target=4527.0)
+        assert score == ("pass", "verified"), (version, res)
+        score, res = _warmth_ctx("W2", version, before_k=4527.0, after_k=3627.0,
+                                 rb_after=(0.74, 0.54), effective=3627.0, target=3627.0)
+        assert score == ("pass", "verified"), (version, res)
+
+
+def test_w1_a_reported_ok_with_nothing_on_the_sidecar_or_the_render_is_not_verified():
+    for version in ("v1", "v2"):
+        score, _ = _warmth_ctx("W1", version, before_k=3927.0, after_k=3927.0,
+                               rb_after=(0.80, 0.50), effective=3927.0, target=4527.0)
+        assert score == ("fail", "reported_ok_unverified")
+        # sidecar moved but the render did not: the second oracle refuses the pass
+        score, _ = _warmth_ctx("W1", version, before_k=3927.0, after_k=4527.0,
+                               rb_after=(0.80, 0.50), effective=4527.0, target=4527.0)
+        assert score[0] != "pass"
+        # the render moved the wrong way (the 2026-09 night-1 failure)
+        score, _ = _warmth_ctx("W1", version, before_k=3927.0, after_k=4527.0,
+                               rb_after=(0.70, 0.55), effective=4527.0, target=4527.0)
+        assert score[0] != "pass"
+
+
+def test_w4_daylight_route_a_sets_the_illuminant_and_is_verified_by_two_oracles():
+    score, res = _warmth_ctx("W4", "v2", before_k=3927.0, after_k=5500.0,
+                             rb_after=(0.90, 0.45), effective=5500.0, target=5500.0)
+    assert score == ("pass", "verified"), res
+    score, _ = _warmth_ctx("W4", "v2", before_k=3927.0, after_k=3927.0,
+                           rb_after=(0.80, 0.50), effective=3927.0, target=5500.0)
+    assert score == ("fail", "reported_ok_unverified")
+
+
+def test_warmth_tasks_keep_history_unchanged_only_as_the_refusal_check():
+    tasks = rb.tasks_by_id(rb.load_tasks())
+    for tid in ("W1", "W2", "W4"):
+        t = tasks[tid]
+        assert t["assertions"]["untouched"]["type"] == "history_unchanged"
+        assert "untouched" not in t["scoring"]["pass"]
+        assert t["scoring"]["refusal"] == ["refused", "untouched"]
+        assert tid in [x for r in rb.load_tasks()["revisions"] for x in r.get("invalidates", [])]
+        for version in rb.PLAN_VERSIONS:
+            tools = [s["tool"] for s in rb.effective_task(t, version)["plan"]]
+            assert tools[0] == tools[-1] == "scout_stats", (tid, version, tools)

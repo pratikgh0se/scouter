@@ -882,7 +882,12 @@ TOOL_SPECS: list[dict] = [
         "against its camera's measured calibration table (scouter wb calibrate). "
         "No table -> kelvin: null, reason names `scouter wb calibrate`. Outside "
         "the calibrated range -> kelvin: null, reason names the range -- never "
-        "an extrapolated guess.",
+        "an extrapolated guess. `kelvin` is always the white balance module's "
+        "estimate. `effective_kelvin` is the Kelvin warmth is actually carried by: "
+        "when `route.route` is `color_calibration` (warmer/cooler/Kelvin sets on "
+        "camera-reference white balance) it is colour calibration's illuminant "
+        "(`route.illuminant_kelvin`) and `note` says so; otherwise it equals "
+        "`kelvin` and `note` is null. Read `effective_kelvin` after a warmth move.",
         "inputSchema": _schema({"image": IMAGE}, ["image"]),
     },
     {

@@ -46,6 +46,17 @@ def colorcal_hex(*, illuminant: int = 2, adaptation: int = 1,
     return binascii.hexlify(bytes(blob)).decode()
 
 
+def stub_table_kelvin(test, kelvin: float = 5000.0) -> None:
+    """The WB module's table estimate (the benchmark saw 5000 beside an illuminant of
+    4527): the fixture's as-shot coefficients fall outside the committed table, so the
+    inversion is stubbed to a number. Only the table inversion; the route logic runs."""
+    result = {"kelvin": kelvin, "interpolated": True, "bracket": None, "residual_ratio": 0.0,
+              "exact": False, "camera": "em10iii", "table": None, "warnings": [], "reason": None}
+    p = mock.patch.object(wb, "_kelvin_from", return_value=result)
+    p.start()
+    test.addCleanup(p.stop)
+
+
 class _RouteFixture(_MovesFixture):
     def setUp(self) -> None:
         super().setUp()
@@ -338,6 +349,7 @@ class KelvinReadbackTest(_RouteFixture):
             p = mock.patch(target, return_value=value)
             p.start()
             self.addCleanup(p.stop)
+        stub_table_kelvin(self)
 
     def test_preset_2_reports_the_white_balance_route(self) -> None:
         r = wb.kelvin_verb.__wrapped__(str(self.raw), job="job-test")
@@ -357,3 +369,47 @@ class KelvinReadbackTest(_RouteFixture):
         r = wb.kelvin_verb.__wrapped__(str(self.raw), job="job-test")
         self.assertEqual(r.route["route"], "unavailable")
         self.assertTrue(any("cannot move warmth" in w for w in r.warnings), r.warnings)
+
+    # -- effective_kelvin (the 2026-11-08 benchmark: kelvin stayed 5000 after a +600 K move) --
+
+    def _sidecar_illuminant(self) -> float:
+        parsed = darkroom._read_sidecar_parsed(str(self.raw))
+        return float(xmp.latest_params(parsed, "channelmixerrgb")["temperature"])
+
+    def test_preset_4_live_effective_kelvin_follows_the_illuminant_not_the_table(self) -> None:
+        self.preset_4()
+        self.pin()
+        self.colorcal(temperature=4527.0)
+        r = wb.kelvin_verb.__wrapped__(str(self.raw), job="job-test")
+        # Oracle 1: the sidecar's committed slot, read independently of wb.py.
+        self.assertAlmostEqual(self._sidecar_illuminant(), 4527.0, places=1)
+        self.assertAlmostEqual(r.effective_kelvin, self._sidecar_illuminant(), places=1)
+        # Oracle 2: `kelvin` keeps its meaning (the WB module's table estimate), so it differs.
+        self.assertNotAlmostEqual(r.kelvin, 4527.0, delta=50)
+        self.assertIn("4527", r.note)
+        self.assertIn("colour calibration", r.note.lower().replace("color", "colour"))
+
+    def test_white_balance_route_has_effective_equal_to_kelvin_and_no_note(self) -> None:
+        r = wb.kelvin_verb.__wrapped__(str(self.raw), job="job-test")
+        self.assertEqual(r.route["route"], "white_balance")
+        self.assertIsNotNone(r.kelvin)
+        self.assertEqual(r.effective_kelvin, r.kelvin)
+        self.assertIsNone(r.note)
+
+    def test_unavailable_route_has_effective_equal_to_kelvin_and_no_note(self) -> None:
+        self.preset_4()
+        self.unpin()
+        r = wb.kelvin_verb.__wrapped__(str(self.raw), job="job-test")
+        self.assertEqual(r.effective_kelvin, r.kelvin)
+        self.assertIsNone(r.note)
+
+    def test_the_registered_verb_envelope_carries_both_fields(self) -> None:
+        from scouter import registry
+        self.preset_4()
+        self.pin()
+        self.colorcal(temperature=4527.0)
+        env = registry.call("wb.kelvin", "cli", image=str(self.raw))
+        self.assertTrue(env.ok, env.to_dict())
+        self.assertAlmostEqual(env.data["effective_kelvin"], 4527.0, places=1)
+        self.assertIn("kelvin", env.data)
+        self.assertIn("note", env.data)

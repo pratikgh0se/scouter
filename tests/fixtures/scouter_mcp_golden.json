@@ -1573,7 +1573,7 @@
     "name": "wb_calibrate"
   },
   {
-    "description": "Invert an image's committed `temperature` coefficients to Kelvin against its camera's measured calibration table (scouter wb calibrate). No table -> kelvin: null, reason names `scouter wb calibrate`. Outside the calibrated range -> kelvin: null, reason names the range -- never an extrapolated guess.",
+    "description": "Invert an image's committed `temperature` coefficients to Kelvin against its camera's measured calibration table (scouter wb calibrate). No table -> kelvin: null, reason names `scouter wb calibrate`. Outside the calibrated range -> kelvin: null, reason names the range -- never an extrapolated guess. `kelvin` is always the white balance module's estimate. `effective_kelvin` is the Kelvin warmth is actually carried by: when `route.route` is `color_calibration` (warmer/cooler/Kelvin sets on camera-reference white balance) it is colour calibration's illuminant (`route.illuminant_kelvin`) and `note` says so; otherwise it equals `kelvin` and `note` is null. Read `effective_kelvin` after a warmth move.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {

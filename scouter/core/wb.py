@@ -547,6 +547,18 @@ def _route_readback(path: str) -> tuple[dict, list[str]]:
         f"this image: {route.get('reason')}"]
 
 
+def _effective(route: dict, kelvin_value: float | None) -> dict:
+    """`effective_kelvin` and `note`: on route A warmth is carried by colour
+    calibration's illuminant, so that is the number to act on; otherwise it is
+    `kelvin` and there is nothing to add."""
+    if route.get("route") != "color_calibration":
+        return {"effective_kelvin": kelvin_value, "note": None}
+    k = route.get("illuminant_kelvin")
+    return {"effective_kelvin": k,
+            "note": f"warmth is carried by colour calibration's illuminant ({k} K); "
+                    "`kelvin` is the white balance module's estimate"}
+
+
 def kelvin(
     coeffs: list[float] | None = None,
     camera: str | None = None,
@@ -582,9 +594,11 @@ def kelvin(
         route, route_warnings = _route_readback(path)
         if coeffs is None:
             out = _no_table_result(camera, _reason_with_table_context(camera, reason))
-            return {**out, "route": route, "warnings": out["warnings"] + route_warnings}
+            return {**out, "route": route, "warnings": out["warnings"] + route_warnings,
+                    **_effective(route, out["kelvin"])}
         result = _kelvin_from(coeffs, camera, strict=strict)
-        return {**result, "route": route, "warnings": result["warnings"] + route_warnings}
+        return {**result, "route": route, "warnings": result["warnings"] + route_warnings,
+                **_effective(route, result["kelvin"])}
     elif coeffs is None or camera is None:
         raise UsageError(
             "wb.kelvin needs image=..., or both coeffs and camera",
@@ -638,6 +652,8 @@ def kelvin_verb(image: str | int, *, job: str | None = None) -> KelvinResult:
         reason=result["reason"],
         warnings=list(result.get("warnings") or []),
         route=result.get("route"),
+        effective_kelvin=result.get("effective_kelvin"),
+        note=result.get("note"),
     )
 
 

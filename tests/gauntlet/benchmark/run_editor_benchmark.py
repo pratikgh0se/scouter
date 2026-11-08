@@ -90,6 +90,8 @@ ASSERTION_TYPES = (
     "wb_ratio",
     "wb_green",
     "wb_changed",
+    "warmth_slot",
+    "render_rb_delta",
     "module_active",
     "history_grew",
     "history_unchanged",
@@ -103,6 +105,7 @@ SNAPSHOT_OPS = (
     "exposure",
     "sigmoid",
     "temperature",
+    "channelmixerrgb",
     "colorbalancergb",
     "colorzones",
     "lens",
@@ -514,6 +517,37 @@ def _expected(value: Any, ctx: dict) -> Any:
     return value
 
 
+def _stats_rb(stats: Any) -> float | None:
+    """Rendered r/b from a scout_stats `data.stats` (wb_ratio_rg / wb_ratio_bg)."""
+    rg, bg = (stats or {}).get("wb_ratio_rg"), (stats or {}).get("wb_ratio_bg")
+    ok = all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (rg, bg))
+    return rg / bg if ok and bg else None
+
+
+def _warmth_slot(a: dict, ctx: dict) -> dict:
+    """Oracle A for a warmth move: the committed sidecar value of whichever module
+    carried it. Colour calibration's illuminant temperature (route A, slot 36) when
+    that slot changed: the move must go the asked way (`sign`) and, when `value` is
+    given, land within `tol` K of it. Otherwise the WB module's coefficients (legacy
+    routes): r/b must move the asked way by `min_rel` (a table is needed for more)."""
+    before, after = ctx.get("before") or {}, ctx.get("after") or {}
+    fb, fa = before.get(a["frame"]), after.get(a["frame"])
+    cb, ca = (_param(f, "channelmixerrgb", "temperature") for f in (fb, fa))
+    if cb is not None and ca is not None and abs(ca - cb) > 1e-3:
+        want = _expected(a.get("value"), ctx)
+        ok = a["sign"] * (ca - cb) > 0 and (
+            want is None or (isinstance(want, (int, float)) and abs(ca - want) <= float(a["tol"]))
+        )
+        return {"ok": bool(ok), "measured": {"route": "color_calibration", "before": cb,
+                                            "after": ca}, "expected": want}
+    wb_b, wb_a = _coeffs(fb), _coeffs(fa)
+    if wb_b is None or wb_a is None:
+        return {"ok": False, "measured": {"route": None}, "note": "no warmth slot moved or readable"}
+    rel = round((wb_a[0] / wb_a[2]) / (wb_b[0] / wb_b[2]) - 1.0, 5)
+    return {"ok": a["sign"] * rel >= float(a["min_rel"]),
+            "measured": {"route": "white_balance", "r_b_rel": rel}, "expected": f"sign {a['sign']}"}
+
+
 def evaluate(a: dict, ctx: dict) -> dict:
     """One assertion -> {ok, measured, expected}. Never raises on missing data:
     a missing step, sidecar or field is a plain `ok: False` with the reason."""
@@ -623,6 +657,17 @@ def evaluate(a: dict, ctx: dict) -> dict:
                 "measured": rel,
                 "expected": f"sign {a['sign']}",
             }
+        if t == "warmth_slot":
+            return _warmth_slot(a, ctx)
+        if t == "render_rb_delta":
+            rb_b = _stats_rb(dig(_env(ctx, a["before_step"]), "data.stats"))
+            rb_a = _stats_rb(dig(_env(ctx, a["after_step"]), "data.stats"))
+            if rb_b is None or rb_a is None:
+                return {"ok": False, "measured": {"before": rb_b, "after": rb_a},
+                        "note": "scout_stats r/b unreadable"}
+            rel = round(rb_a / rb_b - 1.0, 5)
+            return {"ok": a["sign"] * rel >= float(a["min_rel"]), "measured": rel,
+                    "expected": f"sign {a['sign']}, beyond {a['min_rel']}"}
         if t == "module_active":
             mod = ((after.get(a["frame"]) or {}).get("modules") or {}).get(a["module"])
             was = ((before.get(a["frame"]) or {}).get("modules") or {}).get(a["module"])
@@ -1401,6 +1446,8 @@ def _headline(r: dict) -> str:
             "param_delta",
             "wb_ratio",
             "wb_green",
+            "warmth_slot",
+            "render_rb_delta",
             "step_field",
             "stats_delta",
             "slot_value",

@@ -111,6 +111,11 @@ class KelvinResult(Payload):
     #: `color_calibration` (with `illuminant_kelvin` read from the sidecar)
     #: or `unavailable` (with `reason`).
     route: dict | None = None
+    #: The Kelvin the picture's warmth is actually carried by: colour
+    #: calibration's illuminant when `route.route` is `color_calibration`
+    #: (`note` says so), else equal to `kelvin`. `kelvin` keeps its meaning.
+    effective_kelvin: float | None = None
+    note: str | None = None
 
 
 @dataclass

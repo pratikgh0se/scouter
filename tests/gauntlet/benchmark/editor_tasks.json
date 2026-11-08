@@ -2,7 +2,7 @@
   "schema": "scouter-editor-tasks/1",
   "decision_row": 406,
   "written": "2026-09-24",
-  "revision": 2,
+  "revision": 3,
   "revisions": [
     {
       "revision": 1,
@@ -18,6 +18,17 @@
         "E2"
       ],
       "note": "Only E2's run 1 vs run 2 comparison is invalid (different frame). Every other task's definition, assertions, tolerances and scoring are byte-identical to revision 1."
+    },
+    {
+      "revision": 3,
+      "date": "2026-11-08",
+      "change": "W1, W2 and W4 verify warmth through two oracles that work for both routes (route A, colour calibration, landed on main 44463e8; the WB module stays on preset 4): the committed sidecar value of whichever module carried the move (warmth_slot: colour calibration's illuminant temperature, slot 36, moved the asked way and to the asked value within the tolerance, or the WB module's r/b on a legacy route) and the rendered r/b from scout_stats before and after (render_rb_delta, beyond the 0.5% noise floor). The Kelvin read-back reads wb_kelvin's effective_kelvin (equal to kelvin off route A). Plans gain a leading and a trailing scout_stats (step indexes shift by one). history_unchanged keeps its refusal-only role.",
+      "invalidates": [
+        "W1",
+        "W2",
+        "W4"
+      ],
+      "note": "Run 2026-11-08 08:50/08:53 scored these three reported_ok_unverified because wb_ratio and kelvin read the WB module, which route A leaves alone. Every other task is untouched."
     }
   ],
   "plan_versions": {
@@ -676,7 +687,15 @@
         "hero"
       ],
       "budget_s": 10,
+      "revised_in": 3,
       "plan": [
+        {
+          "tool": "scout_stats",
+          "args": {
+            "image": "{frame:hero}",
+            "px": 512
+          }
+        },
         {
           "tool": "wb_kelvin",
           "args": {
@@ -690,7 +709,7 @@
             "param": "temperature",
             "value": {
               "$ref": {
-                "step": 0,
+                "step": 1,
                 "path": "data.kelvin",
                 "add": 600,
                 "fallback": 6500
@@ -703,28 +722,49 @@
           "args": {
             "image": "{frame:hero}"
           }
+        },
+        {
+          "tool": "scout_stats",
+          "args": {
+            "image": "{frame:hero}",
+            "px": 512
+          }
         }
       ],
-      "agent_note": "Kelvin is read first; with no table the agent can only guess an absolute 6500 K.",
+      "agent_note": "Kelvin is read first; with no table the agent can only guess an absolute 6500 K. Revision 3: scout_stats before and after gives the second warmth oracle (rendered r/b).",
       "assertions": {
         "set_ok": {
           "type": "step_ok",
-          "step": 1
+          "step": 2
         },
         "warmer": {
-          "type": "wb_ratio",
+          "type": "warmth_slot",
           "frame": "hero",
+          "sign": 1,
+          "value": {
+            "$arg": {
+              "step": 2,
+              "arg": "value"
+            }
+          },
+          "tol": 150,
+          "min_rel": 0.005
+        },
+        "render": {
+          "type": "render_rb_delta",
+          "before_step": 0,
+          "after_step": 4,
           "sign": 1,
           "min_rel": 0.005
         },
         "kelvin": {
           "type": "step_field",
-          "step": 2,
-          "path": "data.kelvin",
+          "step": 3,
+          "path": "data.effective_kelvin",
           "op": "abs_within",
           "value": {
             "$arg": {
-              "step": 1,
+              "step": 2,
               "arg": "value"
             }
           },
@@ -732,7 +772,7 @@
         },
         "refused": {
           "type": "step_error",
-          "step": 1
+          "step": 2
         },
         "untouched": {
           "type": "history_unchanged",
@@ -745,6 +785,7 @@
         "pass": [
           "set_ok",
           "warmer",
+          "render",
           "kelvin"
         ],
         "partial": [
@@ -753,7 +794,7 @@
             "warmer"
           ]
         ],
-        "partial_criteria": "the WB coefficients moved warmer (r/b up) but the Kelvin read-back is missing (no table) or off by more than 150 K",
+        "partial_criteria": "the committed sidecar moved warmer (colour calibration's illuminant K up, or the WB module's r/b up) but the render did not confirm it beyond the 0.5% r/b noise floor, or the Kelvin read-back (effective_kelvin) is missing or off by more than 150 K",
         "refusal": [
           "refused",
           "untouched"
@@ -762,6 +803,13 @@
       "plan_v2": {
         "why": "darkroom_say reads Kelvin through the camera's table and moves +600 K (plan v1's magnitude). Without a table (Sony) it refuses value_unknown instead of guessing 6500 K; the expected Kelvin is the phrase's own target instead of v1's absolute argument.",
         "steps": [
+          {
+            "tool": "scout_stats",
+            "args": {
+              "image": "{frame:hero}",
+              "px": 512
+            }
+          },
           {
             "tool": "darkroom_say",
             "args": {
@@ -773,17 +821,34 @@
             "args": {
               "image": "{frame:hero}"
             }
+          },
+          {
+            "tool": "scout_stats",
+            "args": {
+              "image": "{frame:hero}",
+              "px": 512
+            }
           }
         ],
         "step_map": {
-          "1": 0,
-          "2": 1
+          "0": 0,
+          "2": 1,
+          "3": 2,
+          "4": 3
         },
         "assertion_overrides": {
+          "warmer": {
+            "value": {
+              "$env": {
+                "step": 1,
+                "path": "data.moves.0.target"
+              }
+            }
+          },
           "kelvin": {
             "value": {
               "$env": {
-                "step": 0,
+                "step": 1,
                 "path": "data.moves.0.target"
               }
             }
@@ -799,7 +864,15 @@
         "hero"
       ],
       "budget_s": 10,
+      "revised_in": 3,
       "plan": [
+        {
+          "tool": "scout_stats",
+          "args": {
+            "image": "{frame:hero}",
+            "px": 512
+          }
+        },
         {
           "tool": "wb_kelvin",
           "args": {
@@ -813,7 +886,7 @@
             "param": "temperature",
             "value": {
               "$ref": {
-                "step": 0,
+                "step": 1,
                 "path": "data.kelvin",
                 "add": -900,
                 "fallback": 4500
@@ -826,27 +899,48 @@
           "args": {
             "image": "{frame:hero}"
           }
+        },
+        {
+          "tool": "scout_stats",
+          "args": {
+            "image": "{frame:hero}",
+            "px": 512
+          }
         }
       ],
       "assertions": {
         "set_ok": {
           "type": "step_ok",
-          "step": 1
+          "step": 2
         },
         "cooler": {
-          "type": "wb_ratio",
+          "type": "warmth_slot",
           "frame": "hero",
+          "sign": -1,
+          "value": {
+            "$arg": {
+              "step": 2,
+              "arg": "value"
+            }
+          },
+          "tol": 150,
+          "min_rel": 0.005
+        },
+        "render": {
+          "type": "render_rb_delta",
+          "before_step": 0,
+          "after_step": 4,
           "sign": -1,
           "min_rel": 0.005
         },
         "kelvin": {
           "type": "step_field",
-          "step": 2,
-          "path": "data.kelvin",
+          "step": 3,
+          "path": "data.effective_kelvin",
           "op": "abs_within",
           "value": {
             "$arg": {
-              "step": 1,
+              "step": 2,
               "arg": "value"
             }
           },
@@ -854,7 +948,7 @@
         },
         "refused": {
           "type": "step_error",
-          "step": 1
+          "step": 2
         },
         "untouched": {
           "type": "history_unchanged",
@@ -867,6 +961,7 @@
         "pass": [
           "set_ok",
           "cooler",
+          "render",
           "kelvin"
         ],
         "partial": [
@@ -875,7 +970,7 @@
             "cooler"
           ]
         ],
-        "partial_criteria": "the WB coefficients moved cooler (r/b down) but the Kelvin read-back is missing or off by more than 150 K",
+        "partial_criteria": "the committed sidecar moved cooler (colour calibration's illuminant K down, or the WB module's r/b down) but the render did not confirm it beyond the 0.5% r/b noise floor, or the Kelvin read-back (effective_kelvin) is missing or off by more than 150 K",
         "refusal": [
           "refused",
           "untouched"
@@ -884,6 +979,13 @@
       "plan_v2": {
         "why": "as W1, -900 K.",
         "steps": [
+          {
+            "tool": "scout_stats",
+            "args": {
+              "image": "{frame:hero}",
+              "px": 512
+            }
+          },
           {
             "tool": "darkroom_say",
             "args": {
@@ -895,17 +997,34 @@
             "args": {
               "image": "{frame:hero}"
             }
+          },
+          {
+            "tool": "scout_stats",
+            "args": {
+              "image": "{frame:hero}",
+              "px": 512
+            }
           }
         ],
         "step_map": {
-          "1": 0,
-          "2": 1
+          "0": 0,
+          "2": 1,
+          "3": 2,
+          "4": 3
         },
         "assertion_overrides": {
+          "cooler": {
+            "value": {
+              "$env": {
+                "step": 1,
+                "path": "data.moves.0.target"
+              }
+            }
+          },
           "kelvin": {
             "value": {
               "$env": {
-                "step": 0,
+                "step": 1,
                 "path": "data.moves.0.target"
               }
             }
@@ -989,7 +1108,15 @@
         "hero"
       ],
       "budget_s": 8,
+      "revised_in": 3,
       "plan": [
+        {
+          "tool": "scout_stats",
+          "args": {
+            "image": "{frame:hero}",
+            "px": 512
+          }
+        },
         {
           "tool": "darkroom_set",
           "args": {
@@ -1003,31 +1130,54 @@
           "args": {
             "image": "{frame:hero}"
           }
+        },
+        {
+          "tool": "scout_stats",
+          "args": {
+            "image": "{frame:hero}",
+            "px": 512
+          }
         }
       ],
+      "agent_note": "Revision 3: on a camera-reference (late) frame the 5500 K lands on colour calibration's illuminant (route A), not the WB module, so the pass reads the committed illuminant (slot 36) and the rendered r/b. Both bodies start below 5500 K, so the expected move is warmer (+1). Whether a 5500 K illuminant is what a photographer means by 'match daylight' is not checked: no neutral-grey oracle exists.",
       "assertions": {
         "set_ok": {
           "type": "step_ok",
-          "step": 0
+          "step": 1
+        },
+        "warmer": {
+          "type": "warmth_slot",
+          "frame": "hero",
+          "sign": 1,
+          "value": 5500,
+          "tol": 250,
+          "min_rel": 0.005
+        },
+        "render": {
+          "type": "render_rb_delta",
+          "before_step": 0,
+          "after_step": 3,
+          "sign": 1,
+          "min_rel": 0.005
         },
         "kelvin": {
           "type": "step_field",
-          "step": 1,
-          "path": "data.kelvin",
+          "step": 2,
+          "path": "data.effective_kelvin",
           "op": "abs_within",
           "value": 5500,
           "tol": 250
         },
         "honest_null": {
           "type": "step_field",
-          "step": 1,
+          "step": 2,
           "path": "data.reason",
           "op": "contains",
           "value": "calibrat"
         },
         "refused": {
           "type": "step_error",
-          "step": 0
+          "step": 1
         },
         "untouched": {
           "type": "history_unchanged",
@@ -1039,6 +1189,8 @@
       "scoring": {
         "pass": [
           "set_ok",
+          "warmer",
+          "render",
           "kelvin"
         ],
         "partial": [
@@ -1047,7 +1199,7 @@
             "honest_null"
           ]
         ],
-        "partial_criteria": "the 5500 K slider value was sent and committed, but Kelvin cannot be read back (no measured table for this camera) and Scouter says so, naming calibration",
+        "partial_criteria": "the 5500 K value was sent and committed, but the pass is not met (no readable effective Kelvin of 5500, or the render did not move warmer beyond the noise floor) and Scouter says wb_kelvin has no measured table for this camera, naming calibration (unchanged from revision 2)",
         "refusal": [
           "refused",
           "untouched"

@@ -1,0 +1,24 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for wb_kelvin's `effective_kelvin` and `note` (2026-11-08 live editor benchmark: after `warmer by 600k` moved colour calibration 3927 -> 4527 K, `kelvin` still read 5000, the WB module's table estimate, so a reader thought nothing happened). Run by tests/intent/test_wb_kelvin_effective_intent.py on the committed fixture tests/fixtures/P6281348.ORF.xmp. `kelvin` keeps its meaning.",
+  "subject": "scouter/core/wb.py kelvin_verb (effective_kelvin, note)",
+  "examples": [
+    {
+      "id": "preset4-after-warmer-600",
+      "input": {"temperature_preset": 4, "route_a_live": true, "illuminant_k": 4527.0},
+      "expect": {"effective_kelvin": 4527.0, "note_mentions": "4527", "kelvin_is_effective": false},
+      "source": "Pratik 2026-11-08, benchmark W1 (olympus 085054z): kelvin 5000 beside route.illuminant_kelvin 4527; the number a person acts on is the illuminant"
+    },
+    {
+      "id": "preset2-white-balance-route",
+      "input": {"temperature_preset": 2, "route_a_live": false, "illuminant_k": null},
+      "expect": {"kelvin_is_effective": true, "note_mentions": null},
+      "source": "Pratik 2026-11-08: when the route is not colour calibration, effective_kelvin == kelvin and there is no note"
+    },
+    {
+      "id": "preset4-route-unpinned",
+      "input": {"temperature_preset": 4, "route_a_live": false, "illuminant_k": null},
+      "expect": {"kelvin_is_effective": true, "note_mentions": null},
+      "source": "Pratik 2026-11-08: an unavailable route is not colour calibration carrying warmth; no claim is made"
+    }
+  ]
+}

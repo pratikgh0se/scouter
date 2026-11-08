@@ -1058,7 +1058,9 @@ answer is `module_unavailable` naming what is missing. `wb kelvin` reports
 which route is in effect (`route`: `white_balance`, `color_calibration` with
 `illuminant_kelvin` read from the sidecar, or `unavailable` with the reason);
 on a preset-4 image its `kelvin` is the white balance module's as-shot value,
-which warmth no longer moves. **Live since 2026-11-08:** the route's darktable
+which warmth no longer moves, so read `effective_kelvin` (colour calibration's
+illuminant on that route, with a one-line `note`; equal to `kelvin`, no note,
+on every other route). **Live since 2026-11-08:** the route's darktable
 action path (`iop/channelmixerrgb/temperature`) was host-pinned by
 `tests/test_host_colorcal.py` (the installed darktable 5.4.1, an isolated library, both
 hero bodies). Measured: the value lands exactly at the requested Kelvin, the
