@@ -97,7 +97,7 @@ class LayoutAndRowTest(_RouteFixture):
         cct = 449 * n ** 3 + 3525 * n ** 2 + 6823.3 * n + 5520.33
         self.assertAlmostEqual(cct, params["temperature"], delta=15)
 
-    def test_the_row_is_live_since_the_host_probe(self) -> None:
+    def test_the_row_is_live_since_the_route_a_probe(self) -> None:
         s = vocab.spec("channelmixerrgb", "temperature")
         self.assertEqual((s.unit, s.lo, s.hi, s.step), ("K", 2000.0, 12000.0, 300.0))
         self.assertEqual(s.candidate_paths, (COLORCAL_PATH,))
@@ -316,7 +316,7 @@ class NeitherRouteTest(_RouteFixture):
     """Preset 4 and no usable color calibration route: the refusal stands,
     names the reason, and nothing is sent."""
 
-    def test_candidate_row_refuses_with_the_host_probe_reason(self) -> None:
+    def test_candidate_row_refuses_with_the_probe_reason(self) -> None:
         self.preset_4()
         self.unpin()
         with self.assertRaises(ModuleUnavailable) as cm:
