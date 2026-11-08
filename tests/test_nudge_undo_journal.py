@@ -151,6 +151,73 @@ class NudgeAtALimitTest(_NudgeFixture):
         self.assertEqual(caught.exception.detail.get("param"), "exposure")
 
 
+class NudgeAtASoftLimitTest(_NudgeFixture):
+    """N12: a GUI `+` step stops at the slider's SOFT max (colour calibration's
+    illuminant temperature: 7000 K, measured on darktable 5.4.1) although `set`
+    goes past it. The nudge must say so promptly, not wait out the commit
+    timeout. Oracles (Z2): the sidecar value against the declared soft bound,
+    and darktable's own live slider position (status 1.0 / 0.0)."""
+
+    MODULE, PARAM = "channelmixerrgb", "temperature"
+
+    def _state(self, value: float) -> dict:
+        return {"value": value, "source": "xmp", "enabled": True}
+
+    def _nudge(self, value: float, steps: int, position: float):
+        self.bridge.responses["darkroom.action"] = lambda p: {
+            "nan": False, "view": "darkroom", **p, "status": position}
+        with mock.patch("scouter.core.darkroom._read_state", return_value=self._state(value)), \
+                mock.patch("scouter.core.darkroom._read_value", return_value=value), \
+                mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()) as commit:
+            result = darkroom.nudge(module=self.MODULE, param=self.PARAM, steps=steps)
+        return result, commit
+
+    def test_the_soft_bound_is_declared_in_data_inside_the_safe_range(self) -> None:
+        lo, hi = vocab.DT_SOFT_BOUNDS[(self.MODULE, self.PARAM)]
+        row = vocab.spec(self.MODULE, self.PARAM)
+        self.assertEqual((lo, hi), (2000.0, 7000.0))
+        self.assertTrue(row.lo <= lo < hi <= row.hi)
+
+    def test_nudge_up_at_the_soft_max_is_a_prompt_noop_that_names_the_way_on(self) -> None:
+        result, commit = self._nudge(7000.0, 1, position=1.0)
+        self.assertTrue(result.noop)
+        self.assertTrue(result.committed)
+        self.assertEqual(result.applied, 7000.0)
+        text = " ".join(result.warnings)
+        self.assertIn("soft limit", text)
+        self.assertIn("darkroom_set", text)
+        # oracle 2: nothing was sent to move the slider and nothing waited for a commit
+        commit.assert_not_called()
+        self.assertEqual([p for m, p in self.bridge.calls if m == "darkroom.action"
+                          and p.get("effect") in ("up", "down")], [])
+        self.assertEqual(journal.read_all(JOB), [])
+
+    def test_nudge_up_from_beyond_the_soft_max_is_the_same_noop(self) -> None:
+        result, commit = self._nudge(9000.0, 1, position=1.0)
+        self.assertTrue(result.noop)
+        self.assertEqual(result.applied, 9000.0)
+        commit.assert_not_called()
+
+    def test_nudge_down_from_the_soft_max_still_goes_to_darktable(self) -> None:
+        with self.assertRaises(CommitTimeout):  # the double never writes; it must be SENT
+            self._nudge(7000.0, -1, position=1.0)
+        self.assertTrue([p for m, p in self.bridge.calls
+                         if m == "darkroom.action" and p.get("effect") == "down"])
+
+    def test_nudge_down_at_the_soft_min_is_a_prompt_noop(self) -> None:
+        result, commit = self._nudge(2000.0, -1, position=0.0)
+        self.assertTrue(result.noop)
+        self.assertIn("soft limit", " ".join(result.warnings))
+        commit.assert_not_called()
+
+    def test_darktable_disagreeing_about_the_position_does_not_short_circuit(self) -> None:
+        # the sidecar reads the soft max but the slider is mid-range: do not guess
+        with self.assertRaises(CommitTimeout):
+            self._nudge(7000.0, 1, position=0.5)
+        self.assertTrue([p for m, p in self.bridge.calls
+                         if m == "darkroom.action" and p.get("effect") == "up"])
+
+
 class UnknownValueReadersTest(_NudgeFixture):
     """Every reader of the journal's value must honour "unknown"."""
 

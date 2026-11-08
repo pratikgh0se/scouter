@@ -1,0 +1,25 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for backlog N12: `darkroom_nudge` up on `channelmixerrgb.temperature` (colour calibration illuminant, route A) at 7000 K returned `commit_timeout` after ~5 s on both bodies (canary-colorcal-20261108 cov-channelmixerrgb.temperature-{olympus,sony_a7}-nudge_up1). Cause measured on the host (darktable 5.4.1, 2026-11-08): 7000 K is the bauhaus slider's SOFT max (2000..7000 K; the slider's own position query reads 0.0 at 2000, 0.2 at 3000, 0.9 at 6500, 1.0 at 7000/7300/9000/12000), a GUI step does not pass it, while `darkroom_set` 7300 landed. A nudge that cannot move because of a soft bound must answer promptly with a typed noop that names the soft limit and points at set/adjust. Run by tests/intent/test_nudge_soft_limit_intent.py.",
+  "subject": "scouter/core/darkroom.py nudge + _soft_limit_noop; scouter/core/vocab.py DT_SOFT_BOUNDS",
+  "measured_slider_positions": {"2000": 0.0, "3000": 0.2, "5000": 0.6, "6500": 0.9, "7000": 1.0, "7300": 1.0, "9000": 1.0, "12000": 1.0},
+  "examples": [
+    {
+      "id": "nudge-up-at-7000k-is-a-prompt-noop-naming-the-soft-limit",
+      "input": {"module": "channelmixerrgb", "param": "temperature", "steps": 1, "sidecar_value": 7000.0},
+      "expect": {"noop": true, "committed": true, "applied": 7000.0, "warning_mentions": ["soft limit", "darkroom_set"], "bridge_up_or_down_sent": false, "commit_awaited": false},
+      "source": "backlog N12; canary cases cov-channelmixerrgb.temperature-*-nudge_up1 (5 s commit_timeout, sidecar unchanged at 7000)"
+    },
+    {
+      "id": "nudge-up-from-9000k-is-the-same-noop",
+      "input": {"module": "channelmixerrgb", "param": "temperature", "steps": 1, "sidecar_value": 9000.0},
+      "expect": {"noop": true, "committed": true, "applied": 9000.0, "warning_mentions": ["soft limit"], "bridge_up_or_down_sent": false, "commit_awaited": false},
+      "source": "host repro 2026-11-08: a nudge up from 9000 K also wrote nothing (5.4 s commit_timeout)"
+    },
+    {
+      "id": "nudge-up-below-the-soft-max-is-still-sent",
+      "input": {"module": "channelmixerrgb", "param": "temperature", "steps": 1, "sidecar_value": 6500.0},
+      "expect": {"noop": false, "bridge_up_sent": true},
+      "source": "host repro 2026-11-08: nudge up from 6500 K landed 6501 K in 1.2 s; the soft-limit answer must not swallow a real nudge"
+    }
+  ]
+}

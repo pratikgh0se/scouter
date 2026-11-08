@@ -1352,6 +1352,58 @@ def _nudge_timeout(
     )
 
 
+def _soft_limit_noop(
+    resolved: dtbridge.ResolvedImage,
+    module: str,
+    param: str,
+    instance: int,
+    effect: str,
+    path_: str,
+    raw_state: dict,
+) -> SetResult | None:
+    """N12: a nudge that darktable's GUI step cannot take because the slider
+    already sits at its SOFT end (`vocab.DT_SOFT_BOUNDS`), answered up front.
+
+    Two independent oracles must agree before anything is claimed (Z2): the
+    sidecar value is at or beyond the declared soft bound on the side `effect`
+    pushes toward, AND darktable's own live slider position (the read-only
+    `dt.gui.action` status query: 0.0 / 1.0 at the soft ends) says the same.
+    Nothing is sent that could move the slider, nothing is journalled and no
+    commit is awaited. Any disagreement (or an unreadable value) returns
+    `None` and the nudge proceeds exactly as before.
+    """
+    lo, hi = vocab.DT_SOFT_BOUNDS.get((module, param), (None, None))
+    limit = hi if effect == "up" else lo
+    value = raw_state.get("value")
+    if limit is None or value is None:
+        return None
+    if (value < limit) if effect == "up" else (value > limit):
+        return None
+    status = dtbridge.action(path_, instance=instance, element="value", effect="", value=0.0)
+    position = status.get("status")
+    at_end = isinstance(position, (int, float)) and (
+        position >= 1.0 if effect == "up" else position <= 0.0)
+    if not at_end:
+        return None
+    end = "top" if effect == "up" else "bottom"
+    row = vocab.spec(module, param)
+    unit = f" {row.unit}" if row is not None and row.unit else ""
+    beyond = ""
+    if row is not None:
+        beyond = (f" (up to {row.hi:g}{unit})" if effect == "up"
+                  else f" (down to {row.lo:g}{unit})")
+    return SetResult(
+        image_id=resolved.image_id, path=resolved.path, module=module, param=param,
+        instance=instance, requested=None, applied=value, previous=value, committed=True,
+        noop=True, clamped=True, source=raw_state.get("source", "xmp"),
+        reason="soft_limit",
+        warnings=[f"no-op: {module}.{param} is at {value:g}{unit}, the {end} of darktable's "
+                  f"slider (its soft limit {limit:g}{unit}); a nudge {effect} cannot go past it. "
+                  f"`darkroom_set` or `darkroom_adjust` can go further{beyond}. "
+                  "Nothing was sent to darktable"],
+    )
+
+
 @metrics.instrumented("darkroom.nudge")
 def nudge(
     module: str,
@@ -1428,6 +1480,10 @@ def nudge(
     )
     if shortcut is not None:
         return shortcut
+    if steps != 0 and not pending_uncommitted:
+        soft = _soft_limit_noop(resolved, module, param, instance, effect, path_, raw_state)
+        if soft is not None:
+            return soft
     before_fp = _history_fingerprint_now(resolved.xmp_path)
     entry = journal.begin(
         job,

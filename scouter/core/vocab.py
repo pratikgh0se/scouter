@@ -436,6 +436,20 @@ DT_HARD_BOUNDS: dict[tuple[str, str], tuple[float | None, float | None]] = {
 }
 
 
+#: The slider's SOFT range where it is narrower than darktable's hard range
+#: (bauhaus `soft_min`/`soft_max`). A GUI `+`/`-` step (`dt.gui.action` effect
+#: up/down, i.e. `darkroom_nudge`) stops at the soft end; an absolute `set`
+#: goes past it up to the hard limit. MEASURED on darktable 5.4.1 (N12, host
+#: probe 2026-11-08): the slider's own position query read 0.0 at 2000 K, 0.2
+#: at 3000 K, 0.9 at 6500 K and 1.0 at 7000/7300/9000/12000 K, and a nudge up
+#: from 7000 and from 9000 K wrote nothing (a 5 s commit timeout), while a set
+#: to 7300 K landed. `None` = that side is not narrowed. Not a safe range
+#: (`lo`/`hi`) and not a hard limit (`DT_HARD_BOUNDS`): only nudge reads it.
+DT_SOFT_BOUNDS: dict[tuple[str, str], tuple[float | None, float | None]] = {
+    ("channelmixerrgb", "temperature"): (2000.0, 7000.0),
+}
+
+
 def dt_effective(module: str, param: str, value: float) -> tuple[float, float | None]:
     """What darktable will actually store for a `set` of `value`:
     `(stored, bound)`. `bound` is the declared hard limit that clamped it, or
