@@ -141,7 +141,11 @@ def call(verb_id: str, layer: str, **kwargs: Any) -> Envelope:
 
     from scouter.core import watchdog
 
+    from scouter.core import darkroom as _darkroom
+
     token = metrics.LAYER.set(layer)
+    retries: list[str] = []
+    retry_token = _darkroom.STALE_RETRIES.set(retries)
     healed = False
     try:
         result, healed = watchdog.run_with_heal(verb_id, lambda: verb.fn(**kwargs), job)
@@ -158,10 +162,17 @@ def call(verb_id: str, layer: str, **kwargs: Any) -> Envelope:
         )
     finally:
         metrics.LAYER.reset(token)
+        _darkroom.STALE_RETRIES.reset(retry_token)
 
     data = result.to_dict()
     if healed:
         data["healed"] = True  # spec 6: always reported; a heal is never silent
+    if retries:
+        # A stale sidecar rewrite was retried once and landed: never silent, and
+        # countable by the gauntlet.
+        data["stale_rewrite_retried"] = True
+        top = data.setdefault("warnings", [])
+        top.extend(w for w in retries if w not in top)
     outcome = data.get("outcome", "ok")
     # A verb's own result can carry outcome "dry_run" (ConfirmationRequired) as
     # well as "ok"; only those two count as success, everything else — an

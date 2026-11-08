@@ -249,6 +249,12 @@ def _commit_with_readback(
     return result.committed, list(result.warnings), False
 
 
+#: Per-verb-call collector of stale-rewrite retry notes (set by `registry.call`).
+STALE_RETRIES: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "scouter_stale_retries", default=None
+)
+
+
 def _commit(
     job: str,
     image_id: int,
@@ -309,12 +315,17 @@ def _commit(
             second.detail = {**(second.detail or {}), "stale_rewrite_retried": True,
                              "first_stale_rewrite": d.get("stale_rewrite")}
             raise
-        result.warnings = [
+        note = (
             "darktable rewrote the sidecar with a stale history after the first bounce "
             f"({d.get('stale_rewrite')}); the pre-commit sidecar was restored and one "
-            "re-bounce landed this edit, confirmed from the sidecar history.",
-            *result.warnings,
-        ]
+            "re-bounce landed this edit, confirmed from the sidecar history."
+        )
+        result.warnings = [note, *result.warnings]
+        # Lets `registry.call` put the note and `stale_rewrite_retried: true` on the
+        # envelope whichever result type the verb builds (set/adjust/say/nudge).
+        holder = STALE_RETRIES.get()
+        if holder is not None:
+            holder.append(note)
         return result
 
 
