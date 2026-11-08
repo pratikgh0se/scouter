@@ -8,17 +8,23 @@ Gated: SCOUTER_HOST_TESTS=1 + darktable installed. Run the whole probe with:
 
 ISOLATION (standing rule): every launch gets its OWN `--library` under
 `~/Pictures/ScouterScratch/colorcal-probe/<run-id>/<body>/<A|B>/library.db`
-on a scratch COPY of a hero frame staged in that same dir. The real library
-and the real photos (read-only copy source) are never opened by darktable.
-The Lua plugin is loaded from ~/.config/darktable (PluginInstall, restored).
+on a scratch COPY of a hero frame staged in that same dir. Pratik's real
+library.db and the real photos (read-only copy source) are never opened by
+darktable. `--library` moves library.db ONLY: darktable still reads and
+rewrites the real ~/.config/darktable/darktablerc and uses the real data.db
+(as every phase 2/3 host probe does). The Lua plugin is loaded from
+~/.config/darktable (PluginInstall, restored).
 
 Per body (Olympus hero, Sony hero), two independent launches:
 - Oracle A (sidecar): path answers non-nan; a warmer then a cooler move (the
   second consecutive move proves the route survives its own first write) land
   at exactly slot 36; a repeat set of the same value is a noop; a fresh
   sentinel changes slot 36 again (a dead or zero-filled slot cannot pass).
-- Oracle B (pixels, `scout.stats` centre r/b): higher K must raise r/b.
-  Contamination guard: B's pristine temperature must equal A's.
+  Requested vs landed K is logged per move; a mismatch is CLAMPED, not "dead".
+- Oracle B (pixels, `scout.stats` centre r/b): higher K must raise r/b by more
+  than a measured floor (two renders of the pristine frame). B verifies its
+  own writes landed at slot 36. Contamination guard: B's pristine temperature
+  and colour calibration history entry count must equal A's.
 Illuminant and x/y are logged before and after every move; illuminant must
 stay in (2, 6); WB preset must stay 4.
 
@@ -37,7 +43,7 @@ import unittest
 from pathlib import Path
 
 from tests import host_support as hs
-from tests.colorcal_probe_logic import Evidence, route_verdict, unique_run_dir
+from tests.colorcal_probe_logic import Evidence, noise_floor, route_verdict, unique_run_dir
 from tests.test_host_phase3 import (
     CONTROL_PATH,
     REASON,
@@ -78,7 +84,11 @@ class _Session:
         from scouter.core import darkroom, history, xmp
 
         self.registry, self.darkroom, self.history, self.xmp = registry, darkroom, history, xmp
-        self.deadline = deadline
+        self.deadline, self.tag = deadline, tag
+        self.log: list[str] = []
+        self.flushed = 0
+        self.moves: list[tuple] = []
+        self.tick()
         src = BODIES[body]
         folder = run_dir / body / tag
         self.frame = folder / f"frame{src.suffix}"
@@ -117,8 +127,11 @@ class _Session:
         last = max(entries, key=lambda e: e.num) if entries else None
         return params, entry_floats(last.params_hex) if last else []
 
-    def move(self, label: str, k: float, log: list[str]) -> dict:
-        """One action + commit; log illuminant and x/y before and after."""
+    def cc_count(self) -> int:
+        return sum(e.operation == "channelmixerrgb" for e in self.history.read(self.image).entries)
+
+    def move(self, label: str, k: float) -> dict:
+        """One action + commit; log requested vs landed K, illuminant and x/y."""
         from scouter.core import dtbridge
 
         before, _ = self.colorcal()
@@ -126,16 +139,32 @@ class _Session:
         self.commit()
         after, floats = self.colorcal()
         b, a = before or {}, after or {}
-        log.append(f"{label}: set {k:.0f} K -> temperature {_fmt(a.get('temperature'))}, "
-                   f"illuminant {b.get('illuminant')} -> {a.get('illuminant')}, "
-                   f"x/y {_fmt(b.get('x'))}/{_fmt(b.get('y'))} -> "
-                   f"{_fmt(a.get('x'))}/{_fmt(a.get('y'))}")
-        return {"params": after, "floats": floats, "k": float(k)}
+        landed = a.get("temperature")
+        slots = sentinel_slots(floats, float(k), tol=1.0)
+        self.log.append(f"{label}: requested {k:.0f} K, landed {_fmt(landed)} K, slots {slots} "
+                        f"(expect [{SLOT}]), illuminant {b.get('illuminant')} -> "
+                        f"{a.get('illuminant')}, x/y {_fmt(b.get('x'))}/{_fmt(b.get('y'))} -> "
+                        f"{_fmt(a.get('x'))}/{_fmt(a.get('y'))}")
+        self.moves.append((label, float(k), landed, slots))
+        return {"params": after, "floats": floats, "k": float(k), "slots": slots}
+
+    def clamp_note(self) -> str:
+        """Moves whose landed K differs from the request, both numbers named."""
+        return "; ".join(f"{label}: requested {k:.0f} K, landed {_fmt(landed)} K"
+                         for label, k, landed, _ in self.moves
+                         if not isinstance(landed, (int, float)) or abs(landed - k) > 1.0)
+
+    def flush(self) -> None:
+        """Record log lines not yet recorded (also used on the error path)."""
+        for line in self.log[self.flushed:]:
+            _record(f"- {self.tag} {line}")
+        self.flushed = len(self.log)
 
     def run(self, work) -> object:
         """Launch isolated, wait, run `work(self)`, always quit darktable."""
         from scouter.core import dtbridge
 
+        self.tick()
         if hs._darktable_is_running():
             raise RuntimeError("a darktable is still running before launch")
         proc = hs.launch(self.frame, self.library)
@@ -162,52 +191,57 @@ def _oracle_a(s: _Session) -> dict:
     start, _ = s.colorcal()
     if not start:
         raise RuntimeError("no colorcal params at start")
-    a: dict = {"pinned": verdict == "pinned", "ms": ms, "log": [], "k0": start["temperature"],
-               "illuminants": [start["illuminant"]], "preset_start": s.darkroom.wb_preset(s.image)}
-    a["log"].append(f"start: illuminant {start['illuminant']}, temperature "
-                    f"{_fmt(start['temperature'])}, x/y {_fmt(start.get('x'))}/"
-                    f"{_fmt(start.get('y'))}, WB preset {a['preset_start']}")
+    a: dict = {"pinned": verdict == "pinned", "ms": ms, "k0": start["temperature"],
+               "illuminants": [start["illuminant"]], "preset_start": s.darkroom.wb_preset(s.image),
+               "cc_count": s.cc_count()}
+    s.log.append(f"start: illuminant {start['illuminant']}, temperature "
+                 f"{_fmt(start['temperature'])}, x/y {_fmt(start.get('x'))}/"
+                 f"{_fmt(start.get('y'))}, WB preset {a['preset_start']}")
     warm, cool = _targets(start["temperature"])
     slots_ok = True
     last = {}
     for label, k in (("warmer", warm), ("cooler (2nd consecutive)", cool)):
-        last = s.move(label, k, a["log"])
-        slots = sentinel_slots(last["floats"], k, tol=1.0)
-        slots_ok &= slots == [SLOT]
-        a["log"].append(f"  slots matching {k:.0f}: {slots} (expect [{SLOT}])")
+        last = s.move(label, k)
+        slots_ok &= last["slots"] == [SLOT]
         a["illuminants"].append((last["params"] or {}).get("illuminant"))
     # live sentinel: same value again is a noop; a fresh value moves slot 36 again.
     held = list(last["floats"])
     try:
-        again = s.move("repeat (noop expected)", cool, a["log"])
+        again = s.move("repeat (noop expected)", cool)
         noop_ok = again["floats"] == held
     except RuntimeError as e:  # a no-change commit may time out; the sidecar decides
-        a["log"].append(f"repeat commit raised: {e}")
+        s.log.append(f"repeat commit raised: {e}")
         noop_ok = s.colorcal()[1] == held
-    fresh = s.move("fresh sentinel", round(start["temperature"] + 500.0), a["log"])
-    live = (sentinel_slots(fresh["floats"], fresh["k"], tol=1.0) == [SLOT]
-            and abs(fresh["floats"][SLOT] - held[SLOT]) > 1.0)
+    fresh = s.move("fresh sentinel", round(start["temperature"] + 500.0))
+    live = fresh["slots"] == [SLOT] and abs(fresh["floats"][SLOT] - held[SLOT]) > 1.0
     a["illuminants"].append((fresh["params"] or {}).get("illuminant"))
     a.update(slots_ok=slots_ok, noop_ok=noop_ok, sentinel_live=live,
              preset=s.darkroom.wb_preset(s.image))
     return a
 
 
-def _oracle_b(s: _Session, k0: float) -> dict:
+def _oracle_b(s: _Session, k0: float, cc_count_a: int) -> dict:
     s.commit()
     start, _ = s.colorcal()
     if not start:
         raise RuntimeError("no colorcal params at start (B)")
-    b: dict = {"log": [], "k0": start["temperature"], "illuminants": [start["illuminant"]]}
-    base = s.rb()
+    b: dict = {"k0": start["temperature"], "illuminants": [start["illuminant"]],
+               "preset_start": s.darkroom.wb_preset(s.image), "cc_count": s.cc_count()}
+    base, base2 = s.rb(), s.rb()
+    floor = noise_floor(base, base, base2)
+    s.log.append(f"start: pristine r/b {base:.4f} and {base2:.4f}, measured floor {floor:.4f}, "
+                 f"temperature {_fmt(start['temperature'])}")
     warm, cool = _targets(start["temperature"])
     rbs = []
+    landed = True
     for label, k in (("warmer", warm), ("cooler (2nd consecutive)", cool)):
-        got = s.move(label, k, b["log"])
+        got = s.move(label, k)
+        landed &= got["slots"] == [SLOT]
         rbs.append(s.rb())
-        b["log"].append(f"  r/b base {base:.4f} -> {rbs[-1]:.4f}")
+        s.log.append(f"  r/b base {base:.4f} -> {rbs[-1]:.4f}")
         b["illuminants"].append((got["params"] or {}).get("illuminant"))
-    b.update(base=base, warm=rbs[0], cool=rbs[1], contaminated=abs(start["temperature"] - k0) > 1.0,
+    b.update(base=base, warm=rbs[0], cool=rbs[1], floor=floor, b_landed=landed,
+             contaminated=abs(start["temperature"] - k0) > 1.0 or b["cc_count"] != cc_count_a,
              preset=s.darkroom.wb_preset(s.image))
     return b
 
@@ -215,24 +249,30 @@ def _oracle_b(s: _Session, k0: float) -> dict:
 def probe_body(run_dir: Path, body: str, deadline: float) -> tuple[str, str]:
     """Both oracles for one body; always returns a recorded verdict."""
     _record(f"\n### {body}\n")
-    a: dict = {}
+    sessions: list[_Session] = []
     try:
-        a = _Session(run_dir, body, "A", deadline).run(_oracle_a)
-        for line in a["log"]:
-            _record(f"- A {line}")
+        sa = _Session(run_dir, body, "A", deadline)
+        sessions.append(sa)
+        a = sa.run(_oracle_a)
+        sa.flush()
         _record(f"| channelmixerrgb.temperature | `{PATH}` | "
                 f"{'pinned' if a['pinned'] else 'NOT pinned'} | {a['ms']} |")
-        b = _Session(run_dir, body, "B", deadline).run(lambda s: _oracle_b(s, a["k0"]))
-        for line in b["log"]:
-            _record(f"- B {line}")
+        sb = _Session(run_dir, body, "B", deadline)
+        sessions.append(sb)
+        b = sb.run(lambda s: _oracle_b(s, a["k0"], a["cc_count"]))
+        sb.flush()
+        presets = (a["preset_start"], a["preset"], b["preset_start"], b["preset"])
         ev = Evidence(pinned=a["pinned"], slots_ok=a["slots_ok"], sentinel_live=a["sentinel_live"],
                       noop_ok=a["noop_ok"], illuminants=tuple(a["illuminants"] + b["illuminants"]),
-                      preset=a["preset"] if a["preset"] == b["preset"] else -1,
+                      preset=next((p for p in presets if p != 4), 4),
                       contaminated=b["contaminated"], base_rb=b["base"], warm_rb=b["warm"],
-                      cool_rb=b["cool"])
+                      cool_rb=b["cool"], b_landed=b["b_landed"], floor=b["floor"],
+                      clamped="; ".join(filter(None, (x.clamp_note() for x in sessions))))
         verdict, reason = route_verdict(ev)
     except Exception as e:  # noqa: BLE001 -- the verdict must still be recorded
         verdict, reason = "DO_NOT_PROMOTE", f"probe error {type(e).__name__}: {e}"
+    for sess in sessions:
+        sess.flush()  # a failed run still leaves its per-move evidence
     line = f"COLORCAL_ROUTE_A {body} {verdict} reason={reason}"
     _record(line)
     _prose(f"- Route A colour calibration probe {time.strftime('%Y-%m-%d %H:%M')}, {body}: "
