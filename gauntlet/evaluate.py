@@ -324,6 +324,9 @@ def _check_m1(i: int, ch: Check, obs: Observation) -> CheckResult:
         ok = abs(d - t["delta"]) <= tol
         if not ok and _delta_clamp_credited(t, b, a, tol, obs, ch.step):
             return CheckResult(i, "M1", True, d, t["delta"], note="clamped_at_bound")
+        if not ok and _delta_unreported_clamp(t, b, a, tol, obs, ch.step):
+            return CheckResult(i, "M1", False, d, t["delta"], note="unreported_clamp",
+                               magnitude_only=True)
         wrong = (d * t["delta"]) < 0
         return CheckResult(i, "M1", ok, d, t["delta"], wrong_direction=wrong,
                            magnitude_only=not ok and not wrong and abs(d) > 0)
@@ -482,6 +485,28 @@ def _delta_clamp_credited(t: dict, b: float, a: float, tol: float, obs: Observat
         return False
     bound = min(max(b + t["delta"], lo), hi)
     return abs(a - bound) <= tol and _boundary_clamped(obs, -1 if step is None else step, t["key"])
+
+
+def _delta_unreported_clamp(t: dict, b: float, a: float, tol: float, obs: Observation,
+                            step: int | None) -> bool:
+    """N1: the mirror of `_delta_clamp_credited`. A relative move whose full
+    ask overshoots a declared bound, that LANDED on that bound (the product
+    clamped), whose own call answered a plain ok (not a noop, so an honest
+    `soft_limit` noop never matches) with no clamp reported, is a silent
+    failure: the user was told "done" and got a different value. Oracle 1: the
+    committed value equals the bound the ask overshoots AND moved off the
+    before value. Oracle 2: the call's envelope reports no clamp."""
+    lo, hi = t.get("lo"), t.get("hi")
+    if lo is None or hi is None:
+        return False
+    want = b + t["delta"]
+    bound = min(max(want, lo), hi)
+    if abs(want - bound) <= tol or abs(a - bound) > tol or abs(a - b) <= tol:
+        return False
+    idx = -1 if step is None else step
+    if not (obs.calls and -len(obs.calls) <= idx < len(obs.calls)):
+        return False
+    return _env_ok(obs.calls[idx]) and not _boundary_clamped(obs, idx, t["key"])
 
 
 def _check_boundary(i: int, ch: Check, obs: Observation) -> CheckResult:
@@ -1081,6 +1106,13 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     landed_as_requested = case.expect.kind == "edit" and not _any_moved_to_limit(obs) \
         and _writes_landed_as_requested(obs, units)
     for r, ch in zip(results, case.expect.checks):
+        # N1: only action steps count; a setup step's own landing is not the
+        # product's claim about the request under test.
+        sidx = ch.step if ch.step is not None else len(case.steps) - 1
+        if ch.metric == "M1" and r.note == "unreported_clamp" and not (
+                0 <= sidx < len(case.steps) and case.steps[sidx].setup):
+            return (f"g: unreported clamp: {ch.target.get('key')} landed at its bound "
+                    f"({r.measured!r} of the asked {r.expected!r}) with ok and no clamp report")
         if ch.tags.get("silent_if_fail") and not r.ok:
             return f"c: {ch.tags.get('why', 'a required report is missing')}"
         if ch.metric in ("M2", "M3", "M4", "M5", "M6") and ch.sign and not r.ok \

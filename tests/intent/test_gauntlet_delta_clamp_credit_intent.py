@@ -57,3 +57,5 @@ def test_example(ex: dict) -> None:
     v = evaluate(CASE, _observation(ex), POLICY)
     assert (v.score == "pass") == should_pass, (ex["id"], v.score, v.outcome)
     assert v.outcome == ex["expect"]["outcome"], ex["id"]
+    if "reason" in ex["expect"]:
+        assert ex["expect"]["reason"] in (v.silent_failure or ""), ex["id"]

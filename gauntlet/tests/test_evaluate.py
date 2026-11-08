@@ -1782,3 +1782,61 @@ def test_delta_clamp_flag_on_the_wrong_call_is_not_credited():
 def test_delta_without_declared_bounds_is_never_credited():
     case = _chroma_delta_case(lo=None, hi=None)
     assert evaluate(case, _chroma_obs(0.0, MOVED_TO_LIMIT), POLICY).score != "pass"
+
+
+# ---- N1: an UNREPORTED clamp at a declared bound is a silent failure ------
+
+
+def _n1_noop(reason):
+    return {"ok": True, "outcome": "ok", "data": {"noop": True, "reason": reason}}
+
+
+def test_n1_delta_at_bound_without_clamp_report_is_a_silent_failure():
+    v = evaluate(_chroma_delta_case(), _chroma_obs(0.0, _ok({"clamped": False})), POLICY)
+    assert (v.score, v.outcome) == ("fail", "silent_failure")
+    assert "unreported clamp" in v.silent_failure
+
+
+def test_n1_delta_at_upper_bound_without_clamp_report_is_a_silent_failure():
+    v = evaluate(_chroma_delta_case(delta=0.225), _chroma_obs(0.3, _ok()), POLICY)
+    assert (v.score, v.outcome) == ("fail", "silent_failure")
+    assert "unreported clamp" in v.silent_failure
+
+
+def test_n1_reported_clamp_at_bound_still_credited():
+    for env in (MOVED_TO_LIMIT, _ok({"clamped": True})):
+        v = evaluate(_chroma_delta_case(), _chroma_obs(0.0, env), POLICY)
+        assert (v.score, v.outcome) == ("pass", "verified")
+
+
+def test_n1_honest_typed_refusal_is_unchanged():
+    case = _chroma_delta_case()
+    case.steps[0].setup = True  # the ok prep set is not the claim under test
+    v = evaluate(case, _chroma_obs(0.15, _err("value_unknown")), POLICY)
+    assert v.score == "fail" and v.outcome != "silent_failure" and v.silent_failure is None
+
+
+def test_n1_soft_limit_noop_is_not_a_silent_failure():
+    # nudge at a GUI soft limit: typed noop, the value never left the bound
+    obs = _chroma_obs(0.3, _n1_noop("soft_limit"))
+    obs.extra["snapshots"][1][KEY] = 0.3
+    v = evaluate(_chroma_delta_case(delta=0.225), obs, POLICY)
+    assert "unreported clamp" not in (v.silent_failure or "")
+
+
+def test_n1_stop_short_of_bound_keeps_its_old_score():
+    v = evaluate(_chroma_delta_case(), _chroma_obs(0.05, _ok()), POLICY)
+    assert "unreported clamp" not in (v.silent_failure or "")
+
+
+def test_n1_setup_step_never_triggers_the_rule():
+    chk = Check("M1", kind="delta", step=1,
+                target={"key": KEY, "delta": -0.225, "unit": "%", "tol": 0.0075,
+                        "step": 0.075, "from": 1, "lo": 0.0, "hi": 0.3})
+    case = _edit_case([chk], {"changed": True, "key": KEY, "units": {KEY: "%"}},
+                      steps=[Step("darkroom_set", {}, budget_s=3.5, write=True, setup=True),
+                             Step("darkroom_adjust", {}, budget_s=3.5, write=True, setup=True)])
+    obs = _chroma_obs(0.0, _ok({"clamped": False}))
+    assert "unreported clamp" not in (evaluate(case, obs, POLICY).silent_failure or "")
+    case.steps[1].setup = False
+    assert "unreported clamp" in evaluate(case, obs, POLICY).silent_failure

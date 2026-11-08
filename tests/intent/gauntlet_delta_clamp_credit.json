@@ -1,5 +1,5 @@
 {
-  "about": "Zenkai Z1 intent examples: a relative gauntlet move (adjust) that stops at the param's declared bound AND whose envelope reports the clamp is scored correct (stage-2 diagnosis item 2: colorbalancergb chroma adjust x3 from the 0.15 midpoint asks -0.225, the product clamps at 0.0 and says so, the evaluator used to score 2/3). Z2 two oracles: oracle A reads the raw facts (committed value vs the declared lo, the envelope's data.clamped) directly from the example; oracle B is gauntlet.evaluate.evaluate() scoring the REAL generated case tests.gauntlet.layers.coverage cov-colorbalancergb.shadows_chroma-olympus-adjust_dn3 (declared range 0.0..0.3, step 0.075) against a hand-built observation. An unreported clamp or a stop short of the bound must still fail.",
+  "about": "Zenkai Z1 intent examples: a relative gauntlet move (adjust) that stops at the param's declared bound AND whose envelope reports the clamp is scored correct (stage-2 diagnosis item 2: colorbalancergb chroma adjust x3 from the 0.15 midpoint asks -0.225, the product clamps at 0.0 and says so, the evaluator used to score 2/3). Z2 two oracles: oracle A reads the raw facts (committed value vs the declared lo, the envelope's data.clamped) directly from the example; oracle B is gauntlet.evaluate.evaluate() scoring the REAL generated case tests.gauntlet.layers.coverage cov-colorbalancergb.shadows_chroma-olympus-adjust_dn3 (declared range 0.0..0.3, step 0.075) against a hand-built observation. An unreported clamp at the bound is a silent_failure naming 'unreported clamp' (N1); a stop short of the bound is not credited.",
   "subject": "gauntlet/evaluate.py::_check_m1 delta branch / _delta_clamp_credited, tests/gauntlet/layers/coverage.py (m1_delta lo/hi)",
   "case": "cov-colorbalancergb.shadows_chroma-olympus-adjust_dn3",
   "key": "colorbalancergb.shadows_chroma",
@@ -14,8 +14,8 @@
     {
       "id": "clamp-at-bound-but-not-reported-is-a-failure",
       "start": 0.15, "committed": 0.0, "clamped": false,
-      "expect": {"outcome": "partial", "score": "not_pass"},
-      "source": "control: the same landing with no clamp report is the silent-clamp bug the check exists to catch"
+      "expect": {"outcome": "silent_failure", "score": "not_pass", "reason": "unreported clamp"},
+      "source": "N1: the same landing with ok and no clamp report is a silent failure (the user was told done and got 0.0, not the asked -0.225); the sidecar disagrees with the claim (Z2)"
     },
     {
       "id": "stop-short-of-the-bound-is-a-failure-even-if-clamp-claimed",
