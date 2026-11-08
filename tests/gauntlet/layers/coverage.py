@@ -937,7 +937,8 @@ def expected_count() -> int:
     syns = sum(len(p.synonyms) for p in phrases.PHRASES)
     hues = sum(p.wraps for p in live_params())
     mods = len({p.module for p in live_params()})
-    softs = sum(_soft_range(p) is not None for p in live_params())  # N12
-    per_body = (softs + live * (6 + 4 + 1 + 2 + 2 + 2) + hues * 2 + mods * 3 + 6 + 2 + keys * 4 + syns
+    softs = sum(_soft_range(p) is not None for p in live_params())
+    per_body = (softs + live * (6 + 4 + 1 + 2 + 2 + 2) + hues * 2 + mods * 3 + 6 + 2 + keys * 4
+                + syns
                 + keys + len(OPPOSED) + len(COMMUTATIVE))
     return 2 * per_body + 20
