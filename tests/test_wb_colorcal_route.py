@@ -108,6 +108,7 @@ class LayoutAndRowTest(_RouteFixture):
 
     def test_without_its_pin_the_row_is_a_candidate_again(self) -> None:
         self.unpin()
+        self.assertEqual(vocab.status(vocab.spec(*darkroom.COLORCAL_WB)), "candidate")
         self.assertNotIn(darkroom.COLORCAL_WB, dtbridge.ACTION_PATHS)
 
 
