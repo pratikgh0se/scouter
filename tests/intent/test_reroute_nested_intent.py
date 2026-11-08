@@ -29,7 +29,7 @@ class RerouteNestedIntentTest(_MovesFixture):
                 attempted = []
 
                 def nesting(module, param, delta, *, resolved, instance, commit, level,
-                            job, ms_precommit=0):
+                            job, ms_precommit=0, flushed=False):
                     if not attempted:
                         attempted.append(True)
                         with self.assertRaises(RerouteNested):
@@ -37,7 +37,7 @@ class RerouteNestedIntentTest(_MovesFixture):
                                 pass
                     return real_adjust_core(module, param, delta, resolved=resolved,
                                              instance=instance, commit=commit, level=level,
-                                             job=job, ms_precommit=ms_precommit)
+                                             job=job, ms_precommit=ms_precommit, flushed=flushed)
 
                 # This example runs its own (non-nested) outer scope, so drop
                 # the `already_active` one set above and use a real one via

@@ -8,7 +8,6 @@ the measured WB table or a declared neutral -- never from a slider position
 
 from __future__ import annotations
 
-import contextvars
 import time
 from datetime import datetime
 from pathlib import Path
@@ -104,7 +103,6 @@ def _table_range(camera: str) -> tuple[float, float] | None:
     return min(ks), max(ks)
 
 
-_FLUSHED: contextvars.ContextVar[bool] = contextvars.ContextVar("moves_flushed", default=False)
 _UNKNOWN_AFTER_NUDGE = (
     "an uncommitted nudge preceded this read, so the live value is unknown (the sidecar "
     "is stale); pass bounce, or commit the pending edit, then read again"
@@ -115,10 +113,9 @@ def read_current(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int,
                  job: str, *, flushed: bool = False) -> tuple[float | None, str, str | None]:
     """(value, source, reason). Source order: journal, xmp, wb_table, neutral.
 
-    `flushed` (or `_FLUSHED`, set by `adjust` around its core): the caller just
-    bounced darktable's history into the sidecar, so the sidecar is the live
-    value even after an uncommitted nudge."""
-    flushed = flushed or _FLUSHED.get()
+    `flushed`: the caller's pre-read bounce was CONFIRMED (`_precommit`), so
+    the sidecar is the live value even after an uncommitted nudge. A bounce
+    that was merely requested, timed out, or found nothing to flush is not."""
     if s.value_source == "wb_table":
         parsed = darkroom._read_sidecar_parsed(resolved.path)
         if parsed is None:
@@ -187,7 +184,7 @@ def _summary(s: vocab.ParamSpec, delta: float, prev: float, shown: float | None,
 
 def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedImage,
                  instance: int, commit: bool, level: str, job: str,
-                 ms_precommit: int = 0) -> AdjustResult:
+                 ms_precommit: int = 0, flushed: bool = False) -> AdjustResult:
     """Steps 5-11 of §6.2. The caller has gated, resolved and (maybe) pre-committed.
 
     `ms_precommit` (spec §16): the caller's own pre-commit bounce time, folded
@@ -198,7 +195,7 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
     s = vocab.spec(module, param)
     assert s is not None
     t0 = time.monotonic()
-    previous, source, reason = read_current(resolved, s, instance, job)
+    previous, source, reason = read_current(resolved, s, instance, job, flushed=flushed)
     if previous is None:
         raise ValueUnknown(
             f"cannot read {module}.{param}'s current value",
@@ -464,8 +461,15 @@ def _set_recording_before(module: str, param: str, target: float, *, instance: i
     return result
 
 
-def _precommit(job: str, image_id: int, *, expect_module: str | None = None) -> str | None:
-    """One expect-no-change bounce (P3-R3). A timeout is a warning, not a failure.
+def _precommit(job: str, image_id: int, *,
+               expect_module: str | None = None) -> tuple[str | None, bool]:
+    """One expect-no-change bounce (P3-R3). `(warning, confirmed)`.
+
+    A timeout is a warning, not a failure. `confirmed` is True only when the
+    bounce's own result shows the sidecar changed (`committed`/`changed` with
+    `confirmed`): a bounce that "found nothing to flush" (`sidecar_written=
+    False`) is not proof the sidecar is current (Z2: the bounce reporting
+    success is not its own oracle).
 
     Controller ruling, fix round 1: ONLY `CommitTimeout` (spec §6.2 step 4) is
     downgraded to a warning here -- darktable simply not settling within one
@@ -483,11 +487,12 @@ def _precommit(job: str, image_id: int, *, expect_module: str | None = None) -> 
     left open on this pre-flight bounce.
     """
     try:
-        darkroom._commit(job, image_id, strategy="auto", attempts=1, expect_change=False,
-                         expect_module=expect_module)
+        result = darkroom._commit(job, image_id, strategy="auto", attempts=1,
+                                  expect_change=False, expect_module=expect_module)
     except CommitTimeout as e:
-        return f"pre-commit did not confirm ({e.code}); the value read may predate darktable's live state"
-    return None
+        return (f"pre-commit did not confirm ({e.code}); the value read may predate "
+                "darktable's live state"), False
+    return None, bool(result.confirmed and (result.committed or result.changed))
 
 
 def _contradiction() -> None:
@@ -548,12 +553,13 @@ def _maybe_precommit(job: str, resolved: ResolvedImage, *, bounce: bool,
                      trust_sidecar: bool, expect_module: str | None = None) -> tuple[str | None, dict]:
     """Run the guard, and the bounce if it asks for one. `(warning, plan_row)`."""
     do_it, reason = precommit_decision(job, resolved, bounce=bounce, trust_sidecar=trust_sidecar)
-    warning = None
+    warning, confirmed = None, False
     t0 = time.monotonic()
     if do_it:
-        warning = _precommit(job, resolved.image_id, expect_module=expect_module)
+        warning, confirmed = _precommit(job, resolved.image_id, expect_module=expect_module)
     ms = int((time.monotonic() - t0) * 1000) if do_it else 0
-    return warning, {"action": "precommit", "bounced": do_it, "reason": reason, "ms": ms}
+    return warning, {"action": "precommit", "bounced": do_it, "reason": reason, "ms": ms,
+                     "flushed": confirmed}
 
 
 @metrics.instrumented("darkroom.get")
@@ -564,11 +570,11 @@ def get(module: str, param: str, *, instance: int = 0, bounce: bool = False,
     job = job or current_job()
     s = require_row(module, param)
     resolved = darkroom._current_image()
-    pre_warning = None
+    pre_warning, flushed = None, False
     if bounce:
         dtbridge.require_darkroom()
-        pre_warning = _precommit(job, resolved.image_id, expect_module=module)
-    value, source, reason = read_current(resolved, s, instance, job, flushed=bounce)
+        pre_warning, flushed = _precommit(job, resolved.image_id, expect_module=module)
+    value, source, reason = read_current(resolved, s, instance, job, flushed=flushed)
     fresh, why = history.watermark_fresh(job, resolved.image_id, resolved.xmp_path)
     warnings: list[str] = [pre_warning] if pre_warning else []
     if not fresh and not bounce:
@@ -643,13 +649,10 @@ def adjust(module: str, param: str, delta: float, *, instance: int = 0, commit: 
         module, param, instance = _target(routed)
         darkroom.refuse_wb_late(resolved.path, module, [param], instance,
                                 what=f"darkroom adjust {module}.{param}")
-    token = _FLUSHED.set(bool(pre["bounced"]))
-    try:
-        with darkroom.no_wb_reroute_scope():
-            result = _adjust_core(module, param, delta, resolved=resolved, instance=instance,
-                                  commit=commit, level=level, job=job, ms_precommit=pre["ms"])
-    finally:
-        _FLUSHED.reset(token)
+    with darkroom.no_wb_reroute_scope():
+        result = _adjust_core(module, param, delta, resolved=resolved, instance=instance,
+                              commit=commit, level=level, job=job, ms_precommit=pre["ms"],
+                              flushed=pre["flushed"])
     result.plan[0]["precommit"] = {"bounced": pre["bounced"], "reason": pre["reason"]}
     if routed is not None:
         result.warnings.append(darkroom.wb_routed_note(routed))
@@ -844,7 +847,8 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
                     if mv.kind == "adjust":
                         delta = mv.value if mv.notches is None else mv.notches * s.step
                         r = _adjust_core(module, mv.param, delta, resolved=resolved, instance=0,
-                                         commit=commit, level="off", job=job)
+                                         commit=commit, level="off", job=job,
+                                         flushed=pre["flushed"])
                         notes.append(explain.MoveNote(s, r.previous, r.target))
                         landed.append(r.to_dict())
                     else:

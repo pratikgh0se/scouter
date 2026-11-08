@@ -60,7 +60,7 @@ class NestedCrossImageRerouteTest(_MovesFixture):
         real_adjust_core = moves._adjust_core
 
         def nesting_adjust_core(module, param, delta, *, resolved, instance, commit,
-                                 level, job, ms_precommit=0):
+                                 level, job, ms_precommit=0, flushed=False):
             if job == "job-A" and not events:
                 # Still inside image A's `no_wb_reroute_scope` (moves.adjust
                 # hasn't reached its own `finally` yet): switch the darkroom
@@ -79,7 +79,7 @@ class NestedCrossImageRerouteTest(_MovesFixture):
                     self._point_bridge_at(12, self.raw)
             return real_adjust_core(module, param, delta, resolved=resolved,
                                      instance=instance, commit=commit, level=level,
-                                     job=job, ms_precommit=ms_precommit)
+                                     job=job, ms_precommit=ms_precommit, flushed=flushed)
 
         with mock.patch("scouter.core.moves._adjust_core", side_effect=nesting_adjust_core):
             result = moves.adjust.__wrapped__("exposure", "exposure", 0.3,

@@ -14,6 +14,7 @@ from unittest import mock
 
 from scouter.core import darkroom, dtbridge, journal, moves, vocab
 from scouter.errors import CommitTimeout, ScouterError, ValueUnknown
+from scouter.types import CommitResult
 from tests.scouter_fakes import FakeBridge, TempCache, with_param_value
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "P6281348.ORF.xmp"
@@ -179,18 +180,65 @@ class UnknownValueReadersTest(_NudgeFixture):
 
     def test_get_with_bounce_reads_the_flushed_sidecar(self) -> None:
         self._nudge_uncommitted()
-        with mock.patch("scouter.core.moves._precommit", return_value=None):
+        with mock.patch("scouter.core.moves._precommit", return_value=(None, True)):
             result = moves.get(module="exposure", param="exposure", bounce=True)
         self.assertAlmostEqual(result.value, 1.5500002, places=5)
         self.assertEqual(result.source, "xmp")
 
     def test_adjust_with_bounce_moves_from_the_flushed_sidecar_value(self) -> None:
         self._nudge_uncommitted()
-        with mock.patch("scouter.core.moves._precommit", return_value=None):
+        with mock.patch("scouter.core.moves._precommit", return_value=(None, True)):
             result = moves.adjust(module="exposure", param="exposure", delta=0.5,
                                   commit=False, bounce=True)
         self.assertAlmostEqual(result.previous, 1.5500002, places=5)
         self.assertAlmostEqual(self._set_actions()[-1]["value"], 2.0500002, places=5)
+
+    def _unconfirmed(self) -> CommitResult:
+        """What `expect_change=False` returns when one bounce found nothing to flush."""
+        return CommitResult(committed=False, changed=False, confirmed=False)
+
+    def _assert_unflushed_refusal(self, act) -> None:
+        self._nudge_uncommitted()
+        sidecar_before = self.sidecar.read_text()
+        sent = len(self.bridge.calls)
+        with self.assertRaises(ValueUnknown):
+            act()
+        # oracle 1: no darkroom action followed; oracle 2: the sidecar is untouched
+        self.assertNotIn("darkroom.action", [m for m, _ in self.bridge.calls[sent:]])
+        self.assertEqual(self.sidecar.read_text(), sidecar_before)
+
+    def test_adjust_with_an_unconfirmed_bounce_still_refuses(self) -> None:
+        with mock.patch("scouter.core.darkroom._commit", return_value=self._unconfirmed()):
+            self._assert_unflushed_refusal(lambda: moves.adjust(
+                module="exposure", param="exposure", delta=0.5, commit=False, bounce=True))
+
+    def test_adjust_by_default_with_an_unconfirmed_bounce_still_refuses(self) -> None:
+        with mock.patch("scouter.core.darkroom._commit", return_value=self._unconfirmed()):
+            self._assert_unflushed_refusal(lambda: moves.adjust(
+                module="exposure", param="exposure", delta=0.5, commit=False))
+
+    def test_adjust_with_a_timed_out_bounce_still_refuses(self) -> None:
+        with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
+            self._assert_unflushed_refusal(lambda: moves.adjust(
+                module="exposure", param="exposure", delta=0.5, commit=False, bounce=True))
+
+    def test_get_with_an_unconfirmed_bounce_does_not_report_the_stale_value(self) -> None:
+        self._nudge_uncommitted()
+        with mock.patch("scouter.core.darkroom._commit", return_value=self._unconfirmed()):
+            result = moves.get(module="exposure", param="exposure", bounce=True)
+        self.assertIsNone(result.value)
+        self.assertAlmostEqual(darkroom._read_value(str(self.raw), "exposure", "exposure", 0),
+                               1.5500002, places=5)
+
+    def test_say_with_an_unconfirmed_bounce_refuses_and_a_confirmed_one_moves(self) -> None:
+        with mock.patch("scouter.core.darkroom._commit", return_value=self._unconfirmed()):
+            self._assert_unflushed_refusal(lambda: moves.say(
+                "brighter", commit=False, bounce=True))
+        confirmed = CommitResult(committed=True, changed=True, confirmed=True)
+        with mock.patch("scouter.core.darkroom._commit", return_value=confirmed):
+            result = moves.say("brighter", commit=False, bounce=True)
+        self.assertAlmostEqual(result.moves[0]["previous"], 1.5500002, places=5)
+        self.assertEqual(len(self._set_actions()), 1)
 
     def test_before_fallback_names_the_unknown_value_as_the_reason(self) -> None:
         self._nudge_uncommitted()
