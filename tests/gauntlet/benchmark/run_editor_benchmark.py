@@ -527,20 +527,21 @@ def _stats_rb(stats: Any) -> float | None:
 def _warmth_slot(a: dict, ctx: dict) -> dict:
     """Oracle A for a warmth move: the committed sidecar value of whichever module
     carried it. Colour calibration's illuminant temperature (route A, slot 36) when
-    that slot changed: the move must go the asked way (`sign`) and, when `value` is
-    given, land within `tol` K of it. Otherwise the WB module's coefficients (legacy
-    routes): r/b must move the asked way by `min_rel` (a table is needed for more)."""
+    that slot changed: it must land within `tol` K of the SIDECAR's before value plus
+    the asked `delta` (or of an absolute `value`, never of what the agent sent or the
+    envelope reported), and the WB coefficients must not have moved. Otherwise the WB
+    module's coefficients (legacy routes): r/b must move the asked way by `min_rel` (a
+    table is needed to check an amount)."""
     before, after = ctx.get("before") or {}, ctx.get("after") or {}
     fb, fa = before.get(a["frame"]), after.get(a["frame"])
     cb, ca = (_param(f, "channelmixerrgb", "temperature") for f in (fb, fa))
-    if cb is not None and ca is not None and abs(ca - cb) > 1e-3:
-        want = _expected(a.get("value"), ctx)
-        ok = a["sign"] * (ca - cb) > 0 and (
-            want is None or (isinstance(want, (int, float)) and abs(ca - want) <= float(a["tol"]))
-        )
-        return {"ok": bool(ok), "measured": {"route": "color_calibration", "before": cb,
-                                            "after": ca}, "expected": want}
     wb_b, wb_a = _coeffs(fb), _coeffs(fa)
+    if cb is not None and ca is not None and abs(ca - cb) > 1e-3:
+        want = a["value"] if "value" in a else cb + float(a["delta"])
+        wb_moved = bool(wb_b and wb_a and any(abs(x - y) > 1e-4 * abs(y) for x, y in zip(wb_a, wb_b)))
+        ok = a["sign"] * (ca - cb) > 0 and abs(ca - want) <= float(a["tol"]) and not wb_moved
+        return {"ok": bool(ok), "measured": {"route": "color_calibration", "before": cb,
+                                            "after": ca, "wb_moved": wb_moved}, "expected": want}
     if wb_b is None or wb_a is None:
         return {"ok": False, "measured": {"route": None}, "note": "no warmth slot moved or readable"}
     rel = round((wb_a[0] / wb_a[2]) / (wb_b[0] / wb_b[2]) - 1.0, 5)
@@ -666,6 +667,9 @@ def evaluate(a: dict, ctx: dict) -> dict:
                 return {"ok": False, "measured": {"before": rb_b, "after": rb_a},
                         "note": "scout_stats r/b unreadable"}
             rel = round(rb_a / rb_b - 1.0, 5)
+            if a.get("not_opposite"):  # inconclusive is fine, the wrong way beyond the floor is not
+                return {"ok": a["sign"] * rel >= -float(a["min_rel"]), "measured": rel,
+                        "expected": f"not opposite to sign {a['sign']} beyond {a['min_rel']}"}
             return {"ok": a["sign"] * rel >= float(a["min_rel"]), "measured": rel,
                     "expected": f"sign {a['sign']}, beyond {a['min_rel']}"}
         if t == "module_active":

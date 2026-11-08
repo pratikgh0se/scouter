@@ -113,7 +113,8 @@ class KelvinResult(Payload):
     route: dict | None = None
     #: The Kelvin the picture's warmth is actually carried by: colour
     #: calibration's illuminant when `route.route` is `color_calibration`
-    #: (`note` says so), else equal to `kelvin`. `kelvin` keeps its meaning.
+    #: (`note` says so), `kelvin` on the white balance route, null (with a
+    #: `note` citing `route.reason`) when the route is unavailable.
     effective_kelvin: float | None = None
     note: str | None = None
 

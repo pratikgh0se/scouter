@@ -19,6 +19,8 @@ the measured r/b ratio direction -- live in tests/test_host_colorcal.py.
 from __future__ import annotations
 
 import binascii
+import json
+import os
 import struct
 from pathlib import Path
 from unittest import mock
@@ -46,15 +48,23 @@ def colorcal_hex(*, illuminant: int = 2, adaptation: int = 1,
     return binascii.hexlify(bytes(blob)).decode()
 
 
-def stub_table_kelvin(test, kelvin: float = 5000.0) -> None:
-    """The WB module's table estimate (the benchmark saw 5000 beside an illuminant of
-    4527): the fixture's as-shot coefficients fall outside the committed table, so the
-    inversion is stubbed to a number. Only the table inversion; the route logic runs."""
-    result = {"kelvin": kelvin, "interpolated": True, "bracket": None, "residual_ratio": 0.0,
-              "exact": False, "camera": "em10iii", "table": None, "warnings": [], "reason": None}
-    p = mock.patch.object(wb, "_kelvin_from", return_value=result)
-    p.start()
-    test.addCleanup(p.stop)
+def synthetic_table(test, shot_kelvin: float = 5000.0) -> None:
+    """Replace the temp config's em10iii table with a synthetic one (so flagged) whose
+    middle row is exactly the fixture's as-shot coefficients at `shot_kelvin` (the
+    benchmark saw 5000 beside an illuminant of 4527). The committed table does not
+    cover the fixture's as-shot ratio, so `kelvin` would be null. Real loader, real
+    inversion; only the data is made up."""
+    parsed = darkroom._read_sidecar_parsed(str(test.raw))
+    c = xmp.latest_params(parsed, "temperature")
+    r0, b0 = float(c["coeff_r"]), float(c["coeff_b"])
+    ratio = r0 / b0
+    samples = [{"k": k, "coeff_r": r0, "coeff_g": 1.0, "coeff_b": r0 / (ratio * f)}
+               for k, f in ((shot_kelvin - 2000, 0.6), (shot_kelvin, 1.0),
+                            (shot_kelvin + 2000, 1.4))]
+    table = {"camera": "em10iii", "camera_model": "synthetic", "synthetic": True,
+             "samples": samples}
+    path = Path(os.environ["SCOUTER_CONFIG"]).parent / "wb" / "em10iii.json"
+    path.write_text(json.dumps(table), encoding="utf-8")
 
 
 class _RouteFixture(_MovesFixture):
@@ -349,7 +359,7 @@ class KelvinReadbackTest(_RouteFixture):
             p = mock.patch(target, return_value=value)
             p.start()
             self.addCleanup(p.stop)
-        stub_table_kelvin(self)
+        synthetic_table(self)
 
     def test_preset_2_reports_the_white_balance_route(self) -> None:
         r = wb.kelvin_verb.__wrapped__(str(self.raw), job="job-test")
@@ -381,7 +391,8 @@ class KelvinReadbackTest(_RouteFixture):
         self.pin()
         self.colorcal(temperature=4527.0)
         r = wb.kelvin_verb.__wrapped__(str(self.raw), job="job-test")
-        # Oracle 1: the sidecar's committed slot, read independently of wb.py.
+        # Oracle 1: the sidecar's committed slot, read back through xmp.latest_params (the
+        # decoder wb_route also uses; its layout is checked on its own by LayoutAndRowTest).
         self.assertAlmostEqual(self._sidecar_illuminant(), 4527.0, places=1)
         self.assertAlmostEqual(r.effective_kelvin, self._sidecar_illuminant(), places=1)
         # Oracle 2: `kelvin` keeps its meaning (the WB module's table estimate), so it differs.
@@ -396,12 +407,14 @@ class KelvinReadbackTest(_RouteFixture):
         self.assertEqual(r.effective_kelvin, r.kelvin)
         self.assertIsNone(r.note)
 
-    def test_unavailable_route_has_effective_equal_to_kelvin_and_no_note(self) -> None:
+    def test_unavailable_route_claims_no_effective_kelvin_and_cites_the_reason(self) -> None:
         self.preset_4()
         self.unpin()
         r = wb.kelvin_verb.__wrapped__(str(self.raw), job="job-test")
-        self.assertEqual(r.effective_kelvin, r.kelvin)
-        self.assertIsNone(r.note)
+        self.assertEqual(r.route["route"], "unavailable")
+        self.assertIsNotNone(r.kelvin)  # the WB module's estimate is still reported
+        self.assertIsNone(r.effective_kelvin)
+        self.assertIn(r.route["reason"], r.note)
 
     def test_the_registered_verb_envelope_carries_both_fields(self) -> None:
         from scouter import registry

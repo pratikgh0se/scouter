@@ -549,8 +549,13 @@ def _route_readback(path: str) -> tuple[dict, list[str]]:
 
 def _effective(route: dict, kelvin_value: float | None) -> dict:
     """`effective_kelvin` and `note`: on route A warmth is carried by colour
-    calibration's illuminant, so that is the number to act on; otherwise it is
-    `kelvin` and there is nothing to add."""
+    calibration's illuminant, so that is the number to act on; on the white
+    balance route it is `kelvin`; when the route is unavailable nothing is
+    known to carry warmth, so it is null and the note cites `route.reason`."""
+    if route.get("route") == "unavailable":
+        return {"effective_kelvin": None,
+                "note": "no Kelvin carries warmth on this image, so none is claimed "
+                        f"(`kelvin` is the white balance module's estimate): {route.get('reason')}"}
     if route.get("route") != "color_calibration":
         return {"effective_kelvin": kelvin_value, "note": None}
     k = route.get("illuminant_kelvin")

@@ -22,7 +22,7 @@
     {
       "revision": 3,
       "date": "2026-11-08",
-      "change": "W1, W2 and W4 verify warmth through two oracles that work for both routes (route A, colour calibration, landed on main 44463e8; the WB module stays on preset 4): the committed sidecar value of whichever module carried the move (warmth_slot: colour calibration's illuminant temperature, slot 36, moved the asked way and to the asked value within the tolerance, or the WB module's r/b on a legacy route) and the rendered r/b from scout_stats before and after (render_rb_delta, beyond the 0.5% noise floor). The Kelvin read-back reads wb_kelvin's effective_kelvin (equal to kelvin off route A). Plans gain a leading and a trailing scout_stats (step indexes shift by one). history_unchanged keeps its refusal-only role.",
+      "change": "W1, W2 and W4 verify warmth through two oracles that work for both routes (route A, colour calibration, landed on main 44463e8; the WB module stays on preset 4): the committed sidecar value of whichever module carried the move (warmth_slot: colour calibration's illuminant temperature, slot 36, moved the asked way and to the asked value within the tolerance, or the WB module's r/b on a legacy route) and the rendered r/b from scout_stats before and after (render_rb_delta, at least 5% to pass, about 3x under the smallest expected swing of a 600 K move; a render that moves the other way beyond the 0.5% noise floor fails the task, it is never partial). The slot must land at the sidecar's before value plus the asked delta (+600 W1, -900 W2) within 150 K and route A must leave the WB coefficients unchanged. The measured probe used centre r/b, this benchmark uses whole-frame r/b. The Kelvin read-back reads wb_kelvin's effective_kelvin (equal to kelvin off route A). Plans gain a leading and a trailing scout_stats (step indexes shift by one). history_unchanged keeps its refusal-only role.",
       "invalidates": [
         "W1",
         "W2",
@@ -710,7 +710,7 @@
             "value": {
               "$ref": {
                 "step": 1,
-                "path": "data.kelvin",
+                "path": "data.effective_kelvin",
                 "add": 600,
                 "fallback": 6500
               }
@@ -741,12 +741,7 @@
           "type": "warmth_slot",
           "frame": "hero",
           "sign": 1,
-          "value": {
-            "$arg": {
-              "step": 2,
-              "arg": "value"
-            }
-          },
+          "delta": 600,
           "tol": 150,
           "min_rel": 0.005
         },
@@ -755,7 +750,15 @@
           "before_step": 0,
           "after_step": 4,
           "sign": 1,
-          "min_rel": 0.005
+          "min_rel": 0.05
+        },
+        "render_ok": {
+          "type": "render_rb_delta",
+          "before_step": 0,
+          "after_step": 4,
+          "sign": 1,
+          "min_rel": 0.005,
+          "not_opposite": true
         },
         "kelvin": {
           "type": "step_field",
@@ -791,10 +794,11 @@
         "partial": [
           [
             "set_ok",
-            "warmer"
+            "warmer",
+            "render_ok"
           ]
         ],
-        "partial_criteria": "the committed sidecar moved warmer (colour calibration's illuminant K up, or the WB module's r/b up) but the render did not confirm it beyond the 0.5% r/b noise floor, or the Kelvin read-back (effective_kelvin) is missing or off by more than 150 K",
+        "partial_criteria": "the committed sidecar moved warmer by the asked 600 K (colour calibration's illuminant, or the WB module's r/b up) and the render did NOT move the other way (within the 0.5% noise floor), but it did not confirm a move of at least 5% r/b, or the Kelvin read-back (effective_kelvin) is missing or off by more than 150 K. A render that moves cooler beyond the noise floor is a fail",
         "refusal": [
           "refused",
           "untouched"
@@ -837,14 +841,6 @@
           "4": 3
         },
         "assertion_overrides": {
-          "warmer": {
-            "value": {
-              "$env": {
-                "step": 1,
-                "path": "data.moves.0.target"
-              }
-            }
-          },
           "kelvin": {
             "value": {
               "$env": {
@@ -887,7 +883,7 @@
             "value": {
               "$ref": {
                 "step": 1,
-                "path": "data.kelvin",
+                "path": "data.effective_kelvin",
                 "add": -900,
                 "fallback": 4500
               }
@@ -917,12 +913,7 @@
           "type": "warmth_slot",
           "frame": "hero",
           "sign": -1,
-          "value": {
-            "$arg": {
-              "step": 2,
-              "arg": "value"
-            }
-          },
+          "delta": -900,
           "tol": 150,
           "min_rel": 0.005
         },
@@ -931,7 +922,15 @@
           "before_step": 0,
           "after_step": 4,
           "sign": -1,
-          "min_rel": 0.005
+          "min_rel": 0.05
+        },
+        "render_ok": {
+          "type": "render_rb_delta",
+          "before_step": 0,
+          "after_step": 4,
+          "sign": -1,
+          "min_rel": 0.005,
+          "not_opposite": true
         },
         "kelvin": {
           "type": "step_field",
@@ -967,10 +966,11 @@
         "partial": [
           [
             "set_ok",
-            "cooler"
+            "cooler",
+            "render_ok"
           ]
         ],
-        "partial_criteria": "the committed sidecar moved cooler (colour calibration's illuminant K down, or the WB module's r/b down) but the render did not confirm it beyond the 0.5% r/b noise floor, or the Kelvin read-back (effective_kelvin) is missing or off by more than 150 K",
+        "partial_criteria": "the committed sidecar moved cooler by the asked 900 K (colour calibration's illuminant, or the WB module's r/b down) and the render did NOT move the other way (within the 0.5% noise floor), but it did not confirm a move of at least 5% r/b, or the Kelvin read-back (effective_kelvin) is missing or off by more than 150 K. A render that moves warmer beyond the noise floor is a fail",
         "refusal": [
           "refused",
           "untouched"
@@ -1013,14 +1013,6 @@
           "4": 3
         },
         "assertion_overrides": {
-          "cooler": {
-            "value": {
-              "$env": {
-                "step": 1,
-                "path": "data.moves.0.target"
-              }
-            }
-          },
           "kelvin": {
             "value": {
               "$env": {
@@ -1139,7 +1131,7 @@
           }
         }
       ],
-      "agent_note": "Revision 3: on a camera-reference (late) frame the 5500 K lands on colour calibration's illuminant (route A), not the WB module, so the pass reads the committed illuminant (slot 36) and the rendered r/b. Both bodies start below 5500 K, so the expected move is warmer (+1). Whether a 5500 K illuminant is what a photographer means by 'match daylight' is not checked: no neutral-grey oracle exists.",
+      "agent_note": "Revision 3: on a camera-reference (late) frame the 5500 K lands on colour calibration's illuminant (route A), not the WB module, so the pass reads the committed illuminant (slot 36) and the rendered r/b. Both bodies start below 5500 K (docs/measurements.md: Olympus 3926.7 K, Sony 2602.9 K), so the expected move is warmer (+1). Whether a 5500 K illuminant is what a photographer means by 'match daylight' is not checked: no neutral-grey oracle exists.",
       "assertions": {
         "set_ok": {
           "type": "step_ok",
@@ -1158,7 +1150,15 @@
           "before_step": 0,
           "after_step": 3,
           "sign": 1,
-          "min_rel": 0.005
+          "min_rel": 0.05
+        },
+        "render_ok": {
+          "type": "render_rb_delta",
+          "before_step": 0,
+          "after_step": 3,
+          "sign": 1,
+          "min_rel": 0.005,
+          "not_opposite": true
         },
         "kelvin": {
           "type": "step_field",
@@ -1196,10 +1196,12 @@
         "partial": [
           [
             "set_ok",
+            "warmer",
+            "render_ok",
             "honest_null"
           ]
         ],
-        "partial_criteria": "the 5500 K value was sent and committed, but the pass is not met (no readable effective Kelvin of 5500, or the render did not move warmer beyond the noise floor) and Scouter says wb_kelvin has no measured table for this camera, naming calibration (unchanged from revision 2)",
+        "partial_criteria": "the 5500 K value landed in the committed sidecar (slot within 250 K of 5500, the right way, WB module untouched on route A) and the render did not move the other way, but the pass is not met (the render did not confirm a 5% r/b move, or no effective Kelvin of 5500 is readable) and Scouter says wb_kelvin has no measured table for this camera, naming calibration. Revision 3 adds the slot and render checks to the revision 2 group",
         "refusal": [
           "refused",
           "untouched"

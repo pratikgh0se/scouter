@@ -805,26 +805,34 @@ def _stats_env(rg, bg):
 
 
 def test_warmth_slot_route_a_checks_direction_and_amount():
-    a = {"type": "warmth_slot", "frame": "hero", "sign": 1, "value": 4527.0, "tol": 150,
+    # The target is the sidecar BEFORE value plus the asked delta, never what was sent.
+    a = {"type": "warmth_slot", "frame": "hero", "sign": 1, "delta": 600, "tol": 150,
          "min_rel": 0.005}
 
-    def run(before_k, after_k, spec=a):
-        ctx = {"before": {"hero": _cc_snap(before_k, "a")},
-               "after": {"hero": _cc_snap(after_k, "b")}}
+    def run(before_k, after_k, spec=a, wb_after=None):
+        wb_before = _mod(coeff_r=2.0, coeff_g=1.0, coeff_b=1.7)
+        ctx = {"before": {"hero": _cc_snap(before_k, "a", temperature=wb_before)},
+               "after": {"hero": _cc_snap(after_k, "b", temperature=wb_after or wb_before)}}
         return rb.evaluate(spec, ctx)
 
     assert run(3927.0, 4527.0)["ok"]
     assert run(3927.0, 4600.0)["ok"]  # inside the step tolerance
     assert not run(3927.0, 3327.0)["ok"]  # the wrong way, even to a nearby number
     assert not run(3927.0, 4100.0)["ok"]  # right way, short of the asked amount
+    assert not run(3927.0, 5600.0)["ok"]  # +1673 K for "a little warmer" (the v1 5000+600 case)
     assert not run(3927.0, 3927.0)["ok"]  # nothing committed
-    assert run(4527.0, 3927.0, a | {"sign": -1, "value": 3927.0})["ok"]
+    assert run(4527.0, 3627.0, a | {"sign": -1, "delta": -900})["ok"]
+    assert run(3927.0, 5500.0, {k: v for k, v in a.items() if k != "delta"} | {"value": 5500.0,
+                                                                              "tol": 250})["ok"]
+    # route A must leave the WB module alone: a moved slot AND moved WB coefficients fails
+    moved_wb = _mod(coeff_r=2.2, coeff_g=1.0, coeff_b=1.5)
+    assert not run(3927.0, 4527.0, wb_after=moved_wb)["ok"]
 
 
 def test_warmth_slot_legacy_route_reads_the_wb_module():
     warm = _snap(fp="b", temperature=_mod(coeff_r=2.2, coeff_g=1.0, coeff_b=1.5))
     base = _snap(fp="a", temperature=_mod(coeff_r=2.0, coeff_g=1.0, coeff_b=1.7))
-    a = {"type": "warmth_slot", "frame": "hero", "sign": 1, "value": 5600.0, "tol": 150,
+    a = {"type": "warmth_slot", "frame": "hero", "sign": 1, "delta": 600, "tol": 150,
          "min_rel": 0.005}
     assert rb.evaluate(a, {"before": {"hero": base}, "after": {"hero": warm}})["ok"]
     assert not rb.evaluate(a | {"sign": -1}, {"before": {"hero": base}, "after": {"hero": warm}})["ok"]
@@ -841,6 +849,16 @@ def test_render_rb_delta_needs_a_move_beyond_the_noise_floor():
     assert not run((0.88, 0.48), sign=-1)["ok"]
     assert not run((0.800, 0.4999))["ok"]  # r/b +0.02%: inside the noise floor
     assert run((0.72, 0.52), sign=-1)["ok"]
+    assert not run((0.82, 0.49), min_rel=0.05)["ok"]  # +4.6%: under a 5% floor
+    assert run((0.88, 0.48), min_rel=0.05)["ok"]
+    # not_opposite: only "went the other way beyond the floor" fails
+    def opp(after):
+        ctx = {"steps": [{"envelope": _stats_env(0.80, 0.50)}, {}, {"envelope": _stats_env(*after)}]}
+        return rb.evaluate({"type": "render_rb_delta", "before_step": 0, "after_step": 2,
+                            "sign": 1, "min_rel": 0.005, "not_opposite": True}, ctx)
+
+    assert opp((0.8, 0.5))["ok"] and opp((0.88, 0.48))["ok"]
+    assert not opp((0.70, 0.55))["ok"]
     assert not rb.evaluate({"type": "render_rb_delta", "before_step": 0, "after_step": 2,
                             "sign": 1, "min_rel": 0.005}, {"steps": []})["ok"]
 
@@ -888,11 +906,34 @@ def test_w1_a_reported_ok_with_nothing_on_the_sidecar_or_the_render_is_not_verif
         # sidecar moved but the render did not: the second oracle refuses the pass
         score, _ = _warmth_ctx("W1", version, before_k=3927.0, after_k=4527.0,
                                rb_after=(0.80, 0.50), effective=4527.0, target=4527.0)
-        assert score[0] != "pass"
-        # the render moved the wrong way (the 2026-09 night-1 failure)
+        assert score == ("partial", "partial")  # inconclusive render only
+        # the render moved the wrong way (the 2026-09 night-1 failure): a FAIL, not partial
         score, _ = _warmth_ctx("W1", version, before_k=3927.0, after_k=4527.0,
                                rb_after=(0.70, 0.55), effective=4527.0, target=4527.0)
-        assert score[0] != "pass"
+        assert score[0] == "fail"
+        score, _ = _warmth_ctx("W2", version, before_k=4527.0, after_k=3627.0,
+                               rb_after=(0.90, 0.45), effective=3627.0, target=3627.0)
+        assert score[0] == "fail"
+
+
+def test_w1_a_wrong_size_move_is_not_verified_even_when_the_slot_equals_what_was_sent():
+    # plan v1 used to start from the WB module's 5000 K: 3927 -> 5600 K for "a little warmer"
+    for version in ("v1", "v2"):
+        score, res = _warmth_ctx("W1", version, before_k=3927.0, after_k=5600.0,
+                                 rb_after=(0.96, 0.40), effective=5600.0, target=5600.0)
+        assert score[0] != "pass", (version, res)
+        assert res["warmer"]["ok"] is False
+    v1 = rb.effective_task(rb.tasks_by_id(rb.load_tasks())["W1"], "v1")
+    ref = v1["plan"][2]["args"]["value"]["$ref"]
+    assert ref["path"] == "data.effective_kelvin" and ref["step"] == 1
+
+
+def test_w4_partial_needs_the_slot_to_have_moved_the_right_way():
+    w4 = rb.tasks_by_id(rb.load_tasks())["W4"]["scoring"]["partial"]
+    assert all("warmer" in g and "render_ok" in g for g in w4)
+    score, _ = _warmth_ctx("W4", "v2", before_k=3927.0, after_k=3927.0,
+                           rb_after=(0.80, 0.50), effective=3927.0, target=5500.0)
+    assert score[0] == "fail"
 
 
 def test_w4_daylight_route_a_sets_the_illuminant_and_is_verified_by_two_oracles():

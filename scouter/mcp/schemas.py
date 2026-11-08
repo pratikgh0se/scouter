@@ -886,8 +886,9 @@ TOOL_SPECS: list[dict] = [
         "estimate. `effective_kelvin` is the Kelvin warmth is actually carried by: "
         "when `route.route` is `color_calibration` (warmer/cooler/Kelvin sets on "
         "camera-reference white balance) it is colour calibration's illuminant "
-        "(`route.illuminant_kelvin`) and `note` says so; otherwise it equals "
-        "`kelvin` and `note` is null. Read `effective_kelvin` after a warmth move.",
+        "(`route.illuminant_kelvin`) and `note` says so; on the white "
+        "balance route it equals `kelvin` and `note` is null; when the route is "
+        "`unavailable` it is null and `note` cites `route.reason`. Read `effective_kelvin` after a warmth move.",
         "inputSchema": _schema({"image": IMAGE}, ["image"]),
     },
     {

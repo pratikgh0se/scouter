@@ -17,8 +17,8 @@
     {
       "id": "preset4-route-unpinned",
       "input": {"temperature_preset": 4, "route_a_live": false, "illuminant_k": null},
-      "expect": {"kelvin_is_effective": true, "note_mentions": null},
-      "source": "Pratik 2026-11-08: an unavailable route is not colour calibration carrying warmth; no claim is made"
+      "expect": {"kelvin_is_effective": false, "note_mentions": "not confirmed yet"},
+      "source": "Pratik 2026-11-08 + review of f6bef2f: an unavailable route is not colour calibration carrying warmth, and the as-shot kelvin is not what warmth is carried by, so effective_kelvin is null and the note cites route.reason"
     }
   ]
 }
