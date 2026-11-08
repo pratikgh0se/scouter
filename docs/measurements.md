@@ -614,3 +614,28 @@ view bounce, which costs about 1-3 s more per write than row 429's (false)
 0.2-1.1 s `no_bounce` figure. Enabling an already-enabled module now waits
 out the 5 s readback poll before resolving.
 
+## Route A colour calibration probe (2026-11-08, branch sha 44ef3bc)
+
+Host probe `tests/test_host_colorcal.py`, darktable 5.4.1, isolated library per
+launch under `~/Pictures/ScouterScratch/colorcal-probe/20261108T151559-32290`,
+263.97 s, 1 passed. Raw log: `docs/measurements-generated.md` (git-ignored).
+
+    COLORCAL_ROUTE_A olympus PROMOTE reason=r/b base 0.8194 warm 1.0323 cool 0.5412 floor 0.0041
+    COLORCAL_ROUTE_A sony PROMOTE reason=r/b base 1.2461 warm 2.6187 cool 0.5821 floor 0.0062
+
+- `iop/channelmixerrgb/temperature` answers non-nan in about 108 ms and the
+  worker stays alive. Two oracles agree: the sidecar float at slot 36 (byte 144)
+  holds exactly the requested K after every move (warmer, a second consecutive
+  cooler, a fresh sentinel), and the rendered centre r/b rises for a higher K
+  and falls for a lower one, far above the measured floor. Direction confirmed:
+  higher illuminant K renders warmer.
+- Olympus hero (3926.7 K start): 4927 K gives r/b 0.8194 -> 1.0323, 2927 K gives
+  0.5412. Sony hero (2602.9 K start): 3603 K gives 1.2461 -> 2.6187, 2000 K gives
+  0.5821.
+- Illuminant stayed 2 (daylight) on every move; x/y are re-derived by darktable
+  on each write (Olympus 0.3829/0.3739 -> 0.3479/0.3604 at 4927 K). WB preset
+  stayed 4. A repeat set of the same value was a noop; a fresh value changed
+  slot 36 again.
+- No clamp: the Sony hero landed exactly 2000.0 K at the product's 2000 K floor,
+  so darktable does not clamp or re-derive there, and no new refusal is needed.
+
