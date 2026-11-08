@@ -387,3 +387,110 @@ def test_c3_unpinned_phrase_families_expect_edit_but_accept_the_honest_refusal()
     assert p4.meta.get("accept_refusal") is True
     p4_live = props["cov-p4-brighter-olympus"]
     assert p4_live.meta.get("accept_refusal") is not True
+
+
+# ------------------------------------------------ night 3 expectation fixes (groups C, E, F)
+
+
+def test_night3_repeat_adjust_two_steps_stay_inside_the_hard_limit():
+    """Group C: the setup start plus two steps must not overshoot hi (the
+    second adjust used to be a moved_to_limit and the ratio 1.25)."""
+    seen = 0
+    for c in coverage.generate():
+        if not c.id.endswith("-repeat_adjust") or c.expect.kind != "property":
+            continue
+        if not any(st.setup and st.tool == "darkroom_set" for st in c.steps):
+            continue
+        prep, a1, a2 = c.steps[-3:]
+        s = vocab.spec(prep.args["module"], prep.args["param"])
+        if s.wraps or s.module == "temperature":
+            continue
+        seen += 1
+        start, d = prep.args["value"], a1.args["delta"]
+        assert prep.setup and not a1.setup and not a2.setup
+        assert s.lo - 1e-9 <= start and start + 2 * d <= s.hi + 1e-9, c.id
+        assert not coverage._at_baseline(s, start), c.id
+    assert seen >= 30
+    chroma = _case("cov-colorbalancergb.global_chroma-olympus-repeat_adjust")
+    assert chroma.steps[0].args["value"] == pytest.approx(-0.1)
+    # the ratio check itself is unchanged
+    assert chroma.expect.checks[0].target["ratio"] == 2.0
+
+
+def test_night3_repeat_adjust_ratio_guard_second_step_not_moving_fails():
+    from gauntlet.adapter import CallRecord, Observation
+    from gauntlet.evaluate import evaluate
+    from tests.gauntlet.policy import load_policy
+    c = _case("cov-colorbalancergb.global_chroma-olympus-repeat_adjust")
+    k = "colorbalancergb.global_chroma"
+    ok = {"ok": True, "outcome": "ok", "data": {}}
+    calls = [CallRecord(st.tool, st.args, ok, write=True) for st in c.steps]
+    for landed, want in (((-0.1, 0.1, 0.3), "pass"), ((-0.1, 0.1, 0.1), "fail")):
+        snaps = [{k: None}] + [{k: v} for v in landed]
+        obs = Observation(calls=calls, before={"params": snaps[0]}, after={"params": snaps[-1]},
+                          extra={"snapshots": snaps})
+        assert evaluate(c, obs, load_policy()).score == want, landed
+
+
+def test_night3_p4_weaker_grade_starts_graded_from_a_setup_step():
+    """Group E: on the clean frame "weaker colour grade" is a typed noop; the
+    P4 sequence now starts from a setup-marked graded precondition and its
+    monotonic pairs skip that step."""
+    c = _case("cov-p4-weaker_grade-olympus")
+    assert c.steps[0].setup and c.steps[0].args["phrase"] == "stronger colour grade a lot"
+    assert not any(st.setup for st in c.steps[1:])
+    assert c.expect.checks[0].kind == "monotonic"
+    assert c.expect.checks[0].target["pairs"] == [[1, 2], [3, 4], [5, 6]]
+    # an ordinary P4 case is untouched
+    plain = _case("cov-p4-brighter_highlights-olympus")
+    assert not any(st.setup for st in plain.steps)
+    assert plain.expect.checks[0].target["pairs"] == [[0, 1], [2, 3], [4, 5]]
+
+
+def test_night3_p4_toggle_phrases_start_in_the_opposite_state_and_expect_equal_landings():
+    """Group E: a boolean has no magnitude to order, so monotonic can never
+    hold; the toggle starts in the opposite state (setup) and every strength
+    must land the same state."""
+    on = _case("cov-p4-lens_on-olympus")
+    off = _case("cov-p4-lens_off-olympus")
+    assert (on.steps[0].tool, on.steps[0].setup) == ("darkroom_disable", True)
+    assert (off.steps[0].tool, off.steps[0].setup) == ("darkroom_enable", True)
+    kinds = [ch.kind for ch in on.expect.checks]
+    assert kinds == ["changed", "step_equal", "step_equal"]
+
+
+def test_night3_set_neutral_on_a_body_dependent_default_is_a_real_change():
+    """Group F: exposure.black's real default is -0.000244, not the vocab
+    neutral 0.0, so set_neutral starts from a setup value and expects a change;
+    a row with an exact default is untouched."""
+    c = _case("cov-exposure.black-olympus-set_neutral")
+    assert c.steps[0].setup and c.steps[0].args["value"] != 0.0
+    assert c.steps[1].args["value"] == 0.0 and not c.steps[1].setup
+    assert c.expect.sidecar["changed"] is True
+    other = _case("cov-colorbalancergb.global_chroma-olympus-set_neutral")
+    assert len(other.steps) == 1 and other.expect.sidecar["changed"] is False
+
+
+def test_night3_set_neutral_guard_real_silent_failure_still_scores_silent():
+    """Z2: an ok `set` of exposure.black 0.0 whose sidecar still holds the old
+    value is a silent failure under the new expectation too."""
+    from gauntlet.adapter import CallRecord, Observation
+    from gauntlet.evaluate import evaluate
+    from tests.gauntlet.policy import load_policy
+    c = _case("cov-exposure.black-olympus-set_neutral")
+    k = "exposure.black"
+    ok = {"ok": True, "outcome": "ok", "data": {}}
+    calls = [CallRecord(st.tool, st.args, ok, write=True) for st in c.steps]
+
+    def run(snaps, fp_after):
+        before = {"params": snaps[0], "fingerprint": "a"}
+        after = {"params": snaps[-1], "fingerprint": fp_after}
+        return evaluate(c, Observation(calls=calls, before=before, after=after,
+                                       extra={"snapshots": snaps}), load_policy())
+    old = -0.000244140625
+    assert run([{k: old}, {k: 0.05}, {k: 0.0}], "b").outcome == "verified"
+    # ok on both writes, the sidecar never moved at all: silent (under the old
+    # "expected unchanged" expectation this shape could not be told from a pass)
+    assert run([{k: old}] * 3, "a").outcome == "silent_failure"
+    # the set did not land over the setup value: not a pass
+    assert run([{k: old}, {k: 0.05}, {k: 0.05}], "b").score != "pass"

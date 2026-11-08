@@ -176,6 +176,28 @@ NUDGE_PRECONDITION_OVERRIDE_DN: dict[tuple[str, str], str] = {
 }
 
 
+def _repeat_start(s: vocab.ParamSpec) -> float:
+    """Where repeat_adjust's prep puts the frame: `_mid(s)` when two `s.step`
+    moves up from it stay inside the hard limit, else `hi - 3 * step` (clamped
+    to lo) so BOTH steps land unclamped (night 3 group C: 0.25 + 2 * 0.2 on a
+    0.5 limit made step 2 a `moved_to_limit` and the step ratio 1.25, not 2).
+    Never the param's baseline, where the prep itself would be a noop."""
+    m = _mid(s)
+    if s.wraps or m + 2 * s.step <= s.hi + 1e-9:
+        return m
+    start = round(max(s.lo, s.hi - 3 * s.step), 6)
+    if _at_baseline(s, start):
+        start = round(start + s.step / 2, 6)
+    return start
+
+
+def _body_dependent_default(s: vocab.ParamSpec) -> bool:
+    """The row's real darktable default depends on the frame (vocab declares a
+    wider default tolerance for it: exposure.black), so the vocab neutral is
+    not the frame's baseline."""
+    return vocab.default_tolerance(s.module, s.param) > 1e-4
+
+
 def _soft_range(s: vocab.ParamSpec) -> tuple[float, float] | None:
     """The slider's declared soft range (`vocab.DT_SOFT_BOUNDS`, N12), where a
     GUI nudge stops; `None` for a slider with no narrower soft range."""
@@ -318,7 +340,15 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
                              _wb_route_a_pinned_edit(wb_route, value=v)))
             continue
         at_base = _at_baseline(s, v)
-        out.append(_case(cid(label), body, tier, [*pre, _set(s, v)],
+        lead = list(pre)
+        if at_base and _body_dependent_default(s):
+            # night 3 group F: darktable's real default (-0.000244 for a scene
+            # raw) is not the vocab neutral, so "already at baseline" is not
+            # knowable. Start from a setup value that is certainly off it: the
+            # set is then a real change on every frame.
+            lead.append(_prep(s, _mid(s)))
+            at_base = False
+        out.append(_case(cid(label), body, tier, [*lead, _set(s, v)],
                          Expect("edit", [m1_equals(s.module, s.param, v, s.unit)],
                                 _side(s, changed=not at_base))))
     for label, v in (("set_lo_minus", plo - s.step), ("set_hi_plus", phi + s.step)):
@@ -466,7 +496,7 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
                                                    target={"key": k, "a": 1 + o, "b": 2 + o,
                                                            "unit": s.unit})], property="P1")))
         out.append(_case(cid("repeat_adjust"), body, "P1",
-                         [*pre, _prep(s, _mid(s)), _adjust(s, s.step), _adjust(s, s.step)],
+                         [*pre, _prep(s, _repeat_start(s)), _adjust(s, s.step), _adjust(s, s.step)],
                          Expect("property", [Check("M1", kind="step_ratio",
                                                    target={"key": k, "base": [1 + o, 2 + o],
                                                            "double": [1 + o, 3 + o], "ratio": 2.0,
@@ -655,6 +685,11 @@ def _phrase_expect(p: phrases.Phrase, sign: float = 1.0, from_step: int = 0) -> 
 GRADED_PRECONDITION_KEYS = frozenset({"weaker_grade"})
 
 
+def _setup_step(st):
+    st.setup = True
+    return st
+
+
 def _graded_precondition(p: phrases.Phrase) -> list:
     if p.key not in GRADED_PRECONDITION_KEYS:
         return []
@@ -769,8 +804,26 @@ def property_cases(body: str) -> list[Case]:
         else:
             exp = Expect("property", [Check("M1", kind="monotonic", target={
                 "key": k, "pairs": [[0, 1], [2, 3], [4, 5]]})], property="P4")
+        pre: list = []
+        if exp.kind == "property" and p.key in GRADED_PRECONDITION_KEYS:
+            # night 3 group E: a "weaker" phrase on the clean frame is a typed
+            # noop (nothing to weaken); start graded, as a setup step
+            pre = [_setup_step(st) for st in _graded_precondition(p)]
+            exp = Expect("property", [Check("M1", kind="monotonic", target={
+                "key": k, "pairs": [[1, 2], [3, 4], [5, 6]]})], property="P4")
+        elif exp.kind == "property" and len(p.moves) == 1 and p.moves[0].kind == "toggle":
+            # a toggle has no magnitude to order: start in the opposite state
+            # (setup) and expect every strength to land the same state
+            tool = "darkroom_disable" if p.key.endswith("_on") else "darkroom_enable"
+            pre = [_setup_step(step(tool, BUDGET_MOVE, module=p.moves[0].module))]
+            exp = Expect("property", [
+                Check("M1", kind="changed", target={"key": k, "unit": unit, "from": 1, "to": 2}),
+                Check("M1", kind="step_equal", target={"key": k, "a": 2, "b": 4, "unit": unit}),
+                Check("M1", kind="step_equal", target={"key": k, "a": 2, "b": 6, "unit": unit}),
+            ], property="P4")
         out.append(_case(case_id(PREFIX, "p4", p.key, body), body, "P1",
-                         [say(f"{syn} a touch"), undo(), say(syn), undo(), say(f"{syn} a lot")],
+                         [*pre, say(f"{syn} a touch"), undo(), say(syn), undo(),
+                          say(f"{syn} a lot")],
                          exp, meta=_candidate_meta(p)))
     for a, b in OPPOSED:
         pa, pb = by_key[a], by_key[b]
