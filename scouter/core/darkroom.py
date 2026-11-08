@@ -291,7 +291,31 @@ def _commit(
         kwargs["attempts"] = attempts
     if expect_module:
         kwargs["expect_module"] = expect_module
-    return commit_fn(image_id, **kwargs)
+    try:
+        return commit_fn(image_id, **kwargs)
+    except CommitTimeout as first:
+        d = first.detail or {}
+        # Host probe 2026-11-09 (scratchpad/stale-rewrite-report.md): darktable writes a
+        # stale sidecar ~1 s after the bounce on some writes; the library.db already holds
+        # the edit and ONE more bounce lands it (23 of 23). Retry exactly once, and only
+        # when history.commit restored the pre-commit sidecar (known state); the retry is
+        # a full commit_expecting, so both oracles (sidecar history advanced for the module,
+        # history fingerprint) still decide. If it fails too, the refusal stays honest.
+        if not (d.get("stale_rewrite") and d.get("stale_rewrite_restored")):
+            raise
+        try:
+            result = commit_fn(image_id, **kwargs)
+        except CommitTimeout as second:
+            second.detail = {**(second.detail or {}), "stale_rewrite_retried": True,
+                             "first_stale_rewrite": d.get("stale_rewrite")}
+            raise
+        result.warnings = [
+            "darktable rewrote the sidecar with a stale history after the first bounce "
+            f"({d.get('stale_rewrite')}); the pre-commit sidecar was restored and one "
+            "re-bounce landed this edit, confirmed from the sidecar history.",
+            *result.warnings,
+        ]
+        return result
 
 
 def _close(a: float | None, b: float | None, tol: float = 1e-4) -> bool:
