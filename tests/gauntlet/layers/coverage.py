@@ -315,7 +315,8 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
             out.append(_case(cid(_signed("adjust", n)), body, tier, [_adjust(s, n * s.step)],
                              _wb_route_a_pinned_edit(wb_route, sign=(1 if n > 0 else -1))))
         elif relative_ok:
-            chk = m1_delta(s.module, s.param, n * s.step, s.unit, s.step)
+            chk = m1_delta(s.module, s.param, n * s.step, s.unit, s.step,
+                           None if s.wraps else s.lo, None if s.wraps else s.hi)
             chk.target["from"] = 1 + o
             out.append(_case(cid(_signed("adjust", n)), body, tier,
                              [*pre, _set(s, _mid(s)), _adjust(s, n * s.step)],

@@ -53,10 +53,15 @@ def m1_equals(module: str, param: str, value: float, unit: str) -> Check:
                  target={"key": key(module, param), "value": value, "unit": UNITS[unit]})
 
 
-def m1_delta(module: str, param: str, delta: float, unit: str, step_size: float) -> Check:
-    return Check("M1", kind="delta", target={"key": key(module, param), "delta": delta,
-                                             "unit": UNITS[unit], "tol": 0.1 * step_size,
-                                             "step": step_size})
+def m1_delta(module: str, param: str, delta: float, unit: str, step_size: float,
+             lo: float | None = None, hi: float | None = None) -> Check:
+    """`lo`/`hi`: the declared range, so a move that stops at a bound and
+    reports the clamp is credited (evaluate._delta_clamp_credited)."""
+    target = {"key": key(module, param), "delta": delta, "unit": UNITS[unit],
+              "tol": 0.1 * step_size, "step": step_size}
+    if lo is not None and hi is not None:
+        target.update(lo=lo, hi=hi)
+    return Check("M1", kind="delta", target=target)
 
 
 def m1_restored(keys: list[str], units: dict[str, str], from_step: int = 0) -> Check:

@@ -322,6 +322,8 @@ def _check_m1(i: int, ch: Check, obs: Observation) -> CheckResult:
             d = (d + 180.0) % 360.0 - 180.0
         tol = t.get("tol", abs(t.get("step", t["delta"])) * 0.1)
         ok = abs(d - t["delta"]) <= tol
+        if not ok and _delta_clamp_credited(t, b, a, tol, obs, ch.step):
+            return CheckResult(i, "M1", True, d, t["delta"], note="clamped_at_bound")
         wrong = (d * t["delta"]) < 0
         return CheckResult(i, "M1", ok, d, t["delta"], wrong_direction=wrong,
                            magnitude_only=not ok and not wrong and abs(d) > 0)
@@ -466,6 +468,20 @@ def _boundary_clamped(obs: Observation, idx: int, key_: str) -> bool:
             return True
     return any(isinstance(m, dict) and f"{m.get('module')}.{m.get('param')}" == key_
               for m in data.get("moved_to_limit") or ())
+
+
+def _delta_clamp_credited(t: dict, b: float, a: float, tol: float, obs: Observation,
+                          step: int | None) -> bool:
+    """A relative move that stops at a declared bound AND says so is correct.
+    Oracle 1: the committed value equals the bound (`lo`/`hi` in the target)
+    that the full ask would overshoot. Oracle 2: the call's envelope reports
+    the clamp (`_boundary_clamped`). A stop short of the bound, or a landing
+    at the bound with no clamp reported, is not credited."""
+    lo, hi = t.get("lo"), t.get("hi")
+    if lo is None or hi is None:
+        return False
+    bound = min(max(b + t["delta"], lo), hi)
+    return abs(a - bound) <= tol and _boundary_clamped(obs, -1 if step is None else step, t["key"])
 
 
 def _check_boundary(i: int, ch: Check, obs: Observation) -> CheckResult:
