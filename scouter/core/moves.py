@@ -8,6 +8,7 @@ the measured WB table or a declared neutral -- never from a slider position
 
 from __future__ import annotations
 
+import contextvars
 import time
 from datetime import datetime
 from pathlib import Path
@@ -103,9 +104,21 @@ def _table_range(camera: str) -> tuple[float, float] | None:
     return min(ks), max(ks)
 
 
+_FLUSHED: contextvars.ContextVar[bool] = contextvars.ContextVar("moves_flushed", default=False)
+_UNKNOWN_AFTER_NUDGE = (
+    "an uncommitted nudge preceded this read, so the live value is unknown (the sidecar "
+    "is stale); pass bounce, or commit the pending edit, then read again"
+)
+
+
 def read_current(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int,
-                 job: str) -> tuple[float | None, str, str | None]:
-    """(value, source, reason). Source order: journal, xmp, wb_table, neutral."""
+                 job: str, *, flushed: bool = False) -> tuple[float | None, str, str | None]:
+    """(value, source, reason). Source order: journal, xmp, wb_table, neutral.
+
+    `flushed` (or `_FLUSHED`, set by `adjust` around its core): the caller just
+    bounced darktable's history into the sidecar, so the sidecar is the live
+    value even after an uncommitted nudge."""
+    flushed = flushed or _FLUSHED.get()
     if s.value_source == "wb_table":
         parsed = darkroom._read_sidecar_parsed(resolved.path)
         if parsed is None:
@@ -126,6 +139,8 @@ def read_current(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int,
         job, resolved.image_id, resolved.path, s.module, s.param, instance)
     if pending and before.get("value") is not None:
         return float(before["value"]), "journal", None
+    if pending and before.get("value_unknown") and not flushed:
+        return None, "journal", _UNKNOWN_AFTER_NUDGE
     # Fix round 1, important: `_module_state`'s `enabled: None` is ambiguous --
     # it means BOTH "no sidecar at all" and "a sidecar exists, but this module
     # has no active entry in it" (darkroom.py's `_module_state`/`_read_sidecar_
@@ -359,7 +374,9 @@ def before_fallback(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int,
         job, resolved.image_id, resolved.path, s.module, s.param, instance)
     if before.get("value") is not None:
         return None
-    if raw.get("history_end") is None:
+    if before.get("value_unknown"):
+        reason = _UNKNOWN_AFTER_NUDGE
+    elif raw.get("history_end") is None:
         reason = "no sidecar yet: commit history first"
     elif raw.get("enabled") is None:
         if s.neutral is not None:
@@ -551,7 +568,7 @@ def get(module: str, param: str, *, instance: int = 0, bounce: bool = False,
     if bounce:
         dtbridge.require_darkroom()
         pre_warning = _precommit(job, resolved.image_id, expect_module=module)
-    value, source, reason = read_current(resolved, s, instance, job)
+    value, source, reason = read_current(resolved, s, instance, job, flushed=bounce)
     fresh, why = history.watermark_fresh(job, resolved.image_id, resolved.xmp_path)
     warnings: list[str] = [pre_warning] if pre_warning else []
     if not fresh and not bounce:
@@ -626,9 +643,13 @@ def adjust(module: str, param: str, delta: float, *, instance: int = 0, commit: 
         module, param, instance = _target(routed)
         darkroom.refuse_wb_late(resolved.path, module, [param], instance,
                                 what=f"darkroom adjust {module}.{param}")
-    with darkroom.no_wb_reroute_scope():
-        result = _adjust_core(module, param, delta, resolved=resolved, instance=instance,
-                              commit=commit, level=level, job=job, ms_precommit=pre["ms"])
+    token = _FLUSHED.set(bool(pre["bounced"]))
+    try:
+        with darkroom.no_wb_reroute_scope():
+            result = _adjust_core(module, param, delta, resolved=resolved, instance=instance,
+                                  commit=commit, level=level, job=job, ms_precommit=pre["ms"])
+    finally:
+        _FLUSHED.reset(token)
     result.plan[0]["precommit"] = {"bounced": pre["bounced"], "reason": pre["reason"]}
     if routed is not None:
         result.warnings.append(darkroom.wb_routed_note(routed))

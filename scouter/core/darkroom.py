@@ -835,8 +835,11 @@ def _raw_and_before_state(
     pending_uncommitted = last is not None and last.commit is False
     before_state = raw_state
     if pending_uncommitted:
-        before_state = {**raw_state, "value": last.after["value"]}
-        if last.after["value"] is None:  # an uncommitted nudge: live value unknown
+        # An uncommitted nudge's live value is unknown, whatever its `after`
+        # holds: a pre-fix entry carries the 0..1 status there (t_176d9d85).
+        unknown = last.verb == "darkroom.nudge" or last.after["value"] is None
+        before_state = {**raw_state, "value": None if unknown else last.after["value"]}
+        if unknown:
             before_state["value_unknown"] = True
     return raw_state, before_state, pending_uncommitted
 
@@ -1318,16 +1321,20 @@ def _nudge_timeout(
     effect: str,
     raw_state: dict,
     pending_uncommitted: bool,
+    before_fp: str | None,
 ) -> SetResult:
     """A nudge whose commit timed out: an honest noop only when the sidecar
     still reads a declared `DT_HARD_BOUNDS` bound on the side `effect` pushes
-    toward (darktable writes nothing there); otherwise a nudge-specific
-    `CommitTimeout` whose fix says read the value and not to retry."""
+    toward (darktable writes nothing there) AND the module's history did not
+    advance (a second oracle, independent of the value reads); otherwise a
+    nudge-specific `CommitTimeout` whose fix says read the value and not to
+    retry."""
     lo, hi = vocab.DT_HARD_BOUNDS.get((module, param), (None, None))
     limit = hi if effect == "up" else lo
     now = _read_value(resolved.path, module, param, instance)
     if (limit is not None and not pending_uncommitted and _close(now, limit)
-            and _close(raw_state.get("value"), limit)):
+            and _close(raw_state.get("value"), limit)
+            and not _history_advanced_for(resolved.xmp_path, before_fp, module)):
         return SetResult(
             image_id=resolved.image_id, path=resolved.path, module=module, param=param,
             instance=instance, requested=None, applied=now, previous=now, committed=True,
@@ -1339,7 +1346,8 @@ def _nudge_timeout(
         error.message,
         fix=("the nudge was not confirmed in the sidecar: read the value (`history read`) "
              f"of {module}.{param} to see whether it moved. If it is at its limit, do not "
-             "retry the nudge; otherwise leave and re-enter the darkroom first"),
+             "retry the nudge; otherwise leave and re-enter the darkroom, then read "
+             "the value again before deciding"),
         detail={**error.detail, "module": module, "param": param, "instance": instance},
     )
 
@@ -1420,6 +1428,7 @@ def nudge(
     )
     if shortcut is not None:
         return shortcut
+    before_fp = _history_fingerprint_now(resolved.xmp_path)
     entry = journal.begin(
         job,
         verb="darkroom.nudge",
@@ -1486,7 +1495,8 @@ def nudge(
             )
         except CommitTimeout as e:
             return _nudge_timeout(
-                e, resolved, module, param, instance, effect, raw_state, pending_uncommitted
+                e, resolved, module, param, instance, effect, raw_state, pending_uncommitted,
+                before_fp,
             )
         applied = _read_value(resolved.path, module, param, instance)
         # Row 433, restated without `status` (fix round 1, I1): a landed
