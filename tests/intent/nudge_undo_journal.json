@@ -1,0 +1,28 @@
+{
+  "about": "Zenkai Rules Z1 intent examples for t_176d9d85 (follow-ups I3 and boundary from the t_fcf77055 review; decision rows 430/461/548). `darkroom.nudge` journalled `dt.gui.action`'s `status` (a normalised 0..1 slider position, design 7.3) as the key's value, so a later write's undo could restore exposure to a slider position; and a nudge at a real limit raised a CommitTimeout whose fix text said to retry. Run by tests/intent/test_nudge_undo_journal_intent.py (tests/test_nudge_undo_journal.py carries the wider suite).",
+  "subject": "scouter/core/darkroom.py nudge, _nudge_timeout, _raw_and_before_state, _undo_one",
+  "examples": [
+    {
+      "id": "uncommitted-nudge-then-set-is-not-undoable-to-a-slider-position",
+      "input": {"steps": ["nudge exposure.exposure +1 commit=false (bridge status 0.5)", "set exposure.exposure 2.0 commit=false", "undo_last single"],
+                "sidecar_exposure": 1.5500002},
+      "expect": {"journal_nudge_after_value": null, "journal_set_before_value": null,
+                "undo": "refused", "restore_sent": false},
+      "source": "design 7.3: status is a slider position, never a value; the sidecar still reads 1.5500002, so the only honest before value of the later set is unknown"
+    },
+    {
+      "id": "nudge-at-a-declared-hard-bound-is-an-honest-noop",
+      "input": {"module": "sigmoid", "param": "skew", "steps": 1, "sidecar_skew": 1.0,
+                "commit": "times out (darktable writes nothing at its limit)"},
+      "expect": {"noop": true, "committed": true, "applied": 1.0},
+      "source": "DT_HARD_BOUNDS (night-1 gauntlet, row 433): sigmoid.skew is stored at +/-1.0 and no history item is written beyond it"
+    },
+    {
+      "id": "nudge-timeout-off-a-bound-says-read-and-do-not-retry",
+      "input": {"module": "exposure", "param": "exposure", "steps": 1, "sidecar_exposure": 1.5500002,
+                "commit": "times out; exposure has no declared bound"},
+      "expect": {"raises": "CommitTimeout", "fix_mentions": ["read the value", "do not retry"]},
+      "source": "an undeclared limit is not a proven clamp (vocab.DT_HARD_BOUNDS docstring), so no noop; the generic fix text invited a retry loop"
+    }
+  ]
+}

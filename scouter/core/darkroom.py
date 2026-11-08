@@ -833,7 +833,11 @@ def _raw_and_before_state(
     raw_state = _read_state(path, module, param, instance)
     last = _last_journal_write(job, image_id, module, param, instance)
     pending_uncommitted = last is not None and last.commit is False
-    before_state = {**raw_state, "value": last.after["value"]} if pending_uncommitted else raw_state
+    before_state = raw_state
+    if pending_uncommitted:
+        before_state = {**raw_state, "value": last.after["value"]}
+        if last.after["value"] is None:  # an uncommitted nudge: live value unknown
+            before_state["value_unknown"] = True
     return raw_state, before_state, pending_uncommitted
 
 
@@ -1305,6 +1309,41 @@ def set_param(
     )
 
 
+def _nudge_timeout(
+    error: CommitTimeout,
+    resolved: dtbridge.ResolvedImage,
+    module: str,
+    param: str,
+    instance: int,
+    effect: str,
+    raw_state: dict,
+    pending_uncommitted: bool,
+) -> SetResult:
+    """A nudge whose commit timed out: an honest noop only when the sidecar
+    still reads a declared `DT_HARD_BOUNDS` bound on the side `effect` pushes
+    toward (darktable writes nothing there); otherwise a nudge-specific
+    `CommitTimeout` whose fix says read the value and not to retry."""
+    lo, hi = vocab.DT_HARD_BOUNDS.get((module, param), (None, None))
+    limit = hi if effect == "up" else lo
+    now = _read_value(resolved.path, module, param, instance)
+    if (limit is not None and not pending_uncommitted and _close(now, limit)
+            and _close(raw_state.get("value"), limit)):
+        return SetResult(
+            image_id=resolved.image_id, path=resolved.path, module=module, param=param,
+            instance=instance, requested=None, applied=now, previous=now, committed=True,
+            noop=True, clamped=True, source=raw_state.get("source", "xmp"),
+            warnings=[f"no-op: {module}.{param} is already at darktable's hard limit "
+                      f"{limit:g} in the sidecar; a nudge {effect} cannot move it"],
+        )
+    raise CommitTimeout(
+        error.message,
+        fix=("the nudge was not confirmed in the sidecar: read the value (`history read`) "
+             f"of {module}.{param} to see whether it moved. If it is at its limit, do not "
+             "retry the nudge; otherwise leave and re-enter the darkroom first"),
+        detail={**error.detail, "module": module, "param": param, "instance": instance},
+    )
+
+
 @metrics.instrumented("darkroom.nudge")
 def nudge(
     module: str,
@@ -1393,35 +1432,20 @@ def nudge(
         commit=commit,
     )
     landed = 0
-    last_status: float | None = None
     try:
         for _ in range(abs(steps)):
-            result = dtbridge.action(
-                path_, instance=instance, element="value", effect=effect, value=1
-            )
+            dtbridge.action(path_, instance=instance, element="value", effect=effect, value=1)
             landed += 1
-            status_value = result.get("status")
-            if isinstance(status_value, (int, float)):
-                last_status = float(status_value)
     except Exception as e:
         code = e.code if isinstance(e, ScouterError) else "error"
         journal.fail(job, entry.seq, outcome=f"error:{code}")
         raise
     # `dt.gui.action`'s `status` is a post-write GUI echo -- a normalised
-    # 0..1 slider position, undocumented for effect up/down, and NEVER the
-    # param's real value in its own units (design 7.3; the Lua plugin's
-    # `darkroom.action`/`darkroom.status`). Nothing in THIS nudge's own
-    # commit=True success/applied decision below trusts it any more -- but
-    # `after["value"]` still records it (fix round 2, blocker 6), and that
-    # value keeps feeding `before_state` for a LATER write to this same key
-    # (`_raw_and_before_state`'s `pending_uncommitted` fallback, `:8xx`) and
-    # `undo_last`'s restore -- a pre-existing leak this branch did not
-    # introduce and does not fix; tracked as a follow-up card (fix round 1,
-    # I3: a nudge's `after` should mark the key `value_unknown`, not carry a
-    # position dressed up as a value).
-    after: dict = {"steps": steps, "steps_landed": landed}
-    if last_status is not None:
-        after["value"] = last_status
+    # 0..1 slider position, NEVER the param's real value (design 7.3). The
+    # journal records the value as unknown (`value: None`, `value_unknown`),
+    # keeping the key so `_last_journal_write` still sees the pending
+    # commit=False write; a later write's undo then refuses (t_176d9d85).
+    after: dict = {"steps": steps, "steps_landed": landed, "value": None, "value_unknown": True}
     journal.complete(job, entry.seq, after=after)
 
     committed, applied, warnings = False, None, []
@@ -1450,15 +1474,20 @@ def nudge(
             current = _read_value(resolved.path, module, param, instance)
             return _moved_as_asked(raw_state.get("value"), current, effect)
 
-        committed, warnings, noop = _commit_with_readback(
-            job,
-            resolved.image_id,
-            xmp_path=resolved.xmp_path,
-            confirm=_confirm_nudge,
-            what=f"{module}.{param}",
-            expect_module=module,
-            allow_noop=False,
-        )
+        try:
+            committed, warnings, noop = _commit_with_readback(
+                job,
+                resolved.image_id,
+                xmp_path=resolved.xmp_path,
+                confirm=_confirm_nudge,
+                what=f"{module}.{param}",
+                expect_module=module,
+                allow_noop=False,
+            )
+        except CommitTimeout as e:
+            return _nudge_timeout(
+                e, resolved, module, param, instance, effect, raw_state, pending_uncommitted
+            )
         applied = _read_value(resolved.path, module, param, instance)
         # Row 433, restated without `status` (fix round 1, I1): a landed
         # (non-noop) commit whose own before/after XMP readback did not
@@ -2249,9 +2278,11 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
         mark_undone_ok = True
         previous = entry.before.get("value")
         if previous is None:
+            why = ("was unknown (an uncommitted nudge preceded it)"
+                   if entry.before.get("value_unknown") else "was never readable from the XMP")
             raise ScouterError(
                 f"cannot undo seq {entry.seq}: the previous value of "
-                f"{entry.module}.{entry.param} was never readable from the XMP",
+                f"{entry.module}.{entry.param} {why}",
                 fix="press Ctrl-Z in darktable, or set the value you want explicitly",
                 detail={"seq": entry.seq},
             )

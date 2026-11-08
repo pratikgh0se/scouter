@@ -451,10 +451,10 @@ class DarkroomCoreTest(_DarkroomFixture):
         self.assertEqual(effects, ["down", "down", "down"])
         entry = journal.latest_open("job-test")
         assert entry is not None
-        # `after.value` comes from the bridge's own `status` on the last
-        # action, not a guess (fix round 2, blocker 6) -- required so a
-        # subsequent commit=False write can fall back to it.
-        self.assertEqual(entry.after, {"steps": -3, "steps_landed": 3, "value": 1.0})
+        # `status` is a slider position, never a value (t_176d9d85): the
+        # key stays (pending commit=False detection) with the value unknown.
+        self.assertEqual(entry.after, {"steps": -3, "steps_landed": 3, "value": None,
+                                       "value_unknown": True})
 
     def test_nudge_mid_loop_failure_leaves_after_null_and_records_the_error(self) -> None:
         calls = {"n": 0}
@@ -475,15 +475,14 @@ class DarkroomCoreTest(_DarkroomFixture):
         self.assertEqual(entry.outcome, "error:not_in_darkroom")
 
     def test_a_nudge_is_a_valid_fallback_source_for_a_later_commit_false_set(self) -> None:
-        """Blocker 6's point: a nudge's `after.value` must be usable by
-        `_last_journal_write`, the same as a `set`'s."""
+        """Blocker 6's point, restated (t_176d9d85): a nudge is still seen by
+        `_last_journal_write` (so the set's `before` is not the stale XMP
+        read of 1.55), but its value is unknown, never the bridge `status`."""
         darkroom.nudge(module="exposure", param="exposure", steps=1, commit=False)
         darkroom.set_param(module="exposure", param="exposure", value=5.0, commit=False)
         entries = journal.read_all("job-test")
-        # The nudge's FakeBridge `status` echoes the requested step value (1),
-        # not a real EV -- what matters here is that the set's `before` came
-        # from the nudge's `after`, not a fresh (stale) XMP read of 1.55.
-        self.assertEqual(entries[-1].before["value"], 1.0)
+        self.assertIsNone(entries[-1].before["value"])
+        self.assertTrue(entries[-1].before["value_unknown"])
 
     # -- enable / reset ----------------------------------------------------
 
