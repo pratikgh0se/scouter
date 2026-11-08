@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest import mock
 
-from scouter.core import darkroom, dtbridge, exif, journal, moves
+from scouter.core import darkroom, dtbridge, exif, journal, moves, vocab
 from scouter.errors import NotPinned, UsageError, ValueUnknown
 from tests.test_moves import _MovesFixture
 
@@ -24,7 +24,9 @@ class SayTest(_MovesFixture):
     def test_contrast_routes_to_sigmoid_on_the_fixture(self) -> None:
         r = moves.say.__wrapped__("less contrast", commit=False, job="job-test")
         self.assertEqual(r.moves[0]["module"], "sigmoid")
-        self.assertAlmostEqual(r.moves[0]["target"], 1.3, places=5)
+        # fixture contrast is 1.4; "less contrast" is one sigmoid.contrast notch down
+        self.assertAlmostEqual(r.moves[0]["target"], 1.4 - vocab.spec("sigmoid", "contrast").step,
+                               places=5)
 
     def test_contrast_routes_to_filmic_when_filmic_is_the_tone_mapper(self) -> None:
         # Task 10 pinned filmic's contrast path and slot; the fixture has no

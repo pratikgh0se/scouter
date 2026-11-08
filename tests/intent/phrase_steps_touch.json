@@ -1,0 +1,18 @@
+{
+  "about": "Zenkai Z1 intent examples for the 2026-11-09 phrase-step ruling (Pratik: 'small' editing phrases move modestly more so the effect is visible). Intent: 'a touch more X' must land its measured stat change inside [floor, 1.5 x floor] of the gauntlet's perceptibility floor for that phrase's stat, never below it and never wildly above. Z2 two oracles: oracle A is arithmetic on the RECORDED night-3 evidence in this file (stat change measured per unit of param change, from observation.stats_before/after and the applied move, scaled to the new touch delta); oracle B is the product's own resolver (scouter.core.phrases.resolve + vocab step) giving the touch delta the vocabulary now plans. The 'residual' examples are phrases whose step cannot clear its floor inside the vocab safety invariant step <= (hi-lo)/4; they assert the shortfall so a later fix is noticed (no skip, no xfail).",
+  "subject": "scouter/core/vocab.py sigmoid.contrast and exposure.black step; scouter/core/phrases.py INTENSITY (touch = 0.5 notch)",
+  "examples": [
+    {"id": "more-contrast-touch-olympus", "phrase": "more contrast a touch", "key": "sigmoid.contrast",
+     "stat": "spread", "floor": 0.5, "recorded_dparam": 0.05, "recorded_dstat": 0.4094504611981904, "expect": "clears",
+     "source": "night3-20261108 cov-phrase-more_contrast-olympus-touch: sigmoid.contrast 1.5 -> 1.55, M6 spread +0.4095 (floor 0.5)"},
+    {"id": "more-contrast-touch-sony", "phrase": "more contrast a touch", "key": "sigmoid.contrast",
+     "stat": "spread", "floor": 0.5, "recorded_dparam": 0.05, "recorded_dstat": 0.474818729990119, "expect": "clears",
+     "source": "night3-20261108 cov-phrase-more_contrast-sony_a7-touch: sigmoid.contrast 1.5 -> 1.55, M6 spread +0.4748 (floor 0.5)"},
+    {"id": "faded-blacks-touch-olympus", "phrase": "faded blacks a touch", "key": "exposure.black",
+     "stat": "p01L", "floor": 0.5, "recorded_dparam": 0.0025, "recorded_dstat": 0.27417482748313304, "expect": "clears",
+     "source": "night3-20261108 cov-phrase-faded_blacks-olympus-touch: exposure.black -0.000244 -> -0.0027, M3 p01L +0.2742 (floor 0.5)"},
+    {"id": "lift-shadows-touch-sony-residual", "phrase": "lift shadows a touch", "key": "colorbalancergb.shadows_luminance",
+     "stat": "L", "floor": 0.5, "recorded_dparam": 0.0625, "recorded_dstat": 0.4875058910584915, "expect": "short",
+     "source": "night3-20261108 cov-phrase-lift_shadows-sony_a7-touch: step 0.125 is the (hi-lo)/4 ceiling, needs 0.16"}
+  ]
+}

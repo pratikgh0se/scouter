@@ -5,6 +5,16 @@ branch, which fixes defects found by the E12 live evaluation against real
 darktable (`Knowledge/Scouter - E12 live evaluation 2026-09-24.md` in the
 vault; decision row 407).
 
+## Unreleased (fix/phrase-steps)
+
+Small editing phrases move modestly more (Pratik, 2026-11-09): `sigmoid.contrast`
+step 0.1 -> 0.15 ("more/less contrast", "punchier", "flatter"; touch 0.075, bare
+0.15, lot 0.3) and `exposure.black` step 0.005 -> 0.01 ("deeper blacks", "faded
+blacks"; touch 0.005, bare 0.01, lot 0.02), so a touch clears the gauntlet
+perceptibility floor on the night-3 evidence. The other night-3 imperceptible
+phrases sit at the `step <= (hi-lo)/4` ceiling and are unchanged (see
+scratchpad/phrase-steps-report.md). Floors and evaluator untouched.
+
 ## Unreleased (fix/colorcal-route-probe)
 
 Route A is live: on a preset-4 ("camera reference (late)") frame, "warmer",

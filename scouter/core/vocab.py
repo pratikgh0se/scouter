@@ -199,7 +199,10 @@ PARAMS: tuple[ParamSpec, ...] = (
               "brightens or darkens the whole frame evenly, before any tone mapping",
               "the highlights for clipping and the shadows for noise"),
     ParamSpec("exposure", "black", "exposure › black level correction", "ratio", 1.0,
-              -0.1, 0.1, 0.005, "xmp", None, False, "black_level",
+              # Phrase-step ruling 2026-11-09: 0.005 -> 0.01 (the most the
+              # "never more than double" rule allows), so "faded blacks a
+              # touch" (0.005) clears the M3 p01L floor on night-3 evidence.
+              -0.1, 0.1, 0.01, "xmp", None, False, "black_level",
               "moves the point that renders as pure black",
               "the darkest areas: a few thousandths is a visible change",
               # Row 474 (final-review issue I1): §4.3's own table
@@ -232,7 +235,9 @@ PARAMS: tuple[ParamSpec, ...] = (
               # (that table stays as-is, blank), only this repo's own
               # host-verified value.
               default=0.0),
-    ParamSpec("sigmoid", "contrast", "sigmoid › contrast", "ratio", 1.0, 0.5, 3.0, 0.1,
+    # Phrase-step ruling 2026-11-09: 0.1 -> 0.15 so "more contrast a touch"
+    # (0.075) lands at 1.2x-1.4x the M6 spread floor on night-3 evidence.
+    ParamSpec("sigmoid", "contrast", "sigmoid › contrast", "ratio", 1.0, 0.5, 3.0, 0.15,
               "xmp", None, False, "tone_mapper",
               "steepens or flattens the middle of the tone curve",
               "shadow and highlight detail at the two ends"),
