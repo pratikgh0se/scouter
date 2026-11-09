@@ -105,6 +105,24 @@ def _run_parallel(args: argparse.Namespace, cfg: dict, adapter, run: RunDir) -> 
     if not todo:
         print(f"{run.root}: nothing to run")
         return 0
+    first = workers_mod.serial_first(adapter, todo)
+    if first:  # e.g. the chart golden: writes the calibration every look shard reads
+        pre_env = workers_mod.preflight_env(run, args.workers, adapter)
+        saved = {k: os.environ.get(k) for k in pre_env}
+        os.environ.update(pre_env)
+        try:
+            summary = runner.run_layers(None, resume=False, case_ids=set(first),
+                                        wait_on_park=args.wait_on_park)
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        print(f"{run.root}: serial pre-run {', '.join(first)}: status {summary.status}")
+        todo = [c for c in todo if c.id not in set(first)]
+        if not todo:
+            return EXIT_PARKED if summary.parked else 0
     shards = workers_mod.partition(
         todo, args.workers, max_cases=runner.session_max_cases,
         atomic_layers=frozenset(getattr(adapter, "atomic_layers", ())))

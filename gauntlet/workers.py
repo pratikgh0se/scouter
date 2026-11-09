@@ -113,6 +113,24 @@ def worker_env(run: RunDir, k: int, n: int, adapter, base: dict | None = None) -
     return env
 
 
+def serial_first(adapter, todo: list[Case]) -> list[str]:
+    """Ids of selected cases the adapter wants run serially in the parent before
+    the shards spawn (e.g. a case that writes a run-wide file every shard reads).
+    Optional adapter hook `serial_first_ids(todo)`; none = nothing to do."""
+    hook = getattr(adapter, "serial_first_ids", None)
+    ids = list(hook(todo)) if hook is not None else []
+    return [c.id for c in todo if c.id in set(ids)]
+
+
+def preflight_env(run: RunDir, n: int, adapter) -> dict[str, str]:
+    """The env a parent-run pre-case uses: a worker's (registered pid registry,
+    seeded configdir, spool) minus the shard marker, so the foreign-darktable
+    guard treats its darktable like a worker's."""
+    env = worker_env(run, 0, n, adapter)
+    env.pop(SHARD_ENV, None)
+    return env
+
+
 def shard_ids_path(run: RunDir, k: int) -> Path:
     return shard_dir(run, k) / "cases.txt"
 

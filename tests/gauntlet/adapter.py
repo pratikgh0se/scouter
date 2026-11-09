@@ -456,6 +456,15 @@ class ScouterAdapter:
     #: install is one stateful 10-step rehearsal; it never splits across workers.
     atomic_layers = frozenset({"install"})
 
+    def serial_first_ids(self, todo: list[Case]) -> list[str]:
+        """Parallel mode: the chart golden writes the per-run calibration every
+        chart/hero look reads, so the parent runs it serially before sharding."""
+        from tests.gauntlet.exec_looks import GOLDEN_ID
+
+        ids = {c.id for c in todo}
+        return [GOLDEN_ID] if GOLDEN_ID in ids and len(ids) > 1 and any(
+            c.layer == "looks" and c.id != GOLDEN_ID for c in todo) else []
+
     @property
     def process_dir(self) -> Path:
         """The gauntlet process's own config/cache dir; one per parallel worker."""

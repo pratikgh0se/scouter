@@ -589,3 +589,19 @@ def test_progress_is_merged_after_a_park(tmp_path, inproc):
     main(_cli(tmp_path) + ["run", "--stamp", "s", "--workers", "2", "--resume"])
     prog = json.loads(run.progress_json.read_text())
     assert sum(lay["done"] for lay in prog["layers"].values()) == len(run.done_ids())
+
+
+def test_adapter_asks_for_golden_serial_first_only_with_other_look_cases(tmp_path):
+    from gauntlet.case import Case
+    from tests.gauntlet.adapter import ScouterAdapter
+    from tests.gauntlet.exec_looks import GOLDEN_ID
+
+    def mk(cid, layer="looks"):
+        return Case(id=cid, layer=layer, tier="P1", steps=[], checks=[], expect=None)
+
+    a = ScouterAdapter(tmp_path)
+    golden, other = mk(GOLDEN_ID), mk("lk-other")
+    assert a.serial_first_ids([other, golden]) == [GOLDEN_ID]
+    assert a.serial_first_ids([golden]) == []
+    assert a.serial_first_ids([other]) == []
+    assert a.serial_first_ids([golden, mk("cov-1", "coverage")]) == []
