@@ -85,6 +85,8 @@ def test_edu_brighter_and_darker_are_unaffected():
             c = next(c for c in cases if c.meta.get("session") == f"edu-{level}" and
                      c.steps[-1].args["phrase"] == phrase)
             assert c.expect.kind == "workflow"
+            # C18: only the `full` level carries the explained-concept reset
+            assert (c.steps[0].tool == "reset_explained") == (level == "full")
 
 
 def test_more_magenta_stays_value_unknown_not_wb_route_a():
