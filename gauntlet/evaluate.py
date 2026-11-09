@@ -1549,6 +1549,12 @@ def _evaluate_with_gaps(case: Case, obs: Observation, policy: Policy, gaps: dict
     if refused and v.score == PASS:
         v = Verdict(PARTIAL, "honest_refusal_component", v.checks, notes=[
             *v.notes, "honest_refusal_component: Scouter refused " + ", ".join(refused)])
+    #: Z2: a confounded check (declared a priori by the case generator) leaves
+    #: only the sidecar oracle for that component; one oracle is never a pass.
+    if v.score == PASS and any(str(ch.tags.get("declared_gap", "")).startswith("confounded by")
+                               for ch in case.expect.checks):
+        v = Verdict(PARTIAL, "needs_review", v.checks, notes=[
+            *v.notes, "needs_review: a confounded check leaves one oracle (Z2)"])
     #: Z2/gates: a gap check stays in the verdict as a NOT served result, so a
     #: per-component gate can never pass just because its checks became gaps.
     if why_by_idx and (len(v.checks) == len(keep) or not keep):

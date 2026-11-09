@@ -205,3 +205,21 @@ def test_c18_reset_explained_clears_only_the_explained_concepts(tmp_path):
     rec = VIRTUAL["reset_explained"](session, None, None, obs)
     assert rec.envelope["data"]["cleared"] == ["exposure"]
     assert json.loads((state / "job1.json").read_text()) == {"last_image": "x"}
+
+
+def test_a_priori_confounded_gap_with_passing_checks_is_never_a_pass():
+    """Z2: a check declared `confounded by ...` leaves one oracle for its
+    component, so the case caps at partial needs_review even when the rest pass."""
+    from gauntlet.case import Case, Check, Expect, Step
+
+    ok = Check("envelope", step=0, target={"path": "ok", "op": "eq", "value": True})
+    gap = Check("M6", stat="spread", sign=1, tags={"declared_gap": "confounded by x"})
+    case = Case(id="syn-confounded", layer="looks", tier="P1", mode="tool",
+                steps=[Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
+                expect=Expect("workflow", [ok, gap]), body="olympus", frame_role="hero",
+                meta={"look": True})
+    obs = Observation(calls=[CallRecord("darkroom_say", {"phrase": "brighter"},
+                                        {"ok": True, "outcome": "ok", "data": {}}, write=True)])
+    v = evaluate(case, obs, POLICY)
+    assert (v.score, v.outcome) == ("partial", "needs_review")
+    assert any("one oracle (Z2)" in n for n in v.notes)
