@@ -60,10 +60,12 @@ def chart_checks(look: dict, tol: dict) -> tuple[list[Check], list[dict]]:
     checks: list[Check] = []
     tags: list[dict] = []
 
-    def add(ch: Check, component: str) -> None:
+    def add(ch: Check, component: str, key: str | None = None) -> None:
         c = conf.get(component, "inferred")
         if c not in SOURCED:  # inferred: sign only
             ch.target = None
+        if key:  # the planner param this check depends on (a gap when it is unplanned)
+            ch.tags["look_key"] = key
         checks.append(ch)
         tags.append({"confidence": c, "component": component})
 
@@ -77,19 +79,21 @@ def chart_checks(look: dict, tol: dict) -> tuple[list[Check], list[dict]]:
     if tone.get("contrast"):
         v = tone["contrast"]
         add(Check("M6", stat="slope", region="chart_tone", sign=1 if v > 0 else -1, kind="frac",
-                  target={"value": v, "tol": tol[conf.get("tone", "inferred")]["sat"]}), "tone")
+                  target={"value": v, "tol": tol[conf.get("tone", "inferred")]["sat"]}), "tone",
+            "sigmoid.contrast")
     sat = t.get("saturation_delta") or 0
     if sat:
         add(Check("M5", stat="C", region="chart_chromatic", sign=1 if sat > 0 else -1,
                   kind="frac", target={"value": sat, "tol": tol[conf.get(
-                      "saturation_delta", "inferred")]["sat"]}), "saturation_delta")
+                      "saturation_delta", "inferred")]["sat"]}), "saturation_delta",
+            "colorbalancergb.global_chroma")
     gc = t.get("grey_cast") or {}
     for axis in ("a", "b"):
         v = gc.get(axis) or 0
         if v:
             add(Check("M4", stat=axis, region="patch:ramp_+0", sign=1 if v > 0 else -1,
                       target={"value": v, "tol": tol[conf.get("grey_cast", "inferred")]["ab"]}),
-                "grey_cast")
+                "grey_cast", "temperature.tint" if axis == "a" else "temperature.temperature")
     st = t.get("split_toning") or {}
     for end, patch in (("shadow", "patch:ramp_-3"), ("highlight", "patch:ramp_+2")):
         hue, s = st.get(f"{end}_hue"), st.get(f"{end}_sat") or 0
@@ -98,7 +102,7 @@ def chart_checks(look: dict, tol: dict) -> tuple[list[Check], list[dict]]:
             add(Check("M4", stat=axis, region=patch, sign=sign), "split_toning")
     if t.get("black_lift"):
         add(Check("M3", stat="L", region="patch:ramp_-5", sign=1 if t["black_lift"] > 0 else -1),
-            "black_lift")
+            "black_lift", "exposure.black")
     if not checks:
         checks.append(Check("M2", stat="L", region="patch:ramp_+0", sign=0, kind="unchanged"))
         tags.append({"confidence": look["confidence"], "component": "neutral"})
@@ -117,19 +121,23 @@ def frame_checks(look: dict) -> tuple[list[Check], list[dict]]:
             tags.append({"confidence": conf.get("tone", "inferred"), "component": "tone"})
     if tone.get("contrast"):
         checks.append(Check("M6", stat="spread", region="frame",
-                            sign=1 if tone["contrast"] > 0 else -1))
+                            sign=1 if tone["contrast"] > 0 else -1,
+                            tags={"look_key": "sigmoid.contrast"}))
         tags.append({"confidence": conf.get("tone", "inferred"), "component": "tone"})
     if t.get("saturation_delta"):
         checks.append(Check("M5", stat="C", region="frame",
-                            sign=1 if t["saturation_delta"] > 0 else -1))
+                            sign=1 if t["saturation_delta"] > 0 else -1,
+                            tags={"look_key": "colorbalancergb.global_chroma"}))
         tags.append({"confidence": conf.get("saturation_delta", "inferred"),
                      "component": "saturation_delta"})
     gc = t.get("grey_cast") or {}
     if gc.get("b"):
-        checks.append(Check("M4", stat="rb", region="frame", sign=1 if gc["b"] > 0 else -1))
+        checks.append(Check("M4", stat="rb", region="frame", sign=1 if gc["b"] > 0 else -1,
+                            tags={"look_key": "temperature.temperature"}))
         tags.append({"confidence": conf.get("grey_cast", "inferred"), "component": "grey_cast"})
     if t.get("black_lift"):
-        checks.append(Check("M3", stat="p01L", region="frame", sign=1))
+        checks.append(Check("M3", stat="p01L", region="frame", sign=1,
+                            tags={"look_key": "exposure.black"}))
         tags.append({"confidence": conf.get("black_lift", "inferred"), "component": "black_lift"})
     if not checks:
         checks.append(Check("M2", stat="L", region="frame", sign=0, kind="unchanged"))

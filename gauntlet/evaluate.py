@@ -25,6 +25,7 @@ Two equalities, never mixed (night-1 fix, bug 2):
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import re
 from dataclasses import asdict, dataclass, field
@@ -1354,7 +1355,79 @@ def _transient_block(obs: Observation, policy: Policy) -> str | None:
     return None
 
 
+#: Night 3 (looks cluster A and the 86 tint refusals): the look planner could not
+#: plan a component (no calibration for sigmoid.contrast / temperature.temperature)
+#: or Scouter honestly refused it (temperature.tint while WB is late). Such a
+#: component is a declared gap -- the check behind it is not asserted, and the
+#: verdict names it.
+_NO_CAL = re.compile(r"^(?:no calibration for (\S+)|(\S+) calibration unverified\b.*)$")
+
+
+def _look_check_key(case: Case, i: int, ch: Check) -> str | None:
+    """The `module.param` a looks check depends on: its own `look_key` tag, else
+    derived (stored night-3 cases carry no tag) from the metric/stat and the
+    component named in `meta["check_tags"]`."""
+    if ch.tags.get("look_key"):
+        return ch.tags["look_key"]
+    tags = case.meta.get("check_tags") or []
+    comp = (tags[i] if i < len(tags) else {}).get("component")
+    if ch.metric == "M6":
+        return "sigmoid.contrast"
+    if comp == "grey_cast" and ch.metric == "M4":
+        return "temperature.tint" if ch.stat == "a" else "temperature.temperature"
+    if comp == "saturation_delta":
+        return "colorbalancergb.global_chroma"
+    if comp == "black_lift":
+        return "exposure.black"
+    return None
+
+
+def _look_gap_keys(case: Case, obs: Observation, policy: Policy) -> dict[str, str]:
+    """{module.param: reason} for every look component that was not planned
+    (`look_notes`) or whose move Scouter honestly refused (a typed refusal
+    code on the sub-move)."""
+    if not case.meta.get("look"):
+        return {}
+    out: dict[str, str] = {}
+    for note in obs.extra.get("look_notes") or []:
+        m = _NO_CAL.match(str(note))
+        if m:
+            out[m.group(1) or m.group(2)] = "no calibration"
+    for c in obs.calls:
+        if c.tool != "look_plan":
+            continue
+        for m in ((c.envelope or {}).get("data") or {}).get("moves") or []:
+            if isinstance(m, dict) and m.get("ok") is False and m.get("error") in policy.refusal_codes:
+                out[f"{m.get('module')}.{m.get('param')}"] = f"refused {m['error']}"
+    return out
+
+
 def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
+    gaps = _look_gap_keys(case, obs, policy)
+    if gaps:
+        keep, dropped = [], []
+        for i, ch in enumerate(case.expect.checks):
+            key = _look_check_key(case, i, ch)
+            (dropped if key in gaps else keep).append((ch, key))
+        if dropped:
+            notes = [f"declared gap: look component not plannable: {k} ({gaps[k]})"
+                     for k in sorted({k for _, k in dropped})]
+            if not keep and not obs.crash_reports and not obs.blocked \
+                    and not _transient_block(obs, policy):
+                return Verdict(PARTIAL, "needs_review", [], notes=notes)
+            slim = dataclasses.replace(case, expect=dataclasses.replace(
+                case.expect, checks=[ch for ch, _ in keep]),
+                meta=dict(case.meta, check_tags=[
+                    t for i, t in enumerate(case.meta.get("check_tags") or [])
+                    if i < len(case.expect.checks)
+                    and _look_check_key(case, i, case.expect.checks[i]) not in gaps]))
+            v = _evaluate(slim, obs, policy)
+            v.notes = [*v.notes, *notes]
+            return v
+    return _evaluate(case, obs, policy)
+
+
+def _evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     if obs.crash_reports:
         return Verdict(FAIL, "crash", notes=list(obs.crash_reports))
     if obs.blocked:

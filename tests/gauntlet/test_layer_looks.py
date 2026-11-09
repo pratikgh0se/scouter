@@ -100,3 +100,16 @@ def test_looks_real_frame_cases_use_the_bright_hero_on_olympus_only():
         want = "hero_bright" if c.body == "olympus" else "hero"
         assert c.frame_role == want, (c.id, c.frame_role)
         assert c.steps[0].args["image"] == "{frame:" + want + "}", (c.id, c.steps[0].args)
+
+
+def test_looks_checks_name_the_planner_param_they_depend_on():
+    """Z1 intent: a look's contrast check is owned by sigmoid.contrast and its warm/cool
+    check by temperature.*; the evaluator uses the tag to declare a gap when the
+    planner could not plan (or Scouter refused) that component."""
+    cases = looks.generate(taxonomy.load())
+    keys = collections.Counter(ch.tags.get("look_key") for c in cases for ch in c.expect.checks)
+    assert keys["sigmoid.contrast"] and keys["temperature.temperature"]
+    for c in cases:
+        for ch in c.expect.checks:
+            if ch.metric == "M6":
+                assert ch.tags["look_key"] == "sigmoid.contrast"

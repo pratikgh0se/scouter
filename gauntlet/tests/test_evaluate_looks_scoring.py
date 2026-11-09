@@ -19,9 +19,10 @@ def _snap(fp, **params):
 
 
 def _look_case(checks, meta=None, steps=None):
+    meta = {"look": "x", **(meta or {})}
     return Case(id="lk-x-chart", layer="looks", tier="P1", mode="tool",
                 steps=steps or [Step("look_plan", {"look_id": "x"}, 40.0, True)],
-                expect=Expect("edit", checks, {"changed": True}), meta=meta or {})
+                expect=Expect("edit", checks, {"changed": True}), meta=meta)
 
 
 def _look_call(moves):
@@ -86,3 +87,80 @@ def test_repeat_step_only_the_last_write_per_key_is_the_landing_claim():
                 expect=Expect("edit", [chk], {"changed": True}))
     v = evaluate(case, obs, POLICY)
     assert (v.score, v.outcome) == ("partial", "imperceptible_step")
+
+
+# ---- item 2: components the planner could not plan / Scouter refused are declared gaps
+
+def _gap_obs(moves, notes=(), stats_after=None, after=None):
+    return Observation(
+        calls=[_look_call(moves)],
+        before=_snap("a", **{"colorbalancergb.shadows_luminance": 0.0}),
+        after=_snap("b", **(after or {"colorbalancergb.shadows_luminance": 0.2})),
+        stats_before={"shadows": {"L": 20.0}, "frame": {"spread": 50.0}},
+        stats_after=stats_after or {"shadows": {"L": 25.0}, "frame": {"spread": 43.7}},
+        floors={"L": 0.5, "spread": 0.5}, extra={"look_notes": list(notes)})
+
+
+SHADOWS = Check("M2", stat="L", region="shadows", sign=1)
+SPREAD = Check("M6", stat="spread", region="frame", sign=1, tags={"look_key": "sigmoid.contrast"})
+
+
+def test_unplanned_contrast_is_a_declared_gap_not_a_silent_failure():
+    """'Grade low key: contrast up, shadows down.' The run had no calibration for
+    sigmoid.contrast, so no contrast move exists; the spread check measured
+    -6.3 because nothing asked for it. That is a declared gap, recorded in the
+    verdict, while the shadows move is still verified by both oracles."""
+    obs = _gap_obs([_mv("shadows_luminance", 0.2)], ["no calibration for sigmoid.contrast"])
+    v = evaluate(_look_case([SHADOWS, SPREAD]), obs, POLICY)
+    assert v.outcome == "verified" and v.silent_failure is None
+    assert any("sigmoid.contrast" in n and "declared gap" in n for n in v.notes)
+    assert len(v.checks) == 1  # the spread check was not asserted
+
+
+def test_gap_does_not_hide_a_real_failure_of_a_planned_check():
+    """Control: with contrast declared a gap, a planned shadows check that moved the
+    wrong way is still scored."""
+    obs = _gap_obs([_mv("shadows_luminance", 0.2)], ["no calibration for sigmoid.contrast"],
+                   stats_after={"shadows": {"L": 15.0}, "frame": {"spread": 43.7}})
+    v = evaluate(_look_case([SHADOWS, SPREAD]), obs, POLICY)
+    assert v.outcome != "verified" and v.score != "pass"
+
+
+def test_look_with_only_unplannable_checks_needs_review():
+    obs = Observation(calls=[_look_call([])], before=_snap("a"), after=_snap("a"),
+                      extra={"look_notes": ["no calibration for sigmoid.contrast"]})
+    v = evaluate(_look_case([SPREAD]), obs, POLICY)
+    assert (v.score, v.outcome) == ("partial", "needs_review")
+    assert "sigmoid.contrast" in v.notes[0]
+
+
+def test_honest_tint_refusal_is_a_declared_gap_and_the_rest_is_scored():
+    """'Warm grey cast' on a camera raw with late WB: Scouter refuses
+    temperature.tint (module_unavailable). That is honest; the look's other
+    components are judged and the tint check is a gap."""
+    tint = Check("M4", stat="a", region="patch:ramp_+0", sign=1,
+                 tags={"look_key": "temperature.tint"})
+    moves = [_mv("shadows_luminance", 0.2),
+             _mv("tint", 0.9, ok=False, error="module_unavailable", module="temperature")]
+    v = evaluate(_look_case([SHADOWS, tint]), _gap_obs(moves), POLICY)
+    assert v.outcome == "verified"
+    assert any("temperature.tint" in n and "refused module_unavailable" in n for n in v.notes)
+
+
+def test_untyped_sub_move_failure_is_not_a_gap():
+    """Control: a sub-move that failed with a non-refusal code is not excused."""
+    tint = Check("M4", stat="a", region="patch:ramp_+0", sign=1,
+                 tags={"look_key": "temperature.tint"})
+    moves = [_mv("shadows_luminance", 0.2),
+             _mv("tint", 0.9, ok=False, error="weird_failure", module="temperature")]
+    v = evaluate(_look_case([SHADOWS, tint]), _gap_obs(moves), POLICY)
+    assert v.outcome != "verified"
+
+
+def test_stored_cases_without_a_tag_derive_the_gap_from_metric_and_component():
+    """Night-3 cases carry no look_key tag: an M6 check is the sigmoid.contrast one."""
+    spread = Check("M6", stat="spread", region="frame", sign=1)
+    obs = _gap_obs([_mv("shadows_luminance", 0.2)], ["no calibration for sigmoid.contrast"])
+    v = evaluate(_look_case([SHADOWS, spread], meta={"look": "x", "check_tags": [
+        {"component": "tone"}, {"component": "tone"}]}), obs, POLICY)
+    assert v.outcome == "verified"
