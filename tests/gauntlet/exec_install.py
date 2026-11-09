@@ -49,6 +49,70 @@ class Rehearsal:
         self.stamp = root / "rehearsal.stamp"
         self.hash_before = ""
         self.facts: dict = {}
+        #: N14: the darktable ins-03 launched (dtprocess.Launched), until it is
+        #: confirmed gone. cleanup() quits it at layer end / abort / close.
+        self.launched = None
+        self.cleanup_result: dict | None = None
+
+    def cache_root(self) -> Path:
+        """The cache the rehearsal's launch wrote its owner record into (its
+        env's SCOUTER_CACHE), never this process's ambient one."""
+        return Path(self.env()["SCOUTER_CACHE"])
+
+    def cleanup(self) -> dict:
+        """N14: quit the darktable ins-03 launched, if still running. Idempotent.
+        Polite quit then escalation through dtprocess.terminate, which only ever
+        signals the pid the owner record in the REHEARSAL cache names (pid, start
+        time and exe checked). If that record is gone (cache removed) the recorded
+        pid is still SIGKILLed, but only while its start time matches the one
+        recorded at launch, so a reused pid or any other darktable is never
+        touched."""
+        rec = self.launched
+        if rec is None:
+            return {"ok": True, "how": "not launched"}
+        from scouter.core import dtprocess
+
+        try:
+            res = dtprocess.terminate(rec.pid, cache_root=self.cache_root())
+        except Exception as e:  # noqa: BLE001 - cleanup must still reach the fallback
+            res = {"ok": False, "how": f"error: {type(e).__name__}: {e}"[:200]}
+        if not res.get("ok") or res.get("how") == "refused_not_ours":
+            if self._same_process(rec):
+                fallback = self._kill_recorded(rec)
+                res = {**res, "fallback": fallback, "ok": fallback == "gone"}
+            else:
+                res = {**res, "ok": True, "how": "gone_or_reused"}
+        if res.get("ok"):
+            self.launched = None
+        self.cleanup_result = res
+        return res
+
+    @staticmethod
+    def _same_process(rec) -> bool:
+        from scouter.core import dtprocess
+
+        return dtprocess._lstart(rec.pid) == rec.start_time
+
+    @staticmethod
+    def _kill_recorded(rec) -> str:
+        import os
+        import signal
+
+        from scouter.core import dtprocess
+
+        if dtprocess._lstart(rec.pid) != rec.start_time:
+            return "gone"
+        try:
+            os.kill(rec.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return "gone"
+        except PermissionError:
+            return "refused"
+        for _ in range(20):
+            if dtprocess._lstart(rec.pid) != rec.start_time:
+                return "gone"
+            time.sleep(0.25)
+        return "alive"
 
     def env(self) -> dict:
         import os
@@ -94,9 +158,16 @@ class Rehearsal:
 
             cfg = self.config / "darktable"
             rec = dtprocess.launch(None, cfg / "library.db", cfg, env=self.env())
-            time.sleep(15)
-            res = dtprocess.terminate(rec.pid)
-            ok = (cfg / "darktablerc").exists() and (cfg / "library.db").exists()
+            self.launched = rec  # N14: owned from here; cleanup() quits it on any exit
+            try:
+                time.sleep(15)
+            finally:
+                # N14: the owner record lives in the rehearsal cache (env's
+                # SCOUTER_CACHE); the old bare terminate(pid) read the ambient
+                # cache, got refused_not_ours and left darktable running.
+                res = self.cleanup()
+            ok = (bool(res.get("ok")) and (cfg / "darktablerc").exists()
+                  and (cfg / "library.db").exists())
             return ok, {"terminate": res}
         if name in ("setup", "setup_again", "rerun_existing"):
             #: Review round 3, GR-2 (P1 blocker): `config init --yes`
@@ -175,6 +246,7 @@ class Rehearsal:
             ok = "scouter" in p.stdout and "scouter.mcp.server" in p.stdout
             return ok, {"list": p.stdout[-800:]}
         if name == "teardown":
+            self.cleanup()  # N14: before the rmtree below deletes the owner record
             self.facts["leaks"] = newer_than(self.stamp)
             self.facts["hash_after"] = mcp_servers_hash()
             for d in (self.home, self.config, self.cache):
@@ -262,6 +334,9 @@ class InstallSession:
                                hang_evidence=[str(e)],
                                extra={"action_ok": False},
                                wall_s=time.monotonic() - t0)
+        except KeyboardInterrupt:
+            self.rehearsal.cleanup()  # N14: stopped early mid-action
+            raise
         except Exception as e:  # noqa: BLE001 - a failed action is a result
             ok, detail = False, {"error": f"{type(e).__name__}: {e}"[:300]}
         #: Fix D (night-1 triage rank 5, INS-doctor-needs-darktable): the
@@ -281,7 +356,7 @@ class InstallSession:
                            wall_s=time.monotonic() - t0)
 
     def abort(self) -> None:
-        pass
+        self.rehearsal.cleanup()  # N14: an owned scratch darktable never outlives the layer
 
     def close(self) -> None:
-        pass
+        self.rehearsal.cleanup()

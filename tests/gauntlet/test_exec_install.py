@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 
 from gauntlet.case import Case, Expect, Step
@@ -38,7 +39,7 @@ def test_first_launch_passes_the_rehearsal_env(tmp_path, monkeypatch):
                                   library=str(library), configdir=str(configdir), frame=None)
 
     monkeypatch.setattr(dtprocess, "launch", fake_launch)
-    monkeypatch.setattr(dtprocess, "terminate", lambda pid: {"ok": True, "how": "fake"})
+    monkeypatch.setattr(dtprocess, "terminate", lambda pid, **kw: {"ok": True, "how": "fake"})
     monkeypatch.setattr(exec_install.time, "sleep", lambda s: None)
     ok, _ = r.action("first_launch")
     assert ok
@@ -325,3 +326,140 @@ def test_setup_still_runs_config_init_and_ins08_state_carries(tmp_path):
     ok2, detail2 = r.action("rerun_existing")
     assert "config_unchanged" in detail2
     assert "config_has_version" in detail2  # still reported, informationally
+
+
+# ---- N14: the install layer owns and quits the darktable it launches ----
+
+class _FakeDt:
+    """In-memory dtprocess: one darktable at a time, owner record per cache."""
+
+    def __init__(self, monkeypatch, *, running=()):
+        from scouter.core import dtprocess
+
+        self.dt = dtprocess
+        self.alive = set(running)
+        self.records = {}      # cache_root -> Launched
+        self.signals = []      # (pid, sig) actually sent
+        self.terminate_calls = []
+        monkeypatch.setattr(dtprocess, "launch", self.launch)
+        monkeypatch.setattr(dtprocess, "terminate", self.terminate)
+        monkeypatch.setattr(dtprocess, "owned_pid", self.owned_pid)
+        monkeypatch.setattr(dtprocess, "running_pids", lambda: sorted(self.alive))
+        monkeypatch.setattr(dtprocess, "_lstart",
+                            lambda pid: f"t{pid}" if pid in self.alive else None)
+        monkeypatch.setattr(exec_install.time, "sleep", lambda s: None)
+        monkeypatch.setattr(os, "kill", self.kill)
+
+    def kill(self, pid, sig):
+        self.signals.append((pid, sig))
+        self.alive.discard(pid)
+
+    def launch(self, frame, library, configdir=None, *, env=None, **kw):
+        cache = env["SCOUTER_CACHE"]
+        rec = self.dt.Launched(pid=4242, start_time="t4242", exe="darktable",
+                               library=str(library), configdir=str(configdir), frame=None)
+        self.alive.add(4242)
+        self.records[cache] = rec
+        cfg = configdir
+        cfg.mkdir(parents=True, exist_ok=True)
+        (cfg / "darktablerc").write_text("x")
+        (cfg / "library.db").write_text("x")
+        return rec
+
+    def owned_pid(self, cache_root=None):
+        rec = self.records.get(str(cache_root)) if cache_root else None
+        return rec.pid if rec and rec.pid in self.alive else None
+
+    def terminate(self, pid=None, *, cache_root=None, **kw):
+        self.terminate_calls.append((pid, cache_root))
+        mine = self.owned_pid(cache_root)
+        if pid != mine:
+            return {"ok": False, "how": "refused_not_ours", "pid": pid}
+        self.alive.discard(pid)
+        return {"ok": True, "how": "osascript", "pid": pid}
+
+    def foreign_pids(self, cache_root=None):
+        mine = self.owned_pid(cache_root)
+        return [p for p in sorted(self.alive) if p != mine]
+
+
+def test_first_launch_quits_through_the_rehearsal_owner_record(tmp_path, monkeypatch):
+    fake = _FakeDt(monkeypatch)
+    r = exec_install.Rehearsal(tmp_path)
+    ok, detail = r.action("first_launch")
+    assert ok and detail["terminate"]["ok"]
+    assert fake.alive == set()
+    # terminate was told the rehearsal cache, where the owner record is
+    assert fake.terminate_calls == [(4242, r.cache_root())]
+    assert r.launched is None
+    assert fake.signals == []  # polite path sufficed
+
+
+def test_first_launch_fails_when_the_darktable_does_not_quit(tmp_path, monkeypatch):
+    fake = _FakeDt(monkeypatch)
+    monkeypatch.setattr(fake.dt, "terminate",
+                        lambda pid=None, **kw: {"ok": False, "how": "SIGKILL", "pid": pid})
+    monkeypatch.setattr(fake, "kill", lambda pid, sig: fake.signals.append((pid, sig)))
+    monkeypatch.setattr(os, "kill", fake.kill)
+    r = exec_install.Rehearsal(tmp_path)
+    ok, _ = r.action("first_launch")
+    assert not ok and r.launched is not None  # still tracked for abort/close
+
+
+def test_missing_owner_record_falls_back_to_killing_the_recorded_pid(tmp_path, monkeypatch):
+    fake = _FakeDt(monkeypatch)
+    r = exec_install.Rehearsal(tmp_path)
+    fake.launch(None, tmp_path / "l.db", tmp_path / "cfg", env=r.env())
+    r.launched = fake.records[r.env()["SCOUTER_CACHE"]]
+    fake.records.clear()  # e.g. the cache was removed
+    res = r.cleanup()
+    assert res["ok"] and res["fallback"] == "gone"
+    assert fake.signals and fake.signals[0][0] == 4242
+    assert r.launched is None
+
+
+def test_cleanup_never_signals_a_reused_pid(tmp_path, monkeypatch):
+    fake = _FakeDt(monkeypatch)
+    r = exec_install.Rehearsal(tmp_path)
+    fake.launch(None, tmp_path / "l.db", tmp_path / "cfg", env=r.env())
+    r.launched = fake.dt.Launched(pid=4242, start_time="OLD", exe="darktable",
+                                  library="x", configdir=None, frame=None)
+    fake.records.clear()
+    res = r.cleanup()
+    assert res["ok"] and fake.signals == []  # start time differs: someone else's process
+    assert 4242 in fake.alive
+
+
+def test_cleanup_never_touches_a_darktable_it_did_not_launch(tmp_path, monkeypatch):
+    fake = _FakeDt(monkeypatch, running=[777])
+    r = exec_install.Rehearsal(tmp_path)
+    assert r.cleanup() == {"ok": True, "how": "not launched"}
+    r.action("first_launch")
+    assert fake.signals == [] and fake.alive == {777}
+    assert all(p == 4242 for p, _ in fake.terminate_calls)
+
+
+def test_layer_end_abort_and_close_quit_the_launched_darktable(tmp_path, monkeypatch):
+    for how in ("abort", "close", "teardown"):
+        fake = _FakeDt(monkeypatch)
+        session = exec_install.InstallSession(tmp_path / how)
+        rec = fake.launch(None, tmp_path / "l.db", tmp_path / how / "cfg",
+                          env=session.rehearsal.env())
+        session.rehearsal.launched = rec  # as if ins-03 had been interrupted
+        if how == "teardown":
+            session.rehearsal.action("teardown")
+        else:
+            getattr(session, how)()
+        assert fake.alive == set(), how
+        getattr(session, "close")()  # idempotent
+
+
+def test_next_layer_guard_does_not_see_the_install_darktable_as_foreign(tmp_path, monkeypatch):
+    fake = _FakeDt(monkeypatch)
+    r = exec_install.Rehearsal(tmp_path)
+    fake.launch(None, tmp_path / "l.db", tmp_path / "cfg", env=r.env())
+    r.launched = fake.records[r.env()["SCOUTER_CACHE"]]
+    process_cache = tmp_path / "process-cache"
+    assert fake.foreign_pids(process_cache) == [4242]  # the night-3 shape: blocks guide
+    r.cleanup()
+    assert fake.foreign_pids(process_cache) == []
