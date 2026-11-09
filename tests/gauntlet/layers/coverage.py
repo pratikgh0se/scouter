@@ -816,6 +816,14 @@ def property_cases(body: str) -> list[Case]:
             # (setup) and expect every strength to land the same state
             tool = "darkroom_disable" if p.key.endswith("_on") else "darkroom_enable"
             pre = [_setup_step(step(tool, BUDGET_MOVE, module=p.moves[0].module))]
+            #: Round 1 C11: `darkroom_disable` is not in WRITE_TOOLS (adding
+            #: it there would also widen the agent's tool allow-list), so
+            #: the executor never re-snapshotted after this setup step and
+            #: snapshot 1 still showed the pre-disable state -- the check
+            #: "changed from snapshot 1" then compared a stale before with
+            #: the final state, and the evaluator's rule (a) fired. The
+            #: setup step IS a write: take the before snapshot after it.
+            pre[0].write = True
             exp = Expect("property", [
                 Check("M1", kind="changed", target={"key": k, "unit": unit, "from": 1, "to": 2}),
                 Check("M1", kind="step_equal", target={"key": k, "a": 2, "b": 4, "unit": unit}),

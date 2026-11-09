@@ -235,9 +235,21 @@ def test_stage_side_resolves_to_the_imported_destination(tmp_path):
     resolved = exec_parity._stage_side(s, src, "mcp")
     assert resolved != src
     assert resolved.name == "2026-05-24_smoke-job_H-mcp.ORF"
+    # C17: an unconfirmed import is a dry-run plan that copies nothing
     assert ("library_import", {"source": str(src.parent),
-                               "job_slug": exec_parity.SMOKE_JOB_SLUG}) in s.calls
+                               "job_slug": exec_parity.SMOKE_JOB_SLUG,
+                               "confirm": True}) in s.calls
     assert exec_parity._fixture_errors(s) == []
+
+
+def test_stage_side_names_a_dry_run_import_as_a_fixture_error(tmp_path):
+    src = tmp_path / "parity" / "cli" / "H-cli.ORF"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"raw")
+    envelope = {"ok": True, "outcome": "dry_run", "data": {"plan": [{"source_name": "H-cli.ORF"}]}}
+    s = _FakeStageSession(tmp_path, library_import_envelope=envelope)
+    assert exec_parity._stage_side(s, src, "cli") == src
+    assert exec_parity._fixture_errors(s) == ["cli_import_failed: import_was_dry_run"]
 
 
 def test_stage_side_falls_back_and_records_the_failure(tmp_path):
@@ -260,6 +272,7 @@ def test_ensure_smoke_style_runs_once_per_session_on_success(tmp_path):
     style_calls = [c for c in s.calls if c[0] == "style_extract"]
     assert len(style_calls) == 1
     assert style_calls[0][1]["name"] == exec_parity.SMOKE_STYLE_NAME
+    assert style_calls[0][1]["confirm"] is True
     assert exec_parity._fixture_errors(s) == []
 
 
@@ -524,3 +537,23 @@ def test_parity_pair_records_the_isolation_mechanism_honestly(corpus, tmp_path, 
     obs = Observation()
     exec_parity.parity_pair(s, case, step, obs)
     assert obs.extra["isolation"] == "xmp_file_restore (library.db not reset)"
+
+
+def test_parity_pair_names_a_missing_mcp_envelope(corpus, tmp_path, monkeypatch):
+    # C17: an MCP leg that answered nothing is "mcp_no_envelope", never a
+    # vague `values` diff -- and it can never be a pass.
+    ok = {"ok": True, "outcome": "ok", "data": {}}
+    mcp = FakeMcp(answers={"wb_kelvin": None})
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(ok), stderr=""))
+    case = Case(id="par-wb-kelvin-happy", layer="parity", tier="P0", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "wb_kelvin", "variant": "happy"})
+    step = Step("parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0,
+               False)
+    obs = Observation()
+    rec = exec_parity.parity_pair(s, case, step, obs)
+    assert "mcp_no_envelope" in obs.extra["parity_diffs"]
+    assert obs.extra["envelopes_match"] is False
+    assert rec.envelope["ok"] is False

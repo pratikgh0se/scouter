@@ -964,7 +964,8 @@ def _verified_clamped_params(obs: Observation, units: dict) -> set[str]:
     return verified
 
 
-def _writes_landed_as_requested(obs: Observation, units: dict) -> bool:
+def _writes_landed_as_requested(obs: Observation, units: dict,
+                                refusal_codes: frozenset | tuple = ()) -> bool:
     """Row 475 (I2 ruling), tightened by review round 2 (R1): every
     non-noop write's claimed `module.param` (`AdjustResult`'s own
     `module`/`param`/`requested`, flat on a single `darkroom.adjust`'s
@@ -986,7 +987,16 @@ def _writes_landed_as_requested(obs: Observation, units: dict) -> bool:
     for c in obs.calls:
         if not c.write:
             continue
-        data = (c.envelope or {}).get("data") or {}
+        #: Round 1 C9 (r0374): a step that honestly REFUSED with a typed
+        #: refusal code (its `data` is empty, so it has no `requested`) made
+        #: no claim about the final state; it must not stop the other,
+        #: ok steps' landings from being verified. It is judged by its own
+        #: per-step check (`_step_honestly_refused`). Any other not-ok call
+        #: (transient code, no code) still returns False below.
+        env = c.envelope or {}
+        if env.get("ok") is False and _code(c) in refusal_codes:
+            continue
+        data = env.get("data") or {}
         moves = data["moves"] if isinstance(data.get("moves"), list) else [data]
         for m in moves:
             if not isinstance(m, dict) or m.get("noop"):
@@ -1016,7 +1026,8 @@ def _writes_landed_as_requested(obs: Observation, units: dict) -> bool:
 
 
 def _imperceptible_step_residual(case: Case, results: list[CheckResult],
-                                 obs: Observation) -> Verdict | None:
+                                 obs: Observation, refusal_codes: frozenset | tuple = ()
+                                 ) -> Verdict | None:
     """Row 475 (I2 ruling, option A, provisional -- Pratik to confirm): the
     real night-1 D-bare-step-below-perceptual-floor rows are plain `ok`,
     never `moved_to_limit` (KNOWN_RESIDUAL's "cap" is the
@@ -1038,7 +1049,7 @@ def _imperceptible_step_residual(case: Case, results: list[CheckResult],
                               for r in non_passing):
         return None
     sidecar = case.expect.sidecar or {}
-    if not _writes_landed_as_requested(obs, sidecar.get("units", {})):
+    if not _writes_landed_as_requested(obs, sidecar.get("units", {}), refusal_codes):
         return None
     return Verdict(PARTIAL, "imperceptible_step", results, notes=["residual: step-below-floor"])
 
@@ -1268,7 +1279,7 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     # exception with nothing to label it.
     verified_clamped = _verified_clamped_params(obs, units)
     landed_as_requested = case.expect.kind == "edit" and not _any_moved_to_limit(obs) \
-        and _writes_landed_as_requested(obs, units)
+        and _writes_landed_as_requested(obs, units, policy.refusal_codes)
     for r, ch in zip(results, case.expect.checks):
         # N1: only action steps count; a setup step's own landing is not the
         # product's claim about the request under test.
@@ -1446,10 +1457,62 @@ def _look_gap_keys(case: Case, obs: Observation, policy: Policy) -> dict[str, st
     return out
 
 
+def _confounded_gaps(case: Case, obs: Observation, policy: Policy
+                     ) -> tuple[dict[int, str], set[int]]:
+    """Round 1 C9: ({check index: reason}, refused indices) for checks whose
+    failure cannot be attributed to the step that owns them.
+
+    1. Checks tagged `gap_if_fail` (a stat another step of the same scenario
+       also moves, e.g. M6 spread after a darker step, or a hue-only
+       highlights b after a contrast step) that FAIL on the measurement.
+    2. A stat check attributed to a step (`Check.step`) of a MULTI-STEP case
+       whose own call answered an honest typed refusal (r0374: the first step
+       "warmer" refused `module_unavailable`, the second step's check was
+       blamed). Second refused indices let the caller cap the verdict.
+
+    Both become declared gaps, never silent failures. A passing check is
+    untouched, so a pass stays a pass; a gap stays in the denominator as a NOT
+    served result; the verdict is capped at partial by the caller."""
+    out: dict[int, str] = {}
+    refused: set[int] = set()
+    multi = len(_action_writes(case, obs)) > 1
+    for i, ch in enumerate(case.expect.checks):
+        why = ch.tags.get("gap_if_fail")
+        if why and not run_check(i, ch, obs).ok:
+            out[i] = str(why)
+        elif (multi and ch.metric in ("M2", "M3", "M4", "M5", "M6") and ch.sign
+              and ch.step is not None and _step_honestly_refused(obs, ch.step, policy)
+              and not run_check(i, ch, obs).ok):
+            c = obs.calls[ch.step]
+            out[i] = f"step {ch.step} honestly refused ({_code(c)})"
+            refused.add(i)
+    if len(out) >= len(case.expect.checks):
+        #: nothing left to judge: never let a gap swallow the whole case (that
+        #: would turn a plain failure into needs_review); score it normally.
+        return {}, set()
+    return out, refused
+
+
 def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     if not case.meta.get("look"):
-        return _evaluate(case, obs, policy)
-    gaps = _look_gap_keys(case, obs, policy)
+        confounded, refused_steps = ({}, set()) if (obs.crash_reports or obs.blocked) \
+            else _confounded_gaps(case, obs, policy)
+        if not confounded and not any(ch.tags.get("declared_gap")
+                                      for ch in case.expect.checks):
+            return _evaluate(case, obs, policy)
+        v = _evaluate_with_gaps(case, obs, policy, {}, confounded)
+        if confounded and v.score == PASS:
+            #: a confounded/refused check did not verify: the case cannot be a
+            #: full pass, whatever the remaining checks say.
+            outcome = "honest_refusal_component" if refused_steps else "confounded_check"
+            v = Verdict(PARTIAL, outcome, v.checks, notes=[
+                *v.notes, f"{outcome}: " + "; ".join(sorted(confounded.values()))])
+        return v
+    return _evaluate_with_gaps(case, obs, policy, _look_gap_keys(case, obs, policy), {})
+
+
+def _evaluate_with_gaps(case: Case, obs: Observation, policy: Policy, gaps: dict[str, str],
+                        confounded: dict[int, str]) -> Verdict:
     #: Honest refusal of a component: the user did not get the whole look, so the
     #: verdict is capped at PARTIAL even when every remaining check passes.
     refused = sorted(k for k, why in gaps.items() if why.startswith("refused"))
@@ -1460,11 +1523,13 @@ def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
             why_by_idx[i] = f"{key} ({gaps[key]})"
         elif ch.tags.get("declared_gap"):
             why_by_idx[i] = str(ch.tags["declared_gap"])
+        elif i in confounded:
+            why_by_idx[i] = confounded[i]
     notes = [f"declared gap: look component not plannable: {k} ({w})"
              for k, w in sorted(gaps.items())
              if any(_look_check_key(case, i, c) == k for i, c in enumerate(case.expect.checks))]
     notes += [f"declared gap: {w}" for i, w in sorted(why_by_idx.items())
-              if case.expect.checks[i].tags.get("declared_gap")]
+              if case.expect.checks[i].tags.get("declared_gap") or i in confounded]
     if not why_by_idx and not refused:
         return _evaluate(case, obs, policy)
     keep = [i for i in range(len(case.expect.checks)) if i not in why_by_idx]
@@ -1661,7 +1726,7 @@ def _evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
         residual = _moved_to_limit_residual(case, results, obs)
         if residual:
             return residual
-        imperceptible = _imperceptible_step_residual(case, results, obs)
+        imperceptible = _imperceptible_step_residual(case, results, obs, policy.refusal_codes)
         if imperceptible:
             return imperceptible
     if blocked and (miss or not all(r.ok for r in results)):

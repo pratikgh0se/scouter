@@ -118,10 +118,19 @@ def _stage_side(session, path, side: str):
     (review fix round 2, A-5): a downstream verb whose own fixture still
     needs the library then fails honestly on its own terms, never on a
     silently guessed path."""
+    #: Round 1 C17 root cause: `library_import` is gated, and without
+    #: `confirm=True` it answers a dry-run plan (outcome `dry_run`, no
+    #: `files`, nothing copied), so every parity case silently fell back to
+    #: the raw copy ("no_files_named") and every job/style fixture was
+    #: missing. The import must be confirmed.
     rec = session.call("library_import", {"source": str(path.parent),
-                                          "job_slug": SMOKE_JOB_SLUG}, 30.0, write=True)
+                                          "job_slug": SMOKE_JOB_SLUG,
+                                          "confirm": True}, 30.0, write=True)
     resolved = _imported_path(session, rec.envelope, path.name)
     if resolved is None:
+        if (rec.envelope or {}).get("outcome") == "dry_run":
+            _fixture_errors(session).append(f"{side}_import_failed: import_was_dry_run")
+            return path
         err = ((rec.envelope or {}).get("error") or {}).get("code") or rec.error or "no_files_named"
         _fixture_errors(session).append(f"{side}_import_failed: {err}")
         return path
@@ -140,7 +149,8 @@ def _ensure_smoke_style(session, path) -> None:
     if getattr(session, "_parity_smoke_style_done", False):
         return
     rec = session.call("style_extract", {"image": str(path), "name": SMOKE_STYLE_NAME,
-                                         "modules": []}, 30.0, write=True)
+                                         "modules": [], "confirm": True}, 30.0,
+                       write=True)
     if (rec.envelope or {}).get("ok"):
         session._parity_smoke_style_done = True
         return
@@ -348,6 +358,13 @@ def parity_pair(session, case, step, obs) -> CallRecord:
         cli_env = {"ok": False, "outcome": f"exit {p.returncode}", "raw": p.stdout[-300:],
                    "stderr": p.stderr[-300:]}
     diffs = compare(mcp_rec.envelope, cli_env)
+    if not isinstance(mcp_rec.envelope, dict):
+        #: Round 1 C17: an MCP leg that produced no envelope at all (a
+        #: transport error, a timeout) was scored as a `values` diff against
+        #: the CLI envelope. Name it: the pair proves nothing, and it must
+        #: never pass. Never weakens `compare`.
+        diffs = ["mcp_no_envelope", *[d for d in diffs if d != "mcp_no_envelope"]]
+        obs.extra["mcp_no_envelope"] = mcp_rec.error or "no envelope"
     mcp_norm = normalise(mcp_rec.envelope)
     cli_norm = normalise(cli_env)
     obs.extra["envelopes_match"] = not diffs

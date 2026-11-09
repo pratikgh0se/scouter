@@ -91,7 +91,10 @@ WALKTHROUGH: tuple[tuple[str, str, object, dict], ...] = (
     ("guide_more_magenta_refuses", "say", "more magenta", {"code": "value_unknown"}),
     ("guide_job_run_dry", "cli", ["--pretty", "job", "run", "--job-slug", "{job_slug}",
                                   "--preset", "harbour-warm", "--hero", "{job_frame:1}",
-                                  "--dry-run"], {"exit": 0}),
+                                  "--dry-run"],
+     #: Round 1 C18: a dry run exits 5 BY DESIGN (phase-1 spec section 9,
+     #: `scouter.errors.EXIT_CODES["dry_run"]`); the case wrongly asked for 0.
+     {"exit": 5, "ok": True}),
     ("guide_job_run", "cli", ["--pretty", "job", "run", "--job-slug", "{job_slug}", "--preset",
                               "harbour-warm", "--hero", "{job_frame:1}", "--yes"], {"exit": 0}),
 )
@@ -131,24 +134,39 @@ def _walk_case(i: int, label: str, kind: str, payload, want: dict) -> Case:
 
 
 def _edu_case(level: str, j: int, phrase: str, concept: str) -> Case:
-    seen_before = any(c == concept for _p, c in EDU_MOVES[:j])
+    """Round 1 C18: every `full` case sets up its own precondition. The
+    concept paragraph is explained once per job, so a `full` case first
+    clears the job's explained-concept state (`reset_explained`), then, when
+    an earlier move in EDU_MOVES teaches the same concept, plays that move
+    itself before the move under test. The check is unchanged in meaning:
+    first sight of a concept gives the paragraph plus the line (>= 2), the
+    second move on it gives the line only (== 1). No case depends on order
+    or on the others having run."""
+    prior = next((p for p, c in EDU_MOVES[:j] if c == concept), None)
+    seen_before = prior is not None
+    setup: list[Step] = []
+    if level == "full" and not _wb_phrase_key(phrase):
+        setup.append(Step("reset_explained", {}, 5.0, False))
+        if seen_before:
+            setup.append(Step("darkroom_say", {"phrase": prior, "educative": level}, 8.0, True))
+    at = len(setup)
     if level == "off":
-        chk = Check("envelope", step=0, target={"path": "data.explain", "op": "len_eq",
-                                                "value": 0})
+        chk = Check("envelope", step=at, target={"path": "data.explain", "op": "len_eq",
+                                                 "value": 0})
     elif level == "brief" or seen_before:
-        chk = Check("envelope", step=0, target={"path": "data.explain", "op": "len_eq",
-                                                "value": 1})
+        chk = Check("envelope", step=at, target={"path": "data.explain", "op": "len_eq",
+                                                 "value": 1})
     else:
-        chk = Check("envelope", step=0, target={"path": "data.explain", "op": "len_gte",
-                                                "value": 2})
+        chk = Check("envelope", step=at, target={"path": "data.explain", "op": "len_gte",
+                                                 "value": 2})
     checks = [chk]
     if level == "brief":
-        checks.append(Check("envelope", step=0, target={"path": "data.explain.0",
-                                                        "op": "regex", "value": r"\d.*\d"}))
+        checks.append(Check("envelope", step=at, target={"path": "data.explain.0",
+                                                         "op": "regex", "value": r"\d.*\d"}))
     exp = _wb_expect(phrase, Expect("workflow", checks))
+    steps = [*setup, Step("darkroom_say", {"phrase": phrase, "educative": level}, 8.0, True)]
     return Case(id=case_id(PREFIX, "edu", level, f"{j}", phrase), layer=LAYER, tier="P0",
-                mode="tool", steps=[Step("darkroom_say", {"phrase": phrase, "educative": level},
-                                         8.0, True)],
+                mode="tool", steps=steps,
                 expect=exp, body="olympus", frame_role="hero",
                 source={"file": "README", "section": "Educative mode"},
                 meta={"session": f"edu-{level}", "order": j, "concept": concept})

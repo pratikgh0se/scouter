@@ -71,7 +71,7 @@ def test_edu_warmer_and_cooler_expect_the_wb_route_a_refusal():
     for level in guide.LEVELS:
         for phrase in ("warmer", "cooler"):
             c = next(c for c in cases if c.meta.get("session") == f"edu-{level}" and
-                     c.steps[0].args["phrase"] == phrase)
+                     c.steps[-1].args["phrase"] == phrase)
             assert c.expect.kind == "typed_error"
             assert c.expect.codes == ["module_unavailable"]
 
@@ -83,7 +83,7 @@ def test_edu_brighter_and_darker_are_unaffected():
     for level in guide.LEVELS:
         for phrase in ("brighter", "darker", "more contrast"):
             c = next(c for c in cases if c.meta.get("session") == f"edu-{level}" and
-                     c.steps[0].args["phrase"] == phrase)
+                     c.steps[-1].args["phrase"] == phrase)
             assert c.expect.kind == "workflow"
 
 

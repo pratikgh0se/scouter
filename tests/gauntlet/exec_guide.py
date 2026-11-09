@@ -32,4 +32,31 @@ def cli(session, case, step, obs) -> CallRecord:
     return CallRecord("cli", {"argv": argv}, env, write=True)
 
 
+def reset_explained(session, case, step, obs) -> CallRecord:
+    """Round 1 C18 (gd-edu-full-*): precondition step. `--educative full`
+    explains a concept once per job (`explain._new_concepts` reads
+    `explained_concepts` from the job's state file), so a case's expected
+    paragraph count depends on whatever ran before it in the session. This
+    clears ONLY that one key in the session's own scratch state file (never
+    the image/watermark keys), so each case starts from a known "nothing
+    explained yet" state and no longer depends on case order or on a
+    selective re-run."""
+    job = session.staged.env.get("SCOUTER_JOB")
+    path = session.staged.cache / "state" / f"{job}.json" if job else None
+    cleared: list = []
+    if path is not None and path.exists():
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            state = {}
+        cleared = list(state.pop("explained_concepts", []))
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        tmp.replace(path)
+    obs.extra.setdefault("explained_reset", []).append(cleared)
+    return CallRecord("reset_explained", {}, {"ok": True, "outcome": "ok",
+                                             "data": {"cleared": cleared}}, write=False)
+
+
 VIRTUAL["cli"] = cli
+VIRTUAL["reset_explained"] = reset_explained

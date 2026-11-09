@@ -58,6 +58,95 @@ def nearest_phrase(req: dict, tax: Taxonomy) -> tuple[str, str]:
     return req["sentence"], f"unknown:{req['modules'][0] if req['modules'] else req['intent']}"
 
 
+def served_plan(req: dict, plan: RequestPlan, tax: Taxonomy) -> RequestPlan | None:
+    """Round 1 C6: is an "out"/"impossible" request's nearest phrase now served?
+
+    Derived from the real resolver (`scouter.core.phrases.resolve`), never a
+    hand list: the phrase must resolve AND every move it makes must be a
+    `live` vocabulary row (a `candidate` row is refused, so that phrase
+    still expects an honest refusal). The resolved phrase key is matched to
+    the check map capability whose own phrase resolves to the same key; the
+    concept/sign that capability serves gives the stat check. Returns an
+    ordinary "in" plan (scored as a normal served request), or None when the
+    request is genuinely unsupported."""
+    if plan.klass not in ("impossible", "out"):
+        return None
+    from scouter.core import phrases, vocab
+    from scouter.errors import ScouterError
+
+    phrase, _ = nearest_phrase(req, tax)
+    try:
+        res = phrases.resolve(phrase)
+    except ScouterError:
+        return None
+    if not res.moves or any(vocab.status(phrases.row_for(m)) != "live" for m in res.moves):
+        return None
+    cmap = tax.check_map
+    cap = None
+    for name, spec in cmap["capabilities"].items():
+        if "phrase" not in spec:
+            continue
+        try:
+            if phrases.resolve(spec["phrase"]).key == res.key:
+                cap = name
+                break
+        except ScouterError:
+            continue
+    if cap is None:
+        return None
+    for concept, c in cmap["concepts"].items():
+        for sign, ccap in c["caps"].items():
+            if ccap == cap and c["metric"] != "sidecar":
+                sg = int(sign) if sign != "*" else c.get("fixed_sign", 1)
+                part = checkmap.PartCheck(text=phrase, concept=concept, sign=sg, kind="delta",
+                                          metric=c["metric"], stat=c.get("stat"),
+                                          region=c.get("region", "frame"), capability=cap)
+                return RequestPlan(plan.request_id, "in", (part,), (cap,))
+    return None
+
+
+#: Round 1 C9: a stat check is attributable to its own step only when no OTHER
+#: step in the same scenario moves the stat it reads. The executor measures
+#: before/after once for the whole scenario, so these pairs cannot be told
+#: apart by the stat alone:
+#:   - M6 `spread` (frame contrast) also moves with every luminance move
+#:     (darker/brighter, shadows, highlights, blacks): r0574/r0214 ("darker
+#:     a bit" shrinks the spread more than "more contrast a bit" grows it);
+#:   - a hue-only zone check (`b` in shadows/highlights: "cool the shadows",
+#:     "warm the highlights") also moves with contrast, saturation, global
+#:     warmth and the other zone's hue move: r0326/r0330 (the contrast step's
+#:     chroma shift, not the hue-only step, moved the highlights' b).
+_LUMA_CONCEPTS = frozenset({"luminance", "shadows", "highlights", "clip", "black_floor"})
+_HUE_ZONE_CONCEPTS = frozenset({"shadow_hue", "highlight_hue", "split_tone"})
+_COLOUR_CONCEPTS = _HUE_ZONE_CONCEPTS | {"contrast", "saturation", "temperature", "tint"}
+
+
+def confounders(part, parts, skip=frozenset()) -> list[str]:
+    """Concepts of the other served parts of a scenario that also move the
+    stat `part`'s check reads (empty: the check is cleanly attributable)."""
+    if part.metric == "M6" and part.stat == "spread":
+        pool = _LUMA_CONCEPTS
+    elif part.concept in _HUE_ZONE_CONCEPTS and part.metric == "M4":
+        pool = _COLOUR_CONCEPTS
+    else:
+        return []
+    return sorted({q.concept for q in parts
+                   if q is not part and q.capability and q.capability not in skip
+                   and q.concept in pool and q.concept != part.concept})
+
+
+def tag_confounded(chk: Check, part, parts, skip=frozenset()) -> Check:
+    """Tag a stat check that another step of the scenario also moves. It is
+    judged normally; ONLY if it fails does the evaluator turn the failure
+    into a declared gap (`gap_if_fail`: reported as a NOT served result, so
+    it stays in the denominator) instead of a silent failure. A confounded
+    check that passes still passes, so no gate gets easier."""
+    why = confounders(part, parts, skip)
+    if why:
+        chk.tags["gap_if_fail"] = f"confounded:{part.concept} by {'+'.join(why)}"
+    return chk
+
+
 def _unserved_modules(req: dict, tax: Taxonomy) -> list[dict]:
     served = {"exposure", "sigmoid", "temperature", "colorbalancergb", "filmicrgb", "colorzones"}
     out = []
@@ -147,6 +236,11 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
     role = cmap["role_for_problem"][req["problem"]]
     meta = {"sentence": req["sentence"], "class": plan.klass, "genre": req["genre"],
             "problem": req["problem"], "followups": list(req["followups"])}
+    served = served_plan(req, plan, tax)
+    if served is not None:
+        meta["served_out_class"] = True
+        meta["roadmap_key"] = nearest_phrase(req, tax)[1]
+        plan = served
     if plan.klass in ("impossible", "out"):
         phrase, rkey = nearest_phrase(req, tax)
         meta["roadmap_key"] = rkey
@@ -194,7 +288,7 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
         checks = []
         for p in plan.parts:
             if p.capability and p.capability not in wb_refusals:
-                chk = stat_check(p)
+                chk = tag_confounded(stat_check(p), p, plan.parts, frozenset(wb_refusals))
                 #: Night 3 (r0372/r0374): attribute the stat check to the step that
                 #: exercises its capability, so an honest refusal of THAT step
                 #: (e.g. colour calibration's custom illuminant, not predictable
@@ -369,7 +463,8 @@ def agent_case(req: dict, plan: RequestPlan, tax: Taxonomy, tier: str) -> Case:
             meta["codes"] = codes
             expect = Expect("refuse")
         else:
-            checks = [stat_check(p) for p in plan.parts
+            checks = [tag_confounded(stat_check(p), p, plan.parts, frozenset(wb_refusals))
+                     for p in plan.parts
                      if p.capability and p.capability not in wb_refusals]
             if wb_refusals:
                 #: Fix round 1 (review I5): a mixed agent request must also
