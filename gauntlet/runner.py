@@ -53,6 +53,8 @@ class RunSummary:
     ran: int = 0
     skipped: int = 0
     parked: list[str] = field(default_factory=list)
+    #: parallel mode: a sibling worker parked, so this one stopped between cases
+    stopped_early: bool = False
     stopped_layers: list[str] = field(default_factory=list)
     status: str = "done"
 
@@ -131,7 +133,9 @@ class Runner:
                  session_open_cap_s: float | None = None,
                  max_consecutive_open_failures: int = MAX_CONSECUTIVE_OPEN_FAILURES,
                  free_disk_gb: Callable[[Path], float] | None = None,
-                 disk_min_gb: float = DISK_MIN_GB) -> None:
+                 disk_min_gb: float = DISK_MIN_GB,
+                 should_stop: Callable[[], bool] | None = None) -> None:
+        self.should_stop = should_stop
         self.adapter = adapter
         self.run = run.ensure()
         self.commit = commit
@@ -188,6 +192,23 @@ class Runner:
             chosen = [c for c in chosen if c.id not in done]
         return chosen
 
+    def selection(self, layers: list[str] | None = None, *, resume: bool = True,
+                  only_failed: bool = False, case_ids: set[str] | None = None,
+                  tiers: set[str] | None = None, prefixes: tuple[str, ...] = (),
+                  where: dict | None = None) -> list[Case]:
+        """The cases run_layers would run, layer by layer in layer order (the
+        parallel parent shards this)."""
+        cases = self.run.read_cases()
+        specs = sorted(self.adapter.layers(), key=lambda s: s.order)
+        if layers:
+            specs = [s for s in specs if s.name in layers]
+        out: list[Case] = []
+        for spec in specs:
+            out.extend(self._select(cases, spec.name, resume=resume, only_failed=only_failed,
+                                    case_ids=case_ids, tiers=tiers, prefixes=prefixes,
+                                    where=where))
+        return out
+
     def run_layers(self, layers: list[str] | None = None, *, resume: bool = True,
                    only_failed: bool = False, case_ids: set[str] | None = None,
                    wait_on_park: bool = False, tiers: set[str] | None = None,
@@ -224,15 +245,16 @@ class Runner:
             #: purposes -- the distinct string only tells THIS loop to stop
             #: opening later layers, each of which would otherwise immediately
             #: re-park its own first case on the same disk floor.
-            self.progress.end_layer(spec.name, "parked" if status == "parked_disk" else status)
+            self.progress.end_layer(spec.name, "parked" if status in (
+                "parked_disk", "stopped_early") else status)
             if status == "stopped_crash":
                 summary.stopped_layers.append(spec.name)
-            if status == "parked_disk":
+            if status in ("parked_disk", "stopped_early"):
                 break
         if refused is not None:
             summary.status = f"blocked: {refused}"
         else:
-            summary.status = "parked" if summary.parked else "done"
+            summary.status = "parked" if summary.parked or summary.stopped_early else "done"
         self.progress.finish(summary.status)
         return summary
 
@@ -321,6 +343,12 @@ class Runner:
         try:
             while i < len(todo):
                 case = todo[i]
+                if self.should_stop is not None and self.should_stop():
+                    summary.stopped_early = True
+                    summary.skipped += len(todo) - i
+                    self.progress.log(f"- layer {layer}: stopped before {case.id} "
+                                      "(a sibling worker parked)")
+                    return "stopped_early"
                 free_gb = (self.free_disk_gb or free_disk_gb)(self.run.root)
                 if free_gb < self.disk_min_gb:
                     reason = f"disk: {free_gb:.1f} GB free < {self.disk_min_gb:.0f} GB"

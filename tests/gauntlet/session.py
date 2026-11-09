@@ -264,7 +264,7 @@ class DtControl:
     def foreign(self) -> list[int]:
         from scouter.core import dtprocess
 
-        return dtprocess.foreign_pids(self.cache_root)
+        return dtprocess.unregistered_foreign_pids(self.cache_root)
 
     def owned(self) -> int | None:
         from scouter.core import dtprocess
@@ -274,7 +274,10 @@ class DtControl:
     def launch(self, frame: Path, library: Path, log: Path, env: dict[str, str] | None = None):
         from scouter.core import dtprocess
 
-        return dtprocess.launch(frame, library, log_path=log, env=env)
+        #: parallel workers (gauntlet/workers.py) give each worker its own darktable
+        #: configdir (data.db, locks); unset = darktable's default, as before.
+        configdir = (env if env is not None else os.environ).get("GAUNTLET_DT_CONFIGDIR")
+        return dtprocess.launch(frame, library, configdir or None, log_path=log, env=env)
 
     def ready(self, timeout_s: float, *, stop_if=None) -> dict:
         from scouter.core import dtprocess

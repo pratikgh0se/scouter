@@ -42,9 +42,25 @@ def _bridge_cache_dir() -> Path:
     return Path(base) / "darktable-mcp"
 
 
-def _darktable_is_running() -> bool:
+def _darktable_pids() -> list[int]:
     result = subprocess.run(["pgrep", "-x", "darktable"], capture_output=True, text=True)
-    return result.returncode == 0
+    return [int(x) for x in result.stdout.split() if x.strip().isdigit()]
+
+
+def _darktable_is_running(
+    pids: Callable[[], list[int]] | None = None,
+    registered: Callable[[], set[int]] | None = None,
+) -> bool:
+    """True when any darktable pid is NOT registered by this gauntlet run (the
+    registry is `$GAUNTLET_DT_REGISTRY`, written by `dtprocess.launch` for the
+    darktables the harness itself launched; unset = empty, so with no registry
+    any darktable blocks, as before). Pratik's own darktable is never
+    registered. `pids`/`registered` are seams for tests (fake process lists)."""
+    if registered is None:
+        from scouter.core import dtprocess  # lazy: importing this module stays product-free
+
+        registered = dtprocess.registered_pids
+    return bool(set((pids or _darktable_pids)()) - registered())
 
 
 #: A request/response file older than this is an orphan (the bridge's own

@@ -3,6 +3,7 @@
   generate [--stamp S] [--layer L ...]
   run [--stamp S|latest] [--layer L ...] [--case ID ...] [--tier P0 ...] [--prefix P ...]
       [--where KEY=VALUE ...] [--resume] [--rerun] [--only-failed] [--wait-on-park]
+      [--workers N]
   report --stamp S|latest
   progress-html --stamp S|latest [--out PATH] [--title T]
   du --stamp S|latest
@@ -14,12 +15,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 from gauntlet import html as html_page
 from gauntlet import report as report_mod
+from gauntlet import workers as workers_mod
 from gauntlet.adapter import load_adapter
 from gauntlet.generate import GenerationError, write_generation
 from gauntlet.runner import Runner
@@ -73,6 +76,60 @@ def _commit() -> str:
         return ""
 
 
+def _run_shard(args: argparse.Namespace, adapter, run: RunDir) -> int:
+    """One `--workers` child: runs exactly its shard's cases, writing its own
+    progress.json and log.md (the parent merges them)."""
+    k, n = workers_mod.parse_shard(args.shard)
+    os.environ.setdefault(workers_mod.SHARD_ENV, f"{k}/{n}")
+    d = workers_mod.shard_dir(run, k)
+    run.progress_json, run.log_md = d / "progress.json", d / "log.md"
+    ids = {x for x in workers_mod.shard_ids_path(run, k).read_text(encoding="utf-8").split()}
+    runner = Runner(adapter, run, commit=_commit(),
+                    should_stop=workers_mod.stop_path(run).exists)
+    summary = runner.run_layers(None, resume=False, case_ids=ids,
+                                wait_on_park=args.wait_on_park)
+    print(f"worker {k}/{n}: ran {summary.ran}, parked {len(summary.parked)}, "
+          f"status {summary.status}")
+    if summary.status.startswith("blocked"):
+        return EXIT_REFUSED
+    return EXIT_PARKED if summary.parked or summary.stopped_early else 0
+
+
+def _run_parallel(args: argparse.Namespace, cfg: dict, adapter, run: RunDir) -> int:
+    runner = Runner(adapter, run, commit=_commit())
+    todo = runner.selection(
+        args.layer, resume=not args.rerun and (args.resume or not args.case),
+        only_failed=args.only_failed, case_ids=set(args.case) if args.case else None,
+        tiers=set(args.tier) if args.tier else None, prefixes=tuple(args.prefix),
+        where=_where(args.where))
+    if not todo:
+        print(f"{run.root}: nothing to run")
+        return 0
+    shards = workers_mod.partition(
+        todo, args.workers, max_cases=runner.session_max_cases,
+        atomic_layers=frozenset(getattr(adapter, "atomic_layers", ())))
+    all_cases = run.read_cases()
+    for spec in adapter.layers():  # layer totals, as run_layers records them
+        mine = [c for c in all_cases if c.layer == spec.name]
+        runner.progress.layer(spec.name, len(mine), sum(c.tier == "P0" for c in mine), spec.live)
+        if any(c.layer == spec.name for c in todo):
+            runner.progress.start_layer(spec.name)
+    base = [sys.executable, "-m", "gauntlet", "--config", args.config]
+    for flag, val in (("--adapter", args.adapter), ("--runs-root", args.runs_root)):
+        if val:
+            base += [flag, val]
+    code = workers_mod.run_parallel(
+        run, shards,
+        lambda k, n: [*base, "run", "--stamp", run.stamp, "--shard", f"{k}/{n}",
+                      *(["--wait-on-park"] if args.wait_on_park else [])],
+        lambda k: workers_mod.worker_env(run, k, args.workers, adapter), runner.progress)
+    runner.progress.finish("parked" if code == EXIT_PARKED else "done" if code == 0
+                           else "blocked")
+    print(f"{run.root}: {len(todo)} cases on {args.workers} workers "
+          f"({', '.join(str(len(s)) for s in shards)}), exit {code}")
+    return code
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m gauntlet")
     p.add_argument("--config", default="gauntlet.json")
@@ -110,6 +167,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--where", action="append", default=[],
                    help="only cases whose meta KEY equals VALUE, as KEY=VALUE (repeatable; "
                    "several values for one key are OR-ed)")
+    r.add_argument("--workers", type=int, default=1,
+                   help="run on N darktable instances at once (default 1, unchanged)")
+    r.add_argument("--shard", help=argparse.SUPPRESS)  # K/N, set by the --workers parent
     rp = sub.add_parser("report")
     rp.add_argument("--stamp")
     h = sub.add_parser("progress-html")
@@ -146,6 +206,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "run":
         if not run.cases_jsonl.exists():
             write_generation(run, adapter)
+        if args.workers < 1:
+            raise SystemExit("gauntlet: --workers must be >= 1")
+        if args.shard:
+            return _run_shard(args, adapter, run)
+        if args.workers > 1:
+            return _run_parallel(args, cfg, adapter, run)
         summary = Runner(adapter, run, commit=_commit()).run_layers(
             args.layer, resume=not args.rerun and (args.resume or not args.case),
             only_failed=args.only_failed,
@@ -156,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
               f"stopped layers {summary.stopped_layers or '-'}, status {summary.status}")
         if summary.status.startswith("blocked"):
             return EXIT_REFUSED
-        return EXIT_PARKED if summary.parked else 0
+        return EXIT_PARKED if summary.parked or summary.stopped_early else 0
     if args.cmd == "report":
         rep = report_mod.write(run, adapter, {"commit": _commit()})
         print(f"{run.report_md} (release bar met: {rep['S8_signoff']['release_bar_met']})")

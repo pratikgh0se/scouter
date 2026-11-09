@@ -142,6 +142,26 @@ class Progress:
                  f"silent {lay['silent']}, crash {lay['crash']})\n")
         self.save()
 
+    def merge_shard(self, shard: dict) -> None:
+        """Fold a parallel worker's progress in. A worker starts from a fresh doc, so
+        its counters are this run's deltas (negative score moves for a rerun)."""
+        for name, theirs in shard.get("layers", {}).items():
+            lay = self.doc["layers"].setdefault(name, {k: 0 for k in _COUNTERS})
+            for k in _COUNTERS:
+                lay[k] = lay.get(k, 0) + theirs.get(k, 0)
+            for k in ("total", "p0_total", "live"):
+                if k in theirs:
+                    lay[k] = theirs[k]
+            if theirs.get("status") in ("parked", "blocked"):
+                lay["status"] = theirs["status"]
+            elif theirs.get("status") == "done" and lay.get("status") in ("pending", "running"):
+                lay["status"] = "done"
+            lay["rate_pct"] = round(100.0 * lay["points"] / lay["done"], 1) if lay["done"] else 0.0
+        for case_id in shard.get("parked", []):
+            if case_id not in self.doc["parked"]:
+                self.doc["parked"].append(case_id)
+        self.save()
+
     def finish(self, status: str) -> None:
         self.doc["status"] = status
         self.doc["current_case"] = None

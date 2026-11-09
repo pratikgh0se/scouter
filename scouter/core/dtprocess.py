@@ -132,8 +132,48 @@ def owned_pid(cache_root: Path | None = None) -> int | None:
 
 
 def foreign_pids(cache_root: Path | None = None) -> list[int]:
+    """Every running darktable that is not this process's owned one. Raw: the
+    quit ladder keys its osascript decision on it (osascript quits by app name,
+    so a registered sibling worker's darktable counts there too)."""
     mine = owned_pid(cache_root)
     return [p for p in running_pids() if p != mine]
+
+
+#: Parallel gauntlet workers (gauntlet/workers.py): a directory in which every
+#: darktable a worker launches is recorded as `<pid>.json`. Unset = the usual
+#: single-instance world and nothing below changes.
+REGISTRY_ENV = "GAUNTLET_DT_REGISTRY"
+
+
+def _registry_dir(env: dict[str, str] | None = None) -> Path | None:
+    raw = (env if env is not None else os.environ).get(REGISTRY_ENV)
+    return Path(raw) if raw else None
+
+
+def registered_pids(registry: Path | None = None) -> set[int]:
+    """Pids recorded in the run's registry that are still the same process
+    (pid + start time match), so a reused pid is never trusted."""
+    registry = registry or _registry_dir()
+    if registry is None or not registry.is_dir():
+        return set()
+    out: set[int] = set()
+    for f in registry.glob("*.json"):
+        try:
+            rec = json.loads(f.read_text(encoding="utf-8"))
+            pid, start = int(rec["pid"]), rec["start_time"]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if _alive(pid) and _lstart(pid) == start:
+            out.add(pid)
+    return out
+
+
+def unregistered_foreign_pids(cache_root: Path | None = None) -> list[int]:
+    """The preflight/launch guard: a darktable that is neither this process's
+    owned one nor registered by this gauntlet run. Pratik's own darktable is
+    never registered, so it still blocks."""
+    ok = registered_pids()
+    return [p for p in foreign_pids(cache_root) if p not in ok]
 
 
 def launch(frame: str | Path | None, library: str | Path, configdir: str | Path | None = None,
@@ -180,6 +220,11 @@ def launch(frame: str | Path | None, library: str | Path, configdir: str | Path 
     op = owner_path(cache_root)
     op.parent.mkdir(parents=True, exist_ok=True)
     op.write_text(json.dumps(asdict(rec)) + "\n", encoding="utf-8")
+    registry = _registry_dir(env)
+    if registry is not None:
+        registry.mkdir(parents=True, exist_ok=True)
+        (registry / f"{rec.pid}.json").write_text(json.dumps(asdict(rec)) + "\n",
+                                                  encoding="utf-8")
     return rec
 
 

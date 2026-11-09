@@ -13,7 +13,9 @@ from collections import Counter
 from pathlib import Path
 
 from gauntlet.adapter import LayerSpec, RefuseRun
+from gauntlet import workers
 from gauntlet.case import Case
+from gauntlet.store import atomic_write_text
 from tests.gauntlet import agent_budget
 from tests.gauntlet import corpus as corpus_mod
 from tests.gauntlet import taxonomy
@@ -66,6 +68,16 @@ def isolate_process(root: Path) -> None:
         os.environ[k] = env[k]
 
 
+def seed_worker_config(src: Path, dst: Path) -> None:
+    """Give a worker's own darktable configdir the Lua plugin: luarc plus lua/,
+    copied from `src` (read only; the real ~/.config/darktable is never written)."""
+    dst.mkdir(parents=True, exist_ok=True)
+    if (src / "luarc").is_file():
+        shutil.copyfile(src / "luarc", dst / "luarc")
+    if (src / "lua").is_dir():
+        shutil.copytree(src / "lua", dst / "lua", dirs_exist_ok=True)
+
+
 def routed_body(case: Case) -> str:
     """The body a RoutedSession opens for this case (chart / no body -> olympus)."""
     return case.body if case.body not in (None, "chart") else "olympus"
@@ -93,7 +105,8 @@ def point_cache(cache: Path, *gauntlet_roots: Path, carry: bool = True) -> None:
         shutil.copyfile(old, new)
 
 
-def adopt_leftover_owner(run, process_cache: Path, *, owned_pid=None) -> Path | None:
+def adopt_leftover_owner(run, process_cache: Path, *, owned_pid=None,
+                         shard: tuple[int, int] | None = None) -> Path | None:
     """(final fix I1): after a killed run, the owner record of the darktable it
     left running sits in the killed session's cache (it reaches the process
     cache only through abort/close). Point the process cache at the newest
@@ -118,6 +131,8 @@ def adopt_leftover_owner(run, process_cache: Path, *, owned_pid=None) -> Path | 
 
     records = sorted(Path(run.sessions_dir).glob(f"*/*/cache/{dtprocess.OWNER_FILE}"),
                      key=mtime, reverse=True)
+    if shard is not None:  # a sibling worker's live darktable is never "our leftover"
+        records = [r for r in records if workers.owns_session_dir(r.parent.parent.name, shard)]
     for rec in records:
         try:
             shutil.copyfile(rec, target)
@@ -256,7 +271,7 @@ class RoutedSession:
                 old.close()
             except Exception:  # noqa: BLE001 - best effort; open() quits our leftover
                 old.abort()
-        self.n += 1
+        self.n = workers.next_session_n(self.n, workers.shard_from_env())
         root = self.run.sessions_dir / self.layer / f"{self.n:03d}-{body}"
         point_cache(root / "cache", *self._roots())  # == the MCP child's cache
         s = self.session_factory(self.adapter.corpus(), root, body, self.run.root)
@@ -288,7 +303,7 @@ class RoutedSession:
         return self.adapter.runs_root, self.run.root
 
     def _back_to_process_cache(self) -> None:
-        point_cache(self.adapter.runs_root / PROCESS_DIR / "cache", *self._roots())
+        point_cache(self.adapter.process_dir / "cache", *self._roots())
 
     def _back_to_process_cache_if_mine(self, old_cache: Path) -> None:
         """(fix round 2 review N2): re-point ambient SCOUTER_CACHE to the
@@ -420,6 +435,26 @@ class ScouterAdapter:
         self.session_factory = None
         self._opening: RoutedSession | None = None  # (N1): the in-flight eager open
 
+    #: install is one stateful 10-step rehearsal; it never splits across workers.
+    atomic_layers = frozenset({"install"})
+
+    @property
+    def process_dir(self) -> Path:
+        """The gauntlet process's own config/cache dir; one per parallel worker."""
+        shard = workers.shard_from_env()
+        return self.runs_root / (PROCESS_DIR if shard is None else f"{PROCESS_DIR}-w{shard[0]}")
+
+    def worker_env(self, shard_dir: Path) -> dict[str, str]:
+        """Parallel mode: the extra env for one worker (its own darktable configdir,
+        seeded with the plugin) after asserting its library is an isolated scratch
+        one (never Pratik's)."""
+        from tests.host_support import assert_isolated_library
+
+        assert_isolated_library(shard_dir / "library" / "library.db", scratch=self.runs_root)
+        configdir = shard_dir / "config"
+        seed_worker_config(Path.home() / ".config" / "darktable", configdir)
+        return {"GAUNTLET_DT_CONFIGDIR": str(configdir)}
+
     # -- data --------------------------------------------------------------
 
     def tax(self):
@@ -501,8 +536,8 @@ class ScouterAdapter:
 
         if layer == "offline":
             return OfflineSession()
-        isolate_process(self.runs_root / PROCESS_DIR)
-        adopt_leftover_owner(run, self.runs_root / PROCESS_DIR / "cache")
+        isolate_process(self.process_dir)
+        adopt_leftover_owner(run, self.process_dir / "cache", shard=workers.shard_from_env())
         self._record_originals(run.root)
         if layer == "install":
             # The runner may reopen (hard cap, rotation): hand back the same
@@ -567,7 +602,7 @@ class ScouterAdapter:
     def foreign_pids(self) -> list[int]:
         from scouter.core import dtprocess
 
-        return dtprocess.foreign_pids()
+        return dtprocess.unregistered_foreign_pids()
 
     def preflight(self, run, layer: str) -> str | None:
         """(final fix I2): refuse a live layer while a darktable this runner did
@@ -575,8 +610,8 @@ class ScouterAdapter:
         from a killed run is adopted first (I1), so it reads as ours."""
         if layer not in LIVE_LAYERS:
             return None
-        isolate_process(self.runs_root / PROCESS_DIR)
-        adopt_leftover_owner(run, self.runs_root / PROCESS_DIR / "cache")
+        isolate_process(self.process_dir)
+        adopt_leftover_owner(run, self.process_dir / "cache", shard=workers.shard_from_env())
         try:
             foreign = self.foreign_pids()
         except (OSError, subprocess.TimeoutExpired) as e:
@@ -589,7 +624,7 @@ class ScouterAdapter:
     def _record_originals(self, run_root: Path) -> None:
         path = run_root / "originals.before.json"
         if not path.exists():
-            path.write_text(json.dumps(corpus_mod.sha256_originals(), sort_keys=True))
+            atomic_write_text(path, json.dumps(corpus_mod.sha256_originals(), sort_keys=True))
         self._originals_before = json.loads(path.read_text())
         self._run_root = run_root
 
