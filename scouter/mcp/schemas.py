@@ -240,8 +240,9 @@ TOOL_SPECS: list[dict] = [
                 "source": {
                     "type": "string",
                     "enum": ["xmp", "db", "auto"],
-                    "default": "xmp",
-                    "description": "where to read the history from; library.db lags the "
+                    "description": "where to read the history from (unset reads the sidecar "
+                    "leniently: a missing one is ok with no entries; an explicit xmp with no "
+                    "sidecar file is the error no_sidecar); library.db lags the "
                     "darkroom's in-memory history exactly like the XMP does",
                 },
                 "library": {

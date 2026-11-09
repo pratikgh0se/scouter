@@ -25,6 +25,7 @@ from scouter.errors import (
     CommitTimeout,
     DarktableUnresponsive,
     DbLocked,
+    NoSidecar,
     NotInDarkroom,
     UsageError,
 )
@@ -301,7 +302,7 @@ def read_db(
 def read(
     image: str | int,
     *,
-    source: str = "xmp",
+    source: str | None = None,
     library: str | None = None,
     job: str | None = None,
 ) -> HistoryResult:
@@ -321,6 +322,11 @@ def read(
     flushed history to the DB -- autosave, synchronize selection -- without
     writing the XMP yet). When library.db cannot be read, auto is the XMP.
     """
+    # rob-r5: only an EXPLICIT source="xmp" treats a missing sidecar as an
+    # error; the unset default keeps the lenient "no edits yet" answer.
+    strict_xmp = source == "xmp"
+    if source is None:
+        source = "xmp"
     if source not in READ_SOURCES:
         raise UsageError(f"unknown source {source!r} (valid: {', '.join(READ_SOURCES)})")
     if source == "db":
@@ -333,6 +339,11 @@ def read(
             result = read_db(resolved.image_id, library=library, job=job)
             result.warnings.insert(0, f"no sidecar at {resolved.xmp_path}; fell back to library.db")
             return result
+        if strict_xmp:
+            raise NoSidecar(
+                f"no sidecar at {resolved.xmp_path}: source=xmp was requested explicitly",
+                detail={"path": resolved.path, "xmp_path": str(resolved.xmp_path)},
+            )
         return HistoryResult(
             image_id=resolved.image_id,
             path=resolved.path,
@@ -1053,9 +1064,9 @@ for verb in (
             ArgSpec(
                 "source",
                 "str",
-                default="xmp",
                 choices=READ_SOURCES,
-                help="xmp (sidecar), db (darktable's library.db, read-only), or auto "
+                help="xmp (sidecar; an explicit xmp with no sidecar file is the error "
+                "no_sidecar; unset is lenient: ok, empty), db (darktable's library.db, read-only), or auto "
                 "(xmp unless it is stale -- missing, mid-write, or older than library.db's "
                 "last history change -- then db)",
             ),

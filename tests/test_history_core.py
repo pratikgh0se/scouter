@@ -56,6 +56,27 @@ class HistoryReadTest(unittest.TestCase):
         self.assertEqual(result.entries, [])
         self.assertTrue(any("write sidecar file" in w for w in result.warnings))
 
+    def test_explicit_xmp_with_missing_sidecar_is_no_sidecar(self) -> None:
+        """rob-r5: asking for the sidecar by name when it is absent is an error."""
+        from scouter.errors import NoSidecar
+
+        self.sidecar.unlink()
+        with self.assertRaises(NoSidecar) as ctx:
+            history.read(image=str(self.raw), source="xmp")
+        self.assertEqual(ctx.exception.code, "no_sidecar")
+
+    def test_auto_with_missing_sidecar_stays_ok(self) -> None:
+        # Unchanged: auto never raises no_sidecar; it falls back to library.db
+        # (entries depend on the host library) and says so.
+        self.sidecar.unlink()
+        result = history.read(image=str(self.raw), source="auto")
+        self.assertTrue(any("no sidecar" in w for w in result.warnings))
+
+    def test_explicit_xmp_with_existing_sidecar_is_unchanged(self) -> None:
+        result = history.read(image=str(self.raw), source="xmp")
+        self.assertTrue(result.confirmed)
+        self.assertEqual(result.history_end, 14)
+
     def test_every_entry_carries_its_own_enabled_flag(self) -> None:
         # Ruling 20: a disabled module must never be reported as live -- the
         # per-entry `enabled` flag has to survive the read verbatim.
