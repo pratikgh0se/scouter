@@ -722,3 +722,26 @@ def test_resume_works_when_closed_session_frames_are_gone(tmp_path):
     r3 = Runner(a, run, session_max_cases=2, session_prune="all")
     r3.run_layers(layers=["alpha"], only_failed=True)
     assert a.ran == ["alpha-2"]
+
+
+def test_two_runners_over_one_run_dir_never_prune_each_others_folders(tmp_path):
+    a, run, ra = _prune_setup(tmp_path, bad=["alpha-0", "alpha-2"], session_prune="all",
+                              session_keep_nonpass_max=0)
+    rb = Runner(a, run, session_max_cases=2, session_prune="all", session_keep_nonpass_max=0)
+    mine = run.sessions_dir / "alpha" / "090-b-open"
+    kept_fail = run.sessions_dir / "alpha" / "091-b-closed-nonpass"
+    stranger = run.sessions_dir / "alpha" / "092-nobody"
+    for d in (mine, kept_fail, stranger):
+        (d / "frames").mkdir(parents=True)
+        (d / "frames" / "f.ORF").write_bytes(b"x" * 100)
+    rb._ledger[mine] = ["pass"]
+    rb._ledger[kept_fail] = ["fail"]
+    ra.free_disk_gb = lambda root: 27.0  # inside the margin: low-disk path runs too
+    ra.run_layers(layers=["alpha"])
+    for d in (mine, kept_fail, stranger):
+        assert (d / "frames" / "f.ORF").exists(), d
+    assert not set(ra._ledger) & {mine, kept_fail, stranger}
+    # B's own low-disk path spares its open session and never reaches strangers
+    rb._prune_for_disk(_DirSession(a, mine), lambda root: 20.0)
+    assert (mine / "frames" / "f.ORF").exists() and (stranger / "frames" / "f.ORF").exists()
+    assert not (kept_fail / "frames" / "f.ORF").exists()  # B's own closed one: prunable

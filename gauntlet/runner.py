@@ -490,8 +490,10 @@ class Runner:
                               f"freed {freed} bytes")
 
     def _sweep(self, open_root: Path | None) -> None:
-        """Prune every CLOSED session (anything in the ledger but the open
-        one): all-pass ones always (mode `passing`/`all`), every one in mode
+        """Prune every CLOSED session THIS runner opened and recorded (the
+        ledger is per Runner/process: with parallel workers over one run dir,
+        a folder another worker opened is never in it, so never touched).
+        Closed = in the ledger but not the open one: all-pass ones always (mode `passing`/`all`), every one in mode
         `all`, and non-pass ones beyond the newest `session_keep_nonpass_max`.
         Verdicts come from the cases the runner itself scored in each folder."""
         if self.session_prune == "off":
