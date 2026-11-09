@@ -964,7 +964,11 @@ def _writes_landed_as_requested(obs: Observation, units: dict) -> bool:
     silent failure, caught elsewhere -- this only excuses a real, verified,
     merely-too-small-to-measure move."""
     before, after = _params(obs.before), _params(obs.after)
-    any_move = False
+    #: Night 3 (looks cluster B, scenario r0031): only the LAST write per
+    #: `module.param` is a claim about the final state -- an earlier step of a
+    #: repeat sequence (0.0625 then 0.125) is legitimately overwritten, so
+    #: comparing it with the final after snapshot would deny a real landing.
+    last: dict[str, tuple[object, str]] = {}
     for c in obs.calls:
         if not c.write:
             continue
@@ -973,19 +977,28 @@ def _writes_landed_as_requested(obs: Observation, units: dict) -> bool:
         for m in moves:
             if not isinstance(m, dict) or m.get("noop"):
                 continue
-            module, param, requested = m.get("module"), m.get("param"), m.get("requested")
+            if c.tool == "look_plan":
+                #: `look_plan` is a harness-synthesised verb: its sub-moves carry
+                #: the asked `value` (no `requested`); a refused sub-move
+                #: (`ok` False) claimed nothing and is judged by its own code.
+                if m.get("ok") is False:
+                    continue
+                requested = m.get("requested", m.get("value"))
+            else:
+                requested = m.get("requested")
+            module, param = m.get("module"), m.get("param")
             if not module or not param or requested is None:
                 return False
-            key_ = f"{module}.{param}"
-            unit = units.get(key_, m.get("unit", ""))
-            a = _num(after.get(key_))
-            if a is None or not _same(unit, a, requested):
-                return False
-            b = _num(before.get(key_))
-            if b is not None and not _differs(unit, b, a):
-                return False
-            any_move = True
-    return any_move
+            last[f"{module}.{param}"] = (requested, m.get("unit", ""))
+    for key_, (requested, munit) in last.items():
+        unit = units.get(key_, munit)
+        a = _num(after.get(key_))
+        if a is None or not _same(unit, a, requested):
+            return False
+        b = _num(before.get(key_))
+        if b is not None and not _differs(unit, b, a):
+            return False
+    return bool(last)
 
 
 def _imperceptible_step_residual(case: Case, results: list[CheckResult],
