@@ -592,12 +592,11 @@ def test_progress_is_merged_after_a_park(tmp_path, inproc):
 
 
 def test_adapter_asks_for_golden_serial_first_only_with_other_look_cases(tmp_path):
-    from gauntlet.case import Case
     from tests.gauntlet.adapter import ScouterAdapter
     from tests.gauntlet.exec_looks import GOLDEN_ID
 
     def mk(cid, layer="looks"):
-        return Case(id=cid, layer=layer, tier="P1", steps=[], checks=[], expect=None)
+        return _case(cid, layer)
 
     a = ScouterAdapter(tmp_path)
     golden, other = mk(GOLDEN_ID), mk("lk-other")
