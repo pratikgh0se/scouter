@@ -47,6 +47,28 @@ def gaps(look: dict) -> list[str]:
     first = (look.get("dt_modules") or [""])[0].lower()
     if "lut" in first:
         out.append("lut3d")
+    out += [f"zone_crosstalk:{k}" for k in zone_crosstalk(t.get("tone") or {})]
+    return out
+
+
+def zone_crosstalk(tone: dict) -> list[str]:
+    """Tone zones (`shadows_ev`...) whose per-zone sign check is unreliable
+    (night 3, cluster C). colorbalancergb's shadows/midtones/highlights masks
+    overlap, so a zone moved against another zone that moves a comparable amount
+    reads the other zone's push (a +0.23 highlights lift raised the ramp_-4
+    patch although shadows were cut). A zone's check is owned by that zone only
+    when no other zone moves the opposite way by more than half its own size;
+    the zone with the largest move always owns its check, so a look keeps at
+    least one tone assertion. The dropped zones are declared gaps."""
+    moves = {k: tone.get(k) or 0 for k in TONE_PATCH}
+    top = max(moves, key=lambda k: abs(moves[k]), default=None)
+    out = []
+    for k, v in moves.items():
+        if not v or k == top:
+            continue
+        if any(w and (w > 0) != (v > 0) and abs(w) * 2 > abs(v)
+               for j, w in moves.items() if j != k):
+            out.append(k)
     return out
 
 
@@ -70,9 +92,10 @@ def chart_checks(look: dict, tol: dict) -> tuple[list[Check], list[dict]]:
         tags.append({"confidence": c, "component": component})
 
     tone = t.get("tone") or {}
+    shared = zone_crosstalk(tone)
     for k, patch in TONE_PATCH.items():
         v = tone.get(k) or 0
-        if v:
+        if v and k not in shared:
             add(Check("M2", stat="ev", region=patch, sign=1 if v > 0 else -1,
                       target={"value": v, "tol": tol[conf.get("tone", "inferred")]["ev"]}),
                 "tone")
@@ -114,9 +137,10 @@ def frame_checks(look: dict) -> tuple[list[Check], list[dict]]:
     checks: list[Check] = []
     tags: list[dict] = []
     tone = t.get("tone") or {}
+    shared = zone_crosstalk(tone)
     for k, region in TONE_REGION.items():
         v = tone.get(k) or 0
-        if v:
+        if v and k not in shared:
             checks.append(Check("M2", stat="L", region=region, sign=1 if v > 0 else -1))
             tags.append({"confidence": conf.get("tone", "inferred"), "component": "tone"})
     if tone.get("contrast"):
@@ -181,10 +205,11 @@ def generate(tax: Taxonomy) -> list[Case]:
                         mode="tool", steps=[Step("look_plan", {"look_id": look["id"],
                                                                "image": frame(role)},
                                                  40.0, True)],
-                        expect=Expect("edit", fchecks, {"changed": bool(fchecks[0].sign)}),
+                        expect=Expect("edit", fchecks, {"changed": bool(fchecks and fchecks[0].sign)}),
                         body=body, frame_role=role,
                         source={"file": "looks.json", "id": look["id"]},
-                        meta=dict(meta, check_tags=ftags, gaps=[])))
+                        meta=dict(meta, check_tags=ftags,
+                                  gaps=[x for x in g if x.startswith("zone_crosstalk:")])))
     return order_by_frame_role(out)
 
 

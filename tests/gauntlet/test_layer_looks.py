@@ -113,3 +113,33 @@ def test_looks_checks_name_the_planner_param_they_depend_on():
         for ch in c.expect.checks:
             if ch.metric == "M6":
                 assert ch.tags["look_key"] == "sigmoid.contrast"
+
+
+def test_zone_checks_are_owned_by_one_zone_when_masks_would_cross_talk():
+    """Z1 intent (night 3 cluster C): 'crush shadows slightly, lift highlights
+    strongly' -- the shadows patch is allowed to move with the highlights mask,
+    so only the dominant zone (highlights) keeps a sign check; the shadows
+    check is a declared gap. Looks whose zones agree, or have a single zone,
+    keep every check."""
+    assert looks.zone_crosstalk({"shadows_ev": -0.1, "highlights_ev": 0.4}) == ["shadows_ev"]
+    assert looks.zone_crosstalk({"shadows_ev": 0.2, "highlights_ev": 0.3}) == []
+    assert looks.zone_crosstalk({"shadows_ev": -0.3}) == []
+    # a small opposite move (under half) does not contaminate the larger zone
+    assert looks.zone_crosstalk({"shadows_ev": -0.4, "highlights_ev": 0.1}) == ["highlights_ev"]
+
+
+def test_every_look_with_a_tone_target_keeps_a_tone_check_and_records_dropped_zones():
+    cases = looks.generate(taxonomy.load())
+    tax = {lk["id"]: lk for lk in taxonomy.load().looks}
+    dropped = 0
+    for c in cases[1:]:
+        tone = tax[c.meta["look"]]["targets"].get("tone") or {}
+        zones = [k for k in ("shadows_ev", "mids_ev", "highlights_ev") if tone.get(k)]
+        if not zones:
+            continue
+        assert any(ch.metric == "M2" and ch.sign for ch in c.expect.checks), c.id
+        gone = looks.zone_crosstalk(tone)
+        dropped += len(gone)
+        for k in gone:
+            assert f"zone_crosstalk:{k}" in c.meta["gaps"], c.id
+    assert dropped
