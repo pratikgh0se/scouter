@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scouter.core import darkroom, dtbridge, moves, vocab, xmp
+from scouter.core import darkroom, dtbridge, moves, xmp
 from scouter.errors import CommitTimeout
 from tests.scouter_fakes import FakeBridge, TempCache, with_param_value
 
@@ -100,7 +100,7 @@ class LateFlushNoopIntentTest(unittest.TestCase):
         # on the real `set_param` path (F1).
         before_text = self.sidecar.read_text()
         before_params = xmp.latest_params(xmp.parse(before_text), "sigmoid", 0)
-        target = round(before_params["contrast"] + vocab.spec("sigmoid", "contrast").step, 6)
+        target = round(before_params["contrast"] + 0.15, 6)  # one notch at the 2026-11-09 step
 
         def _late_flush(*_a, **kw):
             # `say`'s own pre-commit bounce also calls `_commit` (with

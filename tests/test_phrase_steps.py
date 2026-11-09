@@ -14,6 +14,10 @@ def _mags(phrase: str) -> dict[tuple[str, str], float]:
 
 
 class PhraseLadderTest(unittest.TestCase):
+    def test_ruled_steps_are_pinned(self) -> None:
+        self.assertEqual(vocab.spec("sigmoid", "contrast").step, 0.15)
+        self.assertEqual(vocab.spec("exposure", "black").step, 0.01)
+
     def test_every_adjusting_phrase_family_is_strictly_ordered(self) -> None:
         checked = 0
         for p in phrases.PHRASES:
@@ -28,6 +32,9 @@ class PhraseLadderTest(unittest.TestCase):
                     self.assertLess(bare[k], lot[k])
             checked += 1
         self.assertGreater(checked, 25)
+        # the ruled steps give the contrast/black ladders their new rungs
+        self.assertAlmostEqual(_mags("more contrast a touch")[("@tone", "contrast")], 0.075)
+        self.assertAlmostEqual(_mags("more contrast")[("@tone", "contrast")], 0.15)
 
     def test_lot_stays_inside_the_declared_range_after_the_step_raise(self) -> None:
         for p in phrases.PHRASES:
@@ -38,6 +45,9 @@ class PhraseLadderTest(unittest.TestCase):
                 with self.subTest(family=p.key, param=f"{s.module}.{s.param}"):
                     self.assertLessEqual(2.0 * abs(m.notches) * s.step, s.hi - s.lo)
                     self.assertLessEqual(s.step, (s.hi - s.lo) / 4)
+        lot = _mags("more contrast a lot")[("@tone", "contrast")]
+        self.assertAlmostEqual(lot, 0.30)
+        self.assertAlmostEqual(_mags("faded blacks a touch")[("exposure", "black")], 0.005)
 
 
 if __name__ == "__main__":
