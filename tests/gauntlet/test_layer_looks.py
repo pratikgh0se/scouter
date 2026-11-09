@@ -115,31 +115,48 @@ def test_looks_checks_name_the_planner_param_they_depend_on():
                 assert ch.tags["look_key"] == "sigmoid.contrast"
 
 
+def _expected_shared_zones(tone: dict) -> set[str]:
+    """The intent, stated independently of the implementation: a zone is shared
+    (its sign check unreliable) when another zone moves the opposite way by more
+    than half its size, unless it is the largest-moving zone."""
+    zones = {k: tone.get(k) or 0 for k in ("shadows_ev", "mids_ev", "highlights_ev")}
+    top = max(zones, key=lambda k: abs(zones[k]))
+    return {k for k, v in zones.items()
+            if v and k != top and any(w and (w > 0) != (v > 0) and abs(w) * 2 > abs(v)
+                                      for j, w in zones.items() if j != k)}
+
+
 def test_zone_checks_are_owned_by_one_zone_when_masks_would_cross_talk():
     """Z1 intent (night 3 cluster C): 'crush shadows slightly, lift highlights
     strongly' -- the shadows patch is allowed to move with the highlights mask,
-    so only the dominant zone (highlights) keeps a sign check; the shadows
-    check is a declared gap. Looks whose zones agree, or have a single zone,
-    keep every check."""
-    assert looks.zone_crosstalk({"shadows_ev": -0.1, "highlights_ev": 0.4}) == ["shadows_ev"]
-    assert looks.zone_crosstalk({"shadows_ev": 0.2, "highlights_ev": 0.3}) == []
-    assert looks.zone_crosstalk({"shadows_ev": -0.3}) == []
-    # a small opposite move (under half) does not contaminate the larger zone
-    assert looks.zone_crosstalk({"shadows_ev": -0.4, "highlights_ev": 0.1}) == ["highlights_ev"]
-
-
-def test_every_look_with_a_tone_target_keeps_a_tone_check_and_records_dropped_zones():
+    so the shadows check is a declared gap (tagged, recorded in meta gaps) while
+    the dominant zone keeps a real sign check. Looks whose zones agree keep all."""
     cases = looks.generate(taxonomy.load())
     tax = {lk["id"]: lk for lk in taxonomy.load().looks}
-    dropped = 0
+    seen_gap = 0
     for c in cases[1:]:
         tone = tax[c.meta["look"]]["targets"].get("tone") or {}
-        zones = [k for k in ("shadows_ev", "mids_ev", "highlights_ev") if tone.get(k)]
-        if not zones:
+        if not any(tone.get(k) for k in ("shadows_ev", "mids_ev", "highlights_ev")):
             continue
-        assert any(ch.metric == "M2" and ch.sign for ch in c.expect.checks), c.id
-        gone = looks.zone_crosstalk(tone)
-        dropped += len(gone)
-        for k in gone:
-            assert f"zone_crosstalk:{k}" in c.meta["gaps"], c.id
-    assert dropped
+        shared = _expected_shared_zones(tone)
+        zone_checks = [ch for ch in c.expect.checks
+                       if ch.metric == "M2" and (ch.region.startswith("patch:ramp_")
+                                                 or ch.region in ("shadows", "highlights",
+                                                                  "frame"))
+                       and ch.stat in ("ev", "L") and ch.sign]
+        gapped = [ch for ch in zone_checks if ch.tags.get("declared_gap")]
+        assert len(gapped) == len(shared), c.id
+        assert {g for g in c.meta["gaps"] if g.startswith("zone_crosstalk:")} == \
+            {f"zone_crosstalk:{k}" for k in shared}, c.id
+        assert len(zone_checks) - len(gapped) >= 1, c.id  # one owned tone check survives
+        seen_gap += len(shared)
+    assert seen_gap  # the taxonomy does contain cross-talk looks
+
+
+def test_zone_agreeing_looks_keep_every_zone_check_asserted():
+    cases = looks.generate(taxonomy.load())
+    tax = {lk["id"]: lk for lk in taxonomy.load().looks}
+    for c in cases[1:]:
+        tone = tax[c.meta["look"]]["targets"].get("tone") or {}
+        if tone and not _expected_shared_zones(tone):
+            assert not any(ch.tags.get("declared_gap") for ch in c.expect.checks), c.id
