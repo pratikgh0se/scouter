@@ -347,6 +347,16 @@ def run(
             )
         )
     exported = sum(1 for f in files if f.ok)
+    if files and exported == 0:
+        # C14: every render failed (full disk, permission denied...): never
+        # report ok. Mirrors `release`; partial success still returns ok.
+        raise ExportAllFailed(
+            f"export failed for all {len(files)} file(s): "
+            + "; ".join(sorted({f.error or "unknown error" for f in files}))[:400],
+            detail={
+                "files": [{"input": f.input, "error": f.error} for f in files if not f.ok]
+            },
+        )
     return ExportResult(
         preset=preset,
         out_dir=str(destination),

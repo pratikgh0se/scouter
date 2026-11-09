@@ -653,6 +653,17 @@ def _read_state(path: str, module: str, param: str, instance: int) -> dict:
     return state
 
 
+def _module_absent_before(entry) -> bool:
+    """True when the journal says the module had NO active history entry
+    before this write (`before.enabled` is None, not an unknown-value nudge)."""
+    b = entry.before
+    return (
+        b.get("value") is None
+        and not b.get("value_unknown")
+        and b.get("enabled") is None
+    )
+
+
 def _declared_default(module: str, param: str) -> float | None:
     """The vocabulary row's declared `neutral` (else darktable `default`)."""
     s = vocab.spec(module, param)
@@ -2377,7 +2388,18 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
         _warn_late_not_restored(entry, before_params, undone, warnings)
     else:
         mark_undone_ok = True
+        restored_from_default = False
         previous = entry.before.get("value")
+        if previous is None and _module_absent_before(entry):
+            # C13: the module had no history entry before this set, so
+            # darktable ran it at its defaults. When the row carries a
+            # host-verified `default` (never `default_candidate`) that IS
+            # the before value; restoring it is faithful to what the frame
+            # showed. Rows with no verified default keep the refusal below.
+            spec = vocab.spec(entry.module, entry.param)
+            if spec is not None and spec.default is not None:
+                previous = float(spec.default)
+                restored_from_default = True
         if previous is None:
             why = ("was unknown (an uncommitted nudge preceded it)"
                    if entry.before.get("value_unknown") else "was never readable from the XMP")
@@ -2424,6 +2446,12 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
             warnings.append(
                 f"could not verify the restore for seq {entry.seq}: read back {actual!r}, "
                 f"expected {previous!r}"
+            )
+        if restored_from_default:
+            warnings.append(
+                f"{entry.module} had no history entry before this set; restored its "
+                f"verified darktable default ({previous}), which leaves the module "
+                "with an explicit history entry at that value"
             )
         undone = {
             "verb": entry.verb,
