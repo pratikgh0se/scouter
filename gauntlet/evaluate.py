@@ -429,6 +429,11 @@ def _check_m1(i: int, ch: Check, obs: Observation) -> CheckResult:
     return CheckResult(i, "M1", False, None, None, note=f"unknown M1 kind {kind!r}")
 
 
+#: `CheckResult.note` of a check whose image stat could not move the asked way
+#: because it was already at its floor/bound before the edit.
+UNMEASURABLE = "unmeasurable: stat already at its floor"
+
+
 def _check_stat(i: int, ch: Check, obs: Observation) -> CheckResult:
     sb = (obs.stats_before.get(ch.region) or {}).get(ch.stat or "")
     sa = (obs.stats_after.get(ch.region) or {}).get(ch.stat or "")
@@ -444,6 +449,12 @@ def _check_stat(i: int, ch: Check, obs: Observation) -> CheckResult:
         return CheckResult(i, ch.metric, abs(d) <= floor, d, 0)
     wrong = d * ch.sign < -floor
     ok = d * ch.sign > floor
+    #: Night 3 (scenarios r0029/r0043): a clipping fraction already at its floor
+    #: cannot fall further. The stat is unmeasurable for "less clipping", which
+    #: is neither a pass nor a product failure (the sidecar oracle still reads).
+    if (ch.stat in ("clip_high", "clip_low") and ch.sign < 0 and sb <= floor
+            and not ok and not wrong):
+        return CheckResult(i, ch.metric, False, d, ch.sign, note=UNMEASURABLE)
     t = ch.target or {}
     if ok and "value" in t:
         within = abs(d - t["value"]) <= t.get("tol", 0.0)
@@ -1019,7 +1030,10 @@ def _imperceptible_step_residual(case: Case, results: list[CheckResult],
     if case.expect.kind != "edit" or _any_moved_to_limit(obs):
         return None
     non_passing = [r for r in results if not r.ok]
-    if not non_passing or any(r.note != "below noise floor" for r in non_passing):
+    #: an unmeasurable stat (already at its floor) is the same story as a
+    #: below-floor one: the verified edit simply cannot register on it.
+    if not non_passing or any(r.note not in ("below noise floor", UNMEASURABLE)
+                              for r in non_passing):
         return None
     sidecar = case.expect.sidecar or {}
     if not _writes_landed_as_requested(obs, sidecar.get("units", {})):
@@ -1149,6 +1163,25 @@ def _honest_final_step(case: Case, obs: Observation) -> bool:
     return not stray
 
 
+def _step_honestly_refused(obs: Observation, step: int | None, policy: Policy) -> bool:
+    """Night 3 (scenarios r0372/r0374): `reported` is judged per step. A check
+    attributed to a step (`Check.step`) whose own call answered an honest
+    refusal (a typed refusal code, own or nested) is not a claim the product
+    made -- an ok step elsewhere in the case must not turn it into one. Z2:
+    only when the per-step snapshots agree that the refused step changed
+    nothing; without them, or on any change, False (the old reading)."""
+    if step is None or not 0 <= step < len(obs.calls):
+        return False
+    c = obs.calls[step]
+    if not c.write or (c.envelope or {}).get("ok"):
+        return False
+    codes = [_code(c), *_nested_codes(c)]
+    if not any(code in policy.refusal_codes for code in codes if code):
+        return False
+    snaps = _step_snaps(obs)
+    return snaps is not None and not _step_changed(obs, snaps, step, {})
+
+
 def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
                    policy: Policy) -> str | None:
     """Spec 1 conditions (a)-(f). Only asked when the product reported success."""
@@ -1246,6 +1279,10 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
             return f"c: {ch.tags.get('why', 'a required report is missing')}"
         if ch.metric in ("M2", "M3", "M4", "M5", "M6") and ch.sign and not r.ok \
                 and not r.magnitude_only:
+            if r.note == UNMEASURABLE:
+                continue
+            if _step_honestly_refused(obs, ch.step, policy):
+                continue
             if r.note == "below noise floor" and (
                 ch.tags.get("clamp_param") in verified_clamped or landed_as_requested
             ):

@@ -188,3 +188,15 @@ def test_no_followup_turn_after_an_out_or_impossible_agent_case():
             assert c.meta["followups"] == [], c.id
 
 
+
+
+def test_stat_checks_of_edit_cases_are_attributed_to_a_step():
+    """Z1 intent: 'warmer a touch, then deeper blacks' -- the warmth stat check
+    belongs to step 0, so an honest refusal of step 0 is judged for that step
+    (night 3 r0372/r0374). Every stat check of a generated edit case names a
+    step inside the case."""
+    tool, _ = scenarios.generate(taxonomy.load())
+    stat = [(c, ch) for c in tool if c.expect.kind == "edit" for ch in c.expect.checks
+            if ch.metric in ("M2", "M3", "M4", "M5", "M6")]
+    assert stat
+    assert all(ch.step is not None and 0 <= ch.step < len(c.steps) for c, ch in stat)

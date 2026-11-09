@@ -164,3 +164,96 @@ def test_stored_cases_without_a_tag_derive_the_gap_from_metric_and_component():
     v = evaluate(_look_case([SHADOWS, spread], meta={"look": "x", "check_tags": [
         {"component": "tone"}, {"component": "tone"}]}), obs, POLICY)
     assert v.outcome == "verified"
+
+
+# ---- item 3: unmeasurable stats and per-step honest refusals
+
+def _say(moves=None, err=None):
+    if err:
+        return {"ok": False, "outcome": f"error:{err}", "data": {},
+                "error": {"code": err, "message": "no", "fix": "x"}}
+    return {"ok": True, "outcome": "ok", "data": {"moves": moves}}
+
+
+def _mvs(param, req, module="colorbalancergb"):
+    return {"module": module, "param": param, "requested": req, "applied": req,
+            "unit": "ratio", "clamped": False, "noop": False, "committed": True}
+
+
+def test_clip_high_already_zero_is_unmeasurable_not_silent():
+    """'Tame the highlights a bit' on a frame with nothing clipped (r0029): the
+    highlights move landed in the sidecar (0 -> -0.05); clip_high was 0.0 before
+    and stays 0.0 -- 'less clipping' cannot be observed. Not silent."""
+    chk = Check("M3", stat="clip_high", region="frame", sign=-1)
+    obs = Observation(
+        calls=[CallRecord("darkroom_say", {}, _say([_mvs("highlights_luminance", -0.05)]),
+                          write=True)],
+        before=_snap("a", **{"colorbalancergb.highlights_luminance": 0.0}),
+        after=_snap("b", **{"colorbalancergb.highlights_luminance": -0.05}),
+        stats_before={"frame": {"clip_high": 0.0}}, stats_after={"frame": {"clip_high": 0.0}},
+        floors={"clip_high": 0.05})
+    case = Case(id="s", layer="scenarios", tier="P1", mode="tool",
+                steps=[Step("darkroom_say", {}, 3.5, True)],
+                expect=Expect("edit", [chk], {"changed": True}))
+    v = evaluate(case, obs, POLICY)
+    assert v.outcome != "silent_failure" and v.score != "fail"
+
+
+def test_clip_high_unmeasurable_does_not_excuse_an_unlanded_move():
+    """Control: the same stat shape, but the sidecar shows nothing changed while
+    the product said ok: still silent (the sidecar oracle is untouched)."""
+    chk = Check("M3", stat="clip_high", region="frame", sign=-1)
+    obs = Observation(
+        calls=[CallRecord("darkroom_say", {}, _say([_mvs("highlights_luminance", -0.05)]),
+                          write=True)],
+        before=_snap("a", **{"colorbalancergb.highlights_luminance": 0.0}),
+        after=_snap("a", **{"colorbalancergb.highlights_luminance": 0.0}),
+        stats_before={"frame": {"clip_high": 0.0}}, stats_after={"frame": {"clip_high": 0.0}},
+        floors={"clip_high": 0.05})
+    case = Case(id="s", layer="scenarios", tier="P1", mode="tool",
+                steps=[Step("darkroom_say", {}, 3.5, True)],
+                expect=Expect("edit", [chk], {"changed": True}))
+    assert evaluate(case, obs, POLICY).outcome == "silent_failure"
+
+
+def _two_step_case(check_step):
+    chk = Check("M4", stat="rb", region="frame", sign=1, step=check_step)
+    return Case(id="s", layer="scenarios", tier="P1", mode="tool",
+                steps=[Step("darkroom_say", {}, 3.5, True), Step("darkroom_say", {}, 3.5, True)],
+                expect=Expect("edit", [chk], {"changed": True}))
+
+
+def _two_step_obs(first_env, snap_after_first):
+    b = _snap("a", **{"exposure.black": 0.0})
+    return Observation(
+        calls=[CallRecord("darkroom_say", {}, first_env, write=True),
+               CallRecord("darkroom_say", {}, _say([_mvs("black", 0.0025, "exposure")]),
+                          write=True)],
+        before=b, after=_snap("b", **{"exposure.black": 0.0025}),
+        stats_before={"frame": {"rb": 0.16}}, stats_after={"frame": {"rb": 0.13}},
+        floors={"rb": 0.002},
+        extra={"snapshots": [b, snap_after_first, _snap("b", **{"exposure.black": 0.0025})]})
+
+
+def test_honest_refusal_of_the_checked_step_is_not_silent_even_when_a_later_step_is_ok():
+    """'Warmer a touch, then deeper blacks' (r0372): step 0 honestly refuses
+    (module_unavailable, nothing written); step 1 is ok. The warmth check belongs
+    to step 0, so its miss is the refusal's, not a silent failure."""
+    obs = _two_step_obs(_say(err="module_unavailable"), _snap("a", **{"exposure.black": 0.0}))
+    v = evaluate(_two_step_case(0), obs, POLICY)
+    assert v.outcome != "silent_failure"
+
+
+def test_check_on_the_ok_step_is_still_silent_when_it_misses():
+    """Control: the same miss attributed to the ok step 1 stays silent."""
+    obs = _two_step_obs(_say(err="module_unavailable"), _snap("a", **{"exposure.black": 0.0}))
+    v = evaluate(_two_step_case(1), obs, POLICY)
+    assert v.outcome == "silent_failure"
+
+
+def test_refused_step_that_changed_the_sidecar_is_not_excused():
+    """Control (Z2): a 'refused' step whose own snapshot shows a change keeps the
+    old reading."""
+    obs = _two_step_obs(_say(err="module_unavailable"), _snap("c", **{"exposure.black": 0.5}))
+    v = evaluate(_two_step_case(0), obs, POLICY)
+    assert v.outcome == "silent_failure"

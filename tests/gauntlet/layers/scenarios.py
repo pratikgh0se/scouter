@@ -191,8 +191,18 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
         # Mixed (some capabilities WB-refused, some not) or none refused:
         # keep the case as an edit, but never assert a stat check for a
         # capability that will not actually move.
-        checks = [stat_check(p) for p in plan.parts
-                 if p.capability and p.capability not in wb_refusals]
+        checks = []
+        for p in plan.parts:
+            if p.capability and p.capability not in wb_refusals:
+                chk = stat_check(p)
+                #: Night 3 (r0372/r0374): attribute the stat check to the step that
+                #: exercises its capability, so an honest refusal of THAT step
+                #: (e.g. colour calibration's custom illuminant, not predictable
+                #: here) is judged per step, not read as a silent failure
+                #: because a later step was ok.
+                if chk.metric != "M1" and p.capability in plan.capabilities:
+                    chk.step = plan.capabilities.index(p.capability)
+                checks.append(chk)
         undo_follow = False
         for f in req["followups"]:
             if _followup_action(f, cmap) == "undo":
