@@ -257,3 +257,48 @@ def test_refused_step_that_changed_the_sidecar_is_not_excused():
     obs = _two_step_obs(_say(err="module_unavailable"), _snap("c", **{"exposure.black": 0.5}))
     v = evaluate(_two_step_case(0), obs, POLICY)
     assert v.outcome == "silent_failure"
+
+
+# ---- item 5: nested transient codes score blocked, like top-level ones
+
+def test_commit_timeout_inside_a_look_plan_sub_move_is_blocked_not_failed():
+    """A look whose global_chroma sub-move hit darktable's commit_timeout (honest,
+    sidecar restored, retried by the product) is a blocked case -- darktable was
+    not ready -- exactly like a top-level commit_timeout; never `failed`."""
+    chk = Check("M5", stat="C", region="frame", sign=1)
+    obs = Observation(
+        calls=[_look_call([_mv("global_chroma", 0.1, ok=False, error="commit_timeout")])],
+        before=_snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+        after=_snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+        stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.0}},
+        floors={"C": 0.5})
+    v = evaluate(_look_case([chk]), obs, POLICY)
+    assert v.outcome == "blocked"
+
+
+def test_say_partial_refusing_with_commit_timeout_is_blocked():
+    """A `say` partial whose refused move carries commit_timeout is blocked too
+    (the `data.refused[*].code` path)."""
+    env = {"ok": False, "outcome": "error:partial", "data": {"refused": [
+        {"code": "commit_timeout"}]}, "error": {"code": "partial"}}
+    obs = Observation(calls=[CallRecord("darkroom_say", {}, env, write=True)],
+                      before=_snap("a", **{"exposure.exposure": 0.0}),
+                      after=_snap("a", **{"exposure.exposure": 0.0}))
+    case = Case(id="s", layer="scenarios", tier="P1", mode="tool",
+                steps=[Step("darkroom_say", {}, 3.5, True)],
+                expect=Expect("edit", [Check("M1", kind="changed", sign=1,
+                                             target={"key": "exposure.exposure",
+                                                     "unit": "EV"})], {"changed": True}))
+    assert evaluate(case, obs, POLICY).outcome == "blocked"
+
+
+def test_look_plan_sub_move_failing_with_a_non_transient_code_stays_failed():
+    """Control: a non-transient failure code is not blocked."""
+    chk = Check("M5", stat="C", region="frame", sign=1)
+    obs = Observation(
+        calls=[_look_call([_mv("global_chroma", 0.1, ok=False, error="weird_failure")])],
+        before=_snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+        after=_snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+        stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.0}},
+        floors={"C": 0.5})
+    assert evaluate(_look_case([chk]), obs, POLICY).outcome != "blocked"

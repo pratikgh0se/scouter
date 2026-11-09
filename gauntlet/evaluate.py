@@ -1379,6 +1379,11 @@ def _nested_codes(c: CallRecord) -> list[str]:
         for r in src.get("refused") or () if isinstance(src, dict) else ():
             if isinstance(r, dict) and isinstance(r.get("code"), str):
                 out.append(r["code"])
+    #: Night 3: a harness-synthesised `look_plan` carries each failed sub-move's
+    #: typed code as `data.moves[*].error` (e.g. a darktable `commit_timeout`).
+    for m in (env.get("data") or {}).get("moves") or ():
+        if isinstance(m, dict) and m.get("ok") is False and isinstance(m.get("error"), str):
+            out.append(m["error"])
     return out
 
 
