@@ -95,7 +95,9 @@ class UndoFirstSetTest(_DarkroomFixture):
         last = [p for m, p in self.bridge.calls if m == "darkroom.action"][-1]
         self.assertEqual(last["effect"], "set")
         self.assertEqual(last["value"], spec.default)
-        self.assertTrue(any("verified darktable default" in w for w in result.warnings))
+        self.assertTrue(any("disabled it again" in w for w in result.warnings))
+        disables = [p for m, p in self.bridge.calls if m == "module.disable"]
+        self.assertEqual([d["module"] for d in disables], ["colorzones"])
         self.assertIsNone(journal.latest_open("job-test"))
 
     def test_no_verified_default_keeps_the_refusal(self) -> None:
@@ -111,3 +113,36 @@ class UndoFirstSetTest(_DarkroomFixture):
         self._first_set("colorzones", "strength", enabled=True)
         with self.assertRaises(ScouterError):
             darkroom.undo_last()
+
+    def test_unconfirmed_disable_is_an_error_not_ok(self) -> None:
+        # The fixture sidecar keeps exposure enabled, so the disable cannot
+        # be confirmed from it: must raise, and the entry stays open.
+        self._first_set("exposure", "black")
+        with self.assertRaises(ScouterError) as ctx:
+            darkroom.undo_last()
+        self.assertIn("disabled again", str(ctx.exception))
+        entry = journal.latest_open("job-test")
+        assert entry is not None
+        self.assertFalse(entry.undone)
+
+
+class SigmoidContrastDefaultTest(_DarkroomFixture):
+    """C3: host-verified default (docs/measurements.md, 2026-11-09 probe)."""
+
+    def test_sigmoid_contrast_declares_the_verified_default(self) -> None:
+        spec = vocab.spec("sigmoid", "contrast")
+        self.assertEqual(spec.default, 1.5)
+        self.assertIsNone(spec.default_candidate)
+        self.assertEqual(darkroom._declared_default("sigmoid", "contrast"), 1.5)
+
+    def test_first_set_undo_restores_default_and_disables(self) -> None:
+        entry = journal.begin(
+            "job-test", verb="darkroom.set", image_id=12, path=str(self.raw),
+            module="sigmoid", param="contrast", instance=0,
+            before={"source": "xmp", "value": None, "enabled": None, "history_end": 11},
+        )
+        journal.complete("job-test", entry.seq, after={"value": 1.9})
+        darkroom.undo_last()
+        sets = [p for m, p in self.bridge.calls if m == "darkroom.action"]
+        self.assertEqual(sets[-1]["value"], 1.5)
+        self.assertIn("sigmoid", [p["module"] for m, p in self.bridge.calls if m == "module.disable"])

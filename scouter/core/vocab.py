@@ -240,7 +240,14 @@ PARAMS: tuple[ParamSpec, ...] = (
     ParamSpec("sigmoid", "contrast", "sigmoid › contrast", "ratio", 1.0, 0.5, 3.0, 0.15,
               "xmp", None, False, "tone_mapper",
               "steepens or flattens the middle of the tone curve",
-              "shadow and highlight detail at the two ends"),
+              "shadow and highlight detail at the two ends",
+              # Product round 1 (C3): host-verified default, NOT a spec §4.3
+              # edit. `tests/test_host_phase3.py::
+              # ProbeSigmoidContrastDefaultHostTest` (host run 2026-11-09
+              # 20:46, isolated libraries): oracle A (fresh enable) read
+              # contrast=1.5, sentinel 1.9 read 1.9000000953674316 (slot 0
+              # live), oracle B (post-reset) read 1.5. See docs/measurements.md.
+              default=1.5),
     ParamSpec("sigmoid", "skew", "sigmoid › skew", "ratio", 1.0, -1.0, 1.0, 0.1,
               "xmp", None, False, "tone_mapper",
               "shifts where the tone curve spends its contrast, toward shadows or highlights",

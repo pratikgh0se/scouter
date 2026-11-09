@@ -2391,11 +2391,13 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
         restored_from_default = False
         previous = entry.before.get("value")
         if previous is None and _module_absent_before(entry):
-            # C13: the module had no history entry before this set, so
-            # darktable ran it at its defaults. When the row carries a
-            # host-verified `default` (never `default_candidate`) that IS
-            # the before value; restoring it is faithful to what the frame
-            # showed. Rows with no verified default keep the refusal below.
+            # C13: the module had no history entry before this set. darktable
+            # writes auto-applied modules into history, so an absent module
+            # was OFF and the first set switched it on. A faithful undo
+            # restores the row's host-verified `default` (never a
+            # `default_candidate`) AND disables the module again, confirming
+            # both from the sidecar. Rows with no verified default keep the
+            # honest refusal below; no before value is ever invented.
             spec = vocab.spec(entry.module, entry.param)
             if spec is not None and spec.default is not None:
                 previous = float(spec.default)
@@ -2448,10 +2450,27 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
                 f"expected {previous!r}"
             )
         if restored_from_default:
+            dtbridge.call("module.disable", {"module": entry.module, "instance": entry.instance})
+            _c2, warnings2, _n2 = _commit_with_readback(
+                job,
+                entry.image_id,
+                xmp_path=str(xmp.sidecar_path(entry.path)),
+                confirm=lambda: _module_enabled(entry.path, entry.module, entry.instance)
+                is not True,
+                what=f"{entry.module} (disable)",
+                expect_module=entry.module,
+            )
+            warnings.extend(warnings2)
+            if _module_enabled(entry.path, entry.module, entry.instance) is True:
+                raise ScouterError(
+                    f"undid seq {entry.seq}'s value but could not confirm "
+                    f"{entry.module} is disabled again from the sidecar",
+                    fix="disable the module in darktable (it was off before this set)",
+                    detail={"seq": entry.seq},
+                )
             warnings.append(
-                f"{entry.module} had no history entry before this set; restored its "
-                f"verified darktable default ({previous}), which leaves the module "
-                "with an explicit history entry at that value"
+                f"{entry.module} had no history entry before this set (it was off): "
+                f"restored its verified default ({previous}) and disabled it again"
             )
         undone = {
             "verb": entry.verb,

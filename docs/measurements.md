@@ -640,3 +640,17 @@ launch under `~/Pictures/ScouterScratch/colorcal-probe/20261108T151559-32290`,
 - No clamp: the Sony hero landed exactly 2000.0 K at the product's 2000 K floor,
   so darktable does not clamp or re-derive there, and no new refusal is needed.
 
+
+### sigmoid.contrast default (product round 1, C3, 2026-11-09)
+
+`tests/test_host_phase3.py::ProbeSigmoidContrastDefaultHostTest` (host run 2026-11-09 20:46,
+128 s, darktable exited cleanly), two independent oracles, each on its own scratch copy, its own
+isolated library under `~/Pictures/ScouterScratch/phase3-sigmoid-contrast-default/` and its own
+darktable launch:
+
+> oracle A (fresh enable) contrast=1.5; sentinel (1.9 requested) contrast=1.9000000953674316;
+> oracle B (post-reset) contrast=1.5
+
+The sentinel read confirms named slot 0 is live. Oracles A and B agree: `sigmoid.contrast`'s
+darktable default is 1.5. Promoted to `default=1.5` in `scouter/core/vocab.py`. This supersedes
+the round 1 gauntlet `previous: 1.5` readings, which were single-oracle (source xmp, staged frames).

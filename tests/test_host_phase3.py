@@ -491,6 +491,98 @@ class ProbeColorzonesStrengthDefaultHostTest(unittest.TestCase):
                                msg="host default disagrees with vocab.py's declared default")
 
 
+_SIGMOID_CONTRAST_DIR = hs.SCRATCH_DIR / "phase3-sigmoid-contrast-default"
+
+
+@unittest.skipUnless(RUN, REASON)
+@pytest.mark.host
+class ProbeSigmoidContrastDefaultHostTest(unittest.TestCase):
+    """Product round 1, C3: host-verifies `sigmoid.contrast`'s default (the
+    round 1 gauntlet read `previous: 1.5` on staged frames: one oracle,
+    source xmp, not proof of a fresh module's default).
+
+    Same two-oracle design as `ProbeColorzonesStrengthDefaultHostTest`, each
+    oracle on its OWN scratch copy, its OWN isolated library
+    (`hs.assert_isolated_library`) and its OWN darktable launch:
+
+    - Oracle A: fresh enable, commit, decode the newest `sigmoid` entry's
+      `contrast` (named slot 0).
+    - Oracle B: set a 1.9 sentinel (proves slot 0 live), commit, then
+      `module.reset`, commit, decode `contrast` again.
+
+    PASS requires A == B (1e-6) and the sentinel to decode ~1.9.
+    """
+
+    def test_fresh_sigmoid_module_defaults_contrast(self) -> None:
+        from scouter import registry
+        from scouter.core import dtbridge, history
+
+        def newest_contrast(image: str) -> float:
+            entries = [e for e in history.read(image).entries if e.operation == "sigmoid"]
+            self.assertTrue(entries, "no sigmoid history entry")
+            entry = max(entries, key=lambda e: e.num)
+            self.assertIsNotNone(entry.decoded, entry.reason)
+            return entry.decoded["contrast"]
+
+        def fresh(tag: str) -> tuple[Path, Path]:
+            folder = _SIGMOID_CONTRAST_DIR / tag
+            folder.mkdir(parents=True, exist_ok=True)
+            frame = folder / "frame.ORF"
+            library = folder / "library.db"
+            hs.assert_isolated_library(library)
+            shutil.copy(hs.HERO, frame)
+            Path(str(frame) + ".xmp").unlink(missing_ok=True)
+            library.unlink(missing_ok=True)
+            return frame, library
+
+        install = hs.PluginInstall()
+        install.install()
+        try:
+            frame, library = fresh("a")
+            proc = hs.launch(frame, library)
+            try:
+                hs.wait_ready()
+                self.assertTrue(settle(dtbridge.call))
+                enabled = registry.call("darkroom.enable", "cli", module="sigmoid")
+                self.assertTrue(enabled.ok, enabled.error)
+                committed = registry.call("history.commit", "cli", image=str(frame))
+                self.assertTrue(committed.ok, committed.error)
+                contrast_a = newest_contrast(str(frame))
+            finally:
+                hs.quit_darktable(proc)
+
+            frame, library = fresh("b")
+            proc = hs.launch(frame, library)
+            try:
+                hs.wait_ready()
+                self.assertTrue(settle(dtbridge.call))
+                sentinel = registry.call("darkroom.set", "cli", module="sigmoid",
+                                         param="contrast", value=1.9)
+                self.assertTrue(sentinel.ok, sentinel.error)
+                committed = registry.call("history.commit", "cli", image=str(frame))
+                self.assertTrue(committed.ok, committed.error)
+                contrast_sentinel = newest_contrast(str(frame))
+                reset = registry.call("darkroom.reset", "cli", module="sigmoid", confirm=True)
+                self.assertTrue(reset.ok, reset.error)
+                committed = registry.call("history.commit", "cli", image=str(frame))
+                self.assertTrue(committed.ok, committed.error)
+                contrast_reset = newest_contrast(str(frame))
+            finally:
+                hs.quit_darktable(proc)
+        finally:
+            install.restore()
+
+        _record("\n## Phase 3 sigmoid.contrast default probe "
+                f"({time.strftime('%Y-%m-%d %H:%M')})\n\n"
+                f"oracle A (fresh enable) contrast={contrast_a!r}; "
+                f"sentinel (1.9 requested) contrast={contrast_sentinel!r}; "
+                f"oracle B (post-reset) contrast={contrast_reset!r}\n")
+        self.assertFalse(abs(contrast_a - 1.9) <= 1e-5, "oracle A read a post-sentinel sidecar")
+        self.assertAlmostEqual(contrast_sentinel, 1.9, delta=1e-5)
+        self.assertAlmostEqual(contrast_a, contrast_reset, delta=1e-6,
+                               msg="oracle A and oracle B disagree on sigmoid.contrast's default")
+
+
 #: The 10 colorbalancergb rows that carry only `neutral` today (no
 #: host-verified `default`) and gate the 26 coverage cases
 #: m1-default-report.md's "Fix round 1" M4 section lists as staying failed
