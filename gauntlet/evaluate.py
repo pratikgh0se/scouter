@@ -45,6 +45,8 @@ OUTCOMES = {
     #: it moved) nor `silent_failure` (the product claimed nothing it did
     #: not do). Its own outcome, its own report column.
     "imperceptible_step": PARTIAL,
+    #: Night 3: Scouter honestly refused one component of a look; capped at partial.
+    "honest_refusal_component": PARTIAL,
     "silent_failure": FAIL, "wrong_refusal": FAIL, "unexpected_edit": FAIL,
     #: `evaluate()`'s `out_of_scope_policy` branch returns this outcome for
     #: a write before the user picks between offered options, distinct from
@@ -1445,28 +1447,53 @@ def _look_gap_keys(case: Case, obs: Observation, policy: Policy) -> dict[str, st
 
 
 def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
+    if not case.meta.get("look"):
+        return _evaluate(case, obs, policy)
     gaps = _look_gap_keys(case, obs, policy)
-    if gaps:
-        keep, dropped = [], []
+    #: Honest refusal of a component: the user did not get the whole look, so the
+    #: verdict is capped at PARTIAL even when every remaining check passes.
+    refused = sorted(k for k, why in gaps.items() if why.startswith("refused"))
+    why_by_idx: dict[int, str] = {}
+    for i, ch in enumerate(case.expect.checks):
+        key = _look_check_key(case, i, ch)
+        if key in gaps:
+            why_by_idx[i] = f"{key} ({gaps[key]})"
+        elif ch.tags.get("declared_gap"):
+            why_by_idx[i] = str(ch.tags["declared_gap"])
+    notes = [f"declared gap: look component not plannable: {k} ({w})"
+             for k, w in sorted(gaps.items())
+             if any(_look_check_key(case, i, c) == k for i, c in enumerate(case.expect.checks))]
+    notes += [f"declared gap: {w}" for i, w in sorted(why_by_idx.items())
+              if case.expect.checks[i].tags.get("declared_gap")]
+    if not why_by_idx and not refused:
+        return _evaluate(case, obs, policy)
+    keep = [i for i in range(len(case.expect.checks)) if i not in why_by_idx]
+    if why_by_idx and not keep and not (obs.crash_reports or obs.blocked
+                                        or _transient_block(obs, policy)):
+        v = Verdict(PARTIAL, "needs_review", [], notes=notes)
+    else:
+        tags = case.meta.get("check_tags") or []
+        slim = dataclasses.replace(case, expect=dataclasses.replace(
+            case.expect, checks=[case.expect.checks[i] for i in keep]),
+            meta=dict(case.meta, check_tags=[tags[i] for i in keep if i < len(tags)]))
+        v = _evaluate(slim, obs, policy)
+        v.notes = [*v.notes, *notes]
+        if v.checks and len(v.checks) == len(keep):
+            for r, i in zip(v.checks, keep):
+                r.index = i
+    if refused and v.score == PASS:
+        v = Verdict(PARTIAL, "honest_refusal_component", v.checks, notes=[
+            *v.notes, "honest_refusal_component: Scouter refused " + ", ".join(refused)])
+    #: Z2/gates: a gap check stays in the verdict as a NOT served result, so a
+    #: per-component gate can never pass just because its checks became gaps.
+    if why_by_idx and (len(v.checks) == len(keep) or not keep):
+        full = {r.index: r for r in v.checks}
+        out = []
         for i, ch in enumerate(case.expect.checks):
-            key = _look_check_key(case, i, ch)
-            (dropped if key in gaps else keep).append((ch, key))
-        if dropped:
-            notes = [f"declared gap: look component not plannable: {k} ({gaps[k]})"
-                     for k in sorted({k for _, k in dropped})]
-            if not keep and not obs.crash_reports and not obs.blocked \
-                    and not _transient_block(obs, policy):
-                return Verdict(PARTIAL, "needs_review", [], notes=notes)
-            slim = dataclasses.replace(case, expect=dataclasses.replace(
-                case.expect, checks=[ch for ch, _ in keep]),
-                meta=dict(case.meta, check_tags=[
-                    t for i, t in enumerate(case.meta.get("check_tags") or [])
-                    if i < len(case.expect.checks)
-                    and _look_check_key(case, i, case.expect.checks[i]) not in gaps]))
-            v = _evaluate(slim, obs, policy)
-            v.notes = [*v.notes, *notes]
-            return v
-    return _evaluate(case, obs, policy)
+            out.append(full[i] if i in full else CheckResult(
+                i, ch.metric, False, None, ch.sign, note=f"declared gap: {why_by_idx[i]}"))
+        v.checks = out
+    return v
 
 
 def _evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:

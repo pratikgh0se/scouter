@@ -95,10 +95,12 @@ def chart_checks(look: dict, tol: dict) -> tuple[list[Check], list[dict]]:
     shared = zone_crosstalk(tone)
     for k, patch in TONE_PATCH.items():
         v = tone.get(k) or 0
-        if v and k not in shared:
-            add(Check("M2", stat="ev", region=patch, sign=1 if v > 0 else -1,
-                      target={"value": v, "tol": tol[conf.get("tone", "inferred")]["ev"]}),
-                "tone")
+        if v:
+            ch = Check("M2", stat="ev", region=patch, sign=1 if v > 0 else -1,
+                       target={"value": v, "tol": tol[conf.get("tone", "inferred")]["ev"]})
+            if k in shared:  # kept, tagged: the evaluator reports it as a NOT served gap
+                ch.tags["declared_gap"] = f"zone_crosstalk:{k}"
+            add(ch, "tone")
     if tone.get("contrast"):
         v = tone["contrast"]
         add(Check("M6", stat="slope", region="chart_tone", sign=1 if v > 0 else -1, kind="frac",
@@ -140,8 +142,11 @@ def frame_checks(look: dict) -> tuple[list[Check], list[dict]]:
     shared = zone_crosstalk(tone)
     for k, region in TONE_REGION.items():
         v = tone.get(k) or 0
-        if v and k not in shared:
-            checks.append(Check("M2", stat="L", region=region, sign=1 if v > 0 else -1))
+        if v:
+            ch = Check("M2", stat="L", region=region, sign=1 if v > 0 else -1)
+            if k in shared:
+                ch.tags["declared_gap"] = f"zone_crosstalk:{k}"
+            checks.append(ch)
             tags.append({"confidence": conf.get("tone", "inferred"), "component": "tone"})
     if tone.get("contrast"):
         checks.append(Check("M6", stat="spread", region="frame",

@@ -114,7 +114,7 @@ def test_unplanned_contrast_is_a_declared_gap_not_a_silent_failure():
     v = evaluate(_look_case([SHADOWS, SPREAD]), obs, POLICY)
     assert v.outcome == "verified" and v.silent_failure is None
     assert any("sigmoid.contrast" in n and "declared gap" in n for n in v.notes)
-    assert len(v.checks) == 1  # the spread check was not asserted
+    assert [r.ok for r in v.checks] == [True, False]  # spread kept as a NOT served gap
 
 
 def test_gap_does_not_hide_a_real_failure_of_a_planned_check():
@@ -143,8 +143,38 @@ def test_honest_tint_refusal_is_a_declared_gap_and_the_rest_is_scored():
     moves = [_mv("shadows_luminance", 0.2),
              _mv("tint", 0.9, ok=False, error="module_unavailable", module="temperature")]
     v = evaluate(_look_case([SHADOWS, tint]), _gap_obs(moves), POLICY)
-    assert v.outcome == "verified"
+    assert (v.score, v.outcome) == ("partial", "honest_refusal_component")
+    assert v.silent_failure is None
     assert any("temperature.tint" in n and "refused module_unavailable" in n for n in v.notes)
+
+
+def test_refusal_of_a_component_with_no_check_still_caps_at_partial():
+    """Hero looks carry no tint check, but the user still did not get the tint:
+    all remaining checks pass, the verdict is partial, never verified."""
+    moves = [_mv("shadows_luminance", 0.2),
+             _mv("tint", 0.9, ok=False, error="module_unavailable", module="temperature")]
+    v = evaluate(_look_case([SHADOWS]), _gap_obs(moves), POLICY)
+    assert (v.score, v.outcome) == ("partial", "honest_refusal_component")
+
+
+def test_gap_checks_stay_in_the_verdict_aligned_with_check_tags_for_the_gates():
+    """Gate intent: a per-component gate counts every tagged check; a gap check is
+    a NOT served result at its own index, so the gate cannot pass by deleting it."""
+    obs = _gap_obs([_mv("shadows_luminance", 0.2)], ["no calibration for sigmoid.contrast"])
+    tags = [{"component": "tone"}, {"component": "tone", "sourced_component": "tone"}]
+    v = evaluate(_look_case([SHADOWS, SPREAD], meta={"check_tags": tags}), obs, POLICY)
+    assert [(r.index, r.ok) for r in v.checks] == [(0, True), (1, False)]
+    sourced = [r for r, t in zip(v.checks, tags) if "sourced_component" in t]
+    assert len(sourced) == 1 and not sourced[0].ok
+
+
+def test_zone_crosstalk_tagged_check_is_a_not_served_gap_and_can_still_verify():
+    """A generator-declared gap (tag declared_gap) is not asserted but counted
+    as not served; the remaining checks can still verify the case."""
+    gap = Check("M2", stat="L", region="frame", sign=-1, tags={"declared_gap": "zone_crosstalk:mids_ev"})
+    obs = _gap_obs([_mv("shadows_luminance", 0.2)])
+    v = evaluate(_look_case([SHADOWS, gap]), obs, POLICY)
+    assert v.outcome == "verified" and [r.ok for r in v.checks] == [True, False]
 
 
 def test_untyped_sub_move_failure_is_not_a_gap():
