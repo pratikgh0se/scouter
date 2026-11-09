@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -69,11 +70,23 @@ def isolate_process(root: Path) -> None:
 
 
 def seed_worker_config(src: Path, dst: Path) -> None:
-    """Give a worker's own darktable configdir the Lua plugin: luarc plus lua/,
-    copied from `src` (read only; the real ~/.config/darktable is never written)."""
+    """Seed a worker's own darktable configdir like the default one: luarc, lua/,
+    darktablerc and data.db, from `src` (read only; the real ~/.config/darktable is
+    never written; library.db and everything else is not copied)."""
     dst.mkdir(parents=True, exist_ok=True)
-    if (src / "luarc").is_file():
-        shutil.copyfile(src / "luarc", dst / "luarc")
+    for name in ("luarc", "darktablerc"):
+        if (src / name).is_file():
+            shutil.copyfile(src / name, dst / name)
+    if (src / "data.db").is_file():
+        # Presets, styles and workflow defaults, so a worker matches a default-config run.
+        # The source may be open in a running darktable: read-only connection + backup API.
+        src_conn = sqlite3.connect(f"file:{src / 'data.db'}?mode=ro", uri=True)
+        dst_conn = sqlite3.connect(dst / "data.db")
+        try:
+            src_conn.backup(dst_conn)
+        finally:
+            dst_conn.close()
+            src_conn.close()
     if (src / "lua").is_dir():
         shutil.copytree(src / "lua", dst / "lua", dirs_exist_ok=True)
 

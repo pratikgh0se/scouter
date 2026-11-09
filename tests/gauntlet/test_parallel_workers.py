@@ -151,6 +151,41 @@ def test_worker_env_asserts_isolated_library(tmp_path, fake_home):
                                              scratch=tmp_path / "runs")
 
 
+def test_seed_copies_darktablerc_and_data_db_read_only_and_nothing_else(tmp_path):
+    import sqlite3
+    import time
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "darktablerc").write_text("workflow=scene-referred\n")
+    (src / "library.db").write_bytes(b"real library")
+    (src / "other.txt").write_text("x")
+    con = sqlite3.connect(src / "data.db")
+    con.execute("create table styles (name text)")
+    con.execute("insert into styles values ('mine')")
+    con.commit()
+    con.close()
+    old = time.time() - 1000
+    os.utime(src / "data.db", (old, old))
+    before = (src / "data.db").stat().st_mtime
+    opened = []
+    real_connect = sqlite3.connect
+
+    def spy(target, *a, **k):
+        opened.append((str(target), k.get("uri")))
+        return real_connect(target, *a, **k)
+
+    with mock.patch.object(adapter_mod.sqlite3, "connect", spy):
+        adapter_mod.seed_worker_config(src, tmp_path / "cfg")
+    assert (tmp_path / "cfg" / "darktablerc").read_text() == "workflow=scene-referred\n"
+    got = sqlite3.connect(tmp_path / "cfg" / "data.db").execute("select name from styles").fetchall()
+    assert got == [("mine",)]
+    assert (src / "data.db").stat().st_mtime == before
+    assert opened[0][0].endswith("data.db?mode=ro") and opened[0][1] is True
+    assert sorted(p.name for p in (tmp_path / "cfg").iterdir()) == ["darktablerc", "data.db"]
+    assert not (src / "data.db-journal").exists()
+
+
 def test_seed_worker_config_without_a_plugin_is_harmless(tmp_path):
     adapter_mod.seed_worker_config(tmp_path / "none", tmp_path / "cfg")
     assert (tmp_path / "cfg").is_dir() and not list((tmp_path / "cfg").iterdir())
