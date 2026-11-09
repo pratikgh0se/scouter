@@ -584,3 +584,141 @@ def test_open_session_is_told_the_case_it_opens_for(tmp_path):
     a.open_session = open_session
     Runner(a, run).run_layers(layers=["alpha"], case_ids={"alpha-2"})
     assert seen == ["alpha-2"]
+
+
+# -- N15: session-close pruning -------------------------------------------
+
+
+class _DirSession(ToySession):
+    def __init__(self, adapter, root):
+        super().__init__(adapter)
+        self.root = root
+
+    def session_dir(self):
+        return None if self.closed else self.root
+
+
+def _prune_setup(tmp_path, bad=(), **runner_kw):
+    from gauntlet.tests.toy import ToyAdapter
+
+    class A(ToyAdapter):
+        def open_session(self, layer, run_root):
+            self.sessions += 1
+            root = run.sessions_dir / layer / f"{self.sessions:03d}-x"
+            for d, f, n in (("frames/r", "a.ORF", 4000), ("frames/r", "a.ORF.xmp", 10),
+                            ("card", "c.ORF", 3000), ("render", "r.png", 500),
+                            ("library", "library.db", 20), ("config", "c.json", 5)):
+                (root / d).mkdir(parents=True, exist_ok=True)
+                (root / d / f).write_bytes(b"x" * n)
+            (root / "darktable.log").write_text("log")
+            return _DirSession(self, root)
+
+        def session_prune_names(self):
+            return ("frames", "card", "render")
+
+        def session_prune_keep(self):
+            return ("*.xmp",)
+
+    a = A(behaviours={c: "silent" for c in bad})
+    run = RunDir(tmp_path, "s")
+    write_generation(run, a)
+    return a, run, Runner(a, run, session_max_cases=2, **runner_kw)
+
+
+def _kept(run, layer="alpha"):
+    out = {}
+    for d in sorted((run.sessions_dir / layer).glob("*")):
+        out[d.name] = sorted(str(p.relative_to(d)) for p in d.rglob("*") if p.is_file())
+    return out
+
+
+_KEPT = ["config/c.json", "darktable.log", "frames/r/a.ORF.xmp", "library/library.db"]
+
+
+def test_closed_passing_session_is_pruned_to_the_kept_set(tmp_path):
+    a, run, r = _prune_setup(tmp_path)
+    r.run_layers(layers=["alpha"])
+    k = _kept(run)
+    assert k and all(v == _KEPT for v in k.values())
+
+
+def test_closed_session_with_a_nonpass_case_keeps_its_full_folder(tmp_path):
+    a, run, r = _prune_setup(tmp_path, bad=["alpha-2"])
+    r.run_layers(layers=["alpha"])
+    k = _kept(run)
+    assert k["001-x"] == _KEPT
+    assert "card/c.ORF" in k["002-x"] and "frames/r/a.ORF" in k["002-x"]
+
+
+def test_prune_all_mode_prunes_nonpass_sessions_too(tmp_path):
+    a, run, r = _prune_setup(tmp_path, bad=["alpha-2"], session_prune="all")
+    r.run_layers(layers=["alpha"])
+    assert all(v == _KEPT for v in _kept(run).values())
+
+
+def test_prune_off_leaves_everything(tmp_path):
+    a, run, r = _prune_setup(tmp_path, session_prune="off")
+    r.run_layers(layers=["alpha"])
+    assert all("card/c.ORF" in v for v in _kept(run).values())
+
+
+def test_nonpass_sessions_beyond_the_cap_are_pruned_oldest_first(tmp_path):
+    a, run, r = _prune_setup(tmp_path, bad=["alpha-0", "alpha-2"],
+                             session_keep_nonpass_max=1)
+    r.run_layers(layers=["alpha"])
+    k = _kept(run)
+    assert k["001-x"] == _KEPT and "card/c.ORF" in k["002-x"]
+
+
+def test_low_disk_prunes_nonpass_oldest_first_before_parking(tmp_path):
+    a, run, r = _prune_setup(tmp_path, bad=["alpha-0", "alpha-2"], session_keep_nonpass_max=9)
+    order = []
+    orig = r._prune_one
+
+    def prune_one(root):
+        order.append(root.name)
+        orig(root)
+    r._prune_one = prune_one
+    # 27 GB free: above the 25 floor but inside the 5 GB margin; pruning one
+    # session frees enough (the reading rises once a folder was pruned).
+    r.free_disk_gb = lambda root: 27.0 if len(order) < 1 else 40.0
+    s = r.run_layers(layers=["alpha"])
+    assert s.status == "done"
+    assert order[0] == "001-x"
+    assert _kept(run)["001-x"] == _KEPT
+
+
+def test_low_disk_still_parks_when_pruning_cannot_free_enough(tmp_path):
+    a, run, r = _prune_setup(tmp_path, bad=["alpha-0", "alpha-2"], session_keep_nonpass_max=9)
+    r.free_disk_gb = lambda root: 20.0
+    s = r.run_layers(layers=["alpha"])
+    assert s.status == "parked"
+
+
+def test_open_session_and_outside_files_are_never_touched(tmp_path):
+    a, run, r = _prune_setup(tmp_path, session_prune="all")
+    outside = run.root / "previews" / "keep.png"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_bytes(b"p")
+    r.run_layers(layers=["alpha"])
+    assert outside.exists()
+    # the open session: sweep with its root as open_root prunes nothing
+    root = run.sessions_dir / "alpha" / "009-x"
+    (root / "frames").mkdir(parents=True)
+    (root / "frames" / "f.ORF").write_bytes(b"x")
+    r._ledger[root] = ["pass"]
+    r._sweep(root)
+    assert (root / "frames" / "f.ORF").exists()
+    with pytest.raises(AssertionError):
+        run.prune_session(run.root / "previews", ("keep.png",))
+
+
+def test_resume_works_when_closed_session_frames_are_gone(tmp_path):
+    a, run, r = _prune_setup(tmp_path, bad=["alpha-2"])
+    r.run_layers(layers=["alpha"])
+    r2 = Runner(a, run, session_max_cases=2, session_prune="all")
+    a.ran.clear()
+    r2.run_layers(layers=["alpha"], resume=True)
+    r3 = Runner(a, run, session_max_cases=2, session_prune="all")
+    r3.run_layers(layers=["alpha"], only_failed=True)
+    assert a.ran == ["alpha-2"]

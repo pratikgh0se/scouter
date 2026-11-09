@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -135,6 +136,56 @@ class RunDir:
                         p.rmdir()
                 except (FileNotFoundError, OSError):
                     pass
+        return freed
+
+    def prune_session(self, session_root: Path, names: tuple[str, ...],
+                      keep: tuple[str, ...] = ()) -> int:
+        """Session-close retention (N15): delete the bulky regenerable
+        copies `names` (direct children, e.g. `frames`, `card`) of one
+        CLOSED session folder `<run>/sessions/<layer>/NNN-<body>`; files matching a `keep` glob (XMP
+        sidecars) survive inside them; every
+        other child (library, config, sidecars, logs, floor) stays. Refuses
+        (AssertionError) any root that is not exactly two levels under
+        `<run>/sessions`, and any name that is not a plain child name, so
+        nothing outside `sessions/` can ever be reached. Symlinks are
+        unlinked as themselves, never followed. Returns bytes freed."""
+        sessions = (self.root / "sessions").resolve()
+        root = Path(session_root)
+        assert root.resolve().parent.parent == sessions, \
+            f"prune_session refuses a root outside {sessions}: {root}"
+        freed = 0
+        for name in names:
+            assert name and "/" not in name and name not in (".", ".."), f"bad name {name!r}"
+            target = root / name
+            if target.is_symlink():
+                target.unlink()
+                continue
+            if not target.is_dir():
+                continue
+            for dirpath, dirs, files in os.walk(target, topdown=False, followlinks=False):
+                base = Path(dirpath)
+                for f in files:
+                    if any(fnmatch.fnmatch(f, g) for g in keep):
+                        continue
+                    try:
+                        size = (base / f).lstat().st_size
+                        (base / f).unlink()
+                        freed += size
+                    except OSError:
+                        pass
+                for d in dirs:
+                    q = base / d
+                    try:
+                        if q.is_symlink():
+                            q.unlink()
+                        elif not any(q.iterdir()):
+                            q.rmdir()
+                    except OSError:
+                        pass
+            try:
+                target.rmdir()
+            except OSError:
+                pass
         return freed
 
     def du(self) -> dict[str, int]:

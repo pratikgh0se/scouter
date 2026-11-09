@@ -39,6 +39,13 @@ MAX_CONSECUTIVE_OPEN_FAILURES = 3
 #: same shape as the existing usage-meter parker (Park raised before any
 #: session work for the case begins).
 DISK_MIN_GB = 25.0
+#: (N15): session-close pruning. Within this many GB of DISK_MIN_GB the runner
+#: prunes kept (non-pass) closed sessions, oldest first, before it would park.
+DISK_PRUNE_MARGIN_GB = 5.0
+#: (N15): closed sessions holding a non-pass case keep their full folders up
+#: to this many (newest win); older ones are pruned too.
+SESSION_KEEP_NONPASS_MAX = 10
+SESSION_PRUNE_MODES = ("passing", "all", "off")
 
 
 def free_disk_gb(path: Path) -> float:
@@ -134,7 +141,10 @@ class Runner:
                  max_consecutive_open_failures: int = MAX_CONSECUTIVE_OPEN_FAILURES,
                  free_disk_gb: Callable[[Path], float] | None = None,
                  disk_min_gb: float = DISK_MIN_GB,
-                 should_stop: Callable[[], bool] | None = None) -> None:
+                 should_stop: Callable[[], bool] | None = None,
+                 session_prune: str = "passing",
+                 session_keep_nonpass_max: int = SESSION_KEEP_NONPASS_MAX,
+                 disk_prune_margin_gb: float = DISK_PRUNE_MARGIN_GB) -> None:
         self.should_stop = should_stop
         self.adapter = adapter
         self.run = run.ensure()
@@ -157,6 +167,14 @@ class Runner:
         #: not just ones constructed after the patch.
         self.free_disk_gb = free_disk_gb
         self.disk_min_gb = disk_min_gb
+        assert session_prune in SESSION_PRUNE_MODES, session_prune
+        self.session_prune = session_prune
+        self.session_keep_nonpass_max = session_keep_nonpass_max
+        self.disk_prune_margin_gb = disk_prune_margin_gb
+        #: session folder -> scores of the cases that ran in it (insertion
+        #: order = oldest first); `_pruned` = folders already pruned.
+        self._ledger: dict[Path, list[str]] = {}
+        self._pruned: set[Path] = set()
 
     def _select(self, cases: list[Case], layer: str, *, resume: bool, only_failed: bool,
                 case_ids: set[str] | None, tiers: set[str] | None = None,
@@ -349,7 +367,12 @@ class Runner:
                     self.progress.log(f"- layer {layer}: stopped before {case.id} "
                                       "(a sibling worker parked)")
                     return "stopped_early"
-                free_gb = (self.free_disk_gb or free_disk_gb)(self.run.root)
+                free_fn = self.free_disk_gb or free_disk_gb
+                free_gb = free_fn(self.run.root)
+                if free_gb < self.disk_min_gb + self.disk_prune_margin_gb:
+                    # (N15): prune kept closed sessions oldest first before parking
+                    self._prune_for_disk(session, free_fn)
+                    free_gb = free_fn(self.run.root)
                 if free_gb < self.disk_min_gb:
                     reason = f"disk: {free_gb:.1f} GB free < {self.disk_min_gb:.0f} GB"
                     self.progress.park(layer, case.id, reason)
@@ -360,6 +383,7 @@ class Runner:
                     if session is not None:
                         old, session = session, None
                         self._safe_close(old)
+                        self._sweep(None)
                     session, open_err = self._open_session(layer, case)
                     if session is None:
                         consecutive_open_failures += 1
@@ -416,6 +440,8 @@ class Runner:
                 verdict = evaluate(case, obs, self.policy)
                 self._write(case, obs, verdict, t_wall)
                 self._retain(case)
+                self._note_session(session, verdict)
+                self._sweep(self._session_root(session))
                 summary.ran += 1
                 count += 1
                 i += 1
@@ -427,6 +453,72 @@ class Runner:
             if session is not None:
                 old, session = session, None
                 self._safe_close(old)
+                self._sweep(None)
+
+    # -- N15: session-close pruning ---------------------------------------
+
+    @staticmethod
+    def _session_root(session) -> Path | None:
+        """The folder of the session that is open right now (the adapter's
+        session exposes `session_dir()`); None when none is open or the
+        adapter has no per-session folders."""
+        fn = getattr(session, "session_dir", None) if session is not None else None
+        try:
+            r = fn() if fn else None
+        except Exception:  # noqa: BLE001
+            return None
+        return Path(r) if r else None
+
+    def _note_session(self, session, verdict) -> None:
+        root = self._session_root(session)
+        if root is not None:
+            self._ledger.setdefault(root, []).append(verdict.score)
+
+    def _prune_one(self, root: Path) -> None:
+        names = getattr(self.adapter, "session_prune_names", None)
+        keep = tuple(getattr(self.adapter, "session_prune_keep", lambda: ())())
+        if names is None or root in self._pruned:
+            return
+        try:
+            freed = self.run.prune_session(root, tuple(names()), keep)
+        except Exception as e:  # noqa: BLE001 - never let pruning kill the run
+            self.progress.log(f"- session prune {root.name} failed: {type(e).__name__}: {e}")
+            return
+        self._pruned.add(root)
+        if freed:
+            self.progress.log(f"- pruned closed session {root.parent.name}/{root.name}: "
+                              f"freed {freed} bytes")
+
+    def _sweep(self, open_root: Path | None) -> None:
+        """Prune every CLOSED session (anything in the ledger but the open
+        one): all-pass ones always (mode `passing`/`all`), every one in mode
+        `all`, and non-pass ones beyond the newest `session_keep_nonpass_max`.
+        Verdicts come from the cases the runner itself scored in each folder."""
+        if self.session_prune == "off":
+            return
+        kept: list[Path] = []
+        for root, scores in list(self._ledger.items()):
+            if root == open_root or root in self._pruned:
+                continue
+            if self.session_prune == "all" or all(sc == "pass" for sc in scores):
+                self._prune_one(root)
+            else:
+                kept.append(root)
+        for root in kept[:max(0, len(kept) - self.session_keep_nonpass_max)]:
+            self._prune_one(root)
+
+    def _prune_for_disk(self, session, free_fn) -> None:
+        """Low disk: prune the remaining closed (kept) sessions, oldest
+        first, until free space clears the margin. Never the open one."""
+        if self.session_prune == "off":
+            return
+        open_root = self._session_root(session)
+        target = self.disk_min_gb + self.disk_prune_margin_gb
+        for root in list(self._ledger):
+            if free_fn(self.run.root) >= target:
+                return
+            if root != open_root and root not in self._pruned:
+                self._prune_one(root)
 
     def _retain(self, case: Case) -> None:
         """Per-case retention after scoring: an adapter that opts in with

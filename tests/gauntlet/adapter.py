@@ -418,6 +418,11 @@ class RoutedSession:
                     self._back_to_process_cache_if_mine(old_cache)
         return res
 
+    def session_dir(self):
+        """(N15): the folder of the ScouterSession open right now, for the
+        runner's session-close pruning (None when none is open)."""
+        return self.current.root if self.current is not None else None
+
     def close(self) -> None:
         self._stop_agent()
         if self.current is not None:
@@ -721,6 +726,19 @@ class ScouterAdapter:
         verdict is written. Other layers keep their sidecar/XMP; none routes
         disk-heavy writes through a case workdir yet, so this is a no-op."""
         return () if layer == "bulk" else ("*.xmp",)
+
+
+    def session_prune_names(self) -> tuple[str, ...]:
+        """(N15): the bulky regenerable copies inside a CLOSED session folder
+        (~175 MB frames/ raws, ~117 MB card/, render/). library/, config/,
+        floor/, cache/, XMP sidecars' library state and logs stay."""
+        return ("frames", "card", "render")
+
+
+    def session_prune_keep(self) -> tuple[str, ...]:
+        """(N15): XMP sidecars live beside the copied raws in frames/; the
+        diagnosis reads them, so they survive the prune."""
+        return ("*.xmp",)
 
 
 def make() -> ScouterAdapter:
