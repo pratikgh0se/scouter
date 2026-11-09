@@ -48,7 +48,7 @@
   {
     "candidate_paths": [],
     "concept": "tone_mapper",
-    "default": null,
+    "default": 1.5,
     "default_candidate": null,
     "display_scale": 1.0,
     "hi": 3.0,
