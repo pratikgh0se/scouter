@@ -48,8 +48,9 @@ def gaps(look: dict) -> list[str]:
     if "lut" in first:
         out.append("lut3d")
     out += [f"zone_crosstalk:{k}" for k in zone_crosstalk(t.get("tone") or {})]
-    if (t.get("tone") or {}).get("shadows_ev") and confounders(t, "shadows"):
-        out.append("confounded:shadows_ev")
+    for k, chk in _ZONE_CHECK.items():
+        if (t.get("tone") or {}).get(k) and confounders(t, chk):
+            out.append(f"confounded:{k}")
     if t.get("black_lift") and confounders(t, "black_lift"):
         out.append("confounded:black_lift")
     if t.get("saturation_delta") and confounders(t, "chroma"):
@@ -77,6 +78,9 @@ def zone_crosstalk(tone: dict) -> list[str]:
     return out
 
 
+_ZONE_CHECK = {"shadows_ev": "shadows", "mids_ev": "zone", "highlights_ev": "zone"}
+
+
 def _split_active(t: dict) -> bool:
     st = t.get("split_toning") or {}
     return any(st.get(f"{e}_hue") is not None and st.get(f"{e}_sat")
@@ -99,6 +103,11 @@ def confounders(t: dict, check: str) -> list[str]:
             out.append("global_chroma")
         if t.get("black_lift"):
             out.append("black_lift")
+    elif check == "zone":  # mids / highlights: chroma and split-tone moves shift the patch
+        if _split_active(t):
+            out.append("split_toning")
+        if t.get("saturation_delta"):
+            out.append("global_chroma")
     elif check == "black_lift":
         out += [f"tone:{k}" for k in TONE_PATCH if tone.get(k)]
         if _split_active(t):
@@ -147,7 +156,7 @@ def chart_checks(look: dict, tol: dict) -> tuple[list[Check], list[dict]]:
         if v:
             ch = Check("M2", stat="ev", region=patch, sign=1 if v > 0 else -1,
                        target={"value": v, "tol": tol[conf.get("tone", "inferred")]["ev"]})
-            gap = _gap_tag(t, "shadows" if k == "shadows_ev" else "", f"zone_crosstalk:{k}"
+            gap = _gap_tag(t, _ZONE_CHECK[k], f"zone_crosstalk:{k}"
                            if k in shared else None)
             if gap:  # kept, tagged: the evaluator reports it as a NOT served gap
                 ch.tags["declared_gap"] = gap
@@ -199,7 +208,7 @@ def frame_checks(look: dict) -> tuple[list[Check], list[dict]]:
         v = tone.get(k) or 0
         if v:
             ch = Check("M2", stat="L", region=region, sign=1 if v > 0 else -1)
-            gap = _gap_tag(t, "shadows" if k == "shadows_ev" else "",
+            gap = _gap_tag(t, _ZONE_CHECK[k],
                            f"zone_crosstalk:{k}" if k in shared else None)
             if gap:
                 ch.tags["declared_gap"] = gap

@@ -241,3 +241,20 @@ def test_confounded_check_stays_in_the_denominator():
     for c in _synthetic(tone={"shadows_ev": -0.2}, saturation_delta=-0.5):
         assert len(c.meta["check_tags"]) == len(c.expect.checks)
         assert any(ch.metric == "M2" and ch.tags.get("declared_gap") for ch in c.expect.checks)
+
+
+def test_mids_and_highlights_checks_confounded_by_chroma_and_split_tone():
+    """Z1 (round 1 C2): a highlights or mids luminance check is not judged when the
+    same plan has global chroma/desat or split-tone moves that shift the patch."""
+    split = {"split_toning": {"shadow_hue": None, "shadow_sat": 0,
+                              "highlight_hue": 50, "highlight_sat": 0.2}}
+    for tone, region in (({"highlights_ev": -0.1}, "highlights"), ({"mids_ev": 0.1}, "frame")):
+        for extra, name in (({"saturation_delta": -0.5}, "global_chroma"),
+                            (split, "split_toning")):
+            for c in _synthetic(tone=tone, **extra):
+                zc = _zone_checks(c)
+                assert zc and all((ch.tags.get("declared_gap") or "").startswith(
+                    "confounded by") and name in ch.tags["declared_gap"] for ch in zc), \
+                    (c.id, region, name)
+    for c in _synthetic(tone={"highlights_ev": -0.1}):  # single owner keeps its check
+        assert not any(ch.tags.get("declared_gap") for ch in _zone_checks(c)), c.id
