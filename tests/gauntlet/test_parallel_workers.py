@@ -530,3 +530,62 @@ def test_workers_one_is_the_unchanged_single_process_path(tmp_path, inproc):
     assert len(run.done_ids()) == 6 and not (run.root / "workers").exists()
     with pytest.raises(SystemExit):
         main(_cli(tmp_path) + ["run", "--stamp", "s", "--workers", "0"])
+
+
+# -- N16: --resume skips every done id, with or without --case ------------------
+
+
+def _park_then_ids(tmp_path):
+    park = _cli(tmp_path, "tests.gauntlet.test_parallel_workers:make_parking")
+    main(park + ["generate", "--stamp", "s"])
+    assert main(park + ["run", "--stamp", "s", "--workers", "2"]) == EXIT_PARKED
+    run = RunDir(tmp_path, "s")
+    done = run.done_ids()
+    assert 0 < len(done) < 6
+    return run, done, sorted(c.id for c in run.read_cases())
+
+
+def _spawned_ids(inproc):
+    ids = []
+    for argv, env in inproc.spawned:
+        k = argv[argv.index("--shard") + 1].split("/")[0]
+        d = Path(env["XDG_CACHE_HOME"]).parent
+        ids += (d / "cases.txt").read_text().split()
+    return ids
+
+
+def test_resume_with_case_list_runs_only_missing_ids(tmp_path, inproc):
+    run, done, all_ids = _park_then_ids(tmp_path)
+    inproc.spawned = []
+    args = [x for i in all_ids for x in ("--case", i)]
+    assert main(_cli(tmp_path) + ["run", "--stamp", "s", "--workers", "2", "--resume"]
+                + args) == 0
+    ran = _spawned_ids(inproc)
+    assert sorted(ran) == sorted(set(all_ids) - done)
+    assert len(run.done_ids()) == 6
+
+
+def test_resume_without_case_list_runs_only_missing_ids(tmp_path, inproc):
+    run, done, all_ids = _park_then_ids(tmp_path)
+    inproc.spawned = []
+    assert main(_cli(tmp_path) + ["run", "--stamp", "s", "--workers", "2", "--resume"]) == 0
+    assert sorted(_spawned_ids(inproc)) == sorted(set(all_ids) - done)
+
+
+def test_single_worker_resume_with_case_list_skips_done(tmp_path, inproc):
+    run, done, all_ids = _park_then_ids(tmp_path)
+    before = {i: (run.cases_dir / f"{i}.json").stat().st_mtime_ns for i in done}
+    args = [x for i in all_ids for x in ("--case", i)]
+    assert main(_cli(tmp_path) + ["run", "--stamp", "s", "--resume"] + args) == 0
+    assert {i: (run.cases_dir / f"{i}.json").stat().st_mtime_ns for i in done} == before
+
+
+def test_progress_is_merged_after_a_park(tmp_path, inproc):
+    run, done, _ = _park_then_ids(tmp_path)
+    prog = json.loads(run.progress_json.read_text())
+    assert prog["status"] == "parked" and prog["parked"]
+    assert sum(lay["done"] for lay in prog["layers"].values()) == len(done)
+    assert not list((run.root / "workers").glob("w*/progress.json"))
+    main(_cli(tmp_path) + ["run", "--stamp", "s", "--workers", "2", "--resume"])
+    prog = json.loads(run.progress_json.read_text())
+    assert sum(lay["done"] for lay in prog["layers"].values()) == len(run.done_ids())

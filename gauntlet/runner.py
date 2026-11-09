@@ -187,7 +187,7 @@ class Runner:
                 if r is None or r["verdict"]["score"] in NON_PASS:
                     keep.append(c)
             return keep
-        if resume and not case_ids:
+        if resume:  # an explicit --case list narrows the set; it never re-runs done ids
             done = self.run.done_ids()
             chosen = [c for c in chosen if c.id not in done]
         return chosen
