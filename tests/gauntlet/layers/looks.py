@@ -48,28 +48,77 @@ def gaps(look: dict) -> list[str]:
     if "lut" in first:
         out.append("lut3d")
     out += [f"zone_crosstalk:{k}" for k in zone_crosstalk(t.get("tone") or {})]
+    if (t.get("tone") or {}).get("shadows_ev") and confounders(t, "shadows"):
+        out.append("confounded:shadows_ev")
+    if t.get("black_lift") and confounders(t, "black_lift"):
+        out.append("confounded:black_lift")
+    if t.get("saturation_delta") and confounders(t, "chroma"):
+        out.append("confounded:saturation_delta")
     return out
 
 
 def zone_crosstalk(tone: dict) -> list[str]:
     """Tone zones (`shadows_ev`...) whose per-zone sign check is unreliable
-    (night 3, cluster C). colorbalancergb's shadows/midtones/highlights masks
-    overlap, so a zone moved against another zone that moves a comparable amount
-    reads the other zone's push (a +0.23 highlights lift raised the ramp_-4
-    patch although shadows were cut). A zone's check is owned by that zone only
-    when no other zone moves the opposite way by more than half its own size;
-    the zone with the largest move always owns its check, so a look keeps at
-    least one tone assertion. The dropped zones are declared gaps."""
+    (night 3, cluster C; round 1, C2). colorbalancergb's shadows/midtones/
+    highlights masks overlap, so a zone moved against another zone that moves a
+    comparable amount reads the other zone's push (a +0.23 highlights lift raised
+    the ramp_-4 patch although shadows were cut). A zone's check is owned by that
+    zone only when no other zone moves the opposite way by at least half its own
+    size (equal-magnitude included: -0.2 against +0.1 is shared, for both zones).
+    The dropped zones are declared gaps."""
     moves = {k: tone.get(k) or 0 for k in TONE_PATCH}
-    top = max(moves, key=lambda k: abs(moves[k]), default=None)
     out = []
     for k, v in moves.items():
-        if not v or k == top:
+        if not v:
             continue
-        if any(w and (w > 0) != (v > 0) and abs(w) * 2 > abs(v)
+        if any(w and (w > 0) != (v > 0) and abs(w) * 2 >= abs(v)
                for j, w in moves.items() if j != k):
             out.append(k)
     return out
+
+
+def _split_active(t: dict) -> bool:
+    st = t.get("split_toning") or {}
+    return any(st.get(f"{e}_hue") is not None and st.get(f"{e}_sat")
+               for e in ("shadow", "highlight"))
+
+
+def confounders(t: dict, check: str) -> list[str]:
+    """Moves planned in the same look that also disturb the statistic behind a
+    sign check, so its direction cannot be read as the owner move's (round 1,
+    cluster C2: the same plan's split-tone hue/chroma, global chroma/desat, black
+    lift or other zones moved the ramp_-4 / ramp_-5 patch or mean C* the other
+    way). `check` is `shadows`, `black_lift` or `chroma`. A single-owner plan
+    returns []."""
+    tone = t.get("tone") or {}
+    out: list[str] = []
+    if check == "shadows":
+        if _split_active(t):
+            out.append("split_toning")
+        if t.get("saturation_delta"):
+            out.append("global_chroma")
+        if t.get("black_lift"):
+            out.append("black_lift")
+    elif check == "black_lift":
+        out += [f"tone:{k}" for k in TONE_PATCH if tone.get(k)]
+        if _split_active(t):
+            out.append("split_toning")
+        if t.get("saturation_delta"):
+            out.append("global_chroma")
+    elif check == "chroma":
+        if _split_active(t):
+            out.append("split_toning")
+    return out
+
+
+def _gap_tag(t: dict, check: str, zone_gap: str | None = None) -> str | None:
+    """The declared-gap tag for a check: the zone cross-talk tag when only zones
+    clash, else `confounded by <moves>` (zone clash included in the list)."""
+    why = confounders(t, check)
+    if not why:
+        return zone_gap
+    return "confounded by " + ", ".join(([zone_gap.replace("zone_crosstalk:", "zone ")]
+                                         if zone_gap else []) + why)
 
 
 def _hue_axis(hue: float) -> tuple[str, int]:
@@ -98,8 +147,10 @@ def chart_checks(look: dict, tol: dict) -> tuple[list[Check], list[dict]]:
         if v:
             ch = Check("M2", stat="ev", region=patch, sign=1 if v > 0 else -1,
                        target={"value": v, "tol": tol[conf.get("tone", "inferred")]["ev"]})
-            if k in shared:  # kept, tagged: the evaluator reports it as a NOT served gap
-                ch.tags["declared_gap"] = f"zone_crosstalk:{k}"
+            gap = _gap_tag(t, "shadows" if k == "shadows_ev" else "", f"zone_crosstalk:{k}"
+                           if k in shared else None)
+            if gap:  # kept, tagged: the evaluator reports it as a NOT served gap
+                ch.tags["declared_gap"] = gap
             add(ch, "tone")
     if tone.get("contrast"):
         v = tone["contrast"]
@@ -108,10 +159,12 @@ def chart_checks(look: dict, tol: dict) -> tuple[list[Check], list[dict]]:
             "sigmoid.contrast")
     sat = t.get("saturation_delta") or 0
     if sat:
-        add(Check("M5", stat="C", region="chart_chromatic", sign=1 if sat > 0 else -1,
-                  kind="frac", target={"value": sat, "tol": tol[conf.get(
-                      "saturation_delta", "inferred")]["sat"]}), "saturation_delta",
-            "colorbalancergb.global_chroma")
+        ch = Check("M5", stat="C", region="chart_chromatic", sign=1 if sat > 0 else -1,
+                   kind="frac", target={"value": sat, "tol": tol[conf.get(
+                       "saturation_delta", "inferred")]["sat"]})
+        if _gap_tag(t, "chroma"):
+            ch.tags["declared_gap"] = _gap_tag(t, "chroma")
+        add(ch, "saturation_delta", "colorbalancergb.global_chroma")
     gc = t.get("grey_cast") or {}
     for axis in ("a", "b"):
         v = gc.get(axis) or 0
@@ -126,8 +179,10 @@ def chart_checks(look: dict, tol: dict) -> tuple[list[Check], list[dict]]:
             axis, sign = _hue_axis(float(hue))
             add(Check("M4", stat=axis, region=patch, sign=sign), "split_toning")
     if t.get("black_lift"):
-        add(Check("M3", stat="L", region="patch:ramp_-5", sign=1 if t["black_lift"] > 0 else -1),
-            "black_lift", "exposure.black")
+        ch = Check("M3", stat="L", region="patch:ramp_-5", sign=1 if t["black_lift"] > 0 else -1)
+        if _gap_tag(t, "black_lift"):
+            ch.tags["declared_gap"] = _gap_tag(t, "black_lift")
+        add(ch, "black_lift", "exposure.black")
     if not checks:
         checks.append(Check("M2", stat="L", region="patch:ramp_+0", sign=0, kind="unchanged"))
         tags.append({"confidence": look["confidence"], "component": "neutral"})
@@ -144,8 +199,10 @@ def frame_checks(look: dict) -> tuple[list[Check], list[dict]]:
         v = tone.get(k) or 0
         if v:
             ch = Check("M2", stat="L", region=region, sign=1 if v > 0 else -1)
-            if k in shared:
-                ch.tags["declared_gap"] = f"zone_crosstalk:{k}"
+            gap = _gap_tag(t, "shadows" if k == "shadows_ev" else "",
+                           f"zone_crosstalk:{k}" if k in shared else None)
+            if gap:
+                ch.tags["declared_gap"] = gap
             checks.append(ch)
             tags.append({"confidence": conf.get("tone", "inferred"), "component": "tone"})
     if tone.get("contrast"):
@@ -154,9 +211,11 @@ def frame_checks(look: dict) -> tuple[list[Check], list[dict]]:
                             tags={"look_key": "sigmoid.contrast"}))
         tags.append({"confidence": conf.get("tone", "inferred"), "component": "tone"})
     if t.get("saturation_delta"):
+        tags_ = {"look_key": "colorbalancergb.global_chroma"}
+        if _gap_tag(t, "chroma"):
+            tags_["declared_gap"] = _gap_tag(t, "chroma")
         checks.append(Check("M5", stat="C", region="frame",
-                            sign=1 if t["saturation_delta"] > 0 else -1,
-                            tags={"look_key": "colorbalancergb.global_chroma"}))
+                            sign=1 if t["saturation_delta"] > 0 else -1, tags=tags_))
         tags.append({"confidence": conf.get("saturation_delta", "inferred"),
                      "component": "saturation_delta"})
     gc = t.get("grey_cast") or {}
@@ -165,8 +224,10 @@ def frame_checks(look: dict) -> tuple[list[Check], list[dict]]:
                             tags={"look_key": "temperature.temperature"}))
         tags.append({"confidence": conf.get("grey_cast", "inferred"), "component": "grey_cast"})
     if t.get("black_lift"):
-        checks.append(Check("M3", stat="p01L", region="frame", sign=1,
-                            tags={"look_key": "exposure.black"}))
+        tags_ = {"look_key": "exposure.black"}
+        if _gap_tag(t, "black_lift"):
+            tags_["declared_gap"] = _gap_tag(t, "black_lift")
+        checks.append(Check("M3", stat="p01L", region="frame", sign=1, tags=tags_))
         tags.append({"confidence": conf.get("black_lift", "inferred"), "component": "black_lift"})
     if not checks:
         checks.append(Check("M2", stat="L", region="frame", sign=0, kind="unchanged"))
@@ -214,7 +275,7 @@ def generate(tax: Taxonomy) -> list[Case]:
                         body=body, frame_role=role,
                         source={"file": "looks.json", "id": look["id"]},
                         meta=dict(meta, check_tags=ftags,
-                                  gaps=[x for x in g if x.startswith("zone_crosstalk:")])))
+                                  gaps=[x for x in g if x.startswith(("zone_crosstalk:", "confounded:"))])))
     return order_by_frame_role(out)
 
 

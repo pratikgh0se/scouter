@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from gauntlet.adapter import CallRecord, Observation
@@ -159,3 +160,92 @@ def test_every_look_plans_without_error():
     cal = {k: 1.0 for k in chart_render.CALIBRATE}
     for look in taxonomy.load().looks:
         exec_looks.plan_moves(look, cal, {})
+
+
+def _look_session(tmp_path):
+    session = _FakeChartSession(tmp_path)
+    session.run_root.mkdir(parents=True, exist_ok=True)
+    return session
+
+
+def _plan(session):
+    from gauntlet.case import Step
+    look_id = next(x["id"] for x in taxonomy.load().looks
+                   if (x["targets"].get("tone") or {}).get("shadows_ev"))
+    obs = Observation()
+    rec = exec_looks.look_plan(session, None, Step("look_plan", {"look_id": look_id}, 40.0, True),
+                               obs)
+    return rec, obs
+
+
+def test_look_plan_without_calibration_is_a_harness_block_not_an_ok_empty_plan(tmp_path):
+    """Z1 (round 1 C1): no chart/calibration.json -> the look is blocked as a harness
+    problem, no write is attempted, and the envelope never claims ok with 0 moves."""
+    session = _look_session(tmp_path)
+    rec, obs = _plan(session)
+    assert obs.blocked and obs.blocked.startswith("harness_error")
+    assert "calibration" in obs.blocked
+    assert not (rec.envelope or {}).get("ok")
+    assert session.calls == []
+
+
+def test_look_plan_with_unreadable_calibration_blocks(tmp_path):
+    session = _look_session(tmp_path)
+    (session.run_root / "chart").mkdir()
+    (session.run_root / "chart" / "calibration.json").write_text("{not json")
+    _, obs = _plan(session)
+    assert obs.blocked and obs.blocked.startswith("harness_error")
+
+
+def test_look_plan_with_calibration_plans_moves(tmp_path):
+    session = _look_session(tmp_path)
+    (session.run_root / "chart").mkdir()
+    cal = {k: 1.0 for k in chart_render.CALIBRATE}
+    cal.update({"_base_slope": 1.0, "_base_C": 10.0})
+    (session.run_root / "chart" / "calibration.json").write_text(json.dumps(cal))
+    rec, obs = _plan(session)
+    assert not obs.blocked and obs.extra["look_moves"]
+    assert (rec.envelope or {}).get("ok")
+
+
+def test_parallel_worker_with_golden_pending_elsewhere_blocks_after_bounded_wait(
+        tmp_path, monkeypatch):
+    """Z1: a --workers shard whose calibration never appears blocks (bounded
+    wait, here 0 s) instead of planning with an empty calibration."""
+    monkeypatch.setenv("GAUNTLET_SHARD", "1/2")
+    monkeypatch.setenv("GAUNTLET_CAL_WAIT_S", "0")
+    session = _look_session(tmp_path)
+    (session.run_root / "workers" / "w0").mkdir(parents=True)
+    (session.run_root / "workers" / "w0" / "cases.txt").write_text("lk-golden-chart\n")
+    _, obs = _plan(session)
+    assert obs.blocked and "calibration" in obs.blocked
+    assert session.calls == []
+
+
+def test_tint_only_refusal_caps_the_look_at_partial_never_pass():
+    """Z1 (round 1 C4, limit W3): Scouter honestly refuses the tint sub-move of an
+    otherwise landed look: the verdict is capped at partial."""
+    from gauntlet.adapter import CallRecord
+    from gauntlet.case import Case, Check, Expect, Step
+    from gauntlet.evaluate import Policy, evaluate
+
+    pol = Policy(refusal_codes=frozenset({"module_unavailable", "usage", "value_unknown"}),
+                 transient_codes=frozenset({"commit_timeout"}), refusal_markers=("can't",),
+                 claim_markers=(r"\bdone\b",))
+    moves = [{"tool": "darkroom_set", "module": "colorbalancergb", "param": "global_chroma",
+              "value": -0.3, "ok": True, "error": None},
+             {"tool": "darkroom_set", "module": "temperature", "param": "tint", "value": 0.9,
+              "ok": False, "error": "module_unavailable"}]
+    snap = lambda fp, v: {"fingerprint": fp, "history_end": 1,
+                          "params": {"colorbalancergb.global_chroma": v}}
+    obs = Observation(calls=[CallRecord("look_plan", {}, {"ok": False, "outcome": "error:partial",
+                                                           "data": {"moves": moves}}, write=True)],
+                      before=snap("a", 0.0), after=snap("b", -0.3),
+                      stats_before={"frame": {"C": 20.0}}, stats_after={"frame": {"C": 15.0}},
+                      floors={"C": 0.5})
+    case = Case(id="lk-x-sony_a7", layer="looks", tier="P1", mode="tool",
+                steps=[Step("look_plan", {"look_id": "x"}, 40.0, True)],
+                expect=Expect("edit", [Check("M5", stat="C", region="frame", sign=-1)],
+                              {"changed": True}), meta={"look": "x"})
+    v = evaluate(case, obs, pol)
+    assert v.score == "partial" and v.outcome == "honest_refusal_component"

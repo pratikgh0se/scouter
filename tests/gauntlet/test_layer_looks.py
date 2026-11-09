@@ -117,20 +117,26 @@ def test_looks_checks_name_the_planner_param_they_depend_on():
 
 def _expected_shared_zones(tone: dict) -> set[str]:
     """The intent, stated independently of the implementation: a zone is shared
-    (its sign check unreliable) when another zone moves the opposite way by more
-    than half its size, unless it is the largest-moving zone."""
+    (its sign check unreliable) when another zone moves the opposite way by at
+    least half its size (so -0.2 against +0.1 shares both zones)."""
     zones = {k: tone.get(k) or 0 for k in ("shadows_ev", "mids_ev", "highlights_ev")}
-    top = max(zones, key=lambda k: abs(zones[k]))
     return {k for k, v in zones.items()
-            if v and k != top and any(w and (w > 0) != (v > 0) and abs(w) * 2 > abs(v)
-                                      for j, w in zones.items() if j != k)}
+            if v and any(w and (w > 0) != (v > 0) and abs(w) * 2 >= abs(v)
+                         for j, w in zones.items() if j != k)}
+
+
+def _zone_checks(c):
+    return [ch for ch in c.expect.checks
+            if ch.metric == "M2" and (ch.region.startswith("patch:ramp_")
+                                      or ch.region in ("shadows", "highlights", "frame"))
+            and ch.stat in ("ev", "L") and ch.sign]
 
 
 def test_zone_checks_are_owned_by_one_zone_when_masks_would_cross_talk():
     """Z1 intent (night 3 cluster C): 'crush shadows slightly, lift highlights
     strongly' -- the shadows patch is allowed to move with the highlights mask,
-    so the shadows check is a declared gap (tagged, recorded in meta gaps) while
-    the dominant zone keeps a real sign check. Looks whose zones agree keep all."""
+    so a zone check whose zone clashes with an opposing zone is a declared gap
+    (tagged, recorded in meta gaps). Looks whose zones agree keep all."""
     cases = looks.generate(taxonomy.load())
     tax = {lk["id"]: lk for lk in taxonomy.load().looks}
     seen_gap = 0
@@ -139,16 +145,11 @@ def test_zone_checks_are_owned_by_one_zone_when_masks_would_cross_talk():
         if not any(tone.get(k) for k in ("shadows_ev", "mids_ev", "highlights_ev")):
             continue
         shared = _expected_shared_zones(tone)
-        zone_checks = [ch for ch in c.expect.checks
-                       if ch.metric == "M2" and (ch.region.startswith("patch:ramp_")
-                                                 or ch.region in ("shadows", "highlights",
-                                                                  "frame"))
-                       and ch.stat in ("ev", "L") and ch.sign]
-        gapped = [ch for ch in zone_checks if ch.tags.get("declared_gap")]
-        assert len(gapped) == len(shared), c.id
+        gapped = [ch for ch in _zone_checks(c) if ch.tags.get("declared_gap")]
+        # every shared zone is gapped; other gaps are only confounder-tagged shadows
+        assert len(gapped) >= len(shared), c.id
         assert {g for g in c.meta["gaps"] if g.startswith("zone_crosstalk:")} == \
             {f"zone_crosstalk:{k}" for k in shared}, c.id
-        assert len(zone_checks) - len(gapped) >= 1, c.id  # one owned tone check survives
         seen_gap += len(shared)
     assert seen_gap  # the taxonomy does contain cross-talk looks
 
@@ -157,6 +158,86 @@ def test_zone_agreeing_looks_keep_every_zone_check_asserted():
     cases = looks.generate(taxonomy.load())
     tax = {lk["id"]: lk for lk in taxonomy.load().looks}
     for c in cases[1:]:
-        tone = tax[c.meta["look"]]["targets"].get("tone") or {}
-        if tone and not _expected_shared_zones(tone):
+        t = tax[c.meta["look"]]["targets"]
+        tone = t.get("tone") or {}
+        if tone and not _expected_shared_zones(tone) and not _is_confounded(t):
             assert not any(ch.tags.get("declared_gap") for ch in c.expect.checks), c.id
+
+
+def _is_confounded(t: dict) -> bool:
+    st = t.get("split_toning") or {}
+    split = any(st.get(f"{e}_hue") is not None and st.get(f"{e}_sat")
+                for e in ("shadow", "highlight"))
+    return bool(split or t.get("saturation_delta") or t.get("black_lift"))
+
+
+def _synthetic(**targets):
+    """The taxonomy with one extra look whose targets are `targets` (everything
+    else neutral); returns that look's generated cases (chart, hero)."""
+    import copy
+    import dataclasses
+
+    tax = taxonomy.load()
+    look = copy.deepcopy(tax.looks[0])
+    look["id"] = "synthetic-confound"
+    t = look["targets"]
+    t["tone"] = dict(t["tone"], **targets.pop("tone", {}))
+    t.update(targets)
+    cases = looks.generate(dataclasses.replace(tax, looks=[look]))
+    return [c for c in cases if c.meta.get("look") == "synthetic-confound"]
+
+
+def _gap(case, metric, stat=None):
+    out = [ch for ch in case.expect.checks if ch.metric == metric
+           and (stat is None or ch.stat == stat)]
+    assert out, (case.id, metric)
+    return out[0].tags.get("declared_gap")
+
+
+def test_equal_magnitude_zone_clash_declares_both_zones_gaps():
+    """Z1: -0.2 shadows against +0.1 highlights: each zone moves the other's
+    patch by at least half its size, so neither sign can be read."""
+    for c in _synthetic(tone={"shadows_ev": -0.2, "highlights_ev": 0.1}):
+        gaps = [ch.tags.get("declared_gap") for ch in _zone_checks(c)]
+        assert len(gaps) == 2 and all(gaps), c.id
+        assert {g for g in c.meta["gaps"] if g.startswith("zone_crosstalk:")} == \
+            {"zone_crosstalk:shadows_ev", "zone_crosstalk:highlights_ev"}
+
+
+def test_shadows_check_confounded_by_split_tone_desat_or_black_lift():
+    """Z1 (round 1 C2): the shadows sign is not judged when split-tone chroma,
+    global chroma/desat or a black lift in the same plan disturbs the same patch."""
+    split = {"split_toning": {"shadow_hue": 200, "shadow_sat": 0.2,
+                              "highlight_hue": None, "highlight_sat": 0}}
+    for extra, name in ((split, "split_toning"), ({"saturation_delta": -0.5}, "global_chroma"),
+                        ({"black_lift": 0.02}, "black_lift")):
+        for c in _synthetic(tone={"shadows_ev": -0.2}, **extra):
+            g = _gap(c, "M2")
+            assert g and g.startswith("confounded by") and name in g, (c.id, name, g)
+            assert any(x == "confounded:shadows_ev" for x in c.meta["gaps"]) or c.body != "chart"
+
+
+def test_single_owner_plans_keep_their_shadows_chroma_and_black_lift_checks():
+    for c in _synthetic(tone={"shadows_ev": -0.2}):
+        assert _gap(c, "M2") is None, c.id
+    for c in _synthetic(saturation_delta=-0.3):
+        assert _gap(c, "M5") is None, c.id
+    for c in _synthetic(black_lift=0.02):
+        assert _gap(c, "M3") is None, c.id
+
+
+def test_chroma_and_black_lift_checks_confounded_by_their_disturbers():
+    split = {"split_toning": {"shadow_hue": 30, "shadow_sat": 0.2,
+                              "highlight_hue": 200, "highlight_sat": 0.2}}
+    for c in _synthetic(saturation_delta=-0.5, **split):
+        assert "split_toning" in _gap(c, "M5"), c.id
+    for c in _synthetic(black_lift=0.02, tone={"shadows_ev": -0.24}):
+        assert "tone:shadows_ev" in _gap(c, "M3"), c.id
+
+
+def test_confounded_check_stays_in_the_denominator():
+    """Z2 / gates: a confounded check is kept (tagged), never removed, so the
+    per-component gate denominator is unchanged and cannot get easier."""
+    for c in _synthetic(tone={"shadows_ev": -0.2}, saturation_delta=-0.5):
+        assert len(c.meta["check_tags"]) == len(c.expect.checks)
+        assert any(ch.metric == "M2" and ch.tags.get("declared_gap") for ch in c.expect.checks)

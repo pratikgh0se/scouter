@@ -4,18 +4,78 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 
 from gauntlet.adapter import CallRecord
+from gauntlet.case import case_id
 from tests.gauntlet import chart_render
 from tests.gauntlet.execute import VIRTUAL
 from tests.gauntlet.session import SessionBlocked
 
 CAL_FILE = "calibration.json"
+GOLDEN_ID = case_id("lk", "golden", "chart")
+#: Parallel workers: how long a look case waits for the calibration the golden
+#: case (in another shard) is writing. Waited at most once per process; after
+#: that a missing calibration blocks at once.
+CAL_WAIT_ENV = "GAUNTLET_CAL_WAIT_S"
+CAL_WAIT_DEFAULT_S = 900.0
+_waited = False
 
 
 def _cal_path(session) -> Path:
     return session.run_root / "chart" / CAL_FILE
+
+
+class CalibrationMissing(Exception):
+    """The chart calibration a look needs is absent or unreadable: a harness
+    problem (ordering / environment), never a Scouter result."""
+
+
+def _read_cal(session) -> dict | None:
+    try:
+        cal = json.loads(_cal_path(session).read_text())
+    except (OSError, ValueError):
+        return None
+    return cal if isinstance(cal, dict) and "_base_slope" in cal and "_base_C" in cal else None
+
+
+def _golden_pending(session) -> bool:
+    """True when the golden (calibration) case is scheduled in a parallel shard
+    of this run and has not produced a result yet."""
+    root = session.run_root
+    if (root / "cases" / f"{GOLDEN_ID}.json").exists():
+        return False
+    try:
+        return any(GOLDEN_ID in p.read_text().split()
+                   for p in (root / "workers").glob("w*/cases.txt"))
+    except OSError:
+        return False
+
+
+def load_calibration(session, *, sleep=time.sleep, clock=time.monotonic) -> dict:
+    """The run's chart calibration, or `CalibrationMissing`. Under `--workers N`
+    the golden case runs first in whichever shard owns it; a look case in another
+    shard waits (bounded, once per process) for the shared run-dir file."""
+    global _waited
+    cal = _read_cal(session)
+    if cal is not None:
+        return cal
+    if os.environ.get("GAUNTLET_SHARD") and not _waited and _golden_pending(session):
+        _waited = True
+        deadline = clock() + float(os.environ.get(CAL_WAIT_ENV, CAL_WAIT_DEFAULT_S))
+        while clock() < deadline and _golden_pending(session):
+            cal = _read_cal(session)
+            if cal is not None:
+                return cal
+            sleep(2.0)
+        cal = _read_cal(session)
+        if cal is not None:
+            return cal
+    raise CalibrationMissing(
+        f"chart calibration missing or unreadable ({_cal_path(session)}); run the "
+        f"{GOLDEN_ID} case first (it measures it)")
 
 
 def _probe_base(module: str, param: str) -> tuple[float | None, str | None]:
@@ -201,7 +261,7 @@ def look_plan(session, case, step, obs) -> CallRecord:
         from tests.gauntlet.taxonomy import load
 
         look = next(x for x in load().looks if x["id"] == step.args["look_id"])
-        cal = json.loads(_cal_path(session).read_text()) if _cal_path(session).exists() else {}
+        cal = load_calibration(session)
         moves, notes = plan_moves(look, cal, obs.before.get("params", {}))
         sub = []
         for module, param, value in moves:
@@ -215,6 +275,9 @@ def look_plan(session, case, step, obs) -> CallRecord:
         return CallRecord("look_plan", step.args, {"ok": ok, "outcome": "ok" if ok else
                                                    "error:partial", "data": {"moves": sub}},
                           write=True)
+    except CalibrationMissing as e:
+        obs.blocked = f"harness_error: look_plan: {e}"
+        return CallRecord("look_plan", step.args, error=f"blocked: {e}")
     except SessionBlocked as e:
         obs.blocked = f"session: {e}"
         return CallRecord("look_plan", step.args, error=f"blocked: {e}")
