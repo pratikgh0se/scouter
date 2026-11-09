@@ -142,7 +142,10 @@ class SigmoidContrastDefaultTest(_DarkroomFixture):
             before={"source": "xmp", "value": None, "enabled": None, "history_end": 11},
         )
         journal.complete("job-test", entry.seq, after={"value": 1.9})
-        darkroom.undo_last()
+        # The fixture sidecar keeps sigmoid enabled, so the disable cannot be
+        # confirmed there: the undo errors, after restoring the default.
+        with self.assertRaises(ScouterError):
+            darkroom.undo_last()
         sets = [p for m, p in self.bridge.calls if m == "darkroom.action"]
         self.assertEqual(sets[-1]["value"], 1.5)
         self.assertIn("sigmoid", [p["module"] for m, p in self.bridge.calls if m == "module.disable"])
