@@ -104,6 +104,25 @@ def _start_timer_on_call(session, v: dict) -> None:
     session.call = call
 
 
+def _before_step_call(session, v: dict, tool: str, hook) -> None:
+    """Run `hook()` right before the first call of exactly `tool` (the fault
+    step's own call), never at arm time: darktable, with the hero frame open,
+    can undo a file fault between arm and the step (rob-r5: it rewrote the
+    sidecar). `disarm` restores `session.call`."""
+    orig = session.call
+    had_own = "call" in vars(session)
+    v["_restore_call"] = (had_own, orig)
+    done = {"hook": False}
+
+    def call(name, *args, **kwargs):
+        if name == tool and not done["hook"]:
+            done["hook"] = True
+            hook()
+        return orig(name, *args, **kwargs)
+
+    session.call = call
+
+
 def arm(session, fault: str, v: dict | None = None, *, step_tool: str | None = None) -> dict:
     """Arm `fault`. Every undo record lands in `v` as it is made, so a
     `disarm(session, v)` after a partial arm (arm raised) undoes what was done.
@@ -136,6 +155,19 @@ def arm(session, fault: str, v: dict | None = None, *, step_tool: str | None = N
         _snap(v, side)
         if side.exists():
             side.unlink()
+
+        def redelete():
+            #: rob-r5: darktable rewrote the sidecar between arm and the read,
+            #: so the fault was never engaged. Delete again immediately
+            #: before the step and assert it (Z2: the file is its own oracle).
+            if side.exists():
+                side.unlink()
+            if side.exists():
+                raise RuntimeError(f"delete_sidecar not engaged: {side} still exists")
+            v["sidecar_absent_before_step"] = True
+
+        if step_tool:
+            _before_step_call(session, v, step_tool, redelete)
     elif fault == "chmod_sidecar_readonly":
         _snap(v, side)
         side.touch()
@@ -152,9 +184,13 @@ def arm(session, fault: str, v: dict | None = None, *, step_tool: str | None = N
         Path(str(torn) + ".xmp").write_bytes(text[: len(text) // 2])
         v["torn_copy"] = str(torn)
     elif fault == "second_library_lock":
-        lock = Path(str(st.library) + ".lock")
-        _snap(v, lock)  # the live darktable's own lock: restored exactly
-        lock.write_text(f"{os.getpid()}\n")
+        #: rob-r9 failed in every run: a lock file holding the runner's own pid
+        #: changes nothing, because `library_import` goes through the live
+        #: bridge (darktable's own connection). Engagement cannot be proven
+        #: without a second darktable holding the lock, out of scope for scratch
+        #: runs, so the case is declared unrunnable, never scored as a failure.
+        v["_skip"] = ("a lock file written by the runner does not engage the live bridge; "
+                      "needs a second darktable holding library.db (rob-r9)")
     elif fault == "unicode_path":
         v["unicode_copy"] = str(copy_readonly(hero, session.root / "ünï cødé dir" / f"frâme {hero.name}"))  # noqa: E501
     elif fault == "long_path":
@@ -208,6 +244,19 @@ def arm(session, fault: str, v: dict | None = None, *, step_tool: str | None = N
         frames = build_card(session.corpus, case_body(session), 200, card)
         frames[100].write_bytes(frames[100].read_bytes()[:4096])  # a truncated raw
         v["_job_frames"] = (list(st.job_frames),)
+        #: rob-r14: the card frames are not in darktable's library, so `job_run`
+        #: stopped at outliers. Import the card first, then address the
+        #: imported files (the truncated frame keeps its card path).
+        from tests.gauntlet.exec_parity import _imported_path
+
+        rec = session.call("library_import", {"source": str(card),
+                                              "job_slug": st.vars["job_slug"],
+                                              "confirm": True}, 300.0, write=True)
+        resolved = [_imported_path(session, rec.envelope, f.name) or f for f in frames]
+        if all(r == f for r, f in zip(resolved, frames)):
+            code = ((rec.envelope or {}).get("error") or {}).get("code") or rec.error
+            raise RuntimeError(f"huge-job fixture: card import named no frames ({code})")
+        frames = resolved
         st.job_frames = frames
         v["card"] = str(card)
         v["bad_frame"] = frames[100].name

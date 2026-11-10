@@ -414,7 +414,7 @@ def test_file_mutating_faults_restored_byte_for_byte(tmp_path):
         st = p.stat()
         return p.read_bytes(), st.st_mode & 0o7777, st.st_mtime_ns
 
-    for fault, path in (("wrong_wb_table", a7), ("second_library_lock", lock),
+    for fault, path in (("wrong_wb_table", a7),
                         ("delete_sidecar", side), ("future_mtime", side),
                         ("stale_sidecar", side), ("chmod_sidecar_readonly", side)):
         before = state(path)
@@ -947,3 +947,84 @@ def test_healed_helper_reads_data_and_error_detail():
     assert faults.healed({"data": {"healed": True}})
     assert faults.healed({"ok": False, "error": {"detail": {"healed": True}}})
     assert not faults.healed({"ok": True, "data": {}}) and not faults.healed(None)
+
+
+# ---- final-20261110 HB8 ---------------------------------------------------
+
+
+def test_delete_sidecar_is_redeleted_right_before_the_step(tmp_path):
+    # rob-r5: darktable rewrote the sidecar between arm and the read, so the
+    # fault was never engaged. The step's own call must see no sidecar.
+    s = _session(tmp_path)
+    side = Path(str(s.staged.frames["hero"]) + ".xmp")
+    seen = []
+
+    def call(tool, args=None, *a, **k):
+        seen.append((tool, side.exists()))
+        return CallRecord(tool, args or {}, {"ok": True})
+
+    s.call = call
+    v = faults.arm(s, "delete_sidecar", step_tool="history_read")
+    assert not side.exists()
+    side.write_text("<x:xmpmeta>darktable rewrote me</x:xmpmeta>")  # darktable autosave
+    s.call("history_read", {})
+    s.call("history_read", {})
+    assert seen[0] == ("history_read", False)
+    assert v["sidecar_absent_before_step"] is True
+    faults.disarm(s, v)
+    assert "call" in vars(s) and s.call is call
+
+
+def test_second_library_lock_is_declared_unrunnable_and_writes_nothing(tmp_path):
+    # rob-r9: a runner-pid lock file never engages the live bridge.
+    s = _session(tmp_path)
+    v = faults.arm(s, "second_library_lock")
+    assert "second darktable" in v["_skip"]
+    assert not Path(str(s.staged.library) + ".lock").exists()
+
+
+def test_huge_job_fixture_imports_the_card_before_the_step(tmp_path, monkeypatch):
+    # rob-r14: the card frames were not in darktable's library, so job_run
+    # stopped at outliers. The arm now imports the card and uses imported paths.
+    from tests.gauntlet import corpus as corpus_mod
+    from tests.gauntlet import exec_parity
+
+    def build_card(corpus, body, n, dest):
+        dest.mkdir(parents=True, exist_ok=True)
+        out = []
+        for i in range(n):
+            f = dest / f"DUP{i:04d}.ORF"
+            f.write_bytes(b"x" * 8192)
+            out.append(f)
+        return out
+
+    monkeypatch.setattr(corpus_mod, "build_card", build_card)
+    monkeypatch.setattr(exec_parity, "_imported_path",
+                        lambda session, env, name: tmp_path / "jobs" / f"imp_{name}"
+                        if (env or {}).get("ok") else None)
+    s = _session(tmp_path)
+    s.corpus = None
+    s.staged.vars["job_slug"] = "slug"
+    calls = []
+    s.call = lambda tool, args, budget, write=False: calls.append((tool, args)) or \
+        CallRecord(tool, args, {"ok": True, "data": {}})
+    v = faults.arm(s, "huge_job_one_timeout")
+    assert calls[0][0] == "library_import" and calls[0][1]["confirm"] is True
+    assert calls[0][1]["job_slug"] == "slug"
+    assert all(p.name.startswith("imp_") for p in s.staged.job_frames)
+    assert v["bad_frame"] == "imp_DUP0100.ORF"
+
+
+def test_huge_job_fixture_failure_is_a_harness_block(tmp_path, monkeypatch):
+    from tests.gauntlet import corpus as corpus_mod
+
+    monkeypatch.setattr(corpus_mod, "build_card", lambda c, b, n, d: [
+        (d.mkdir(parents=True, exist_ok=True), (d / f"F{i}.ORF").write_bytes(b"x" * 8192),
+         d / f"F{i}.ORF")[2] for i in range(n)])
+    s = _session(tmp_path)
+    s.corpus = None
+    s.staged.vars["job_slug"] = "slug"
+    s.call = lambda tool, args, budget, write=False: CallRecord(
+        tool, args, {"ok": False, "error": {"code": "usage"}})
+    with pytest.raises(RuntimeError, match="huge-job fixture"):
+        faults.arm(s, "huge_job_one_timeout")
