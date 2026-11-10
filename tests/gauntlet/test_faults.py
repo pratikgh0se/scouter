@@ -1026,5 +1026,6 @@ def test_huge_job_fixture_failure_is_a_harness_block(tmp_path, monkeypatch):
     s.staged.vars["job_slug"] = "slug"
     s.call = lambda tool, args, budget, write=False: CallRecord(
         tool, args, {"ok": False, "error": {"code": "usage"}})
-    with pytest.raises(RuntimeError, match="huge-job fixture"):
+    with pytest.raises(RuntimeError, match="huge-job fixture") as ei:
         faults.arm(s, "huge_job_one_timeout")
+    assert "usage" in str(ei.value)
