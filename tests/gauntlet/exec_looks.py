@@ -177,9 +177,14 @@ def chart_golden(session, case, step, obs) -> CallRecord:
             # calibration hole this run hit, distinct from a genuinely flat
             # (zero) measured slope.
             obs.extra["calibration_errors"] = cal_errors
-        obs.extra["calibration_ok"] = (not cal_errors
-                                       and all(v not in (None, 0.0) for k, v in cal.items()
-                                               if not k.startswith("_")))
+        #: L6: a key with no declared neutral/default to probe from is a declared
+        #: gap (W3/C3), not a calibration failure: it stays in calibration_errors
+        #: but does not make calibration_ok false. Every other error still does.
+        gap_keys = {k for k, e in cal_errors.items() if "has no declared neutral" in e}
+        obs.extra["calibration_ok"] = (
+            all(k in gap_keys for k in cal_errors)
+            and all(v not in (None, 0.0) for k, v in cal.items()
+                    if not k.startswith("_") and k not in gap_keys))
         return CallRecord("chart_golden", {}, {"ok": True, "outcome": "ok",
                                                "data": {"golden": golden["verdict"]}})
     except SessionBlocked as e:

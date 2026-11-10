@@ -276,3 +276,13 @@ def test_look_plan_contrast_starts_from_the_default_when_sigmoid_is_not_in_the_f
              and m["module"] == "sigmoid"]
         assert v, look_id
         assert (v[0] - 1.5) * sign > 0, (look_id, v)
+
+
+def test_l6_a_declared_gap_probe_alone_does_not_make_calibration_not_ok(monkeypatch, tmp_path):
+    """lk-golden-chart: temperature.temperature has no probe (declared gap, W3/C3);
+    every other key calibrated, so calibration_ok must be true while the gap stays
+    reported in calibration_errors."""
+    monkeypatch.setattr(chart_render, "slope", lambda first, after, key, amount: 1.0)
+    _, obs = _run_chart_golden(monkeypatch, tmp_path)
+    assert list(obs.extra["calibration_errors"]) == ["temperature.temperature"]
+    assert obs.extra["calibration_ok"] is True
