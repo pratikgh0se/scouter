@@ -379,6 +379,30 @@ def _parity_needs_review(variant: str | None, mcp_norm: dict, cli_norm: dict,
     return None
 
 
+#: HB7: which staged fixtures a verb's happy case needs (besides the frame
+#: import, which every verb taking an image needs).
+FIXTURE_NEEDS = {
+    "backup.verify": ("backup_run",),
+    "cull.apply": ("cull_propose",),
+    "style.apply": ("smoke_style",),
+    "style.apply_set": ("smoke_style",),
+    "preset.apply_job": ("smoke_style",),
+    "export.release": ("smoke_style",),
+}
+_IMAGE_ARGS = {"image", "images", "reference"}
+
+
+def _relevant_fixture_errors(verb_id: str, errors: list[str]) -> list[str]:
+    from scouter import registry
+
+    needs = list(FIXTURE_NEEDS.get(verb_id, ()))
+    verb = registry.load_verbs().get(verb_id)
+    if verb is not None and any(a.name in _IMAGE_ARGS for a in verb.args):
+        needs.append("import")
+    return [e for e in errors if any(e.startswith(f"{n}_failed") or f"_{n}_failed" in e
+                                     for n in needs)]
+
+
 def parity_pair(session, case, step, obs) -> CallRecord:
     from tests.gauntlet.policy import POLICY as _policy
 
@@ -462,10 +486,11 @@ def parity_pair(session, case, step, obs) -> CallRecord:
     fixture_errors = getattr(session, "_parity_fixture_errors", None)
     if fixture_errors:
         obs.extra["fixture_errors"] = list(fixture_errors)
-        if reason and reason.startswith("happy variant: both sides failed"):
-            #: HB7: the verb never ran because the fixture was not staged. That
+        relevant = _relevant_fixture_errors(verb_id, fixture_errors)
+        if relevant and reason and reason.startswith("happy variant: both sides failed"):
+            #: HB7: the verb never ran because ITS fixture was not staged. That
             #: is the harness's failure, never a needs_review about the product.
-            obs.blocked = f"harness_bug: parity fixture failed: {'; '.join(fixture_errors)}"[:500]
+            obs.blocked = f"harness_bug: parity fixture failed: {'; '.join(relevant)}"[:500]
     return CallRecord("parity_pair", step.args, {"ok": not diffs, "outcome": "ok",
                                                  "data": {"diffs": diffs}}, write=step.write)
 
