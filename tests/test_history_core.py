@@ -68,8 +68,22 @@ class HistoryReadTest(unittest.TestCase):
     def test_auto_with_missing_sidecar_stays_ok(self) -> None:
         # Unchanged: auto never raises no_sidecar; it falls back to library.db
         # (entries depend on the host library) and says so.
+        # Hermetic: an explicit fixture library holding image 12, never whatever
+        # library the running darktable (e.g. a gauntlet session) is using.
+        import sqlite3
+
+        lib = self.raw.parent / "library.db"
+        conn = sqlite3.connect(lib)
+        conn.executescript(
+            "CREATE TABLE images (id INTEGER PRIMARY KEY, history_end INTEGER);"
+            "CREATE TABLE history (imgid INTEGER, num INTEGER, module INTEGER, operation TEXT,"
+            " op_params BLOB, enabled INTEGER, blendop_params BLOB, blendop_version INTEGER,"
+            " multi_priority INTEGER, multi_name TEXT, multi_name_hand_edited INTEGER);"
+            "INSERT INTO images VALUES (12, 0);")
+        conn.commit()
+        conn.close()
         self.sidecar.unlink()
-        result = history.read(image=str(self.raw), source="auto")
+        result = history.read(image=str(self.raw), source="auto", library=str(lib))
         self.assertTrue(any("no sidecar" in w for w in result.warnings))
 
     def test_explicit_xmp_with_existing_sidecar_is_unchanged(self) -> None:
