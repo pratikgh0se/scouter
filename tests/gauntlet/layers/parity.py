@@ -34,11 +34,52 @@ def _swap(v):
     return v
 
 
+#: HB7 (final-20261110 diagnosis): SMOKE_ARGS is shared with the product's own
+#: event-count tests, so it stays untouched; these are the parity layer's own
+#: happy-arg corrections for verbs that, with the smoke value, were refused on
+#: both sides for a fixture reason ("the verb never ran").
+PARITY_HAPPY_OVERRIDES: dict[str, dict] = {
+    # frames are rated 1 in the corpus: the smoke preset's rating>=2 matched none.
+    "export.release": {"min_rating": 0},
+    # the smoke call hands history.commit a 0.05 s poll: always commit_timeout.
+    "history.commit": {"timeout_s": 10.0},
+    # reference and images were the same raw, so the comparison set was empty.
+    "outliers.list": {"reference": "{frame:hero}", "job_slug": "smoke-job"},
+}
+
+
 def happy_args(verb_id: str) -> dict:
-    return {k: _swap(v) for k, v in SMOKE_ARGS[verb_id].items()}
+    args = {k: _swap(v) for k, v in SMOKE_ARGS[verb_id].items()}
+    over = PARITY_HAPPY_OVERRIDES.get(verb_id, {})
+    args.update(over)
+    if verb_id == "outliers.list":
+        args.pop("images", None)
+    return args
+
+
+#: HB7: error variants whose bad value was only dry-run accepted on both
+#: sides (no `confirm`, or the happy `dry_run` carried over). They are sent
+#: confirmed and not dry-run, so the bad value itself is validated. The paths
+#: point nowhere writable, so a wrongly accepted value still cannot write.
+CONFIRMED_ERROR_VERBS = {
+    "config.init": {"path": "/nonexistent/htc-missing/config.json"},
+    "config.show": {"path": MISSING},
+    "job.run": {},
+    "preset.apply": {},
+}
 
 
 def error_args(verb: registry.Verb) -> dict:
+    args = _error_args(verb)
+    if verb.id in CONFIRMED_ERROR_VERBS:
+        args.pop("dry_run", None)
+        args.update(CONFIRMED_ERROR_VERBS[verb.id])
+        if any(s.name == "confirm" for s in verb.args):
+            args["confirm"] = True
+    return args
+
+
+def _error_args(verb: registry.Verb) -> dict:
     args = happy_args(verb.id)
     for spec in verb.args:
         if spec.type in ("str", "image") and spec.name in args:

@@ -557,3 +557,136 @@ def test_parity_pair_names_a_missing_mcp_envelope(corpus, tmp_path, monkeypatch)
     assert "mcp_no_envelope" in obs.extra["parity_diffs"]
     assert obs.extra["envelopes_match"] is False
     assert rec.envelope["ok"] is False
+
+
+# ---- final-20261110 HB6 / HB7 ------------------------------------------------
+
+
+def _env(data, **kw):
+    return {"ok": True, "outcome": "ok", "data": data, **kw}
+
+
+def test_compare_ignores_per_leg_volatile_keys():
+    mcp = _env({"applied": 1.5, "analyse_ms": 3, "render_ms": 2060, "cached": False,
+                "archive_dir": "/a/2026-11-09T10", "xmp_mtime": 1.0, "preview_path": "/p/1.ppm",
+                "from_ts": "2026-11-09T12:46:48Z", "totals": {"calls": 3}})
+    cli = _env({"applied": 1.5, "analyse_ms": 0, "render_ms": 11, "cached": True,
+                "archive_dir": "/a/2026-11-09T11", "xmp_mtime": 2.0, "preview_path": "/p/2.ppm",
+                "from_ts": "2026-11-09T12:50:00Z", "totals": {"calls": 9}})
+    assert exec_parity.compare(mcp, cli) == []
+
+
+def test_compare_still_differs_on_meaningful_keys():
+    a = _env({"applied": 1.5, "analyse_ms": 3})
+    b = _env({"applied": 1.0, "analyse_ms": 3})
+    assert exec_parity.compare(a, b) == ["values"]
+    assert exec_parity.compare(_env({"noop": False}), _env({"noop": True})) == ["values"]
+
+
+def test_compare_histograms_by_shape_not_by_raw_counts():
+    h1 = {"r": [1, 2, 3], "g": [4, 5, 6]}
+    h2 = {"r": [9, 9, 9], "g": [0, 0, 1]}
+    assert exec_parity.compare(_env({"histogram": h1}), _env({"histogram": h2})) == []
+    odd = {"r": [9, 9], "g": [0, 0, 1]}
+    assert exec_parity.compare(_env({"histogram": h1}), _env({"histogram": odd})) == ["shapes"]
+
+
+def _pair_session(corpus, tmp_path, mcp, monkeypatch, cli_env):
+    s = _session(corpus, tmp_path, mcp=mcp).open()
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(cli_env), stderr=""))
+    return s
+
+
+def _kelvin_case(variant="happy"):
+    case = Case(id=f"par-wb-kelvin-{variant}", layer="parity", tier="P0", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "wb_kelvin", "variant": variant})
+    step = Step("parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0,
+               False)
+    return case, step
+
+
+def test_parity_pair_stores_the_mcp_envelope_next_to_the_cli_one(corpus, tmp_path, monkeypatch):
+    mcp_env = _env({"kelvin": 4000})
+    cli_env = _env({"kelvin": 4000})
+    s = _pair_session(corpus, tmp_path, FakeMcp(answers={"wb_kelvin": mcp_env}), monkeypatch,
+                      cli_env)
+    case, step = _kelvin_case()
+    obs = Observation()
+    exec_parity.parity_pair(s, case, step, obs)
+    assert obs.extra["mcp_envelope"] == mcp_env
+    assert obs.extra["cli_envelope"] == cli_env
+
+
+def test_parity_pair_resets_the_frame_between_the_two_legs(corpus, tmp_path, monkeypatch):
+    # HB6: the CLI leg ran on the frame the MCP leg had just edited (noop).
+    from tests.gauntlet import execute
+
+    order: list[str] = []
+    ok = _env({})
+    monkeypatch.setattr(execute, "isolate", lambda *a, **k: order.append("reset") or False)
+    s = _session(corpus, tmp_path, mcp=FakeMcp(answers={"darkroom_set": ok})).open()
+
+    def run(*a, **k):
+        order.append("cli")
+        return subprocess.CompletedProcess(a[0], 0, stdout=json.dumps(ok), stderr="")
+
+    monkeypatch.setattr(exec_parity.subprocess, "run", run)
+    case = Case(id="par-darkroom-set-happy", layer="parity", tier="P0", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "darkroom_set", "variant": "happy"})
+    step = Step("parity_pair", {"verb": "darkroom.set",
+                                "args": {"module": "exposure", "param": "exposure",
+                                         "value": 1.0}}, 60.0, True)
+    obs = Observation()
+    exec_parity.parity_pair(s, case, step, obs)
+    assert order == ["reset", "cli"]
+    assert obs.extra["leg_restore"] == "reset"
+
+
+def test_smoke_style_is_staged_with_a_non_empty_module_list(tmp_path):
+    s = _FakeStageSession(tmp_path)
+    exec_parity._ensure_smoke_style(s, tmp_path / "parity" / "mcp" / "H-mcp.ORF")
+    call = [c for c in s.calls if c[0] == "style_extract"][0]
+    assert call[1]["modules"] and "exposure" in call[1]["modules"]
+
+
+def test_fixture_runs_a_confirmed_backup_once(corpus, tmp_path, monkeypatch):
+    ok = _env({})
+    mcp = FakeMcp(answers={"wb_kelvin": ok})
+    s = _pair_session(corpus, tmp_path, mcp, monkeypatch, ok)
+    case, step = _kelvin_case()
+    exec_parity.parity_pair(s, case, step, Observation())
+    exec_parity.parity_pair(s, case, step, Observation())
+    runs = [c for c in mcp.calls if c[0] == "backup_run"]
+    assert len(runs) == 1 and runs[0][1].get("confirm") is True
+
+
+def test_a_failed_fixture_scores_blocked_not_needs_review(corpus, tmp_path, monkeypatch):
+    err = {"ok": False, "outcome": "error:usage", "error": {"code": "usage", "message": "x"}}
+    mcp = FakeMcp(answers={"wb_kelvin": err, "library_import": {"ok": False, "data": {}}})
+    s = _pair_session(corpus, tmp_path, mcp, monkeypatch, err)
+    case, step = _kelvin_case("happy")
+    obs = Observation()
+    exec_parity.parity_pair(s, case, step, obs)
+    assert (obs.blocked or "").startswith("harness_bug: parity fixture failed")
+
+
+def test_error_variants_of_gated_verbs_send_confirm_and_no_dry_run():
+    from scouter import registry
+    from tests.gauntlet.layers import parity
+
+    verbs = registry.load_verbs()
+    for vid in ("job.run", "config.init"):
+        args = parity.error_args(verbs[vid])
+        assert args.get("confirm") is True and "dry_run" not in args
+    assert "dry_run" not in parity.error_args(verbs["preset.apply"])
+
+
+def test_parity_happy_args_for_fixture_starved_verbs():
+    from tests.gauntlet.layers import parity
+
+    assert parity.happy_args("history.commit")["timeout_s"] >= 1
+    assert parity.happy_args("export.release")["min_rating"] == 0
+    assert "images" not in parity.happy_args("outliers.list")

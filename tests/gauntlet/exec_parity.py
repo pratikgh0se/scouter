@@ -13,7 +13,25 @@ from tests.gauntlet.corpus import copy_readonly
 from tests.gauntlet.execute import VIRTUAL, substitute
 
 VOLATILE = {"ms", "job", "layer", "ts", "id", "duration_s", "elapsed_ms", "event_id", "path",
-            "dtstyle_path", "memory_path", "manifest", "out_dir", "image_id"}
+            "dtstyle_path", "memory_path", "manifest", "out_dir", "image_id",
+            # HB6 (final-20261110): per-leg timings, cache state, timestamped
+            # archive dirs, file mtimes, per-leg preview paths, a window start
+            # time and the per-leg totals each leg's own calls bump. None of
+            # them says anything about whether the two sides agree.
+            "analyse_ms", "render_ms", "cached", "archive_dir", "xmp_mtime", "preview_path",
+            "from_ts", "totals", "histogram"}
+
+#: Structured values compared by SHAPE only (HB6): two legs render their own
+#: frame, so raw histogram counts differ per leg while the layout must not.
+SHAPE_ONLY = ("histogram",)
+
+
+def _shape(v):
+    if isinstance(v, dict):
+        return {k: _shape(x) for k, x in sorted(v.items())}
+    if isinstance(v, (list, tuple)):
+        return ["len", len(v)]
+    return type(v).__name__
 
 
 def normalise(env: dict | None) -> dict:
@@ -24,7 +42,8 @@ def normalise(env: dict | None) -> dict:
             "code": err.get("code"),
             "data_keys": sorted(k for k in data if k not in VOLATILE),
             "values": {k: v for k, v in sorted(data.items())
-                       if k not in VOLATILE and isinstance(v, (bool, int, float, str))}}
+                       if k not in VOLATILE and isinstance(v, (bool, int, float, str))},
+            "shapes": {k: _shape(data[k]) for k in SHAPE_ONLY if k in data}}
 
 
 def cli_argv(verb_id: str, args: dict) -> list[str]:
@@ -72,6 +91,9 @@ def compare(a: dict, b: dict) -> list[str]:
 #: style.apply_set).
 SMOKE_JOB_SLUG = "smoke-job"
 SMOKE_STYLE_NAME = "smoke"
+#: HB7: `style_extract(modules=[])` is refused as usage ("an empty style is not
+#: a style"), so no `smoke` style ever existed. A real, non-empty module list.
+SMOKE_STYLE_MODULES = ["exposure"]
 
 
 def _fixture_errors(session) -> list[str]:
@@ -142,20 +164,46 @@ def _ensure_smoke_style(session, path) -> None:
     P0 -- export.release, preset.apply_job -- need a real darktable style
     named 'smoke' to already exist). Once per session, ONLY on success
     (review fix round 2, A-4: a failed write must stay retryable and
-    reported, never marked done): `style.extract` with `modules=[]`
+    reported, never marked done): `style.extract` with `SMOKE_STYLE_MODULES`
     (SMOKE_ARGS's own style.extract args) writes an empty-history style of
     that name without needing the darkroom to show `path` (style.py
     extract's filtered path takes no `dtbridge.require_darkroom()`)."""
     if getattr(session, "_parity_smoke_style_done", False):
         return
     rec = session.call("style_extract", {"image": str(path), "name": SMOKE_STYLE_NAME,
-                                         "modules": [], "confirm": True}, 30.0,
+                                         "modules": SMOKE_STYLE_MODULES, "confirm": True}, 30.0,
                        write=True)
     if (rec.envelope or {}).get("ok"):
         session._parity_smoke_style_done = True
         return
     err = ((rec.envelope or {}).get("error") or {}).get("code") or rec.error or "unknown"
     _fixture_errors(session).append(f"smoke_style_failed: {err}")
+
+
+def _stage_once(session, flag: str, label: str, tool: str, args: dict, budget_s: float,
+                write: bool) -> None:
+    """HB7: run one fixture-staging call once per session, ONLY on success; a
+    failure stays retryable and is recorded as a fixture error."""
+    if getattr(session, flag, False):
+        return
+    rec = session.call(tool, args, budget_s, write=write)
+    if (rec.envelope or {}).get("ok"):
+        setattr(session, flag, True)
+        return
+    err = ((rec.envelope or {}).get("error") or {}).get("code") or rec.error or "unknown"
+    _fixture_errors(session).append(f"{label}_failed: {err}")
+
+
+def _ensure_backup(session) -> None:
+    """HB7: backup.verify needs an archives dir, i.e. one prior `backup run --yes`."""
+    _stage_once(session, "_parity_backup_done", "backup_run", "backup_run",
+                {"confirm": True}, 120.0, True)
+
+
+def _ensure_cull_proposal(session) -> None:
+    """HB7: cull.apply needs a cull-*.json proposal under the smoke job."""
+    _stage_once(session, "_parity_cull_done", "cull_propose", "cull_propose",
+                {"job_slug": SMOKE_JOB_SLUG}, 120.0, False)
 
 
 def _staged_dests(session):
@@ -196,6 +244,8 @@ def _staged_dests(session):
         mcp_dest = _stage_side(session, mcp_src, "mcp")
         cli_dest = _stage_side(session, cli_src, "cli")
         _ensure_smoke_style(session, mcp_dest)
+        _ensure_backup(session)
+        _ensure_cull_proposal(session)
         cached = (mcp_dest, cli_dest)
         session._parity_staged_dests = cached
         session._parity_sidecar_baseline = {str(p): _read_sidecar_bytes(p) for p in cached}
@@ -235,6 +285,28 @@ def _restore_sidecars(session, dests) -> None:
             sidecar.unlink(missing_ok=True)
         else:
             sidecar.write_bytes(snap)
+
+
+def _restore_between_legs(session, obs, hero):
+    """HB6: a darkroom verb without an explicit image acts on the frame darktable
+    has open, the SAME one for both legs, so the CLI leg ran on top of what the
+    MCP leg just wrote (darkroom.set answered `noop`, "already 1.0"). Reset what
+    the MCP leg touched, and re-stage the frame when the reset did not bring it
+    back to its baseline (the same `isolate` every other layer uses), so both
+    legs start from the same state. Returns the (possibly re-staged) hero."""
+    from tests.gauntlet.execute import isolate
+    from tests.gauntlet.session import SessionBlocked
+
+    try:
+        restaged = isolate(session, hero, "hero")
+        if restaged:
+            session.ensure_frame("hero")
+        obs.extra["leg_restore"] = "restaged" if restaged else "reset"
+    except SessionBlocked:
+        raise
+    except Exception as e:  # noqa: BLE001 - recorded, the pair still runs
+        obs.extra["leg_restore"] = f"error: {type(e).__name__}: {e}"[:300]
+    return session.staged.frames["hero"]
 
 
 def _call_with_frame_switch(session, obs, tool: str, args: dict, path, budget_s: float,
@@ -332,6 +404,9 @@ def parity_pair(session, case, step, obs) -> CallRecord:
                                           step.budget_s, step.write, "mcp")
     else:
         mcp_rec = session.call(case.meta["mcp"], mcp_args, step.budget_s, write=step.write)
+    if step.write and not is_open:
+        session.staged.frames["hero"] = hero
+        hero = _restore_between_legs(session, obs, hero)
     session.staged.frames["hero"] = cli_copy
     cli_args = substitute(step.args["args"], session, [])
     session.staged.frames["hero"] = hero
@@ -370,6 +445,7 @@ def parity_pair(session, case, step, obs) -> CallRecord:
     obs.extra["envelopes_match"] = not diffs
     obs.extra["parity_diffs"] = diffs
     obs.extra["cli_envelope"] = cli_env
+    obs.extra["mcp_envelope"] = mcp_rec.envelope  # HB6: both sides, for diagnosis
     variant = case.meta.get("variant")
     reason = _parity_needs_review(variant, mcp_norm, cli_norm, not diffs,
                                   _policy.transient_codes)
@@ -386,6 +462,10 @@ def parity_pair(session, case, step, obs) -> CallRecord:
     fixture_errors = getattr(session, "_parity_fixture_errors", None)
     if fixture_errors:
         obs.extra["fixture_errors"] = list(fixture_errors)
+        if reason and reason.startswith("happy variant: both sides failed"):
+            #: HB7: the verb never ran because the fixture was not staged. That
+            #: is the harness's failure, never a needs_review about the product.
+            obs.blocked = f"harness_bug: parity fixture failed: {'; '.join(fixture_errors)}"[:500]
     return CallRecord("parity_pair", step.args, {"ok": not diffs, "outcome": "ok",
                                                  "data": {"diffs": diffs}}, write=step.write)
 
