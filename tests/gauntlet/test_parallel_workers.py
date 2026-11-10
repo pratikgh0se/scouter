@@ -604,3 +604,49 @@ def test_adapter_asks_for_golden_serial_first_only_with_other_look_cases(tmp_pat
     assert a.serial_first_ids([golden]) == []
     assert a.serial_first_ids([other]) == []
     assert a.serial_first_ids([golden, mk("cov-1", "coverage")]) == []
+
+
+def _fake_time():
+    t = [0.0]
+    return (lambda: t[0]), (lambda s: t.__setitem__(0, t[0] + s)), t
+
+
+def test_guard_waits_for_a_registration_that_lands_in_the_grace(registry, monkeypatch):
+    """The pid race: a sibling's darktable is up before its registry entry."""
+    monkeypatch.setattr(dtprocess, "running_pids", lambda: [54061])
+    monkeypatch.setattr(dtprocess, "owned_pid", lambda cache_root=None: None)
+    clock, sleep, t = _fake_time()
+
+    def slow_sleep(s):
+        sleep(s)
+        if t[0] >= 3:
+            (registry / "54061.json").write_text(
+                json.dumps({"pid": 54061, "start_time": "start-54061"}))
+
+    assert dtprocess.unregistered_foreign_pids(
+        grace_s=15, poll_s=1, clock=clock, sleep=slow_sleep) == []
+    assert t[0] < 15
+
+
+def test_guard_still_blocks_a_pid_that_stays_unregistered(registry, monkeypatch):
+    monkeypatch.setattr(dtprocess, "running_pids", lambda: [999])
+    monkeypatch.setattr(dtprocess, "owned_pid", lambda cache_root=None: None)
+    clock, sleep, t = _fake_time()
+    assert dtprocess.unregistered_foreign_pids(
+        grace_s=15, poll_s=1, clock=clock, sleep=sleep) == [999]
+    assert t[0] >= 15
+
+
+def test_launch_registers_before_the_owner_write(registry, tmp_path, monkeypatch):
+    """Registration precedes the owner write (and so any GUI-ready wait)."""
+    proc = mock.Mock(pid=4343)
+    monkeypatch.setattr(dtprocess.subprocess, "Popen", lambda *a, **k: proc)
+
+    def boom(cache_root=None):
+        assert (registry / "4343.json").exists()
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(dtprocess, "owner_path", boom)
+    env = {"SCOUTER_CACHE": str(tmp_path / "cache"), dtprocess.REGISTRY_ENV: str(registry)}
+    with pytest.raises(RuntimeError, match="stop here"):
+        dtprocess.launch(None, tmp_path / "lib" / "l.db", env=env)

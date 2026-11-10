@@ -168,12 +168,27 @@ def registered_pids(registry: Path | None = None) -> set[int]:
     return out
 
 
-def unregistered_foreign_pids(cache_root: Path | None = None) -> list[int]:
+#: A sibling worker's darktable is running a moment before its registry entry
+#: is written (spawn -> start time -> record). A guard that scans in that
+#: window must not mistake it for Pratik's own, so callers pass this grace.
+REGISTRY_GRACE_S = 15.0
+
+
+def unregistered_foreign_pids(cache_root: Path | None = None, *, grace_s: float = 0.0,
+                              poll_s: float = 1.0, clock=time.monotonic,
+                              sleep=time.sleep) -> list[int]:
     """The preflight/launch guard: a darktable that is neither this process's
     owned one nor registered by this gauntlet run. Pratik's own darktable is
-    never registered, so it still blocks."""
-    ok = registered_pids()
-    return [p for p in foreign_pids(cache_root) if p not in ok]
+    never registered, so it still blocks, but only after `grace_s` of
+    re-reading the registry (a registry must be configured, else nothing could
+    ever register and the wait is skipped)."""
+    deadline = clock() + (grace_s if _registry_dir() is not None else 0.0)
+    while True:
+        ok = registered_pids()
+        bad = [p for p in foreign_pids(cache_root) if p not in ok]
+        if not bad or clock() >= deadline:
+            return bad
+        sleep(poll_s)
 
 
 def launch(frame: str | Path | None, library: str | Path, configdir: str | Path | None = None,
@@ -217,14 +232,16 @@ def launch(frame: str | Path | None, library: str | Path, configdir: str | Path 
     #: `os.environ` `owner_path()` would otherwise fall back to. See
     #: `owner_path`'s docstring.
     cache_root = Path(env["SCOUTER_CACHE"]) if env and env.get("SCOUTER_CACHE") else None
-    op = owner_path(cache_root)
-    op.parent.mkdir(parents=True, exist_ok=True)
-    op.write_text(json.dumps(asdict(rec)) + "\n", encoding="utf-8")
+    # Register first (pid race): a sibling worker's guard that scans now must
+    # see this darktable as the gauntlet's, so nothing slow precedes this.
     registry = _registry_dir(env)
     if registry is not None:
         registry.mkdir(parents=True, exist_ok=True)
         (registry / f"{rec.pid}.json").write_text(json.dumps(asdict(rec)) + "\n",
                                                   encoding="utf-8")
+    op = owner_path(cache_root)
+    op.parent.mkdir(parents=True, exist_ok=True)
+    op.write_text(json.dumps(asdict(rec)) + "\n", encoding="utf-8")
     return rec
 
 

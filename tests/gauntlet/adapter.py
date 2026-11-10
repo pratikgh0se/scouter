@@ -629,7 +629,7 @@ class ScouterAdapter:
     def foreign_pids(self) -> list[int]:
         from scouter.core import dtprocess
 
-        return dtprocess.unregistered_foreign_pids()
+        return dtprocess.unregistered_foreign_pids(grace_s=dtprocess.REGISTRY_GRACE_S)
 
     def preflight(self, run, layer: str) -> str | None:
         """(final fix I2): refuse a live layer while a darktable this runner did

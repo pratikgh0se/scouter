@@ -264,7 +264,8 @@ class DtControl:
     def foreign(self) -> list[int]:
         from scouter.core import dtprocess
 
-        return dtprocess.unregistered_foreign_pids(self.cache_root)
+        return dtprocess.unregistered_foreign_pids(self.cache_root,
+                                                   grace_s=dtprocess.REGISTRY_GRACE_S)
 
     def owned(self) -> int | None:
         from scouter.core import dtprocess
