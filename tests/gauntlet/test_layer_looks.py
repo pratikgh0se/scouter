@@ -168,7 +168,10 @@ def _is_confounded(t: dict) -> bool:
     st = t.get("split_toning") or {}
     split = any(st.get(f"{e}_hue") is not None and st.get(f"{e}_sat")
                 for e in ("shadow", "highlight"))
-    return bool(split or t.get("saturation_delta") or t.get("black_lift"))
+    tone = t.get("tone") or {}
+    zones = any(tone.get(k) for k in ("shadows_ev", "mids_ev", "highlights_ev"))
+    return bool(split or t.get("saturation_delta") or t.get("black_lift")
+                or (tone.get("contrast") and zones))
 
 
 def _synthetic(**targets):
@@ -258,3 +261,29 @@ def test_mids_and_highlights_checks_confounded_by_chroma_and_split_tone():
                     (c.id, region, name)
     for c in _synthetic(tone={"highlights_ev": -0.1}):  # single owner keeps its check
         assert not any(ch.tags.get("declared_gap") for ch in _zone_checks(c)), c.id
+
+
+def test_contrast_slope_check_confounded_by_zone_luminance_or_split_tone():
+    """Z2 (round 2b): sigmoid slope is not judged when zone luminance or split-tone
+    moves in the same plan reshape the ramp; the check stays in the denominator."""
+    split = {"split_toning": {"shadow_hue": 200, "shadow_sat": 0.2,
+                              "highlight_hue": None, "highlight_sat": 0}}
+    for tone, extra, name in (({"contrast": 0.15, "shadows_ev": -0.2}, {}, "tone:shadows_ev"),
+                              ({"contrast": 0.2, "mids_ev": -0.5}, {}, "tone:mids_ev"),
+                              ({"contrast": 0.15}, split, "split_toning")):
+        for c in _synthetic(tone=tone, **extra):
+            g = _gap(c, "M6")
+            assert g and g.startswith("confounded by") and name in g, (c.id, name, g)
+            assert len(c.meta["check_tags"]) == len(c.expect.checks)
+
+
+def test_single_owner_contrast_plan_keeps_its_slope_check():
+    for c in _synthetic(tone={"contrast": 0.15}):
+        assert _gap(c, "M6") is None, c.id
+
+
+def test_chroma_check_confounded_by_contrast_and_zone_moves():
+    for tone, name in (({"contrast": -0.2}, "tone:contrast"), ({"shadows_ev": 0.3}, "tone:shadows_ev")):
+        for c in _synthetic(tone=tone, saturation_delta=0.05):
+            g = _gap(c, "M5")
+            assert g and g.startswith("confounded by") and name in g, (c.id, name, g)

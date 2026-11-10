@@ -51,6 +51,8 @@ def gaps(look: dict) -> list[str]:
     for k, chk in _ZONE_CHECK.items():
         if (t.get("tone") or {}).get(k) and confounders(t, chk):
             out.append(f"confounded:{k}")
+    if (t.get("tone") or {}).get("contrast") and confounders(t, "contrast"):
+        out.append("confounded:contrast")
     if t.get("black_lift") and confounders(t, "black_lift"):
         out.append("confounded:black_lift")
     if t.get("saturation_delta") and confounders(t, "chroma"):
@@ -92,7 +94,7 @@ def confounders(t: dict, check: str) -> list[str]:
     sign check, so its direction cannot be read as the owner move's (round 1,
     cluster C2: the same plan's split-tone hue/chroma, global chroma/desat, black
     lift or other zones moved the ramp_-4 / ramp_-5 patch or mean C* the other
-    way). `check` is `shadows`, `black_lift` or `chroma`. A single-owner plan
+    way). `check` is `shadows`, `zone`, `black_lift`, `chroma` or `contrast`. A single-owner plan
     returns []."""
     tone = t.get("tone") or {}
     out: list[str] = []
@@ -115,6 +117,15 @@ def confounders(t: dict, check: str) -> list[str]:
         if t.get("saturation_delta"):
             out.append("global_chroma")
     elif check == "chroma":
+        if _split_active(t):
+            out.append("split_toning")
+        # round 2b: sigmoid contrast and zone luminance moves shift mean C* too
+        # (sony_sh: C -0.14 against +0.05 with contrast -0.2 and zones up)
+        if tone.get("contrast"):
+            out.append("tone:contrast")
+        out += [f"tone:{k}" for k in TONE_PATCH if tone.get(k)]
+    elif check == "contrast":  # M6 slope/spread: zone luminance and split-tone moves reshape the ramp
+        out += [f"tone:{k}" for k in TONE_PATCH if tone.get(k)]
         if _split_active(t):
             out.append("split_toning")
     return out
@@ -163,9 +174,11 @@ def chart_checks(look: dict, tol: dict) -> tuple[list[Check], list[dict]]:
             add(ch, "tone")
     if tone.get("contrast"):
         v = tone["contrast"]
-        add(Check("M6", stat="slope", region="chart_tone", sign=1 if v > 0 else -1, kind="frac",
-                  target={"value": v, "tol": tol[conf.get("tone", "inferred")]["sat"]}), "tone",
-            "sigmoid.contrast")
+        ch = Check("M6", stat="slope", region="chart_tone", sign=1 if v > 0 else -1, kind="frac",
+                   target={"value": v, "tol": tol[conf.get("tone", "inferred")]["sat"]})
+        if _gap_tag(t, "contrast"):
+            ch.tags["declared_gap"] = _gap_tag(t, "contrast")
+        add(ch, "tone", "sigmoid.contrast")
     sat = t.get("saturation_delta") or 0
     if sat:
         ch = Check("M5", stat="C", region="chart_chromatic", sign=1 if sat > 0 else -1,
@@ -215,9 +228,11 @@ def frame_checks(look: dict) -> tuple[list[Check], list[dict]]:
             checks.append(ch)
             tags.append({"confidence": conf.get("tone", "inferred"), "component": "tone"})
     if tone.get("contrast"):
+        tags_ = {"look_key": "sigmoid.contrast"}
+        if _gap_tag(t, "contrast"):
+            tags_["declared_gap"] = _gap_tag(t, "contrast")
         checks.append(Check("M6", stat="spread", region="frame",
-                            sign=1 if tone["contrast"] > 0 else -1,
-                            tags={"look_key": "sigmoid.contrast"}))
+                            sign=1 if tone["contrast"] > 0 else -1, tags=tags_))
         tags.append({"confidence": conf.get("tone", "inferred"), "component": "tone"})
     if t.get("saturation_delta"):
         tags_ = {"look_key": "colorbalancergb.global_chroma"}

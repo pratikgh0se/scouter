@@ -217,7 +217,11 @@ def plan_moves(look: dict, cal: dict, current: dict) -> tuple[list[tuple[str, st
             return
         module, param = key.split(".")
         row = vocab.spec(module, param)
-        base = current.get(key, row.neutral if row.neutral is not None else 0.0)
+        # A key absent from the frame's history (the PFM chart never has sigmoid
+        # active) starts from its declared neutral, else its verified default,
+        # never 0.0 (round 2b: 0.0 + delta clamped sigmoid.contrast to its 0.5 floor).
+        declared = row.neutral if row.neutral is not None else row.default
+        base = current.get(key, declared if declared is not None else 0.0)
         target, _clamped = vocab.clamp(row, base + delta_metric / s)
         moves.append((module, param, round(target, 4)))
 

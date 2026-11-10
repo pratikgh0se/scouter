@@ -249,3 +249,30 @@ def test_tint_only_refusal_caps_the_look_at_partial_never_pass():
                               {"changed": True}), meta={"look": "x"})
     v = evaluate(case, obs, pol)
     assert v.score == "partial" and v.outcome == "honest_refusal_component"
+
+
+def _contrast_value(moves):
+    return {(m, p): v for m, p, v in moves}[("sigmoid", "contrast")]
+
+
+def test_look_plan_contrast_starts_from_the_default_when_sigmoid_is_not_in_the_frame(tmp_path):
+    """Z1 (round 2b): the chart frame has no sigmoid in its history, so the planner's
+    base must be the verified default 1.5, not 0.0 (which clamped a +0.1 contrast
+    look to the 0.5 floor, a flatter curve than the default)."""
+    from gauntlet.case import Step
+
+    session = _look_session(tmp_path)
+    (session.run_root / "chart").mkdir()
+    cal = {k: 1.0 for k in chart_render.CALIBRATE}
+    cal.update({"_base_slope": 60.0, "_base_C": 10.0, "sigmoid.contrast": 30.0})
+    (session.run_root / "chart" / "calibration.json").write_text(json.dumps(cal))
+    for look_id, sign in (("fuji-sim-classic-chrome", 1), ("fuji-sim-nostalgic-neg", 1),
+                          ("sony-sh", -1)):
+        session.calls.clear()
+        obs = Observation()
+        exec_looks.look_plan(session, None, Step("look_plan", {"look_id": look_id}, 40.0, True),
+                             obs)
+        v = [m["value"] for m in obs.extra["look_moves"] if m["param"] == "contrast"
+             and m["module"] == "sigmoid"]
+        assert v, look_id
+        assert (v[0] - 1.5) * sign > 0, (look_id, v)
