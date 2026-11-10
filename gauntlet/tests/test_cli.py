@@ -107,3 +107,24 @@ def test_progress_folds_in_the_subset_record(tmp_path):
     doc = json.loads((tmp_path / "s1" / "progress.json").read_text())
     assert doc["subset"] == {"layer": "alpha", "size": 2, "of": 4, "seed": 0,
                              "keys": ["sleep_s"]}
+
+
+def test_run_refuses_cases_generated_by_different_harness_code(tmp_path, monkeypatch, capsys):
+    """fix/harness-r2 stale-cases guard (L7): generate records a fingerprint of the
+    generator inputs; run exits EXIT_STALE_CASES when it no longer matches."""
+    from gauntlet.cli import EXIT_STALE_CASES
+    work = tmp_path / "work"
+    (work / "tests" / "gauntlet" / "layers").mkdir(parents=True)
+    layer = work / "tests" / "gauntlet" / "layers" / "looks.py"
+    layer.write_text("A = 1\n")
+    monkeypatch.chdir(work)
+    runs = tmp_path / "runs"
+    assert main(["--adapter", "gauntlet.tests.toy:make", "--runs-root", str(runs),
+                 "generate", "--stamp", "s"]) == 0
+    base = ["--adapter", "gauntlet.tests.toy:make", "--runs-root", str(runs), "run",
+            "--stamp", "s", "--resume"]
+    assert main(base) == 0                       # unchanged inputs: runs
+    layer.write_text("A = 2\n")                  # a looks-layer commit lands
+    assert main(base) == EXIT_STALE_CASES
+    assert "refusing to run" in capsys.readouterr().err
+    assert main(base + ["--allow-stale-cases"]) == 0
