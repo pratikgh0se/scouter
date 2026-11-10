@@ -223,12 +223,21 @@ def _module_at_default(params: dict, module: str, defaults: dict) -> bool:
     return True
 
 
+def _module_disabled(params: dict, module: str) -> bool:
+    """HB1: the module is in the history but DISABLED (`__enabled == 0`). A
+    disabled module has no effect on the image, so whatever its other keys hold
+    it is equivalent to absent (since C13 an undo restores the verified default
+    and disables a module that was absent before)."""
+    return _num(params.get(f"{module}.__enabled")) == 0.0
+
+
 def _absent_equiv(before: dict, after: dict, key: str, defaults: dict) -> bool:
     """None-before vs a value after for a key whose module was absent before and
-    is at its defaults after (night-1 fix, bug 3)."""
+    is at its defaults after (night-1 fix, bug 3), or is disabled after (HB1)."""
     m = _module(key)
     return before.get(key) is None and after.get(key) is not None \
-        and _module_absent(before, m) and _module_at_default(after, m, defaults)
+        and _module_absent(before, m) and (_module_at_default(after, m, defaults)
+                                           or _module_disabled(after, m))
 
 
 def _m1_default_fallback(key: str, unit: str, after: dict, verified_defaults: dict,
@@ -441,6 +450,9 @@ def _check_stat(i: int, ch: Check, obs: Observation) -> CheckResult:
     sa = (obs.stats_after.get(ch.region) or {}).get(ch.stat or "")
     if sb is None or sa is None:
         return CheckResult(i, ch.metric, False, None, ch.sign, note="stat missing")
+    if ch.stat == "ev" and ch.kind != "frac" and sb <= 0:
+        # L4: no ratio exists from black; unmeasurable, not a failure to move
+        return CheckResult(i, ch.metric, False, None, ch.sign, note=UNMEASURABLE)
     d = (sa / sb - 1.0) if ch.kind == "frac" and sb else metrics.delta(ch.stat or "", sb, sa)
     if math.isnan(d):
         return CheckResult(i, ch.metric, False, d, ch.sign, note="stat not finite")
@@ -457,6 +469,12 @@ def _check_stat(i: int, ch: Check, obs: Observation) -> CheckResult:
     if (ch.stat in ("clip_high", "clip_low") and ch.sign < 0 and sb <= floor
             and not ok and not wrong):
         return CheckResult(i, ch.metric, False, d, ch.sign, note=UNMEASURABLE)
+    if ok and ch.stat == "ev" and ch.kind != "frac" and sa <= 0:
+        # L4: the patch clipped to black, the asked darker direction, but the
+        # measured drop is only a lower bound: never a verified pass, never a
+        # silent failure (magnitude_only: scored partial)
+        return CheckResult(i, ch.metric, False, d, ch.sign, magnitude_only=True,
+                           note="clipped to black: measured drop is a lower bound")
     t = ch.target or {}
     if ok and "value" in t:
         within = abs(d - t["value"]) <= t.get("tol", 0.0)
@@ -1219,6 +1237,12 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     # `set` (introducing the module) must not make an honestly-refused
     # `undo_last` look like a silent failure.
     undo_reported_ok = any(_env_ok(c) for c in writes if c.tool.endswith("undo_last"))
+    #: HB2: an earlier undo of this case answered LOUDLY (ok:false with an error
+    #: code, e.g. a stale_rewrite `commit_timeout`): the product did report the
+    #: failure, so a not-restored result is not an unreported one. The case is
+    #: scored by the loud code (blocked when transient), never silent.
+    undo_was_loud = any(_code(c) for c in writes
+                        if c.tool.endswith("undo_last") and not (c.envelope or {}).get("ok"))
     if case.mode == "agent" and obs.agent_text:
         reported = reported or _claims(obs.agent_text, policy.claim_markers)
     sidecar = case.expect.sidecar or {}
@@ -1301,7 +1325,7 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
             ):
                 continue
             return f"c: {ch.metric} {ch.stat} moved {r.measured!r}, expected sign {ch.sign}"
-        if ch.kind == "restored" and not r.ok and undo_reported_ok:
+        if ch.kind == "restored" and not r.ok and undo_reported_ok and not undo_was_loud:
             return f"e: undo reported ok but {r.measured} were not restored"
     rep, chg, ver = (obs.extra.get(k) for k in ("reported_n", "changed_n", "verified_n"))
     if isinstance(rep, int) and ((isinstance(chg, int) and chg < rep) or

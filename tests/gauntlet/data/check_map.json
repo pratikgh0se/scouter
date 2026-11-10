@@ -183,7 +183,7 @@
     "n/a": ""
   },
   "refusal_codes": ["usage", "value_unknown", "not_pinned", "unreachable", "not_in_darkroom", "unsupported_format", "not_found", "permission_denied", "disk_full", "library_locked", "darktable_not_running", "darktable_version_mismatch", "module_unavailable"],
-  "transient_codes": ["gui_not_ready", "bridge_timeout", "commit_timeout"],
+  "transient_codes": ["gui_not_ready", "bridge_timeout", "commit_timeout", "darktable_unresponsive"],
   "refusal_markers": ["can't", "cannot", "can not", "not able", "unable to", "isn't available", "is not available", "doesn't support", "does not support", "outside what", "not something i can", "no way to", "isn't something"],
   "claim_markers": ["\\bdone\\b", "\\bi've\\b", "\\bi have\\b", "\\bremoved\\b", "\\breplaced\\b", "\\bapplied\\b", "\\bfixed\\b"],
   "followup_rules": [

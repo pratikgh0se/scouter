@@ -158,12 +158,19 @@ def region_stats(r: Raster8, masks: Masks, regions: tuple[str, ...] = REGIONS) -
     return out
 
 
+#: Linear-mean floor an `ev` patch clipped to black is measured at (2^-16).
+EV_FLOOR = 2.0 ** -16
+
+
 def delta(stat: str, before: float, after: float) -> float:
-    """after - before; for `ev` the stops ratio log2(after/before) of linear means."""
+    """after - before; for `ev` the stops ratio log2(after/before) of linear means.
+    L4: an `after` clipped to black (<= 0) is measured at EV_FLOOR, a finite
+    LOWER BOUND on the real drop (the caller flags it as clipped); a `before`
+    already at black has no ratio (nan, the caller reads it as unmeasurable)."""
     if stat == "ev":
-        if before <= 0 or after <= 0:
+        if before <= 0:
             return float("nan")
-        return math.log2(after / before)
+        return math.log2(max(after, EV_FLOOR) / before)
     return after - before
 
 

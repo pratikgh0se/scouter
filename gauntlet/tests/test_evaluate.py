@@ -1075,11 +1075,11 @@ def test_fix3_undo_that_leaves_a_non_default_or_unknown_default_still_fails():
     obs = _steps_obs(envs, [{}, _cb(highlights_chroma=0.02), _cb(contrast=0.1)],
                      before_meta={"defaults": CB_DEFAULTS}, tools=tools)
     assert evaluate(_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
-    # the module is disabled after undo: not equivalent to absent
+    # HB1: a module disabled after undo (absent before) is as inert as absent: restored
     obs = _steps_obs(envs, [{}, _cb(highlights_chroma=0.02),
                             {**_cb(), "colorbalancergb.__enabled": 0}],
                      before_meta={"defaults": CB_DEFAULTS}, tools=tools)
-    assert evaluate(_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
+    assert evaluate(_undo_case(k), obs, POLICY).outcome == "verified"
     # no defaults known: conservative, still a mismatch
     obs = _steps_obs(envs, [{}, _cb(highlights_chroma=0.02), _cb()], tools=tools)
     assert evaluate(_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
@@ -1840,3 +1840,79 @@ def test_n1_setup_step_never_triggers_the_rule():
     assert "unreported clamp" not in (evaluate(case, obs, POLICY).silent_failure or "")
     case.steps[1].setup = False
     assert "unreported clamp" in evaluate(case, obs, POLICY).silent_failure
+
+
+# ---- fix/harness-r2: HB1 undo-and-disable, HB2 loud undo, L4 clip to black
+
+def _hb_undo_case(k, n_undo=1):
+    chk = Check("M1", kind="restored", target={"from": 0, "keys": [k], "units": {k: "%"}})
+    return _edit_case([chk], None, kind="workflow",
+                      steps=[Step("darkroom_adjust", write=True)] +
+                            [Step("darkroom_undo_last", write=True)] * n_undo)
+
+
+def test_hb1_absent_before_disabled_after_undo_is_restored_whatever_the_other_keys_hold():
+    """cov-colorbalancergb.*-undo_after_set: since C13 undo disables a module that was
+    absent before. A disabled module has no effect: equivalent to absent."""
+    k = "colorbalancergb.global_vibrance"
+    tools = ["darkroom_adjust", "darkroom_undo_last"]
+    envs = [_mv("colorbalancergb", "global_vibrance"), _ok({})]
+    off_default = {**_cb(contrast=0.1), "colorbalancergb.__enabled": 0}
+    obs = _steps_obs(envs, [{}, _cb(global_vibrance=0.2), off_default],
+                     before_meta={"defaults": CB_DEFAULTS}, tools=tools)
+    v = evaluate(_hb_undo_case(k), obs, POLICY)
+    assert v.outcome == "verified" and v.silent_failure is None, (v.silent_failure, v.checks)
+
+
+def test_hb1_an_enabled_module_left_at_a_non_default_value_is_still_not_restored():
+    k = "colorbalancergb.global_vibrance"
+    tools = ["darkroom_adjust", "darkroom_undo_last"]
+    envs = [_mv("colorbalancergb", "global_vibrance"), _ok({})]
+    obs = _steps_obs(envs, [{}, _cb(global_vibrance=0.2), _cb(global_vibrance=0.2)],
+                     before_meta={"defaults": CB_DEFAULTS}, tools=tools)
+    assert evaluate(_hb_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
+    obs = _steps_obs(envs, [{}, _cb(global_vibrance=0.2), _cb(contrast=0.1)],
+                     before_meta={"defaults": CB_DEFAULTS}, tools=tools)
+    assert evaluate(_hb_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
+
+
+def test_hb2_an_earlier_loud_undo_error_is_not_a_silent_failure():
+    """scn-r0347-olympus-tool: undo 1 answered a LOUD commit_timeout (stale_rewrite);
+    undo 2 was ok. Not restored, but the product did report the failure."""
+    k = "exposure.exposure"
+    envs = [_ok({}), _err("commit_timeout"), _ok({})]
+    tools = ["darkroom_adjust", "darkroom_undo_last", "darkroom_undo_last"]
+    obs = _steps_obs(envs, [{k: 0.7}, {k: 1.0}, {k: 1.0}, {k: 1.0}], tools=tools)
+    v = evaluate(_hb_undo_case(k, 2), obs, POLICY)
+    assert v.silent_failure is None
+    assert (v.outcome, v.notes) == ("blocked", ["commit_timeout"])
+
+
+def test_hb2_two_ok_undos_that_restored_nothing_are_still_silent():
+    k = "exposure.exposure"
+    envs = [_ok({}), _ok({}), _ok({})]
+    tools = ["darkroom_adjust", "darkroom_undo_last", "darkroom_undo_last"]
+    obs = _steps_obs(envs, [{k: 0.7}, {k: 1.0}, {k: 1.0}, {k: 1.0}], tools=tools)
+    v = evaluate(_hb_undo_case(k, 2), obs, POLICY)
+    assert v.outcome == "silent_failure" and v.silent_failure.startswith("e:")
+
+
+def test_l4_a_patch_clipped_to_black_in_the_asked_direction_is_never_nan_or_verified():
+    chk = Check("M2", stat="ev", region="patch:ramp_-4", sign=-1)
+    obs = _obs(_ok(), _snap("a"), _snap("b"),
+               stats_before={"patch:ramp_-4": {"ev": 0.03}},
+               stats_after={"patch:ramp_-4": {"ev": 0.0}})
+    v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
+    r = v.checks[0]
+    assert r.measured is not None and r.measured == r.measured  # finite, not nan
+    assert r.measured < 0 and not r.ok and r.magnitude_only
+    assert v.outcome != "verified" and v.silent_failure is None
+
+
+def test_l4_clipping_to_black_against_the_asked_direction_still_fails():
+    chk = Check("M2", stat="ev", region="patch:ramp_-4", sign=1)
+    obs = _obs(_ok(), _snap("a"), _snap("b"),
+               stats_before={"patch:ramp_-4": {"ev": 0.03}},
+               stats_after={"patch:ramp_-4": {"ev": 0.0}})
+    v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
+    assert v.checks[0].wrong_direction and v.silent_failure.startswith("c:")
