@@ -147,6 +147,20 @@ def tag_confounded(chk: Check, part, parts, skip=frozenset()) -> Check:
     return chk
 
 
+def phrase_served(phrase: str) -> bool:
+    """HB4: does the real resolver now serve `phrase` (it resolves AND every
+    move it makes is a `live` vocabulary row)? A `candidate` row is refused,
+    so that phrase still expects an honest refusal. Same rule as `served_plan`."""
+    from scouter.core import phrases, vocab
+    from scouter.errors import ScouterError
+    try:
+        res = phrases.resolve(phrase)
+    except ScouterError:
+        return False
+    return bool(res.moves) and all(vocab.status(phrases.row_for(m)) == "live"
+                                   for m in res.moves)
+
+
 def _unserved_modules(req: dict, tax: Taxonomy) -> list[dict]:
     served = {"exposure", "sigmoid", "temperature", "colorbalancergb", "filmicrgb", "colorzones"}
     out = []
@@ -308,9 +322,16 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
                     if c in wb_refusals:
                         refused_steps.append((len(steps) - 1, wb_refusals[c]))
         if un:
-            steps.append(step("darkroom_say", BUDGET_SAY, phrase=un[0]["phrases"][0]))
+            un_phrase = un[0]["phrases"][0]
+            steps.append(step("darkroom_say", BUDGET_SAY, phrase=un_phrase))
+            #: HB4: the module's own phrase may have become served since the
+            #: taxonomy was written (r0212/r0574 "open the shadows" is now
+            #: lift_shadows): then step ok is the expectation, not a refusal.
+            now_served = phrase_served(un_phrase)
+            if now_served:
+                meta["served_unserved_module"] = un_phrase
             checks.append(Check("envelope", step=len(steps) - 1, target={
-                "path": "ok", "op": "eq", "value": False}))
+                "path": "ok", "op": "eq", "value": now_served}))
         if undo_follow:
             expect = Expect("workflow", [m1_restored([], {})])
         else:

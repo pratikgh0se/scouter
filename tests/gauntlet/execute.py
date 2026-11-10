@@ -199,6 +199,32 @@ def _mark_walkthrough_broken(session, case: Case, obs: Observation, walkthrough:
         session.walkthrough_broken = case.id
 
 
+def export_files_count(obs: Observation) -> tuple[int, dict] | None:
+    """HB3: how many files a case's `export_run` calls produced, with two
+    oracles (Zenkai Z2). Oracle 1 is the envelope's own `files[]` entries that
+    answer `ok`. Oracle 2 is the disk: how many of those ok outputs are
+    actually present as non-empty files in the call's `out_dir`. The two must
+    agree; on any disagreement the count is 0 (so a `gte 1` check fails) and
+    the detail dict names both numbers. None when the case made no export_run
+    call (nothing to count)."""
+    calls = [c for c in obs.calls if c.tool == "export_run"]
+    if not calls:
+        return None
+    reported = on_disk = 0
+    for c in calls:
+        data = (c.envelope or {}).get("data") or {}
+        out_dir = Path(str(data.get("out_dir") or (c.args or {}).get("out_dir") or ""))
+        for f in data.get("files") or ():
+            if not (isinstance(f, dict) and f.get("ok")):
+                continue
+            reported += 1
+            out = Path(str(f.get("output") or ""))
+            if out.is_file() and out.stat().st_size > 0 and out.parent == out_dir:
+                on_disk += 1
+    detail = {"reported": reported, "on_disk": on_disk}
+    return (reported if reported == on_disk else 0), detail
+
+
 def run_tool_case(session, case: Case, *, clock=time.monotonic, pre_ping: bool = True) -> Observation:
     obs = Observation()
     t0 = clock()
@@ -356,6 +382,9 @@ def run_tool_case(session, case: Case, *, clock=time.monotonic, pre_ping: bool =
         snaps.append(observe.snapshot(frame, kelvin)["params"] if st.write else snaps[-1])
     obs.after = observe.snapshot(frame, kelvin)
     obs.extra["snapshots"] = snaps
+    exported = export_files_count(obs)
+    if exported is not None:
+        obs.extra["export_files"], obs.extra["export_files_oracles"] = exported
     if stats and not obs.blocked:
         raster = observe.render_raster(frame, session.root / "render" / "after.ppm")
         obs.stats_after = chart.patch_stats(raster) if is_chart else \
