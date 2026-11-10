@@ -417,7 +417,8 @@ def test_crash_and_block_and_heal():
     assert evaluate(case, Observation(blocked="launch"), POLICY).outcome == "blocked"
     # a harness-declared unrunnable case (rob-h2, rob-r9) is a known gap, not a failure
     skipped = evaluate(case, Observation(blocked="skipped: no modal hook"), POLICY)
-    assert skipped.outcome == "skipped" and skipped.score != FAIL
+    assert skipped.outcome == "skipped" and skipped.score == FAIL
+    assert POINTS[OUTCOMES["skipped"]] == 0.0  # a skip never improves a gate (Z4)
     healed = _obs(_ok(), _snap("a", **{"exposure.exposure": 0.7}),
                   _snap("b", **{"exposure.exposure": 1.0}), healed=True)
     assert evaluate(case, healed, POLICY).outcome == "failed"

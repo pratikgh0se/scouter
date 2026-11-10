@@ -214,6 +214,7 @@ def build(run: RunDir, adapter: Adapter, cases: list[Case], results: list[dict],
         kind = _blocked_kind(_blocked(r))
         if kind:
             blocked_counts[kind] += 1
+    skipped_ids = sorted(r["id"] for r in valid if _outcome(r) == "skipped")
     p0 = [r for r in valid if r["tier"] == "P0"]
     p0_total = sum(c.tier == "P0" for c in cases)
     p0_pass = sum(r["verdict"]["score"] == "pass" for r in p0)
@@ -258,6 +259,7 @@ def build(run: RunDir, adapter: Adapter, cases: list[Case], results: list[dict],
         "p0": f"{p0_pass}/{p0_total}", "p0_all_pass": p0_total > 0 and p0_pass == p0_total,
         "p1_gates_ok": gates_ok, "cases_missing": missing, "missing_ids": missing_ids,
         "orphan_result_ids": orphan_ids, "blocked": blocked_counts,
+        "skipped_ids": skipped_ids,
         "commits": commits, "one_commit": one_commit,
         "layers_without_cases": layers_without_cases,
         "release_bar_met": not crashes and not silent and not hangs and p0_total > 0
@@ -294,6 +296,8 @@ def markdown(rep: dict) -> str:
          f"- Crashes: {s8['crashes']}", f"- Silent failures: {s8['silent_failures']}",
          f"- Hangs: {s8['hangs']}",
          "- Blocked: " + ", ".join(f"{k}={v}" for k, v in s8["blocked"].items()),
+         f"- Skipped (declared unrunnable): {len(s8.get('skipped_ids', []))}"
+         + (" \u2014 " + ", ".join(s8["skipped_ids"]) if s8.get("skipped_ids") else ""),
          f"- P0: {s8['p0']}", f"- P1 gates: {'ok' if s8['p1_gates_ok'] else 'NOT met'}",
          "- Commits: " + (", ".join(c or "(unknown)" for c in s8["commits"]) or "-")
          + ("" if s8["one_commit"] else " (**NOT one commit**)"),

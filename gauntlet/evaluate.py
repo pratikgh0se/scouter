@@ -53,9 +53,9 @@ OUTCOMES = {
     #: the generic `unexpected_edit` every other refuse-kind write earns.
     "unrequested_edit": FAIL,
     "failed": FAIL, "failed_hang": FAIL, "crash": FAIL, "blocked": FAIL,
-    #: A case the harness declares unrunnable (rob-h2, rob-r9): a known gap,
-    #: not a product failure, so it is capped at partial like other known gaps.
-    "skipped": PARTIAL,
+    #: A case the harness declares unrunnable (rob-h2, rob-r9). Its own label,
+    #: but it weighs 0 like a fail: a skip must never improve a gate (Z4).
+    "skipped": FAIL,
 }
 #: Old benchmark labels still readable (spec 1: renamed, alias kept).
 ALIASES = {"reported_ok_unverified": "silent_failure", "honest_refusal": "wrong_refusal"}
@@ -1598,7 +1598,7 @@ def _evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     if obs.crash_reports:
         return Verdict(FAIL, "crash", notes=list(obs.crash_reports))
     if (obs.blocked or "").startswith("skipped:"):
-        return Verdict(PARTIAL, "skipped", notes=[obs.blocked])
+        return Verdict(FAIL, "skipped", notes=[obs.blocked])
     if obs.blocked:
         outcome = "failed_hang" if obs.blocked == "hang_twice" else "blocked"
         return Verdict(FAIL, outcome, notes=[obs.blocked, *obs.hang_evidence])

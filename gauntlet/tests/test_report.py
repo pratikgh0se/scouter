@@ -143,6 +143,18 @@ def test_inherited_wedge_has_its_own_blocked_kind_never_a_hang():
     assert report._blocked_kind("inherited_wedge") == "inherited_wedge"
 
 
+def test_skipped_cases_weigh_zero_and_are_listed_in_s8():
+    cases = [_case("a-0"), _case("a-1")]
+    results = [_result("a-0", score="pass", outcome="verified"),
+               _result("a-1", score="fail", outcome="skipped",
+                       blocked="skipped: no modal hook")]
+    adapter = _StubAdapter([LayerSpec("l", 1, 1, True)])
+    rep = report.build(_StubRun(), adapter, cases, results)
+    assert rep["S1_headline"]["fail"] == 1 and rep["S1_headline"]["partial"] == 0
+    assert rep["S8_signoff"]["skipped_ids"] == ["a-1"]
+    assert "- Skipped (declared unrunnable): 1 \u2014 a-1" in report.markdown(rep)
+
+
 def test_run_level_crash_not_attributed_to_any_case_blocks_the_bar():
     case = _case("a-0")
     result = _result("a-0", score="pass", outcome="verified")
