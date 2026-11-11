@@ -5,7 +5,11 @@ branch, which fixes defects found by the E12 live evaluation against real
 darktable (`Knowledge/Scouter - E12 live evaluation 2026-09-24.md` in the
 vault; decision row 407).
 
-## Unreleased (fix/phrase-steps)
+## 0.3.0 (2026-11-11)
+
+First public release of Scouter: live conversational editing of the photo open in darktable (darkroom_say, darkroom_set, darkroom_get, undo, previews), with every write confirmed from the XMP sidecar. Release gauntlet on 2026-11-11: 6191 cases, 0 crashes, 0 wrong edits, originals unchanged. Known limits: some 'a touch' phrases change the image less than the test can measure on some frames; 'warmer'/'cooler' is refused on Sony raws whose color calibration uses a custom illuminant.
+
+### fix/phrase-steps
 
 Small editing phrases move modestly more (Pratik, 2026-11-09): `sigmoid.contrast`
 step 0.1 -> 0.15 ("more/less contrast", "punchier", "flatter"; touch 0.075, bare
@@ -15,7 +19,7 @@ perceptibility floor on the night-3 evidence. The other night-3 imperceptible
 phrases sit at the `step <= (hi-lo)/4` ceiling and are unchanged (see
 scratchpad/phrase-steps-report.md). Floors and evaluator untouched.
 
-## Unreleased (fix/colorcal-route-probe)
+### fix/colorcal-route-probe
 
 Route A is live: on a preset-4 ("camera reference (late)") frame, "warmer",
 "cooler", Kelvin adjusts and sets now move color calibration's illuminant
@@ -28,7 +32,7 @@ Tint, nudge, other illuminants and frames without color calibration history
 still refuse. The probe itself now runs in its own scratch library
 (`host_support.launch(image, library=...)`).
 
-## Unreleased (fix/mcp-add-order)
+### fix/mcp-add-order
 
 `scouter setup` and the README printed `claude mcp add --transport stdio
 --scope user --env PYTHONPATH=... scouter -- ...`, which the current Claude
@@ -36,7 +40,7 @@ Code CLI rejects ("Invalid environment variable format: scouter"): `--env`
 takes several values and swallowed the server name. The name now comes right
 after `mcp add`. (Earlier entries below quote the old order as history.)
 
-## Unreleased (fix/htc-applied-verify)
+### fix/htc-applied-verify
 
 Row 433, night-1 gauntlet (`night1-20260926`): write verbs reported what
 they asked for, not what darktable stored.
@@ -72,7 +76,7 @@ they asked for, not what darktable stored.
   rewrite answers `undo_unverified`, not `commit_timeout`. A write whose
   effective state differs from the sidecar still times out.
 
-## Unreleased (fix/htc-stale-history, rows 434 and 461)
+### fix/htc-stale-history, rows 434 and 461
 
 On darktable 5.4.x, `history.commit` `auto` now goes straight to
 `view_bounce_action`, and `no_bounce` runs only as an explicit strategy,
@@ -91,7 +95,7 @@ history_end 112 -> 92, with the params of a case three moves earlier). Row
   `tests/intent/history_commit_expected.json`, the "row 434" and "row 461"
   Lua blocks, and an AST wiring test.
 
-## Unreleased (fix/adjust-commit)
+### fix/adjust-commit
 
 Row 430 (host acceptance run on darktable 5.4.1, 2026-09-26): row 429's
 `no_bounce` default never actually commits on this host.
@@ -135,7 +139,7 @@ Row 430 (host acceptance run on darktable 5.4.1, 2026-09-26): row 429's
 - README and docs/measurements.md corrected to stop claiming `no_bounce`
   commits, and to give the honest speed figures above.
 
-## Unreleased (fix/bounce-main-thread)
+### fix/bounce-main-thread
 
 Row 429 (host probe on darktable 5.4.1, 2026-09-26, then this change):
 
@@ -241,7 +245,7 @@ live darktable session.
 - Version `0.3.0` -> `1.0rc1`. `PHASE` stays `3` (an integer column in
   `metrics.db`).
 
-## Unreleased (phase-3-task10: host run)
+### phase-3-task10: host run
 
 - Phase 3 task 10 host run on darktable 5.4.1 (details in
   `docs/measurements.md`, "Phase 3 host run"). All 15 candidate vocabulary
@@ -264,7 +268,7 @@ live darktable session.
   pre-commit bounce, which misses the 3.5 s target. With `--trust-sidecar`
   the median is 1.4 s.
 
-## Unreleased (fix/e12-findings)
+### fix/e12-findings
 
 - CLI/README drift (D2): `cull propose`, `outliers list` and `export release`
   now accept `--pretty` after the group/verb, the same as the README's phase

@@ -1,4 +1,39 @@
-# Darktable MCP Server
+# Scouter
+
+MCP server for editing photos in darktable by conversation. Ask for "warmer" or "more contrast" and Scouter makes the edit in your running darktable, then reads the XMP sidecar back to confirm it landed.
+
+[![License: MIT](https://img.shields.io/github/license/pratikgh0se/scouter)](LICENSE)
+[![CI](https://github.com/pratikgh0se/scouter/actions/workflows/ci.yml/badge.svg)](https://github.com/pratikgh0se/scouter/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/pratikgh0se/scouter)](https://github.com/pratikgh0se/scouter/releases)
+
+<!-- TODO(screenshot): add a GIF of a conversational edit in darktable. None is recorded yet. -->
+
+## Quick start
+
+Tested on macOS with darktable 5.4.1 (`darktable-cli` on `PATH`) and Python 3.10+.
+
+```sh
+pip install 'git+https://github.com/pratikgh0se/scouter@v0.3.0'
+scouter setup          # installs the darktable Lua plugin, prints the `claude mcp add` line
+# restart darktable and open a photo in the darkroom, then:
+scouter setup --check  # exits 0 when everything is ready
+```
+
+Run the `claude mcp add` line that `scouter setup` printed (or add the JSON it prints to any MCP client), then ask something like "make it a bit warmer and add contrast".
+
+## What it does
+
+- Edits the photo open in darktable's darkroom through darktable's Lua API. Each change is one history item you can see and undo.
+- Turns plain phrases ("warmer", "a touch brighter", "punchier") into fixed parameter steps (`darkroom_say`), or sets exact values (`darkroom_set`).
+- Confirms every write by reading the XMP sidecar back. If darktable writes an older history over it, Scouter refuses the write and restores the sidecar.
+- Renders previews with `darktable-cli` in an isolated config, so the agent can look at the result (`scout_preview`).
+- Never writes to darktable's `library.db`.
+
+Known limits are listed under [Honest limits](#honest-limits).
+
+Scouter is a fork of [w1ne/darktable-mcp](https://github.com/w1ne/darktable-mcp) (MIT). The original darktable-mcp tools are documented below and still ship in this package as the `darktable-mcp` command.
+
+## darktable-mcp tools (from upstream)
 
 A Model Context Protocol (MCP) server that exposes darktable operations
 to MCP clients (Claude Desktop, Claude Code, etc.). The AI lives in the
@@ -81,9 +116,9 @@ Use only the official darktable APIs: `darktable-cli` for export, the Lua API fo
 Not on PyPI yet — install from the repository:
 
 ```bash
-pip install 'git+https://github.com/w1ne/darktable-mcp'
+pip install 'git+https://github.com/pratikgh0se/scouter'
 # Optional: vision-rating workflow extras
-pip install 'darktable-mcp[vision] @ git+https://github.com/w1ne/darktable-mcp'
+pip install 'darktable-mcp[vision] @ git+https://github.com/pratikgh0se/scouter'
 # Install the Lua plugin into ~/.config/darktable/, then restart darktable
 darktable-mcp install-plugin
 ```

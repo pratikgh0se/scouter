@@ -5,8 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "darktable-mcp"
 dynamic = ["version"]
-description = "MCP server for darktable photo management with headless library operations"
-authors = [{name = "w1ne", email = "14119286+w1ne@users.noreply.github.com"}]
+description = "MCP server for editing photos in darktable by conversation (Scouter), plus the darktable-mcp library tools"
+authors = [{name = "w1ne", email = "14119286+w1ne@users.noreply.github.com"}, {name = "Pratik Ghose"}]
 license = {text = "MIT"}
 readme = "README.md"
 # Floor is set by the hard dependencies, not by taste:
@@ -14,7 +14,7 @@ readme = "README.md"
 #   - every mcp release in the pinned range declares Requires-Python >=3.10
 # so 3.10 is the lowest interpreter this package can actually install on.
 requires-python = ">=3.10"
-keywords = ["darktable", "mcp", "model-context-protocol", "photo-editing", "photography"]
+keywords = ["darktable", "mcp", "model-context-protocol", "photo-editing", "photography", "claude", "ai-agents"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -53,9 +53,9 @@ vision = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/w1ne/darktable-mcp"
-Repository = "https://github.com/w1ne/darktable-mcp"
-Issues = "https://github.com/w1ne/darktable-mcp/issues"
+Homepage = "https://github.com/pratikgh0se/scouter"
+Repository = "https://github.com/pratikgh0se/scouter"
+Issues = "https://github.com/pratikgh0se/scouter/issues"
 
 [project.scripts]
 darktable-mcp = "darktable_mcp:main"
