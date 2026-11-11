@@ -6,6 +6,26 @@
 # pyproject.toml, so they live here.
 graft tests
 
+# The suite also imports/executes the top-level gauntlet harness and shells out
+# to the repo scripts; none of these are packages, so graft them for the sdist
+# to be able to run its own tests (release.yml's self-containment check).
+graft gauntlet
+graft scripts
+graft tools
+graft docs
+graft ops
+include gauntlet.json Makefile CLAUDE.md CHANGELOG.md
+
+# The suite also imports/executes the top-level gauntlet harness and shells out
+# to the repo scripts; none of these are packages, so graft them for the sdist
+# to be able to run its own tests (release.yml's self-containment check).
+graft gauntlet
+graft scripts
+graft tools
+graft docs
+graft ops
+include gauntlet.json Makefile CLAUDE.md CHANGELOG.md
+
 # Belt and braces with [tool.setuptools.package-data]: the plugin must be in
 # the wheel or `darktable-mcp install-plugin`, the first thing every user runs,
 # fails on a fresh install.
