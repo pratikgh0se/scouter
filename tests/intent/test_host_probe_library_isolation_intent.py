@@ -9,9 +9,9 @@ from pathlib import Path
 
 from tests import host_support as hs
 
-EXAMPLES = json.loads(
-    (Path(__file__).parent / "host_probe_library_isolation.json").read_text()
-)["examples"]
+EXAMPLES = json.loads((Path(__file__).parent / "host_probe_library_isolation.json").read_text())[
+    "examples"
+]
 
 
 class HostProbeLibraryIsolationIntentTest(unittest.TestCase):
@@ -35,6 +35,7 @@ class HostProbeLibraryIsolationIntentTest(unittest.TestCase):
 def _make(ex: dict):
     def test(self: HostProbeLibraryIsolationIntentTest) -> None:
         self.run_example(ex)
+
     return test
 
 

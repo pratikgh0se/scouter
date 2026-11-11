@@ -15,8 +15,11 @@ def _ok(data=None, **kw):
 
 
 def _err(code, fix="try x instead"):
-    return {"ok": False, "outcome": f"error:{code}", "error": {"code": code, "fix": fix,
-                                                                "message": "no"}}
+    return {
+        "ok": False,
+        "outcome": f"error:{code}",
+        "error": {"code": code, "fix": fix, "message": "no"},
+    }
 
 
 def _snap(fp, **params):
@@ -24,57 +27,93 @@ def _snap(fp, **params):
 
 
 def _edit_case(checks=None, sidecar=None, kind="edit", mode="tool", steps=None, meta=None):
-    return Case(id="c", layer="coverage", tier="P0", mode=mode,
-                steps=steps or [Step("darkroom_set", {}, budget_s=3.5, write=True)],
-                expect=Expect(kind, checks=checks or [], sidecar=sidecar),
-                meta=meta or {})
+    return Case(
+        id="c",
+        layer="coverage",
+        tier="P0",
+        mode=mode,
+        steps=steps or [Step("darkroom_set", {}, budget_s=3.5, write=True)],
+        expect=Expect(kind, checks=checks or [], sidecar=sidecar),
+        meta=meta or {},
+    )
 
 
-M1_SET = Check("M1", kind="equals", target={"key": "exposure.exposure", "value": 1.0,
-                                            "unit": "EV"})
+M1_SET = Check("M1", kind="equals", target={"key": "exposure.exposure", "value": 1.0, "unit": "EV"})
 SIDECAR = {"changed": True, "key": "exposure.exposure", "units": {"exposure.exposure": "EV"}}
 
 
 def _obs(env, before, after, wall=1.0, **kw):
-    return Observation(calls=[CallRecord("darkroom_set", {}, env, wall_s=wall, write=True)],
-                       before=before, after=after, **kw)
+    return Observation(
+        calls=[CallRecord("darkroom_set", {}, env, wall_s=wall, write=True)],
+        before=before,
+        after=after,
+        **kw,
+    )
 
 
 def test_verified_set():
-    v = evaluate(_edit_case([M1_SET], SIDECAR),
-                 _obs(_ok(), _snap("a", **{"exposure.exposure": 0.7}),
-                      _snap("b", **{"exposure.exposure": 1.0})), POLICY)
+    v = evaluate(
+        _edit_case([M1_SET], SIDECAR),
+        _obs(
+            _ok(),
+            _snap("a", **{"exposure.exposure": 0.7}),
+            _snap("b", **{"exposure.exposure": 1.0}),
+        ),
+        POLICY,
+    )
     assert (v.score, v.outcome) == ("pass", "verified")
 
 
 def test_silent_failure_a_sidecar_unchanged():
-    v = evaluate(_edit_case([M1_SET], SIDECAR),
-                 _obs(_ok(), _snap("a", **{"exposure.exposure": 0.7}),
-                      _snap("a", **{"exposure.exposure": 0.7})), POLICY)
+    v = evaluate(
+        _edit_case([M1_SET], SIDECAR),
+        _obs(
+            _ok(),
+            _snap("a", **{"exposure.exposure": 0.7}),
+            _snap("a", **{"exposure.exposure": 0.7}),
+        ),
+        POLICY,
+    )
     assert v.outcome == "silent_failure" and v.silent_failure.startswith("a:")
     assert POINTS[v.score] == 0.0
 
 
 def test_silent_failure_b_wrong_param_moved():
-    v = evaluate(_edit_case([M1_SET], SIDECAR),
-                 _obs(_ok(), _snap("a", **{"exposure.exposure": 0.7, "sigmoid.contrast": 1.5}),
-                      _snap("b", **{"exposure.exposure": 0.7, "sigmoid.contrast": 1.8})), POLICY)
+    v = evaluate(
+        _edit_case([M1_SET], SIDECAR),
+        _obs(
+            _ok(),
+            _snap("a", **{"exposure.exposure": 0.7, "sigmoid.contrast": 1.5}),
+            _snap("b", **{"exposure.exposure": 0.7, "sigmoid.contrast": 1.8}),
+        ),
+        POLICY,
+    )
     assert v.silent_failure.startswith("b:")
 
 
 def test_silent_failure_c_stat_wrong_direction():
     chk = Check("M2", stat="L", region="frame", sign=1)
-    obs = _obs(_ok(), _snap("a"), _snap("b"),
-               stats_before={"frame": {"L": 50.0}}, stats_after={"frame": {"L": 45.0}})
+    obs = _obs(
+        _ok(),
+        _snap("a"),
+        _snap("b"),
+        stats_before={"frame": {"L": 50.0}},
+        stats_after={"frame": {"L": 45.0}},
+    )
     v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
     assert v.silent_failure.startswith("c:")
 
 
 def test_below_floor_is_silent_c_not_partial():
     chk = Check("M2", stat="L", region="frame", sign=1)
-    obs = _obs(_ok(), _snap("a"), _snap("b"),
-               stats_before={"frame": {"L": 50.0}}, stats_after={"frame": {"L": 50.1}},
-               floors={"L": 0.5})
+    obs = _obs(
+        _ok(),
+        _snap("a"),
+        _snap("b"),
+        stats_before={"frame": {"L": 50.0}},
+        stats_after={"frame": {"L": 50.1}},
+        floors={"L": 0.5},
+    )
     assert evaluate(_edit_case([chk], {"changed": True}), obs, POLICY).outcome == "silent_failure"
 
 
@@ -100,6 +139,7 @@ def _mtl(module=None, param=None, applied=None, cap=None, moves=None):
 #: check is the one tagged (`Check.tags["clamp_param"]`) to that same
 #: param. Probe ids below match `scratchpad/n1rev_probe.py`.
 
+
 def test_p1_moved_to_limit_claim_xmp_unchanged_no_sidecar_is_silent_failure():
     """Probe P1: the claim is unverifiable (nothing in the envelope names a
     module/param/cap) and the XMP did not move at all. Before this fix,
@@ -107,10 +147,14 @@ def test_p1_moved_to_limit_claim_xmp_unchanged_no_sidecar_is_silent_failure():
     False) and fell through to a bare 'failed'; it must be silent_failure,
     same as a plain `ok` that changed nothing would be."""
     chk = Check("M2", stat="L", region="frame", sign=1)
-    obs = _obs(_mtl(), _snap("a", **{"exposure.exposure": 0.7}),
-               _snap("a", **{"exposure.exposure": 0.7}),
-               stats_before={"frame": {"L": 50.0}}, stats_after={"frame": {"L": 50.1}},
-               floors={"L": 0.5})
+    obs = _obs(
+        _mtl(),
+        _snap("a", **{"exposure.exposure": 0.7}),
+        _snap("a", **{"exposure.exposure": 0.7}),
+        stats_before={"frame": {"L": 50.0}},
+        stats_after={"frame": {"L": 50.1}},
+        floors={"L": 0.5},
+    )
     v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
     assert v.outcome == "silent_failure"
 
@@ -119,13 +163,15 @@ def test_p4_moved_to_limit_claim_applied_does_not_match_cap_is_silent_failure():
     """Probe P4: claims exposure capped at 4.0, but the after-XMP shows
     exposure only reached 1.0 -- the claim does not verify, so the
     below-floor exception must not apply."""
-    chk = Check("M2", stat="L", region="frame", sign=1,
-                tags={"clamp_param": "exposure.exposure"})
-    obs = _obs(_mtl("exposure", "exposure", applied=4.0, cap=4.0),
-               _snap("a", **{"exposure.exposure": 0.7}),
-               _snap("b", **{"exposure.exposure": 1.0}),
-               stats_before={"frame": {"L": 50.0}}, stats_after={"frame": {"L": 50.1}},
-               floors={"L": 0.5})
+    chk = Check("M2", stat="L", region="frame", sign=1, tags={"clamp_param": "exposure.exposure"})
+    obs = _obs(
+        _mtl("exposure", "exposure", applied=4.0, cap=4.0),
+        _snap("a", **{"exposure.exposure": 0.7}),
+        _snap("b", **{"exposure.exposure": 1.0}),
+        stats_before={"frame": {"L": 50.0}},
+        stats_after={"frame": {"L": 50.1}},
+        floors={"L": 0.5},
+    )
     v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
     assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
 
@@ -138,13 +184,15 @@ def test_moved_to_limit_verified_clamp_below_floor_is_correct_refusal_residual_c
     synthetically (I4: the real night-1 D-bare-step rows never hit this
     path at all -- see I2/test_layer_coverage's touch-floor rows, which
     are plain `ok` and score `imperceptible_step` instead)."""
-    chk = Check("M2", stat="L", region="frame", sign=1,
-                tags={"clamp_param": "exposure.exposure"})
-    obs = _obs(_mtl("exposure", "exposure", applied=4.0, cap=4.0),
-               _snap("a", **{"exposure.exposure": 0.7}),
-               _snap("b", **{"exposure.exposure": 4.0}),
-               stats_before={"frame": {"L": 50.0}}, stats_after={"frame": {"L": 50.1}},
-               floors={"L": 0.5})
+    chk = Check("M2", stat="L", region="frame", sign=1, tags={"clamp_param": "exposure.exposure"})
+    obs = _obs(
+        _mtl("exposure", "exposure", applied=4.0, cap=4.0),
+        _snap("a", **{"exposure.exposure": 0.7}),
+        _snap("b", **{"exposure.exposure": 4.0}),
+        stats_before={"frame": {"L": 50.0}},
+        stats_after={"frame": {"L": 50.1}},
+        floors={"L": 0.5},
+    )
     v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
     assert (v.score, v.outcome) == ("pass", "correct_refusal")
     assert v.notes == ["residual: clamp"]
@@ -155,17 +203,21 @@ def test_moved_to_limit_below_floor_check_tagged_to_a_different_unclamped_move_i
     verified at its cap) and one plain move (shadows_hue) -- the
     below-floor stat check is tagged to the PLAIN move's param, so the
     verified clamp on the OTHER param must not excuse it."""
-    chk = Check("M2", stat="L", region="frame", sign=1,
-                tags={"clamp_param": "colorbalancergb.shadows_hue"})
+    chk = Check(
+        "M2", stat="L", region="frame", sign=1, tags={"clamp_param": "colorbalancergb.shadows_hue"}
+    )
     obs = _obs(
-        _mtl(moves=[{"module": "colorbalancergb", "param": "shadows_chroma",
-                     "applied": 0.3, "cap": 0.3}]),
-        _snap("a", **{"colorbalancergb.shadows_chroma": 0.2,
-                      "colorbalancergb.shadows_hue": 10.0}),
-        _snap("b", **{"colorbalancergb.shadows_chroma": 0.3,
-                      "colorbalancergb.shadows_hue": 15.0}),
-        stats_before={"frame": {"L": 50.0}}, stats_after={"frame": {"L": 50.1}},
-        floors={"L": 0.5})
+        _mtl(
+            moves=[
+                {"module": "colorbalancergb", "param": "shadows_chroma", "applied": 0.3, "cap": 0.3}
+            ]
+        ),
+        _snap("a", **{"colorbalancergb.shadows_chroma": 0.2, "colorbalancergb.shadows_hue": 10.0}),
+        _snap("b", **{"colorbalancergb.shadows_chroma": 0.3, "colorbalancergb.shadows_hue": 15.0}),
+        stats_before={"frame": {"L": 50.0}},
+        stats_after={"frame": {"L": 50.1}},
+        floors={"L": 0.5},
+    )
     v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
     assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
 
@@ -176,19 +228,35 @@ def test_p6_moved_to_limit_wrong_direction_is_silent_failure():
     silent failure, clamp or not (the plain-ok control, P7, scores the
     same way -- see test_silent_failure_c_stat_wrong_direction above)."""
     chk = Check("M2", stat="L", region="frame", sign=1)
-    obs = _obs(_mtl(), _snap("a"), _snap("b"),
-               stats_before={"frame": {"L": 50.0}}, stats_after={"frame": {"L": 45.0}},
-               floors={"L": 0.5})
+    obs = _obs(
+        _mtl(),
+        _snap("a"),
+        _snap("b"),
+        stats_before={"frame": {"L": 50.0}},
+        stats_after={"frame": {"L": 45.0}},
+        floors={"L": 0.5},
+    )
     v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
     assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
 
 
 def _plain_ok_move(module, param, previous, delta, unit=""):
     applied = previous + delta
-    return {"ok": True, "outcome": "ok",
-            "data": {"module": module, "param": param, "previous": previous, "delta": delta,
-                     "applied": applied, "requested": applied, "unit": unit,
-                     "clamped": False, "noop": False}}
+    return {
+        "ok": True,
+        "outcome": "ok",
+        "data": {
+            "module": module,
+            "param": param,
+            "previous": previous,
+            "delta": delta,
+            "applied": applied,
+            "requested": applied,
+            "unit": unit,
+            "clamped": False,
+            "noop": False,
+        },
+    }
 
 
 def test_imperceptible_step_real_recorded_shape_is_its_own_outcome():
@@ -204,11 +272,14 @@ def test_imperceptible_step_real_recorded_shape_is_its_own_outcome():
     `correct_refusal` (nothing was refused -- it moved): its own outcome,
     `imperceptible_step`, tagged `residual: step-below-floor`."""
     chk = Check("M5", stat="C", region="frame", sign=1)
-    obs = _obs(_plain_ok_move("colorbalancergb", "global_chroma", 0.0, 0.05, unit="%"),
-               _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
-               _snap("b", **{"colorbalancergb.global_chroma": 0.05}),
-               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.407}},
-               floors={"C": 0.5})
+    obs = _obs(
+        _plain_ok_move("colorbalancergb", "global_chroma", 0.0, 0.05, unit="%"),
+        _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+        _snap("b", **{"colorbalancergb.global_chroma": 0.05}),
+        stats_before={"frame": {"C": 40.0}},
+        stats_after={"frame": {"C": 40.407}},
+        floors={"C": 0.5},
+    )
     v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
     assert (v.score, v.outcome) == ("partial", "imperceptible_step")
     assert v.notes == ["residual: step-below-floor"]
@@ -221,11 +292,21 @@ def test_imperceptible_step_real_recorded_shape_is_its_own_outcome():
 #: below match `scratchpad/n1rev_probe2.py` (Q1/Q4/Q5/Q7 -- Q2/Q3/Q6/Q8 were
 #: already correct and are covered by other tests above).
 
+
 def _claims_ok(applied, requested, unit="%"):
-    return {"ok": True, "outcome": "ok",
-            "data": {"module": "colorbalancergb", "param": "global_chroma",
-                     "applied": applied, "requested": requested, "unit": unit,
-                     "clamped": False, "noop": False}}
+    return {
+        "ok": True,
+        "outcome": "ok",
+        "data": {
+            "module": "colorbalancergb",
+            "param": "global_chroma",
+            "applied": applied,
+            "requested": requested,
+            "unit": unit,
+            "clamped": False,
+            "noop": False,
+        },
+    }
 
 
 def test_q1_claim_matches_but_xmp_is_identical_is_silent_failure():
@@ -235,10 +316,14 @@ def test_q1_claim_matches_but_xmp_is_identical_is_silent_failure():
     silent_failure, not imperceptible_step: `_writes_landed_as_requested`
     reads the XMP, not the envelope's own numbers."""
     chk = Check("M5", stat="C", region="frame", sign=1)
-    obs = _obs(_claims_ok(0.05, 0.05), _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
-               _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
-               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.3}},
-               floors={"C": 0.5})
+    obs = _obs(
+        _claims_ok(0.05, 0.05),
+        _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+        _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+        stats_before={"frame": {"C": 40.0}},
+        stats_after={"frame": {"C": 40.3}},
+        floors={"C": 0.5},
+    )
     v = evaluate(_edit_case([chk], None), obs, POLICY)
     assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
 
@@ -248,10 +333,14 @@ def test_q4_claim_matches_but_xmp_shows_a_short_move_is_silent_failure():
     snapshot shows the param only reached 0.01 -- a genuinely short move
     wearing a full-step claim. Must be silent_failure."""
     chk = Check("M5", stat="C", region="frame", sign=1)
-    obs = _obs(_claims_ok(0.05, 0.05), _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
-               _snap("b", **{"colorbalancergb.global_chroma": 0.01}),
-               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.3}},
-               floors={"C": 0.5})
+    obs = _obs(
+        _claims_ok(0.05, 0.05),
+        _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+        _snap("b", **{"colorbalancergb.global_chroma": 0.01}),
+        stats_before={"frame": {"C": 40.0}},
+        stats_after={"frame": {"C": 40.3}},
+        floors={"C": 0.5},
+    )
     v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
     assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
 
@@ -261,12 +350,17 @@ def test_q5_short_move_with_a_passing_m1_check_is_still_silent_failure():
     PASSES (0.01 != 0 is a real, if short, change) -- the passing M1
     check must not distract from rule (c)'s below-floor stat failure."""
     chk = Check("M5", stat="C", region="frame", sign=1)
-    m1 = Check("M1", kind="changed", sign=1,
-               target={"key": "colorbalancergb.global_chroma", "unit": "%"})
-    obs = _obs(_claims_ok(0.05, 0.05), _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
-               _snap("b", **{"colorbalancergb.global_chroma": 0.01}),
-               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.3}},
-               floors={"C": 0.5})
+    m1 = Check(
+        "M1", kind="changed", sign=1, target={"key": "colorbalancergb.global_chroma", "unit": "%"}
+    )
+    obs = _obs(
+        _claims_ok(0.05, 0.05),
+        _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+        _snap("b", **{"colorbalancergb.global_chroma": 0.01}),
+        stats_before={"frame": {"C": 40.0}},
+        stats_after={"frame": {"C": 40.3}},
+        floors={"C": 0.5},
+    )
     v = evaluate(_edit_case([m1, chk], {"changed": True}), obs, POLICY)
     assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
 
@@ -278,12 +372,20 @@ def test_q7_workflow_kind_genuine_step_below_floor_is_silent_failure_not_unlabel
     small-to-measure move on a workflow case keeps its ordinary silent
     scoring, not an unlabelled 'failed' from a half-applied exemption."""
     chk = Check("M5", stat="C", region="frame", sign=1)
-    case = _edit_case([chk], {"changed": True}, kind="workflow",
-                      steps=[Step("darkroom_say", {}, budget_s=3.5, write=True)])
-    obs = _obs(_claims_ok(0.05, 0.05), _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
-               _snap("b", **{"colorbalancergb.global_chroma": 0.05}),
-               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.3}},
-               floors={"C": 0.5})
+    case = _edit_case(
+        [chk],
+        {"changed": True},
+        kind="workflow",
+        steps=[Step("darkroom_say", {}, budget_s=3.5, write=True)],
+    )
+    obs = _obs(
+        _claims_ok(0.05, 0.05),
+        _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+        _snap("b", **{"colorbalancergb.global_chroma": 0.05}),
+        stats_before={"frame": {"C": 40.0}},
+        stats_after={"frame": {"C": 40.3}},
+        floors={"C": 0.5},
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
 
@@ -295,17 +397,22 @@ def test_imperceptible_step_does_not_excuse_a_short_move():
     chk = Check("M5", stat="C", region="frame", sign=1)
     move = _plain_ok_move("colorbalancergb", "global_chroma", 0.0, 0.05, unit="%")
     move["data"]["applied"] = 0.01  # claims requested 0.05 but only landed 0.01
-    obs = _obs(move, _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
-               _snap("b", **{"colorbalancergb.global_chroma": 0.01}),
-               stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.05}},
-               floors={"C": 0.5})
+    obs = _obs(
+        move,
+        _snap("a", **{"colorbalancergb.global_chroma": 0.0}),
+        _snap("b", **{"colorbalancergb.global_chroma": 0.01}),
+        stats_before={"frame": {"C": 40.0}},
+        stats_after={"frame": {"C": 40.05}},
+        floors={"C": 0.5},
+    )
     v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
     assert v.outcome == "silent_failure" and v.silent_failure.startswith("c:")
 
 
 def test_silent_failure_d_bulk_counts():
-    obs = _obs(_ok(), _snap("a"), _snap("b"), extra={"reported_n": 7, "changed_n": 6,
-                                                     "verified_n": 7})
+    obs = _obs(
+        _ok(), _snap("a"), _snap("b"), extra={"reported_n": 7, "changed_n": 6, "verified_n": 7}
+    )
     v = evaluate(_edit_case([], {"changed": True}, kind="workflow"), obs, POLICY)
     assert v.silent_failure.startswith("d:")
 
@@ -315,9 +422,13 @@ def test_silent_failure_e_undo_not_restored():
     obs = Observation(
         calls=[CallRecord("darkroom_undo_last", {}, _ok(), write=True)],
         before=_snap("a", **{"exposure.exposure": 0.7}),
-        after=_snap("b", **{"exposure.exposure": 1.0}))
-    v = evaluate(_edit_case([chk], None, kind="workflow",
-                            steps=[Step("darkroom_undo_last", write=True)]), obs, POLICY)
+        after=_snap("b", **{"exposure.exposure": 1.0}),
+    )
+    v = evaluate(
+        _edit_case([chk], None, kind="workflow", steps=[Step("darkroom_undo_last", write=True)]),
+        obs,
+        POLICY,
+    )
     assert v.silent_failure.startswith("e:")
 
 
@@ -330,20 +441,31 @@ def test_undo_own_refusal_is_not_silent_e():
     an earlier ok `set` must not turn an honest refusal into a silent
     failure. The case should score `failed` (honest), never `silent_failure`.
     """
-    chk = Check("M1", kind="restored",
-                target={"keys": ["colorbalancergb.highlights_chroma"], "unit": "%"})
+    chk = Check(
+        "M1", kind="restored", target={"keys": ["colorbalancergb.highlights_chroma"], "unit": "%"}
+    )
     obs = Observation(
         calls=[
             CallRecord("darkroom_set", {}, _ok(), write=True),
-            CallRecord("darkroom_undo_last", {},
-                       _err("error", fix="press Ctrl-Z in darktable, or set the value "
-                                          "you want explicitly"), write=True),
+            CallRecord(
+                "darkroom_undo_last",
+                {},
+                _err(
+                    "error",
+                    fix="press Ctrl-Z in darktable, or set the value " "you want explicitly",
+                ),
+                write=True,
+            ),
         ],
         before=_snap("a"),
-        after=_snap("b", **{"colorbalancergb.highlights_chroma": 12.0}))
-    case = _edit_case([chk], None, kind="workflow",
-                       steps=[Step("darkroom_set", write=True),
-                              Step("darkroom_undo_last", write=True)])
+        after=_snap("b", **{"colorbalancergb.highlights_chroma": 12.0}),
+    )
+    case = _edit_case(
+        [chk],
+        None,
+        kind="workflow",
+        steps=[Step("darkroom_set", write=True), Step("darkroom_undo_last", write=True)],
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome != "silent_failure", v.silent_failure
     assert v.outcome == "failed", (v.outcome, v.silent_failure)
@@ -351,14 +473,12 @@ def test_undo_own_refusal_is_not_silent_e():
 
 def test_silent_failure_f_noop_but_changed():
     env = _ok({"noop": True})
-    v = evaluate(_edit_case([], {"changed": False}),
-                 _obs(env, _snap("a"), _snap("b")), POLICY)
+    v = evaluate(_edit_case([], {"changed": False}), _obs(env, _snap("a"), _snap("b")), POLICY)
     assert v.silent_failure.startswith("f:")
 
 
 def test_wrong_refusal_of_an_in_vocabulary_edit():
-    v = evaluate(_edit_case([M1_SET], SIDECAR),
-                 _obs(_err("usage"), _snap("a"), _snap("a")), POLICY)
+    v = evaluate(_edit_case([M1_SET], SIDECAR), _obs(_err("usage"), _snap("a"), _snap("a")), POLICY)
     assert v.outcome == "wrong_refusal"
 
 
@@ -377,8 +497,10 @@ def test_refusal_with_half_applied_edit_fails():
 def test_refusal_code_outside_the_set_fails_and_transient_blocks():
     case = _edit_case(kind="refuse", steps=[Step("darkroom_say", write=True)])
     assert evaluate(case, _obs(_err("error"), _snap("a"), _snap("a")), POLICY).outcome == "failed"
-    assert evaluate(case, _obs(_err("gui_not_ready"), _snap("a"), _snap("a")),
-                    POLICY).outcome == "blocked"
+    assert (
+        evaluate(case, _obs(_err("gui_not_ready"), _snap("a"), _snap("a")), POLICY).outcome
+        == "blocked"
+    )
 
 
 def test_agent_refusal_rules():
@@ -390,23 +512,31 @@ def test_agent_refusal_rules():
     assert both.outcome == "needs_review" and both.score == "partial"
     neither = evaluate(case, Observation(agent_text="Sure.", **base), POLICY)
     assert neither.outcome == "needs_review"
-    wrote = evaluate(case, Observation(agent_text="I can't.", calls=[], before=_snap("a"),
-                                       after=_snap("b")), POLICY)
+    wrote = evaluate(
+        case,
+        Observation(agent_text="I can't.", calls=[], before=_snap("a"), after=_snap("b")),
+        POLICY,
+    )
     assert wrote.outcome == "unexpected_edit"
 
 
 def test_agent_claim_without_change_is_silent():
     case = _edit_case([], {"changed": True}, mode="agent", steps=[])
-    v = evaluate(case, Observation(agent_text="Done, I've brightened it.", before=_snap("a"),
-                                   after=_snap("a")), POLICY)
+    v = evaluate(
+        case,
+        Observation(agent_text="Done, I've brightened it.", before=_snap("a"), after=_snap("a")),
+        POLICY,
+    )
     assert v.outcome == "silent_failure"
 
 
 def test_typed_error_expected():
     case = _edit_case(kind="typed_error", steps=[Step("darkroom_set", write=True)])
     case.expect.codes = ["value_unknown"]
-    assert evaluate(case, _obs(_err("value_unknown"), _snap("a"), _snap("a")),
-                    POLICY).outcome == "verified"
+    assert (
+        evaluate(case, _obs(_err("value_unknown"), _snap("a"), _snap("a")), POLICY).outcome
+        == "verified"
+    )
     assert evaluate(case, _obs(_ok(), _snap("a"), _snap("b")), POLICY).outcome == "failed"
 
 
@@ -419,47 +549,74 @@ def test_crash_and_block_and_heal():
     skipped = evaluate(case, Observation(blocked="skipped: no modal hook"), POLICY)
     assert skipped.outcome == "skipped" and skipped.score == FAIL
     assert POINTS[OUTCOMES["skipped"]] == 0.0  # a skip never improves a gate (Z4)
-    healed = _obs(_ok(), _snap("a", **{"exposure.exposure": 0.7}),
-                  _snap("b", **{"exposure.exposure": 1.0}), healed=True)
+    healed = _obs(
+        _ok(),
+        _snap("a", **{"exposure.exposure": 0.7}),
+        _snap("b", **{"exposure.exposure": 1.0}),
+        healed=True,
+    )
     assert evaluate(case, healed, POLICY).outcome == "failed"
 
 
 def test_over_budget_is_a_pass():
-    v = evaluate(_edit_case([M1_SET], SIDECAR),
-                 _obs(_ok(), _snap("a", **{"exposure.exposure": 0.7}),
-                      _snap("b", **{"exposure.exposure": 1.0}), wall=9.0), POLICY)
+    v = evaluate(
+        _edit_case([M1_SET], SIDECAR),
+        _obs(
+            _ok(),
+            _snap("a", **{"exposure.exposure": 0.7}),
+            _snap("b", **{"exposure.exposure": 1.0}),
+            wall=9.0,
+        ),
+        POLICY,
+    )
     assert (v.score, v.outcome) == ("pass", "over_budget")
 
 
 def test_collateral_is_partial():
     side = dict(SIDECAR, collateral_check=True)
-    v = evaluate(_edit_case([M1_SET], side),
-                 _obs(_ok(), _snap("a", **{"exposure.exposure": 0.7, "exposure.black": 0.0}),
-                      _snap("b", **{"exposure.exposure": 1.0, "exposure.black": 0.05})),
-                 POLICY)
+    v = evaluate(
+        _edit_case([M1_SET], side),
+        _obs(
+            _ok(),
+            _snap("a", **{"exposure.exposure": 0.7, "exposure.black": 0.0}),
+            _snap("b", **{"exposure.exposure": 1.0, "exposure.black": 0.05}),
+        ),
+        POLICY,
+    )
     assert v.outcome == "collateral" and v.score == "partial"
 
 
 def test_right_direction_wrong_magnitude_is_partial():
     chk = Check("M2", stat="ev", region="frame", sign=1, target={"value": 1.0, "tol": 0.15})
-    obs = _obs(_ok(), _snap("a"), _snap("b"),
-               stats_before={"frame": {"ev": 0.1}}, stats_after={"frame": {"ev": 0.141}})
+    obs = _obs(
+        _ok(),
+        _snap("a"),
+        _snap("b"),
+        stats_before={"frame": {"ev": 0.1}},
+        stats_after={"frame": {"ev": 0.141}},
+    )
     v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
     assert v.outcome == "partial"
 
 
 def test_property_kinds():
     snaps = [{"k": 0.0}, {"k": 0.3}, {"k": 0.3}, {"k": 0.9}]
-    obs = Observation(calls=[CallRecord("s", {}, _ok(), write=True)] * 3,
-                      before=_snap("a"), after=_snap("b"), extra={"snapshots": snaps})
+    obs = Observation(
+        calls=[CallRecord("s", {}, _ok(), write=True)] * 3,
+        before=_snap("a"),
+        after=_snap("b"),
+        extra={"snapshots": snaps},
+    )
     checks = [
         Check("M1", kind="step_equal", target={"key": "k", "a": 1, "b": 2}),
-        Check("M1", kind="step_ratio", target={"key": "k", "base": [0, 1], "double": [0, 3],
-                                               "ratio": 3.0}),
+        Check(
+            "M1",
+            kind="step_ratio",
+            target={"key": "k", "base": [0, 1], "double": [0, 3], "ratio": 3.0},
+        ),
         Check("M1", kind="monotonic", target={"key": "k", "pairs": [[0, 1], [0, 3]]}),
     ]
-    case = _edit_case(checks, None, kind="property",
-                      steps=[Step("s", write=True)] * 3)
+    case = _edit_case(checks, None, kind="property", steps=[Step("s", write=True)] * 3)
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "verified", v
 
@@ -475,18 +632,36 @@ def test_legacy_alias():
 
 
 def test_boundary_set_accepts_a_typed_refusal_but_not_a_silent_clamp():
-    clamp = Check("envelope", target={"path": "data.clamped", "op": "truthy"},
-                  tags={"silent_if_fail": True, "why": "clamp not reported"})
-    chk = Check("M1", kind="equals", target={"key": "exposure.exposure", "value": -3.0,
-                                             "unit": "EV"})
+    clamp = Check(
+        "envelope",
+        target={"path": "data.clamped", "op": "truthy"},
+        tags={"silent_if_fail": True, "why": "clamp not reported"},
+    )
+    chk = Check(
+        "M1", kind="equals", target={"key": "exposure.exposure", "value": -3.0, "unit": "EV"}
+    )
     case = _edit_case([chk, clamp], SIDECAR, meta={"accept_refusal": True})
     refused = evaluate(case, _obs(_err("usage"), _snap("a"), _snap("a")), POLICY)
     assert refused.outcome == "correct_refusal"
-    silent = evaluate(case, _obs(_ok(), _snap("a", **{"exposure.exposure": 0.7}),
-                                 _snap("b", **{"exposure.exposure": -3.0})), POLICY)
+    silent = evaluate(
+        case,
+        _obs(
+            _ok(),
+            _snap("a", **{"exposure.exposure": 0.7}),
+            _snap("b", **{"exposure.exposure": -3.0}),
+        ),
+        POLICY,
+    )
     assert silent.outcome == "silent_failure" and "clamp" in silent.silent_failure
-    reported = evaluate(case, _obs(_ok({"clamped": True}), _snap("a", **{"exposure.exposure": 0.7}),
-                                   _snap("b", **{"exposure.exposure": -3.0})), POLICY)
+    reported = evaluate(
+        case,
+        _obs(
+            _ok({"clamped": True}),
+            _snap("a", **{"exposure.exposure": 0.7}),
+            _snap("b", **{"exposure.exposure": -3.0}),
+        ),
+        POLICY,
+    )
     assert reported.outcome == "verified"
 
 
@@ -498,17 +673,32 @@ def test_boundary_metric_landed_as_requested_needs_no_clamp_report():
     item 2: cov-colorbalancergb.contrast-olympus-set_hi_plus)."""
     chk = Check("boundary", target={"key": "exposure.exposure", "unit": "EV", "request": 4.3})
     case = _edit_case([chk], SIDECAR)
-    v = evaluate(case, _obs(_ok(), _snap("a", **{"exposure.exposure": 4.0}),
-                            _snap("b", **{"exposure.exposure": 4.3})), POLICY)
+    v = evaluate(
+        case,
+        _obs(
+            _ok(),
+            _snap("a", **{"exposure.exposure": 4.0}),
+            _snap("b", **{"exposure.exposure": 4.3}),
+        ),
+        POLICY,
+    )
     assert v.outcome == "verified"
 
 
 def test_boundary_metric_clamped_and_reported_passes():
-    chk = Check("boundary", target={"key": "exposure.exposure", "unit": "EV", "request": 4.3,
-                                    "bound": 4.0})
+    chk = Check(
+        "boundary", target={"key": "exposure.exposure", "unit": "EV", "request": 4.3, "bound": 4.0}
+    )
     case = _edit_case([chk], SIDECAR)
-    v = evaluate(case, _obs(_ok({"clamped": True}), _snap("a", **{"exposure.exposure": 3.5}),
-                            _snap("b", **{"exposure.exposure": 4.0})), POLICY)
+    v = evaluate(
+        case,
+        _obs(
+            _ok({"clamped": True}),
+            _snap("a", **{"exposure.exposure": 3.5}),
+            _snap("b", **{"exposure.exposure": 4.0}),
+        ),
+        POLICY,
+    )
     assert v.outcome == "verified"
 
 
@@ -517,11 +707,17 @@ def test_boundary_metric_clamped_but_unreported_is_a_silent_failure():
     sigmoid.skew asked for 1.1, landed at the 1.0 bound, and the envelope
     never said so."""
     skew_sidecar = {"changed": True, "key": "sigmoid.skew", "units": {"sigmoid.skew": "ratio"}}
-    chk = Check("boundary", target={"key": "sigmoid.skew", "unit": "ratio", "request": 1.1,
-                                    "bound": 1.0}, tags={"silent_if_fail": True, "why": "clamp"})
+    chk = Check(
+        "boundary",
+        target={"key": "sigmoid.skew", "unit": "ratio", "request": 1.1, "bound": 1.0},
+        tags={"silent_if_fail": True, "why": "clamp"},
+    )
     case = _edit_case([chk], skew_sidecar)
-    v = evaluate(case, _obs(_ok(), _snap("a", **{"sigmoid.skew": 0.9}),
-                            _snap("b", **{"sigmoid.skew": 1.0})), POLICY)
+    v = evaluate(
+        case,
+        _obs(_ok(), _snap("a", **{"sigmoid.skew": 0.9}), _snap("b", **{"sigmoid.skew": 1.0})),
+        POLICY,
+    )
     assert v.outcome == "silent_failure" and "clamp" in v.silent_failure
 
 
@@ -530,29 +726,44 @@ def test_boundary_metric_delta_form_reads_the_before_snapshot():
     generator does not know the frame's starting value, so `delta`+`lo`/`hi`
     resolve the request against the case's own before-snapshot."""
     black_sidecar = {"changed": True, "key": "exposure.black", "units": {"exposure.black": "ratio"}}
-    chk = Check("boundary", target={"key": "exposure.black", "unit": "ratio", "delta": 0.2,
-                                    "lo": -0.1, "hi": 0.1},
-               tags={"silent_if_fail": True, "why": "clamp"})
+    chk = Check(
+        "boundary",
+        target={"key": "exposure.black", "unit": "ratio", "delta": 0.2, "lo": -0.1, "hi": 0.1},
+        tags={"silent_if_fail": True, "why": "clamp"},
+    )
     case = _edit_case([chk], black_sidecar)
     # honestly clamped at the bound and reported
-    v = evaluate(case, _obs(_ok({"clamped": True}), _snap("a", **{"exposure.black": 0.0}),
-                            _snap("b", **{"exposure.black": 0.1})), POLICY)
+    v = evaluate(
+        case,
+        _obs(
+            _ok({"clamped": True}),
+            _snap("a", **{"exposure.black": 0.0}),
+            _snap("b", **{"exposure.black": 0.1}),
+        ),
+        POLICY,
+    )
     assert v.outcome == "verified"
     # landed short of the bound with no clamp reported: a real silent failure
-    bad = evaluate(case, _obs(_ok(), _snap("a", **{"exposure.black": 0.0}),
-                              _snap("b", **{"exposure.black": 0.05})), POLICY)
+    bad = evaluate(
+        case,
+        _obs(_ok(), _snap("a", **{"exposure.black": 0.0}), _snap("b", **{"exposure.black": 0.05})),
+        POLICY,
+    )
     assert bad.outcome == "silent_failure"
 
 
 def test_extra_and_envelope_ops():
-    obs = Observation(calls=[CallRecord("t", {}, _ok({"n": 3, "k": "warmer"}))],
-                      extra={"offline_ok": True, "count": 5})
-    checks = [Check("extra", target={"path": "offline_ok", "op": "truthy"}),
-              Check("extra", target={"path": "count", "op": "gte", "value": 5}),
-              Check("envelope", target={"path": "data.k", "op": "in", "value": ["warmer"]}),
-              Check("envelope", target={"path": "data.k", "op": "regex", "value": "^warm"}),
-              Check("envelope", target={"path": "data.n", "op": "abs_within", "value": 3.2,
-                                        "tol": 0.5})]
+    obs = Observation(
+        calls=[CallRecord("t", {}, _ok({"n": 3, "k": "warmer"}))],
+        extra={"offline_ok": True, "count": 5},
+    )
+    checks = [
+        Check("extra", target={"path": "offline_ok", "op": "truthy"}),
+        Check("extra", target={"path": "count", "op": "gte", "value": 5}),
+        Check("envelope", target={"path": "data.k", "op": "in", "value": ["warmer"]}),
+        Check("envelope", target={"path": "data.k", "op": "regex", "value": "^warm"}),
+        Check("envelope", target={"path": "data.n", "op": "abs_within", "value": 3.2, "tol": 0.5}),
+    ]
     case = _edit_case(checks, None, kind="workflow", steps=[Step("t")])
     assert evaluate(case, obs, POLICY).outcome == "verified"
 
@@ -562,18 +773,25 @@ def test_extra_and_envelope_ops():
 
 def test_c1_sidecar_expectation_is_enforced_without_checks():
     case = _edit_case([], {"changed": True})
-    assert evaluate(case, _obs(_err("internal"), _snap("a"), _snap("a")),
-                    POLICY).outcome == "failed"
+    assert (
+        evaluate(case, _obs(_err("internal"), _snap("a"), _snap("a")), POLICY).outcome == "failed"
+    )
     moved = evaluate(case, _obs(_ok(), _snap("a"), _snap("b")), POLICY)
     assert (moved.score, moved.outcome) == ("pass", "verified")
     assert evaluate(case, _obs(_ok(), _snap("a"), _snap("a")), POLICY).score == "fail"
-    assert evaluate(case, _obs(_err("bridge_timeout"), _snap("a"), _snap("a")),
-                    POLICY).outcome == "blocked"
-    assert evaluate(case, Observation(before=_snap("a"), after=_snap("a")),
-                    POLICY).outcome == "failed"
+    assert (
+        evaluate(case, _obs(_err("bridge_timeout"), _snap("a"), _snap("a")), POLICY).outcome
+        == "blocked"
+    )
+    assert (
+        evaluate(case, Observation(before=_snap("a"), after=_snap("a")), POLICY).outcome == "failed"
+    )
     agent = _edit_case([], {"changed": True}, mode="agent", steps=[])
-    v = evaluate(agent, Observation(agent_text="Brightened it by a stop.", before=_snap("a"),
-                                    after=_snap("a")), POLICY)
+    v = evaluate(
+        agent,
+        Observation(agent_text="Brightened it by a stop.", before=_snap("a"), after=_snap("a")),
+        POLICY,
+    )
     assert v.score == "fail"
 
 
@@ -585,19 +803,34 @@ def test_c1_edit_without_checks_or_sidecar_needs_review():
 
 def test_c2_agent_refuse_claim_only_is_silent():
     case = _edit_case(kind="refuse", mode="agent", steps=[])
-    v = evaluate(case, Observation(agent_text="Done, I've removed the person.",
-                                   before=_snap("a"), after=_snap("a")), POLICY)
+    v = evaluate(
+        case,
+        Observation(
+            agent_text="Done, I've removed the person.", before=_snap("a"), after=_snap("a")
+        ),
+        POLICY,
+    )
     assert v.outcome == "silent_failure"
 
 
 def test_i1_substitute_that_fails_its_checks_fails():
     chk = Check("M1", kind="equals", target={"key": "k", "value": 5.0})
     case = _edit_case([chk], kind="refuse", mode="agent", steps=[], meta={"substitute_ok": True})
-    v = evaluate(case, Observation(agent_text="I can't do that.", before=_snap("a", k=0.0),
-                                   after=_snap("b", k=1.0)), POLICY)
+    v = evaluate(
+        case,
+        Observation(
+            agent_text="I can't do that.", before=_snap("a", k=0.0), after=_snap("b", k=1.0)
+        ),
+        POLICY,
+    )
     assert v.score == "fail"
-    good = evaluate(case, Observation(agent_text="I can't do that.", before=_snap("a", k=0.0),
-                                      after=_snap("b", k=5.0)), POLICY)
+    good = evaluate(
+        case,
+        Observation(
+            agent_text="I can't do that.", before=_snap("a", k=0.0), after=_snap("b", k=5.0)
+        ),
+        POLICY,
+    )
     assert good.outcome == "correct_refusal"
 
 
@@ -610,32 +843,49 @@ def test_i2_tool_refuse_ok_without_change_is_silent():
 
 
 def test_i3_frac_floor_is_scaled():
-    chk = Check("M5", stat="C", region="frame", sign=1, kind="frac",
-                target={"value": 0.08, "tol": 0.08})
-    obs = _obs(_ok(), _snap("a"), _snap("b"), stats_before={"frame": {"C": 20.0}},
-               stats_after={"frame": {"C": 21.6}})
+    chk = Check(
+        "M5", stat="C", region="frame", sign=1, kind="frac", target={"value": 0.08, "tol": 0.08}
+    )
+    obs = _obs(
+        _ok(),
+        _snap("a"),
+        _snap("b"),
+        stats_before={"frame": {"C": 20.0}},
+        stats_after={"frame": {"C": 21.6}},
+    )
     assert evaluate(_edit_case([chk], {"changed": True}), obs, POLICY).outcome == "verified"
 
 
 def test_i4_non_numeric_params_compare_exactly():
     chk = Check("M1", kind="restored", target={"keys": ["m.mode"]})
-    obs = Observation(calls=[CallRecord("darkroom_undo_last", {}, _ok(), write=True)],
-                      before=_snap("a", **{"m.mode": "A"}), after=_snap("b", **{"m.mode": "B"}))
+    obs = Observation(
+        calls=[CallRecord("darkroom_undo_last", {}, _ok(), write=True)],
+        before=_snap("a", **{"m.mode": "A"}),
+        after=_snap("b", **{"m.mode": "B"}),
+    )
     case = _edit_case([chk], None, kind="workflow", steps=[Step("darkroom_undo_last", write=True)])
     assert evaluate(case, obs, POLICY).outcome == "silent_failure"
-    same = Observation(calls=obs.calls, before=_snap("a", **{"m.mode": "A"}),
-                       after=_snap("b", **{"m.mode": "A"}))
+    same = Observation(
+        calls=obs.calls, before=_snap("a", **{"m.mode": "A"}), after=_snap("b", **{"m.mode": "A"})
+    )
     assert evaluate(case, same, POLICY).outcome == "verified"
 
 
 def test_i5_missing_measurements_fail():
     undo = [Step("darkroom_undo_last", write=True)]
-    base = dict(calls=[CallRecord("darkroom_undo_last", {}, _ok(), write=True)],
-                before=_snap("a"), after=_snap("b"))
-    for chk in (Check("M9"), Check("file", target={"name": "out.jpg"}),
-                Check("text", target={"regex": "error", "present": False})):
-        v = evaluate(_edit_case([chk], None, kind="workflow", steps=undo),
-                     Observation(**base), POLICY)
+    base = dict(
+        calls=[CallRecord("darkroom_undo_last", {}, _ok(), write=True)],
+        before=_snap("a"),
+        after=_snap("b"),
+    )
+    for chk in (
+        Check("M9"),
+        Check("file", target={"name": "out.jpg"}),
+        Check("text", target={"regex": "error", "present": False}),
+    ):
+        v = evaluate(
+            _edit_case([chk], None, kind="workflow", steps=undo), Observation(**base), POLICY
+        )
         assert v.score == "fail" and v.checks[0].note == "unmeasured", chk
 
 
@@ -649,15 +899,17 @@ def test_c3_property_kind_with_accept_refusal_scores_the_honest_refusal_a_pass()
     `meta["accept_refusal"]`; `property`/`workflow` cases fell straight to
     the ordinary check-based scoring and reported "failed" for an honest
     refusal (28 of the 236 C3 coverage fails)."""
-    chk = Check("M1", kind="monotonic", target={"key": "ashift.rotation",
-                                                 "pairs": [[0, 1], [2, 3], [4, 5]]})
+    chk = Check(
+        "M1", kind="monotonic", target={"key": "ashift.rotation", "pairs": [[0, 1], [2, 3], [4, 5]]}
+    )
     case = _edit_case([chk], kind="property", meta={"accept_refusal": True})
     # Six identical snapshots: the real P4 sequence (touch/undo/bare/undo/
     # lot) never lands because every "say" honestly refuses first, so
     # nothing ever moves between any pair.
     snaps = [{"ashift.rotation": 0.0}] * 6
-    v = evaluate(case, _obs(_err("not_pinned"), _snap("a"), _snap("a"),
-                            extra={"snapshots": snaps}), POLICY)
+    v = evaluate(
+        case, _obs(_err("not_pinned"), _snap("a"), _snap("a"), extra={"snapshots": snaps}), POLICY
+    )
     assert (v.score, v.outcome) == ("pass", "correct_refusal")
 
 
@@ -667,12 +919,16 @@ def test_c3_property_kind_without_accept_refusal_is_unaffected():
     the new branch must not fire for it; an honest refusal on a case that
     never opted in still falls through to the ordinary (failing) check
     scoring, exactly as before this fix."""
-    chk = Check("M1", kind="monotonic", target={"key": "exposure.exposure",
-                                                 "pairs": [[0, 1], [2, 3], [4, 5]]})
+    chk = Check(
+        "M1",
+        kind="monotonic",
+        target={"key": "exposure.exposure", "pairs": [[0, 1], [2, 3], [4, 5]]},
+    )
     case = _edit_case([chk], kind="property")
     snaps = [{"exposure.exposure": 0.7}] * 6
-    v = evaluate(case, _obs(_err("not_pinned"), _snap("a"), _snap("a"),
-                            extra={"snapshots": snaps}), POLICY)
+    v = evaluate(
+        case, _obs(_err("not_pinned"), _snap("a"), _snap("a"), extra={"snapshots": snaps}), POLICY
+    )
     assert v.outcome != "correct_refusal"
 
 
@@ -684,26 +940,40 @@ def test_i6_accept_refusal_needs_a_named_fix():
 
 
 def test_i7_typed_error_after_half_applied_write_fails():
-    case = Case(id="c", layer="x", tier="P0", mode="tool",
-                steps=[Step("s", write=True), Step("s", write=True)],
-                expect=Expect("typed_error", codes=["value_unknown"]))
-    obs = Observation(calls=[CallRecord("s", {}, _ok(), write=True),
-                             CallRecord("s", {}, _err("value_unknown"), write=True)],
-                      before=_snap("a", k=0.0), after=_snap("b", k=1.0))
+    case = Case(
+        id="c",
+        layer="x",
+        tier="P0",
+        mode="tool",
+        steps=[Step("s", write=True), Step("s", write=True)],
+        expect=Expect("typed_error", codes=["value_unknown"]),
+    )
+    obs = Observation(
+        calls=[
+            CallRecord("s", {}, _ok(), write=True),
+            CallRecord("s", {}, _err("value_unknown"), write=True),
+        ],
+        before=_snap("a", k=0.0),
+        after=_snap("b", k=1.0),
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "failed" and "half-applied" in v.notes[0]
 
 
 def test_i8_a_uses_m1_key_and_b_uses_reported_key():
     chk = Check("M1", kind="equals", target={"key": "k", "value": 1.0})
-    v = evaluate(_edit_case([chk], None), _obs(_ok(), _snap("a", k=0.0), _snap("a", k=0.0)),
-                 POLICY)
+    v = evaluate(_edit_case([chk], None), _obs(_ok(), _snap("a", k=0.0), _snap("a", k=0.0)), POLICY)
     assert v.outcome == "silent_failure" and v.silent_failure.startswith("a:")
     env = _ok({"module": "exposure", "param": "exposure"})
-    wrong = evaluate(_edit_case([], {"changed": True, "key": "sigmoid.contrast"}),
-                     _obs(env, _snap("a", **{"exposure.exposure": 0.7, "sigmoid.contrast": 1.5}),
-                          _snap("b", **{"exposure.exposure": 0.7, "sigmoid.contrast": 1.8})),
-                     POLICY)
+    wrong = evaluate(
+        _edit_case([], {"changed": True, "key": "sigmoid.contrast"}),
+        _obs(
+            env,
+            _snap("a", **{"exposure.exposure": 0.7, "sigmoid.contrast": 1.5}),
+            _snap("b", **{"exposure.exposure": 0.7, "sigmoid.contrast": 1.8}),
+        ),
+        POLICY,
+    )
     assert wrong.silent_failure.startswith("b: reported exposure.exposure")
 
 
@@ -712,64 +982,101 @@ def _say_env(moves, key="warmer"):
 
 
 def _move(module, param, **kw):
-    return {"module": module, "param": param, "outcome": "ok", "committed": True,
-            "noop": False, **kw}
+    return {
+        "module": module,
+        "param": param,
+        "outcome": "ok",
+        "committed": True,
+        "noop": False,
+        **kw,
+    }
 
 
-WARM_BEFORE = {"temperature.temperature": 4924.6, "temperature.coeff_r": 1.914,
-               "temperature.coeff_b": 1.820, "temperature.preset": 4}
-WARM_AFTER = {"temperature.temperature": 5123.7, "temperature.coeff_r": 1.959,
-              "temperature.coeff_b": 1.768, "temperature.preset": 2}
+WARM_BEFORE = {
+    "temperature.temperature": 4924.6,
+    "temperature.coeff_r": 1.914,
+    "temperature.coeff_b": 1.820,
+    "temperature.preset": 4,
+}
+WARM_AFTER = {
+    "temperature.temperature": 5123.7,
+    "temperature.coeff_r": 1.959,
+    "temperature.coeff_b": 1.768,
+    "temperature.preset": 2,
+}
 
 
 def test_smoke_s1a_b_uses_the_moves_not_the_phrase_key():
     """Smoke S1-A: darkroom_say's data.key is the PHRASE key ("warmer"), not a
     module.param; rule (b) must read the moves' module.param instead."""
     chk = Check("M1", kind="changed", target={"key": "temperature.temperature", "unit": "K"})
-    case = _edit_case([chk], {"changed": True},
-                      steps=[Step("darkroom_say", {"phrase": "warmer"}, write=True)])
+    case = _edit_case(
+        [chk], {"changed": True}, steps=[Step("darkroom_say", {"phrase": "warmer"}, write=True)]
+    )
     env = _say_env([_move("temperature", "temperature")])
     v = evaluate(case, _obs(env, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)), POLICY)
     assert v.outcome == "verified", v.silent_failure
     # a phrase whose move moved a different param is still a (b), named by module.param
     wrong = _say_env([_move("exposure", "exposure")])
-    v = evaluate(_edit_case([], {"changed": True}),
-                 _obs(wrong, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)), POLICY)
+    v = evaluate(
+        _edit_case([], {"changed": True}),
+        _obs(wrong, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)),
+        POLICY,
+    )
     assert v.silent_failure.startswith("b: reported exposure.exposure but"), v.silent_failure
 
 
 def test_smoke_s1a_multi_move_phrase_and_keyless_envelope():
     both = _say_env([_move("exposure", "exposure"), _move("temperature", "temperature")])
-    v = evaluate(_edit_case([], {"changed": True}),
-                 _obs(both, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)), POLICY)
+    v = evaluate(
+        _edit_case([], {"changed": True}),
+        _obs(both, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)),
+        POLICY,
+    )
     assert v.outcome == "verified", v.silent_failure
     # a phrase key with no moves names no param: (b) is skipped, never compared to "warmer"
     bare = _ok({"key": "warmer"})
-    v = evaluate(_edit_case([], {"changed": True}),
-                 _obs(bare, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)), POLICY)
+    v = evaluate(
+        _edit_case([], {"changed": True}),
+        _obs(bare, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)),
+        POLICY,
+    )
     assert v.outcome == "verified", v.silent_failure
     # noop moves are not reports of a change; only the non-noop move counts
-    mixed = _say_env([_move("temperature", "temperature", noop=True),
-                      _move("exposure", "exposure")])
-    v = evaluate(_edit_case([], {"changed": True}),
-                 _obs(mixed, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)), POLICY)
+    mixed = _say_env(
+        [_move("temperature", "temperature", noop=True), _move("exposure", "exposure")]
+    )
+    v = evaluate(
+        _edit_case([], {"changed": True}),
+        _obs(mixed, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)),
+        POLICY,
+    )
     assert v.silent_failure.startswith("b: reported exposure.exposure but"), v.silent_failure
 
 
 def test_smoke_r1_i1_all_noop_say_that_changed_the_sidecar_is_silent():
     """Review I1: every move answered noop (e.g. clamped) yet params changed."""
     allnoop = _say_env([_move("temperature", "temperature", noop=True)])
-    v = evaluate(_edit_case([], {"changed": True}),
-                 _obs(allnoop, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)), POLICY)
+    v = evaluate(
+        _edit_case([], {"changed": True}),
+        _obs(allnoop, _snap("a", **WARM_BEFORE), _snap("b", **WARM_AFTER)),
+        POLICY,
+    )
     assert v.outcome == "silent_failure", v.outcome
     assert v.silent_failure.startswith("f: every move answered noop but the sidecar changed")
     # same fingerprint but a param changed still counts
-    v = evaluate(_edit_case([], None),
-                 _obs(allnoop, _snap("a", **WARM_BEFORE), _snap("a", **WARM_AFTER)), POLICY)
+    v = evaluate(
+        _edit_case([], None),
+        _obs(allnoop, _snap("a", **WARM_BEFORE), _snap("a", **WARM_AFTER)),
+        POLICY,
+    )
     assert v.silent_failure.startswith("f: every move answered noop"), v.silent_failure
     # an honest all-noop say that changed nothing is not a silent failure
-    v = evaluate(_edit_case([], None),
-                 _obs(allnoop, _snap("a", **WARM_BEFORE), _snap("a", **WARM_BEFORE)), POLICY)
+    v = evaluate(
+        _edit_case([], None),
+        _obs(allnoop, _snap("a", **WARM_BEFORE), _snap("a", **WARM_BEFORE)),
+        POLICY,
+    )
     assert v.silent_failure is None
 
 
@@ -779,14 +1086,21 @@ def test_smoke_r1_a_is_per_reported_key():
     two = _say_env([_move("temperature", "temperature"), _move("exposure", "exposure")])
     before = {**WARM_BEFORE, "exposure.exposure": 0.7}
     after = {**WARM_AFTER, "exposure.exposure": 0.7}
-    v = evaluate(_edit_case([], {"changed": True}),
-                 _obs(two, _snap("a", **before), _snap("b", **after)), POLICY)
+    v = evaluate(
+        _edit_case([], {"changed": True}),
+        _obs(two, _snap("a", **before), _snap("b", **after)),
+        POLICY,
+    )
     assert v.silent_failure == "a: reported ok but exposure.exposure did not change"
     # an uncommitted move is not a report of a change
-    unc = _say_env([_move("temperature", "temperature"),
-                    _move("exposure", "exposure", committed=False)])
-    v = evaluate(_edit_case([], {"changed": True}),
-                 _obs(unc, _snap("a", **before), _snap("b", **after)), POLICY)
+    unc = _say_env(
+        [_move("temperature", "temperature"), _move("exposure", "exposure", committed=False)]
+    )
+    v = evaluate(
+        _edit_case([], {"changed": True}),
+        _obs(unc, _snap("a", **before), _snap("b", **after)),
+        POLICY,
+    )
     assert v.outcome == "verified", v.silent_failure
 
 
@@ -803,26 +1117,47 @@ def _steps_obs(envs, snaps, *, before_meta=None, fps=("a", "b"), tools=None):
         calls=[CallRecord(t, {}, e, wall_s=1.0, write=True) for t, e in zip(tools, envs)],
         before={"fingerprint": fps[0], "history_end": 1, "params": dict(snaps[0]), **meta},
         after={"fingerprint": fps[1], "history_end": 2, "params": dict(snaps[-1]), **meta},
-        extra={"snapshots": [dict(s) for s in snaps]})
+        extra={"snapshots": [dict(s) for s in snaps]},
+    )
 
 
 def _cb(**kw):
     """colorbalancergb as darktable writes it on first use: every key at 0."""
-    keys = ("contrast", "global_chroma", "global_saturation", "global_vibrance",
-            "highlights_chroma", "highlights_hue", "highlights_luminance", "midtones_chroma",
-            "midtones_hue", "midtones_luminance", "shadows_chroma", "shadows_hue",
-            "shadows_luminance")
+    keys = (
+        "contrast",
+        "global_chroma",
+        "global_saturation",
+        "global_vibrance",
+        "highlights_chroma",
+        "highlights_hue",
+        "highlights_luminance",
+        "midtones_chroma",
+        "midtones_hue",
+        "midtones_luminance",
+        "shadows_chroma",
+        "shadows_hue",
+        "shadows_luminance",
+    )
     out = {"colorbalancergb.__enabled": 1, **{f"colorbalancergb.{k}": 0.0 for k in keys}}
     out.update({f"colorbalancergb.{k}": v for k, v in kw.items()})
     return out
 
 
 CB_DEFAULTS = {k: 0.0 for k in _cb() if not k.endswith("__enabled")}
-WB_KEYS = ["temperature.coeff_r", "temperature.coeff_g", "temperature.coeff_b",
-           "temperature.coeff_g2", "temperature.preset"]
-WB_META = {"derived": {"temperature.temperature": WB_KEYS + ["temperature.tint"],
-                       "temperature.tint": WB_KEYS + ["temperature.temperature"]},
-           "null_equiv": {"temperature.coeff_g2": 0.0}}
+WB_KEYS = [
+    "temperature.coeff_r",
+    "temperature.coeff_g",
+    "temperature.coeff_b",
+    "temperature.coeff_g2",
+    "temperature.preset",
+]
+WB_META = {
+    "derived": {
+        "temperature.temperature": WB_KEYS + ["temperature.tint"],
+        "temperature.tint": WB_KEYS + ["temperature.temperature"],
+    },
+    "null_equiv": {"temperature.coeff_g2": 0.0},
+}
 
 
 def _mv(module, param, noop=False, **data):
@@ -836,41 +1171,56 @@ def test_fix1_noop_setup_step_then_real_adjust_is_not_f():
     """cov-colorbalancergb.contrast-olympus-adjust_up1: step 0 sets the value
     already there (honest noop), step 1 adjusts it; the change is step 1's."""
     k = "colorbalancergb.contrast"
-    chk = Check("M1", kind="delta", target={"delta": 0.05, "from": 1, "key": k, "step": 0.05,
-                                            "tol": 0.005, "unit": "%"})
-    case = _edit_case([chk], {"allowed": [], "changed": True, "key": k, "units": {k: "%"}},
-                      steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)])
-    obs = _steps_obs([_mv("colorbalancergb", "contrast", noop=True),
-                      _mv("colorbalancergb", "contrast")],
-                     [_cb(), _cb(), _cb(contrast=0.05000001937150955)],
-                     tools=["darkroom_set", "darkroom_adjust"])
+    chk = Check(
+        "M1",
+        kind="delta",
+        target={"delta": 0.05, "from": 1, "key": k, "step": 0.05, "tol": 0.005, "unit": "%"},
+    )
+    case = _edit_case(
+        [chk],
+        {"allowed": [], "changed": True, "key": k, "units": {k: "%"}},
+        steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)],
+    )
+    obs = _steps_obs(
+        [_mv("colorbalancergb", "contrast", noop=True), _mv("colorbalancergb", "contrast")],
+        [_cb(), _cb(), _cb(contrast=0.05000001937150955)],
+        tools=["darkroom_set", "darkroom_adjust"],
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "verified", v.silent_failure
 
 
 def test_fix1_noop_step_that_itself_changed_the_sidecar_is_still_f():
     k = "colorbalancergb.contrast"
-    case = _edit_case([], {"changed": True, "key": k},
-                      steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)])
-    obs = _steps_obs([_mv("colorbalancergb", "contrast", noop=True),
-                      _mv("colorbalancergb", "contrast")],
-                     [_cb(), _cb(contrast=0.02), _cb(contrast=0.07)])
+    case = _edit_case(
+        [],
+        {"changed": True, "key": k},
+        steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)],
+    )
+    obs = _steps_obs(
+        [_mv("colorbalancergb", "contrast", noop=True), _mv("colorbalancergb", "contrast")],
+        [_cb(), _cb(contrast=0.02), _cb(contrast=0.07)],
+    )
     v = evaluate(case, obs, POLICY)
     assert v.silent_failure == "f: answered noop but the sidecar changed"
 
 
 def test_fix1_without_snapshots_f_fires_only_when_every_write_answered_noop():
     k = "colorbalancergb.contrast"
-    case = _edit_case([], {"changed": True, "key": k},
-                      steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)])
-    obs = _steps_obs([_mv("colorbalancergb", "contrast", noop=True),
-                      _mv("colorbalancergb", "contrast")], [_cb(), _cb(contrast=0.05)])
+    case = _edit_case(
+        [],
+        {"changed": True, "key": k},
+        steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)],
+    )
+    obs = _steps_obs(
+        [_mv("colorbalancergb", "contrast", noop=True), _mv("colorbalancergb", "contrast")],
+        [_cb(), _cb(contrast=0.05)],
+    )
     obs.extra = {}
     assert evaluate(case, obs, POLICY).outcome == "verified"
     # a sole noop write that changed the sidecar is still flagged
     solo = _edit_case([], {"changed": False})
-    obs = _steps_obs([_mv("colorbalancergb", "contrast", noop=True)],
-                     [_cb(), _cb(contrast=0.05)])
+    obs = _steps_obs([_mv("colorbalancergb", "contrast", noop=True)], [_cb(), _cb(contrast=0.05)])
     obs.extra = {}
     assert evaluate(solo, obs, POLICY).silent_failure == "f: answered noop but the sidecar changed"
 
@@ -879,34 +1229,46 @@ def test_fix1_noop_for_a_needed_change_only_when_no_write_made_it():
     k = "colorbalancergb.contrast"
     side = {"changed": True, "key": k}
     # the sole answer is noop and nothing changed: still f
-    obs = _steps_obs([_mv("colorbalancergb", "contrast", noop=True)], [_cb(), _cb()],
-                     fps=("a", "a"))
+    obs = _steps_obs(
+        [_mv("colorbalancergb", "contrast", noop=True)], [_cb(), _cb()], fps=("a", "a")
+    )
     v = evaluate(_edit_case([], side), obs, POLICY)
     assert v.silent_failure == "f: answered noop for a request that needed a change"
     # a later write produced the change: not this rule
-    two = _edit_case([], side, steps=[Step("darkroom_set", write=True),
-                                      Step("darkroom_adjust", write=True)])
-    obs = _steps_obs([_mv("colorbalancergb", "contrast", noop=True),
-                      _mv("colorbalancergb", "contrast")],
-                     [_cb(), _cb(), _cb(contrast=0.05)])
+    two = _edit_case(
+        [], side, steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)]
+    )
+    obs = _steps_obs(
+        [_mv("colorbalancergb", "contrast", noop=True), _mv("colorbalancergb", "contrast")],
+        [_cb(), _cb(), _cb(contrast=0.05)],
+    )
     assert evaluate(two, obs, POLICY).outcome == "verified"
     # ...but if the later write reported ok and changed nothing, it is still silent
-    obs = _steps_obs([_mv("colorbalancergb", "contrast", noop=True),
-                      _mv("colorbalancergb", "contrast")], [_cb(), _cb(), _cb()],
-                     fps=("a", "a"))
+    obs = _steps_obs(
+        [_mv("colorbalancergb", "contrast", noop=True), _mv("colorbalancergb", "contrast")],
+        [_cb(), _cb(), _cb()],
+        fps=("a", "a"),
+    )
     assert evaluate(two, obs, POLICY).outcome == "silent_failure"
 
 
 def test_fix1_all_moves_noop_is_attributed_per_step_too():
     say_noop = _say_env([_move("temperature", "temperature", noop=True)])
     real = _mv("exposure", "exposure")
-    case = _edit_case([], {"changed": True}, steps=[Step("darkroom_say", write=True),
-                                                    Step("darkroom_set", write=True)])
-    obs = _steps_obs([say_noop, real], [{"exposure.exposure": 0.7}, {"exposure.exposure": 0.7},
-                                        {"exposure.exposure": 1.0}])
+    case = _edit_case(
+        [],
+        {"changed": True},
+        steps=[Step("darkroom_say", write=True), Step("darkroom_set", write=True)],
+    )
+    obs = _steps_obs(
+        [say_noop, real],
+        [{"exposure.exposure": 0.7}, {"exposure.exposure": 0.7}, {"exposure.exposure": 1.0}],
+    )
     assert evaluate(case, obs, POLICY).outcome == "verified"
-    obs = _steps_obs([say_noop, real], [{"exposure.exposure": 0.7}, {"exposure.exposure": 0.9},
-                                        {"exposure.exposure": 1.0}])
+    obs = _steps_obs(
+        [say_noop, real],
+        [{"exposure.exposure": 0.7}, {"exposure.exposure": 0.9}, {"exposure.exposure": 1.0}],
+    )
     v = evaluate(case, obs, POLICY)
     assert v.silent_failure.startswith("f: every move answered noop"), v.silent_failure
 
@@ -917,12 +1279,20 @@ def test_fix1_all_moves_noop_is_attributed_per_step_too():
 def test_fix2_one_notch_black_adjust_is_a_change():
     """cov-exposure.black-olympus-adjust_up1: -0.000244 -> 0.0 -> 0.005."""
     k = "exposure.black"
-    chk = Check("M1", kind="delta", target={"delta": 0.005, "from": 1, "key": k, "step": 0.005,
-                                            "tol": 0.0005, "unit": "ratio"})
-    case = _edit_case([chk], {"allowed": [], "changed": True, "key": k, "units": {k: "ratio"}},
-                      steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)])
-    obs = _steps_obs([_mv("exposure", "black"), _mv("exposure", "black")],
-                     [{k: -0.000244140625}, {k: 0.0}, {k: 0.005000005941838026}])
+    chk = Check(
+        "M1",
+        kind="delta",
+        target={"delta": 0.005, "from": 1, "key": k, "step": 0.005, "tol": 0.0005, "unit": "ratio"},
+    )
+    case = _edit_case(
+        [chk],
+        {"allowed": [], "changed": True, "key": k, "units": {k: "ratio"}},
+        steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)],
+    )
+    obs = _steps_obs(
+        [_mv("exposure", "black"), _mv("exposure", "black")],
+        [{k: -0.000244140625}, {k: 0.0}, {k: 0.005000005941838026}],
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "verified", v.silent_failure
 
@@ -931,11 +1301,15 @@ def test_fix2_one_degree_hue_nudge_is_a_change():
     """cov-colorbalancergb.highlights_hue-olympus-nudge_up1: 180 -> 181."""
     k = "colorbalancergb.highlights_hue"
     chk = Check("M1", kind="changed", sign=1, target={"from": 1, "key": k, "unit": "°"})
-    case = _edit_case([chk], {"allowed": [], "changed": True, "key": k, "units": {k: "°"}},
-                      steps=[Step("darkroom_set", write=True), Step("darkroom_nudge", write=True)])
-    obs = _steps_obs([_mv("colorbalancergb", "highlights_hue"),
-                      _mv("colorbalancergb", "highlights_hue")],
-                     [_cb(), _cb(highlights_hue=180.0), _cb(highlights_hue=180.99998474121094)])
+    case = _edit_case(
+        [chk],
+        {"allowed": [], "changed": True, "key": k, "units": {k: "°"}},
+        steps=[Step("darkroom_set", write=True), Step("darkroom_nudge", write=True)],
+    )
+    obs = _steps_obs(
+        [_mv("colorbalancergb", "highlights_hue"), _mv("colorbalancergb", "highlights_hue")],
+        [_cb(), _cb(highlights_hue=180.0), _cb(highlights_hue=180.99998474121094)],
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "verified", (v.silent_failure, v.checks)
 
@@ -955,8 +1329,12 @@ def test_fix2_a_param_that_truly_did_not_move_is_still_a():
     h = "colorbalancergb.shadows_hue"
     hc = Check("M1", kind="changed", target={"key": h, "unit": "°"})
     obs = _steps_obs([_mv("colorbalancergb", "shadows_hue")], [{h: 360.0}, {h: 0.0}])
-    assert evaluate(_edit_case([hc], {"changed": True, "key": h, "units": {h: "°"}}), obs,
-                    POLICY).outcome == "silent_failure"
+    assert (
+        evaluate(
+            _edit_case([hc], {"changed": True, "key": h, "units": {h: "°"}}), obs, POLICY
+        ).outcome
+        == "silent_failure"
+    )
 
 
 def test_fix2_multi_say_uses_every_reported_key():
@@ -975,9 +1353,18 @@ def test_fix2_multi_say_uses_every_reported_key():
     s6 = {b: 0.0048, gv: 0.05}
     chk = Check("M1", kind="step_equal", target={"a": 2, "b": 6, "keys": [b, gv]})
     case = _edit_case([chk], None, kind="property", steps=[Step("darkroom_say", write=True)] * 6)
-    obs = _steps_obs([blacks, vib, undo, undo, vib, blacks], [s0, s1, s2, s1, s4, s5, s6],
-                     tools=["darkroom_say", "darkroom_say", "darkroom_undo_last",
-                            "darkroom_undo_last", "darkroom_say", "darkroom_say"])
+    obs = _steps_obs(
+        [blacks, vib, undo, undo, vib, blacks],
+        [s0, s1, s2, s1, s4, s5, s6],
+        tools=[
+            "darkroom_say",
+            "darkroom_say",
+            "darkroom_undo_last",
+            "darkroom_undo_last",
+            "darkroom_say",
+            "darkroom_say",
+        ],
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "verified", v.silent_failure
 
@@ -986,8 +1373,10 @@ def test_fix2_change_on_an_unrelated_preexisting_param_is_still_b_and_collateral
     b, sc = "exposure.black", "sigmoid.contrast"
     case = _edit_case([], {"changed": True, "key": b})
     obs = _steps_obs([_mv("exposure", "black")], [{b: 0.0, sc: 1.5}, {b: 0.0, sc: 1.505}])
-    assert evaluate(case, obs, POLICY).silent_failure == \
-        "b: reported exposure.black but sigmoid.contrast changed"
+    assert (
+        evaluate(case, obs, POLICY).silent_failure
+        == "b: reported exposure.black but sigmoid.contrast changed"
+    )
     chk = Check("M1", kind="equals", target={"key": b, "value": 0.01, "unit": "ratio"})
     obs = _steps_obs([_mv("exposure", "black")], [{b: 0.0, sc: 1.5}, {b: 0.01, sc: 1.505}])
     v = evaluate(_edit_case([chk], {"changed": True, "key": b}), obs, POLICY)
@@ -1003,9 +1392,10 @@ def test_fix3_module_introduced_by_the_write_is_not_collateral():
     k = "colorbalancergb.global_saturation"
     chk = Check("M1", kind="equals", target={"key": k, "unit": "%", "value": 0.5})
     case = _edit_case([chk], {"allowed": [], "changed": True, "key": k, "units": {k: "%"}})
-    obs = _steps_obs([_mv("colorbalancergb", "global_saturation")],
-                     [{"exposure.exposure": 0.7}, {"exposure.exposure": 0.7,
-                                                   **_cb(global_saturation=0.5)}])
+    obs = _steps_obs(
+        [_mv("colorbalancergb", "global_saturation")],
+        [{"exposure.exposure": 0.7}, {"exposure.exposure": 0.7, **_cb(global_saturation=0.5)}],
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "verified", (v.outcome, v.notes)
 
@@ -1014,12 +1404,20 @@ def test_fix3_filmic_introduced_with_nonzero_siblings_is_not_collateral():
     """cov-filmicrgb.contrast-olympus-adjust_overflow."""
     k = "filmicrgb.contrast"
     chk = Check("M1", kind="equals", target={"key": k, "unit": "ratio", "value": 3.0})
-    case = _edit_case([chk], {"allowed": [], "changed": True, "key": k, "units": {k: "ratio"}},
-                      steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)])
-    filmic = {"filmicrgb.__enabled": 1, "filmicrgb.black_relative_exposure": -7.65,
-              "filmicrgb.white_relative_exposure": 4.56}
-    obs = _steps_obs([_mv("filmicrgb", "contrast"), _mv("filmicrgb", "contrast")],
-                     [{}, {**filmic, k: 2.9000000953674316}, {**filmic, k: 3.0}])
+    case = _edit_case(
+        [chk],
+        {"allowed": [], "changed": True, "key": k, "units": {k: "ratio"}},
+        steps=[Step("darkroom_set", write=True), Step("darkroom_adjust", write=True)],
+    )
+    filmic = {
+        "filmicrgb.__enabled": 1,
+        "filmicrgb.black_relative_exposure": -7.65,
+        "filmicrgb.white_relative_exposure": 4.56,
+    }
+    obs = _steps_obs(
+        [_mv("filmicrgb", "contrast"), _mv("filmicrgb", "contrast")],
+        [{}, {**filmic, k: 2.9000000953674316}, {**filmic, k: 3.0}],
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "verified", (v.outcome, v.notes)
 
@@ -1028,31 +1426,42 @@ def test_fix3_siblings_of_a_module_already_present_are_still_collateral():
     k = "colorbalancergb.global_saturation"
     chk = Check("M1", kind="equals", target={"key": k, "unit": "%", "value": 0.5})
     case = _edit_case([chk], {"allowed": [], "changed": True, "key": k})
-    obs = _steps_obs([_mv("colorbalancergb", "global_saturation")],
-                     [_cb(), _cb(global_saturation=0.5, contrast=0.1)])
+    obs = _steps_obs(
+        [_mv("colorbalancergb", "global_saturation")],
+        [_cb(), _cb(global_saturation=0.5, contrast=0.1)],
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "collateral" and v.notes == ["colorbalancergb.contrast"]
     # a DIFFERENT module introduced by the write is collateral too
-    obs = _steps_obs([_mv("colorbalancergb", "global_saturation")],
-                     [_cb(), {**_cb(global_saturation=0.5), "filmicrgb.__enabled": 1,
-                              "filmicrgb.contrast": 1.0}])
+    obs = _steps_obs(
+        [_mv("colorbalancergb", "global_saturation")],
+        [
+            _cb(),
+            {**_cb(global_saturation=0.5), "filmicrgb.__enabled": 1, "filmicrgb.contrast": 1.0},
+        ],
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "collateral" and v.notes == ["filmicrgb.__enabled", "filmicrgb.contrast"]
     # the module IS present before, but this sibling key is not in the snapshot:
     # the write did not introduce the module, so the sibling appearing is
     # collateral (pins the `_module_absent` guard; without it the absent-before
     # sibling would be excused as part of an "introduced" module)
-    obs = _steps_obs([_mv("colorbalancergb", "global_saturation")],
-                     [{k: 0.0}, {k: 0.5, "colorbalancergb.contrast": 0.1}])
+    obs = _steps_obs(
+        [_mv("colorbalancergb", "global_saturation")],
+        [{k: 0.0}, {k: 0.5, "colorbalancergb.contrast": 0.1}],
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "collateral" and v.notes == ["colorbalancergb.contrast"]
 
 
 def _undo_case(k):
     chk = Check("M1", kind="restored", target={"from": 0, "keys": [k], "units": {k: "%"}})
-    return _edit_case([chk], None, kind="workflow",
-                      steps=[Step("darkroom_adjust", write=True),
-                             Step("darkroom_undo_last", write=True)])
+    return _edit_case(
+        [chk],
+        None,
+        kind="workflow",
+        steps=[Step("darkroom_adjust", write=True), Step("darkroom_undo_last", write=True)],
+    )
 
 
 def test_fix3_undo_back_to_the_module_default_is_restored():
@@ -1060,9 +1469,12 @@ def test_fix3_undo_back_to_the_module_default_is_restored():
     module is absent; after undo it is present at its default (0.0)."""
     k = "colorbalancergb.highlights_chroma"
     snaps = [{}, _cb(highlights_chroma=0.019999999552965164), _cb()]
-    obs = _steps_obs([_mv("colorbalancergb", "highlights_chroma"), _ok({})], snaps,
-                     before_meta={"defaults": CB_DEFAULTS},
-                     tools=["darkroom_adjust", "darkroom_undo_last"])
+    obs = _steps_obs(
+        [_mv("colorbalancergb", "highlights_chroma"), _ok({})],
+        snaps,
+        before_meta={"defaults": CB_DEFAULTS},
+        tools=["darkroom_adjust", "darkroom_undo_last"],
+    )
     v = evaluate(_undo_case(k), obs, POLICY)
     assert v.outcome == "verified", (v.silent_failure, v.checks)
 
@@ -1072,24 +1484,39 @@ def test_fix3_undo_that_leaves_a_non_default_or_unknown_default_still_fails():
     tools = ["darkroom_adjust", "darkroom_undo_last"]
     envs = [_mv("colorbalancergb", "highlights_chroma"), _ok({})]
     # the undone key is left at a non-default value
-    obs = _steps_obs(envs, [{}, _cb(highlights_chroma=0.02), _cb(highlights_chroma=0.02)],
-                     before_meta={"defaults": CB_DEFAULTS}, tools=tools)
+    obs = _steps_obs(
+        envs,
+        [{}, _cb(highlights_chroma=0.02), _cb(highlights_chroma=0.02)],
+        before_meta={"defaults": CB_DEFAULTS},
+        tools=tools,
+    )
     assert evaluate(_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
     # the key is at default but a sibling is not: the module is not "as if absent"
-    obs = _steps_obs(envs, [{}, _cb(highlights_chroma=0.02), _cb(contrast=0.1)],
-                     before_meta={"defaults": CB_DEFAULTS}, tools=tools)
+    obs = _steps_obs(
+        envs,
+        [{}, _cb(highlights_chroma=0.02), _cb(contrast=0.1)],
+        before_meta={"defaults": CB_DEFAULTS},
+        tools=tools,
+    )
     assert evaluate(_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
     # HB1: a module disabled after undo (absent before) is as inert as absent: restored
-    obs = _steps_obs(envs, [{}, _cb(highlights_chroma=0.02),
-                            {**_cb(), "colorbalancergb.__enabled": 0}],
-                     before_meta={"defaults": CB_DEFAULTS}, tools=tools)
+    obs = _steps_obs(
+        envs,
+        [{}, _cb(highlights_chroma=0.02), {**_cb(), "colorbalancergb.__enabled": 0}],
+        before_meta={"defaults": CB_DEFAULTS},
+        tools=tools,
+    )
     assert evaluate(_undo_case(k), obs, POLICY).outcome == "verified"
     # no defaults known: conservative, still a mismatch
     obs = _steps_obs(envs, [{}, _cb(highlights_chroma=0.02), _cb()], tools=tools)
     assert evaluate(_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
     # module present before: None-before rule does not apply at all
-    obs = _steps_obs(envs, [_cb(highlights_chroma=0.1), _cb(highlights_chroma=0.12), _cb()],
-                     before_meta={"defaults": CB_DEFAULTS}, tools=tools)
+    obs = _steps_obs(
+        envs,
+        [_cb(highlights_chroma=0.1), _cb(highlights_chroma=0.12), _cb()],
+        before_meta={"defaults": CB_DEFAULTS},
+        tools=tools,
+    )
     assert evaluate(_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
 
 
@@ -1099,22 +1526,47 @@ def test_fix3_undo_that_leaves_a_non_default_or_unknown_default_still_fails():
 def test_fix4_tint_set_moves_the_coefficients_it_is_derived_from():
     """cov-temperature.tint-sony_a7-set_0.8 (no Kelvin decode on this body)."""
     case = _edit_case([], {"changed": True})
-    obs = _steps_obs([_mv("temperature", "tint", previous=None, applied=None)],
-                     [{"temperature.coeff_b": 2.32421875, "temperature.coeff_g2": 0.0,
-                       "temperature.coeff_r": 1.61328125, "temperature.preset": 4},
-                      {"temperature.coeff_b": 2.8568811416625977, "temperature.coeff_g2": None,
-                       "temperature.coeff_r": 2.43988299369812, "temperature.preset": 2}],
-                     before_meta=WB_META)
+    obs = _steps_obs(
+        [_mv("temperature", "tint", previous=None, applied=None)],
+        [
+            {
+                "temperature.coeff_b": 2.32421875,
+                "temperature.coeff_g2": 0.0,
+                "temperature.coeff_r": 1.61328125,
+                "temperature.preset": 4,
+            },
+            {
+                "temperature.coeff_b": 2.8568811416625977,
+                "temperature.coeff_g2": None,
+                "temperature.coeff_r": 2.43988299369812,
+                "temperature.preset": 2,
+            },
+        ],
+        before_meta=WB_META,
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "verified", v.silent_failure
     # olympus: the derived Kelvin moves too (cov-temperature.tint-olympus-set_1.1)
-    obs = _steps_obs([_mv("temperature", "tint")],
-                     [{"temperature.coeff_b": 1.8203125, "temperature.coeff_g2": 0.0,
-                       "temperature.coeff_r": 1.9140625, "temperature.preset": 4,
-                       "temperature.temperature": 4924.615011773081},
-                      {"temperature.coeff_b": 1.7376030683517456, "temperature.coeff_g2": None,
-                       "temperature.coeff_r": 1.7524051666259766, "temperature.preset": 2,
-                       "temperature.temperature": 4788.635454379341}], before_meta=WB_META)
+    obs = _steps_obs(
+        [_mv("temperature", "tint")],
+        [
+            {
+                "temperature.coeff_b": 1.8203125,
+                "temperature.coeff_g2": 0.0,
+                "temperature.coeff_r": 1.9140625,
+                "temperature.preset": 4,
+                "temperature.temperature": 4924.615011773081,
+            },
+            {
+                "temperature.coeff_b": 1.7376030683517456,
+                "temperature.coeff_g2": None,
+                "temperature.coeff_r": 1.7524051666259766,
+                "temperature.preset": 2,
+                "temperature.temperature": 4788.635454379341,
+            },
+        ],
+        before_meta=WB_META,
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "verified", v.silent_failure
 
@@ -1123,16 +1575,37 @@ def test_fix4_temperature_set_is_not_collateral_on_its_coefficients():
     """cov-temperature.temperature-olympus-set_hi."""
     k = "temperature.temperature"
     chk = Check("M1", kind="equals", target={"key": k, "unit": "K", "value": 12000.0})
-    case = _edit_case([chk], {"allowed": [], "changed": True, "key": k, "units": {k: "K"}},
-                      steps=[Step("darkroom_set", write=True), Step("darkroom_set", write=True)])
-    s = [{"temperature.coeff_b": 1.8203125, "temperature.coeff_g2": 0.0,
-          "temperature.coeff_r": 1.9140625, "temperature.preset": 4, k: 4924.615011773081},
-         {"temperature.coeff_b": 1.8782345056533813, "temperature.coeff_g2": None,
-          "temperature.coeff_r": 2.0358850955963135, "temperature.preset": 2, k: 5000},
-         {"temperature.coeff_b": 1.2534654140472412, "temperature.coeff_g2": None,
-          "temperature.coeff_r": 2.7179274559020996, "temperature.preset": 2, k: 12000}]
-    obs = _steps_obs([_mv("temperature", "tint"), _mv("temperature", "temperature")], s,
-                     before_meta=WB_META)
+    case = _edit_case(
+        [chk],
+        {"allowed": [], "changed": True, "key": k, "units": {k: "K"}},
+        steps=[Step("darkroom_set", write=True), Step("darkroom_set", write=True)],
+    )
+    s = [
+        {
+            "temperature.coeff_b": 1.8203125,
+            "temperature.coeff_g2": 0.0,
+            "temperature.coeff_r": 1.9140625,
+            "temperature.preset": 4,
+            k: 4924.615011773081,
+        },
+        {
+            "temperature.coeff_b": 1.8782345056533813,
+            "temperature.coeff_g2": None,
+            "temperature.coeff_r": 2.0358850955963135,
+            "temperature.preset": 2,
+            k: 5000,
+        },
+        {
+            "temperature.coeff_b": 1.2534654140472412,
+            "temperature.coeff_g2": None,
+            "temperature.coeff_r": 2.7179274559020996,
+            "temperature.preset": 2,
+            k: 12000,
+        },
+    ]
+    obs = _steps_obs(
+        [_mv("temperature", "tint"), _mv("temperature", "temperature")], s, before_meta=WB_META
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "verified", (v.outcome, v.notes)
 
@@ -1140,25 +1613,40 @@ def test_fix4_temperature_set_is_not_collateral_on_its_coefficients():
 def test_fix4_wb_ownership_does_not_hide_real_problems():
     # a temperature report that moved an unrelated param is still (b)
     case = _edit_case([], {"changed": True})
-    obs = _steps_obs([_mv("temperature", "temperature")],
-                     [{"temperature.coeff_r": 1.9, "sigmoid.contrast": 1.5},
-                      {"temperature.coeff_r": 1.9, "sigmoid.contrast": 1.6}], before_meta=WB_META)
-    assert evaluate(case, obs, POLICY).silent_failure == \
-        "b: reported temperature.temperature but sigmoid.contrast changed"
+    obs = _steps_obs(
+        [_mv("temperature", "temperature")],
+        [
+            {"temperature.coeff_r": 1.9, "sigmoid.contrast": 1.5},
+            {"temperature.coeff_r": 1.9, "sigmoid.contrast": 1.6},
+        ],
+        before_meta=WB_META,
+    )
+    assert (
+        evaluate(case, obs, POLICY).silent_failure
+        == "b: reported temperature.temperature but sigmoid.contrast changed"
+    )
     # a warmer move that renders cooler still fails its M4 stat check (c)
     chk = Check("M4", stat="rb", region="frame", sign=1)
-    obs = _steps_obs([_mv("temperature", "temperature")],
-                     [{"temperature.coeff_r": 1.9, "temperature.coeff_g2": 0.0},
-                      {"temperature.coeff_r": 2.1, "temperature.coeff_g2": None}],
-                     before_meta=WB_META)
+    obs = _steps_obs(
+        [_mv("temperature", "temperature")],
+        [
+            {"temperature.coeff_r": 1.9, "temperature.coeff_g2": 0.0},
+            {"temperature.coeff_r": 2.1, "temperature.coeff_g2": None},
+        ],
+        before_meta=WB_META,
+    )
     obs.stats_before, obs.stats_after = {"frame": {"rb": 1.0}}, {"frame": {"rb": 0.8}}
     v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
     assert v.silent_failure.startswith("c: M4 rb moved"), v.silent_failure
     # coeff_g2 0.0 -> None alone is not a change, so the history-only write is still (a)
-    obs = _steps_obs([_mv("temperature", "temperature")],
-                     [{"temperature.coeff_r": 1.9, "temperature.coeff_g2": 0.0},
-                      {"temperature.coeff_r": 1.9, "temperature.coeff_g2": None}],
-                     before_meta=WB_META)
+    obs = _steps_obs(
+        [_mv("temperature", "temperature")],
+        [
+            {"temperature.coeff_r": 1.9, "temperature.coeff_g2": 0.0},
+            {"temperature.coeff_r": 1.9, "temperature.coeff_g2": None},
+        ],
+        before_meta=WB_META,
+    )
     v = evaluate(_edit_case([], {"changed": True, "key": "temperature.coeff_r"}), obs, POLICY)
     assert v.silent_failure is not None and v.silent_failure.startswith("a:"), v.silent_failure
 
@@ -1169,25 +1657,43 @@ def test_fix4_derived_key_is_restored_only_when_its_coefficients_are():
     stayed at the 7000 K values; None == None must not read as restored."""
     k = "temperature.temperature"
     chk = Check("M1", kind="restored", target={"from": 1, "keys": [k], "units": {k: "K"}})
-    case = _edit_case([chk], None, kind="workflow",
-                      steps=[Step("darkroom_set", write=True), Step("darkroom_set", write=True),
-                             Step("darkroom_undo_last", write=True)])
-    s1 = {"temperature.coeff_b": 2.3526809215545654, "temperature.coeff_g2": None,
-          "temperature.coeff_r": 1.6502976417541504, "temperature.preset": 2}
-    s2 = {"temperature.coeff_b": 1.1910351514816284, "temperature.coeff_g2": None,
-          "temperature.coeff_r": 2.8313372135162354, "temperature.preset": 2}
-    s0 = {"temperature.coeff_b": 2.32421875, "temperature.coeff_g2": 0.0,
-          "temperature.coeff_r": 1.61328125, "temperature.preset": 4}
+    case = _edit_case(
+        [chk],
+        None,
+        kind="workflow",
+        steps=[
+            Step("darkroom_set", write=True),
+            Step("darkroom_set", write=True),
+            Step("darkroom_undo_last", write=True),
+        ],
+    )
+    s1 = {
+        "temperature.coeff_b": 2.3526809215545654,
+        "temperature.coeff_g2": None,
+        "temperature.coeff_r": 1.6502976417541504,
+        "temperature.preset": 2,
+    }
+    s2 = {
+        "temperature.coeff_b": 1.1910351514816284,
+        "temperature.coeff_g2": None,
+        "temperature.coeff_r": 2.8313372135162354,
+        "temperature.preset": 2,
+    }
+    s0 = {
+        "temperature.coeff_b": 2.32421875,
+        "temperature.coeff_g2": 0.0,
+        "temperature.coeff_r": 1.61328125,
+        "temperature.preset": 4,
+    }
     tools = ["darkroom_set", "darkroom_set", "darkroom_undo_last"]
-    envs = [_mv("temperature", "tint"), _mv("temperature", "temperature"),
-            _err("unsupported_undo")]
-    v = evaluate(case, _steps_obs(envs, [s0, s1, s2, s2], before_meta=WB_META, tools=tools),
-                 POLICY)
+    envs = [_mv("temperature", "tint"), _mv("temperature", "temperature"), _err("unsupported_undo")]
+    v = evaluate(case, _steps_obs(envs, [s0, s1, s2, s2], before_meta=WB_META, tools=tools), POLICY)
     assert v.score == "fail" and not v.checks[0].ok, v
     # an undo that put the coefficients back is restored (coeff_g2 None == None)
     ok_undo = [*envs[:2], _ok({})]
-    v = evaluate(case, _steps_obs(ok_undo, [s0, s1, s2, s1], before_meta=WB_META, tools=tools),
-                 POLICY)
+    v = evaluate(
+        case, _steps_obs(ok_undo, [s0, s1, s2, s1], before_meta=WB_META, tools=tools), POLICY
+    )
     assert v.outcome == "verified", v
 
 
@@ -1202,11 +1708,16 @@ def test_fix4_derived_key_is_restored_only_when_its_coefficients_are():
 
 
 def _parity_case_obs(reason: str | None):
-    case = _edit_case([Check("extra", target={"path": "envelopes_match", "op": "truthy"})],
-                      None, kind="workflow", steps=[Step("parity_pair")])
-    obs = Observation(calls=[CallRecord("parity_pair", {}, _ok({"diffs": []}))],
-                      extra={"envelopes_match": True, "parity_diffs": [],
-                             "parity_needs_review": reason})
+    case = _edit_case(
+        [Check("extra", target={"path": "envelopes_match", "op": "truthy"})],
+        None,
+        kind="workflow",
+        steps=[Step("parity_pair")],
+    )
+    obs = Observation(
+        calls=[CallRecord("parity_pair", {}, _ok({"diffs": []}))],
+        extra={"envelopes_match": True, "parity_diffs": [], "parity_needs_review": reason},
+    )
     return case, obs
 
 
@@ -1239,26 +1750,41 @@ def test_parity_same_failure_is_pass_flag_restores_the_old_scoring():
 
 
 ACTION_CHECK = Check("extra", target={"path": "action_ok", "op": "truthy"})
-VERSION_CHECK = Check("extra", target={"path": "detail.config_has_version", "op": "truthy"},
-                      tags={"disputed": "spec 3.7 vs setup.py design, needs Pratik"})
+VERSION_CHECK = Check(
+    "extra",
+    target={"path": "detail.config_has_version", "op": "truthy"},
+    tags={"disputed": "spec 3.7 vs setup.py design, needs Pratik"},
+)
 
 
 def _install_case(checks):
-    return Case(id="ins-x", layer="install", tier="P0", mode="cli",
-               steps=[Step("rehearsal", {"action": "setup"}, 120.0, False)],
-               expect=Expect("workflow", checks))
+    return Case(
+        id="ins-x",
+        layer="install",
+        tier="P0",
+        mode="cli",
+        steps=[Step("rehearsal", {"action": "setup"}, 120.0, False)],
+        expect=Expect("workflow", checks),
+    )
 
 
 def _install_obs(*, action_ok, config_has_version):
-    return Observation(calls=[CallRecord("rehearsal", {"action": "setup"},
-                                         {"ok": action_ok, "outcome": "ok", "data": {}})],
-                       extra={"action_ok": action_ok,
-                              "detail": {"config_has_version": config_has_version}})
+    return Observation(
+        calls=[
+            CallRecord(
+                "rehearsal", {"action": "setup"}, {"ok": action_ok, "outcome": "ok", "data": {}}
+            )
+        ],
+        extra={"action_ok": action_ok, "detail": {"config_has_version": config_has_version}},
+    )
 
 
 def test_tagged_check_alone_failing_gives_needs_review():
-    v = evaluate(_install_case([ACTION_CHECK, VERSION_CHECK]),
-                 _install_obs(action_ok=True, config_has_version=False), POLICY)
+    v = evaluate(
+        _install_case([ACTION_CHECK, VERSION_CHECK]),
+        _install_obs(action_ok=True, config_has_version=False),
+        POLICY,
+    )
     assert (v.score, v.outcome) == ("partial", "needs_review")
     assert v.notes == ["spec 3.7 vs setup.py design, needs Pratik"]
 
@@ -1266,15 +1792,21 @@ def test_tagged_check_alone_failing_gives_needs_review():
 def test_untagged_check_failing_alongside_a_passing_tagged_check_gives_failed():
     """A real product failure (the untagged check) must never be lifted to
     partial by a passing-or-failing tagged check sitting next to it."""
-    v = evaluate(_install_case([ACTION_CHECK, VERSION_CHECK]),
-                 _install_obs(action_ok=False, config_has_version=True), POLICY)
+    v = evaluate(
+        _install_case([ACTION_CHECK, VERSION_CHECK]),
+        _install_obs(action_ok=False, config_has_version=True),
+        POLICY,
+    )
     assert (v.score, v.outcome) == ("fail", "failed")
     assert v.notes and v.notes[0].startswith("check 0:")
 
 
 def test_both_checks_passing_gives_verified():
-    v = evaluate(_install_case([ACTION_CHECK, VERSION_CHECK]),
-                 _install_obs(action_ok=True, config_has_version=True), POLICY)
+    v = evaluate(
+        _install_case([ACTION_CHECK, VERSION_CHECK]),
+        _install_obs(action_ok=True, config_has_version=True),
+        POLICY,
+    )
     assert (v.score, v.outcome) == ("pass", "verified")
 
 
@@ -1284,11 +1816,17 @@ def test_a_differently_keyed_tag_is_never_read_as_disputed():
     or anything else) is inert here, so a real value mismatch under some
     OTHER tag key still scores as a genuine failure/partial, never
     needs_review."""
-    checks = [ACTION_CHECK, Check("extra", target={"path": "detail.config_has_version",
-                                                    "op": "truthy"},
-                                  tags={"sign_unverified": "unrelated to this evaluator path"})]
-    v = evaluate(_install_case(checks),
-                 _install_obs(action_ok=True, config_has_version=False), POLICY)
+    checks = [
+        ACTION_CHECK,
+        Check(
+            "extra",
+            target={"path": "detail.config_has_version", "op": "truthy"},
+            tags={"sign_unverified": "unrelated to this evaluator path"},
+        ),
+    ]
+    v = evaluate(
+        _install_case(checks), _install_obs(action_ok=True, config_has_version=False), POLICY
+    )
     assert v.outcome != "needs_review"
 
 
@@ -1296,13 +1834,21 @@ def test_an_untagged_two_check_workflow_case_keeps_todays_partial():
     """The new path only ever activates when at least one Check carries a
     "needs_review" tag; an ordinary untagged multi-check case must keep its
     existing partial-credit scoring exactly as before."""
-    checks = [Check("extra", target={"path": "a", "op": "truthy"}),
-             Check("extra", target={"path": "b", "op": "truthy"})]
-    case = Case(id="c", layer="coverage", tier="P1", mode="tool",
-               steps=[Step("darkroom_set", {}, budget_s=3.5, write=True)],
-               expect=Expect("workflow", checks))
-    obs = Observation(calls=[CallRecord("darkroom_set", {}, _ok(), write=True)],
-                      extra={"a": True, "b": False})
+    checks = [
+        Check("extra", target={"path": "a", "op": "truthy"}),
+        Check("extra", target={"path": "b", "op": "truthy"}),
+    ]
+    case = Case(
+        id="c",
+        layer="coverage",
+        tier="P1",
+        mode="tool",
+        steps=[Step("darkroom_set", {}, budget_s=3.5, write=True)],
+        expect=Expect("workflow", checks),
+    )
+    obs = Observation(
+        calls=[CallRecord("darkroom_set", {}, _ok(), write=True)], extra={"a": True, "b": False}
+    )
     v = evaluate(case, obs, POLICY)
     assert (v.score, v.outcome) == ("partial", "partial")
 
@@ -1311,9 +1857,17 @@ def test_an_untagged_two_check_workflow_case_keeps_todays_partial():
 # check kinds, and the workflow needs_review fallback for a clarify-only
 # conversation with no verb/write call.
 
+
 def _agent_workflow_case(checks, sidecar):
-    return Case(id="sca-c", layer="scenarios_agent", tier="P0", mode="agent", steps=[],
-               expect=Expect("workflow", checks, sidecar), meta={})
+    return Case(
+        id="sca-c",
+        layer="scenarios_agent",
+        tier="P0",
+        mode="agent",
+        steps=[],
+        expect=Expect("workflow", checks, sidecar),
+        meta={},
+    )
 
 
 def test_verb_check_rejects_a_successful_read_that_is_not_the_workflow_verb():
@@ -1364,7 +1918,8 @@ def test_clarify_only_needs_review_reaches_r0348_r0364_shape_before_sidecar_gate
     # something WAS written) must still fall through to the sidecar gate,
     # not needs_review -- the fix must not swallow every failure.
     calls_wrote_something_else = [
-        CallRecord("darkroom_set", {}, {"ok": True, "verb": "darkroom.set"}, write=True)]
+        CallRecord("darkroom_set", {}, {"ok": True, "verb": "darkroom.set"}, write=True)
+    ]
     obs3 = Observation(calls=calls_wrote_something_else, before=_snap("a"), after=_snap("a"))
     v3 = evaluate(case2, obs3, POLICY)
     assert v3.outcome != "needs_review", v3
@@ -1375,9 +1930,11 @@ def test_verb_check_passes_on_the_real_verb_even_if_not_the_last_call():
     verb: the verb check must not require it to be the LAST call."""
     check = Check("verb", target={"any_of": ["export.release", "export.run"]})
     case = _agent_workflow_case([check], {"changed": False})
-    calls = [CallRecord("library_jobs", {}, {"ok": True, "verb": "library.jobs"}),
-             CallRecord("export_release", {}, {"ok": True, "verb": "export.release"}),
-             CallRecord("darkroom_status", {}, {"ok": True, "verb": "darkroom.status"})]
+    calls = [
+        CallRecord("library_jobs", {}, {"ok": True, "verb": "library.jobs"}),
+        CallRecord("export_release", {}, {"ok": True, "verb": "export.release"}),
+        CallRecord("darkroom_status", {}, {"ok": True, "verb": "darkroom.status"}),
+    ]
     obs = Observation(calls=calls, before=_snap("a"), after=_snap("a"))
     v = evaluate(case, obs, POLICY)
     assert v.score == "pass" and v.outcome == "verified", v
@@ -1388,14 +1945,20 @@ def test_repeat_more_verb_check_requires_a_real_write_not_any_ok_call():
     case = _agent_workflow_case([check], {"changed": True})
     # a read-only conversation: no write call anywhere
     calls = [CallRecord("darkroom_get", {}, {"ok": True, "verb": "darkroom.get"})]
-    obs = Observation(calls=calls, before=_snap("a", **{"exposure.exposure": 1.0}),
-                      after=_snap("a", **{"exposure.exposure": 1.0}))
+    obs = Observation(
+        calls=calls,
+        before=_snap("a", **{"exposure.exposure": 1.0}),
+        after=_snap("a", **{"exposure.exposure": 1.0}),
+    )
     v = evaluate(case, obs, POLICY)
     assert v.score != "pass", v
     # a real write call passes
     calls_ok = [CallRecord("darkroom_say", {}, {"ok": True, "verb": "darkroom.say"}, write=True)]
-    obs_ok = Observation(calls=calls_ok, before=_snap("a", **{"exposure.exposure": 1.0}),
-                         after=_snap("b", **{"exposure.exposure": 1.5}))
+    obs_ok = Observation(
+        calls=calls_ok,
+        before=_snap("a", **{"exposure.exposure": 1.0}),
+        after=_snap("b", **{"exposure.exposure": 1.5}),
+    )
     v2 = evaluate(case, obs_ok, POLICY)
     assert v2.score == "pass" and v2.outcome == "verified", v2
 
@@ -1406,8 +1969,9 @@ def test_undo_check_verified_by_history_end_decrement_no_sidecar_gate():
     change a fresh frame with nothing of the agent's own to undo may never
     produce."""
     case = _agent_workflow_case([Check("undo", target={})], None)
-    calls = [CallRecord("darkroom_undo_last", {}, {"ok": True, "verb": "darkroom.undo_last"},
-                        write=True)]
+    calls = [
+        CallRecord("darkroom_undo_last", {}, {"ok": True, "verb": "darkroom.undo_last"}, write=True)
+    ]
     before = {"fingerprint": "a", "history_end": 3, "params": {"exposure.exposure": 1.0}}
     after = {"fingerprint": "a", "history_end": 2, "params": {"exposure.exposure": 1.0}}
     obs = Observation(calls=calls, before=before, after=after)
@@ -1446,8 +2010,9 @@ def test_undo_check_passes_on_a_real_undo_call_that_restores_params():
     params -- the guard above lets `decremented OR restored` decide, same
     as before the fix."""
     case = _agent_workflow_case([Check("undo", target={})], None)
-    calls = [CallRecord("darkroom_undo_last", {}, {"ok": True, "verb": "darkroom.undo_last"},
-                        write=True)]
+    calls = [
+        CallRecord("darkroom_undo_last", {}, {"ok": True, "verb": "darkroom.undo_last"}, write=True)
+    ]
     before = {"fingerprint": "a", "history_end": 1, "params": {"exposure.exposure": 1.0}}
     after = {"fingerprint": "a", "history_end": 1, "params": {"exposure.exposure": 1.0}}
     obs = Observation(calls=calls, before=before, after=after)
@@ -1457,8 +2022,9 @@ def test_undo_check_passes_on_a_real_undo_call_that_restores_params():
 
 def test_undo_check_fails_when_neither_decremented_nor_restored():
     case = _agent_workflow_case([Check("undo", target={})], None)
-    calls = [CallRecord("darkroom_undo_last", {}, {"ok": True, "verb": "darkroom.undo_last"},
-                        write=True)]
+    calls = [
+        CallRecord("darkroom_undo_last", {}, {"ok": True, "verb": "darkroom.undo_last"}, write=True)
+    ]
     before = {"fingerprint": "a", "history_end": 1, "params": {"exposure.exposure": 1.0}}
     after = {"fingerprint": "b", "history_end": 2, "params": {"exposure.exposure": 1.8}}
     obs = Observation(calls=calls, before=before, after=after)
@@ -1473,9 +2039,19 @@ def test_undo_check_honest_noop_scores_needs_review_not_failed():
     agent that honestly finds nothing to undo scores worse than one that
     never called anything at all."""
     case = _agent_workflow_case([Check("undo", target={})], None)
-    calls = [CallRecord("darkroom_undo_last", {},
-                        {"ok": False, "outcome": "noop", "verb": "darkroom.undo_last",
-                         "error": {"code": "noop", "message": "nothing to undo"}}, write=True)]
+    calls = [
+        CallRecord(
+            "darkroom_undo_last",
+            {},
+            {
+                "ok": False,
+                "outcome": "noop",
+                "verb": "darkroom.undo_last",
+                "error": {"code": "noop", "message": "nothing to undo"},
+            },
+            write=True,
+        )
+    ]
     before = {"fingerprint": "a", "history_end": 0, "params": {"exposure.exposure": 1.0}}
     after = {"fingerprint": "a", "history_end": 0, "params": {"exposure.exposure": 1.0}}
     obs = Observation(calls=calls, before=before, after=after)
@@ -1484,6 +2060,7 @@ def test_undo_check_honest_noop_scores_needs_review_not_failed():
 
 
 # -- row 501 item G, ruling 8: `unrequested_edit` in OUTCOMES -----------------
+
 
 def test_unrequested_edit_is_in_the_outcomes_table_as_a_fail():
     """(row 501 item G, fix round 1, Opus finding 6): `evaluate()`'s
@@ -1498,11 +2075,18 @@ def test_unrequested_edit_outcome_is_produced_and_now_in_the_table():
     """End to end: the out-of-scope refuse_and_offer_only policy's own
     write-before-choice case really does produce `unrequested_edit`, and
     that outcome now has a table entry."""
-    case = Case(id="g-c", layer="scenarios_agent", tier="P0", mode="agent",
-               steps=[], expect=Expect("refuse"),
-               meta={"out_of_scope_policy": "refuse_and_offer_only"})
-    obs = Observation(calls=[], agent_text="Sure, done.",
-                      before={"fingerprint": "a"}, after={"fingerprint": "b"})
+    case = Case(
+        id="g-c",
+        layer="scenarios_agent",
+        tier="P0",
+        mode="agent",
+        steps=[],
+        expect=Expect("refuse"),
+        meta={"out_of_scope_policy": "refuse_and_offer_only"},
+    )
+    obs = Observation(
+        calls=[], agent_text="Sure, done.", before={"fingerprint": "a"}, after={"fingerprint": "b"}
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "unrequested_edit"
     assert OUTCOMES[v.outcome] == FAIL
@@ -1516,11 +2100,17 @@ def test_c5_rule_f_honest_noop_at_target_synthetic():
     `noop: true` -- the pre-write snapshot alone (not "the check happened
     to pass") proves it was honestly nothing to change."""
     chk = Check("M1", kind="equals", target={"key": "lens.__enabled", "value": 1.0, "unit": "bool"})
-    case = _edit_case([chk], {"changed": True, "key": "lens.__enabled",
-                              "units": {"lens.__enabled": "bool"}},
-                      steps=[Step("darkroom_say", {}, budget_s=3.5, write=True)])
-    env = _ok({"noop": True, "moves": [{"module": "lens", "param": "__enabled", "noop": True,
-                                        "committed": True}]})
+    case = _edit_case(
+        [chk],
+        {"changed": True, "key": "lens.__enabled", "units": {"lens.__enabled": "bool"}},
+        steps=[Step("darkroom_say", {}, budget_s=3.5, write=True)],
+    )
+    env = _ok(
+        {
+            "noop": True,
+            "moves": [{"module": "lens", "param": "__enabled", "noop": True, "committed": True}],
+        }
+    )
     obs = _obs(env, _snap("a", **{"lens.__enabled": 1}), _snap("a", **{"lens.__enabled": 1}))
     v = evaluate(case, obs, POLICY)
     assert (v.score, v.outcome) == ("pass", "verified")
@@ -1530,17 +2120,38 @@ def test_c5_rule_a_net_zero_set_then_undo_synthetic():
     """Rule (a): a precondition (+0.25) and the tested write (-0.25) net
     to zero across the WHOLE case, but the per-step snapshot shows the
     tested write itself landed."""
-    chk = Check("M1", kind="delta", target={"key": "colorbalancergb.global_saturation",
-                                            "delta": -0.25, "unit": "%", "tol": 0.025, "from": 1})
-    case = _edit_case([chk], {"changed": True, "key": "colorbalancergb.global_saturation",
-                              "units": {"colorbalancergb.global_saturation": "%"}},
-                      steps=[Step("darkroom_set", {}, budget_s=3.5, write=True),
-                             Step("darkroom_adjust", {}, budget_s=3.5, write=True)])
-    calls = [CallRecord("darkroom_set", {}, _ok(), write=True),
-             CallRecord("darkroom_adjust", {}, _ok(), write=True)]
-    snaps = [{"colorbalancergb.global_saturation": 0.0},
-             {"colorbalancergb.global_saturation": 0.25},
-             {"colorbalancergb.global_saturation": 0.0}]
+    chk = Check(
+        "M1",
+        kind="delta",
+        target={
+            "key": "colorbalancergb.global_saturation",
+            "delta": -0.25,
+            "unit": "%",
+            "tol": 0.025,
+            "from": 1,
+        },
+    )
+    case = _edit_case(
+        [chk],
+        {
+            "changed": True,
+            "key": "colorbalancergb.global_saturation",
+            "units": {"colorbalancergb.global_saturation": "%"},
+        },
+        steps=[
+            Step("darkroom_set", {}, budget_s=3.5, write=True),
+            Step("darkroom_adjust", {}, budget_s=3.5, write=True),
+        ],
+    )
+    calls = [
+        CallRecord("darkroom_set", {}, _ok(), write=True),
+        CallRecord("darkroom_adjust", {}, _ok(), write=True),
+    ]
+    snaps = [
+        {"colorbalancergb.global_saturation": 0.0},
+        {"colorbalancergb.global_saturation": 0.25},
+        {"colorbalancergb.global_saturation": 0.0},
+    ]
     obs = Observation(calls=calls, before=_snap("a"), after=_snap("a"), extra={"snapshots": snaps})
     v = evaluate(case, obs, POLICY)
     assert (v.score, v.outcome) == ("pass", "verified")
@@ -1551,13 +2162,30 @@ def test_c5_rule_c_nested_clamp_synthetic():
     `clamped: true` per move in `data.moves[j]`, unlike a plain
     `darkroom_set`'s flat `data.clamped` -- the boundary check must read
     both shapes."""
-    chk = Check("boundary", target={"key": "exposure.black", "unit": "ratio",
-                                    "request": 0.199755859375, "bound": 0.1})
-    case = _edit_case([chk], kind="edit", steps=[Step("darkroom_say", {}, budget_s=3.5, write=True)])
-    env = _ok({"moves": [{"module": "exposure", "param": "black", "clamped": True,
-                          "applied": 0.1, "cap": 0.1}]}, outcome="moved_to_limit")
-    obs = _obs(env, _snap("a", **{"exposure.black": -0.0002}),
-              _snap("b", **{"exposure.black": 0.1}))
+    chk = Check(
+        "boundary",
+        target={"key": "exposure.black", "unit": "ratio", "request": 0.199755859375, "bound": 0.1},
+    )
+    case = _edit_case(
+        [chk], kind="edit", steps=[Step("darkroom_say", {}, budget_s=3.5, write=True)]
+    )
+    env = _ok(
+        {
+            "moves": [
+                {
+                    "module": "exposure",
+                    "param": "black",
+                    "clamped": True,
+                    "applied": 0.1,
+                    "cap": 0.1,
+                }
+            ]
+        },
+        outcome="moved_to_limit",
+    )
+    obs = _obs(
+        env, _snap("a", **{"exposure.black": -0.0002}), _snap("b", **{"exposure.black": 0.1})
+    )
     v = evaluate(case, obs, POLICY)
     assert (v.score, v.outcome) == ("pass", "verified")
 
@@ -1581,22 +2209,45 @@ def _cz_chk(target=0.0, key="colorzones.strength"):
 
 def _cz_case(chk=None, steps=None, key="colorzones.strength"):
     chk = chk or _cz_chk()
-    return _edit_case([chk], {"changed": False, "key": key, "units": {key: "%"}},
-                      steps=steps or [Step("darkroom_set", {}, budget_s=3.5, write=True)])
+    return _edit_case(
+        [chk],
+        {"changed": False, "key": key, "units": {key: "%"}},
+        steps=steps or [Step("darkroom_set", {}, budget_s=3.5, write=True)],
+    )
 
 
 def _cz_snap(fp, params=None, verified_defaults=None):
-    return {"fingerprint": fp, "history_end": 1, "params": params or {},
-            "verified_defaults": verified_defaults or {}}
+    return {
+        "fingerprint": fp,
+        "history_end": 1,
+        "params": params or {},
+        "verified_defaults": verified_defaults or {},
+    }
 
 
 def _cz_call(value, noop, applied, ok=True, module="colorzones", param="strength"):
-    return CallRecord("darkroom_set", {"module": module, "param": param, "value": value},
-                      _ok({"module": module, "param": param, "noop": noop, "applied": applied,
-                          "committed": True}) if ok else
-                      {"ok": False, "outcome": "error:usage",
-                       "error": {"code": "usage", "fix": "x", "message": "no"}},
-                      write=True)
+    return CallRecord(
+        "darkroom_set",
+        {"module": module, "param": param, "value": value},
+        (
+            _ok(
+                {
+                    "module": module,
+                    "param": param,
+                    "noop": noop,
+                    "applied": applied,
+                    "committed": True,
+                }
+            )
+            if ok
+            else {
+                "ok": False,
+                "outcome": "error:usage",
+                "error": {"code": "usage", "fix": "x", "message": "no"},
+            }
+        ),
+        write=True,
+    )
 
 
 def test_m1_declared_default_fallback_scores_pass():
@@ -1604,9 +2255,11 @@ def test_m1_declared_default_fallback_scores_pass():
     default), (b) its module has no history entry in after -- and the
     envelope's own noop/applied agree with the default: the fallback
     measures the default and the check passes."""
-    obs = Observation(calls=[_cz_call(0.0, True, 0.0)],
-                      before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
-                      after=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}))
+    obs = Observation(
+        calls=[_cz_call(0.0, True, 0.0)],
+        before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+        after=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+    )
     v = evaluate(_cz_case(), obs, POLICY)
     assert (v.score, v.outcome) == ("pass", "verified")
     assert v.checks[0].measured == 0.0
@@ -1641,8 +2294,11 @@ def test_m1_declared_default_fallback_neutral_only_key_still_fails():
     side of this same boundary and CAN import the product."""
     chk = _cz_chk(target=0.0, key="grain.strength")
     case = _cz_case(chk=chk, key="grain.strength")
-    obs = Observation(calls=[_cz_call(0.0, True, 0.0, module="grain", param="strength")],
-                      before=_cz_snap("a"), after=_cz_snap("a"))
+    obs = Observation(
+        calls=[_cz_call(0.0, True, 0.0, module="grain", param="strength")],
+        before=_cz_snap("a"),
+        after=_cz_snap("a"),
+    )
     v = evaluate(case, obs, POLICY)
     assert v.checks[0].measured is None
     assert POINTS[v.score] == 0.0
@@ -1653,10 +2309,13 @@ def test_m1_declared_default_fallback_module_has_history_still_fails():
     after (a sibling key of the same module is present) -- the default is
     not necessarily what darktable applied for THIS key, so the fallback
     refuses."""
-    obs = Observation(calls=[_cz_call(0.0, True, 0.0)],
-                      before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
-                      after=_cz_snap("a", params={"colorzones.curves": 0.5},
-                                    verified_defaults={"colorzones.strength": 0.0}))
+    obs = Observation(
+        calls=[_cz_call(0.0, True, 0.0)],
+        before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+        after=_cz_snap(
+            "a", params={"colorzones.curves": 0.5}, verified_defaults={"colorzones.strength": 0.0}
+        ),
+    )
     v = evaluate(_cz_case(), obs, POLICY)
     assert v.checks[0].measured is None
     assert POINTS[v.score] == 0.0
@@ -1668,9 +2327,11 @@ def test_m1_declared_default_fallback_noop_false_fails_loudly():
     fallback must not trust the params side alone. Isolated from the
     `applied`-mismatch guard below (review round 2, Minor M1) so either
     guard alone catches a mutant that drops the other."""
-    obs = Observation(calls=[_cz_call(0.0, False, 0.0)],
-                      before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
-                      after=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}))
+    obs = Observation(
+        calls=[_cz_call(0.0, False, 0.0)],
+        before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+        after=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+    )
     v = evaluate(_cz_case(), obs, POLICY)
     assert v.checks[0].measured is None
     assert POINTS[v.score] == 0.0
@@ -1681,14 +2342,24 @@ def test_m1_declared_default_fallback_envelope_not_ok_fails_loudly():
     still carries `noop: true`/a matching `applied` must not count -- the
     call itself was refused, so its `data` is not a trustworthy read of what
     darktable applied. Requires `env.get("ok")` on top of `data.get("noop")`."""
-    env = {"ok": False, "outcome": "error:usage",
-          "error": {"code": "usage", "fix": "x", "message": "no"},
-          "data": {"module": "colorzones", "param": "strength", "noop": True, "applied": 0.0,
-                    "committed": True}}
+    env = {
+        "ok": False,
+        "outcome": "error:usage",
+        "error": {"code": "usage", "fix": "x", "message": "no"},
+        "data": {
+            "module": "colorzones",
+            "param": "strength",
+            "noop": True,
+            "applied": 0.0,
+            "committed": True,
+        },
+    }
     args = {"module": "colorzones", "param": "strength", "value": 0.0}
-    obs = Observation(calls=[CallRecord("darkroom_set", args, env, write=True)],
-                      before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
-                      after=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}))
+    obs = Observation(
+        calls=[CallRecord("darkroom_set", args, env, write=True)],
+        before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+        after=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+    )
     v = evaluate(_cz_case(), obs, POLICY)
     assert v.checks[0].measured is None
     assert POINTS[v.score] == 0.0
@@ -1698,9 +2369,11 @@ def test_m1_declared_default_fallback_applied_mismatch_fails_loudly():
     """Two oracles (Z2), guard 2: the envelope reports noop=True but
     `applied` does NOT match the declared default -- isolated from the
     `noop`-false guard above (review round 2, Minor M1)."""
-    obs = Observation(calls=[_cz_call(0.0, True, 0.5)],
-                      before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
-                      after=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}))
+    obs = Observation(
+        calls=[_cz_call(0.0, True, 0.5)],
+        before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+        after=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+    )
     v = evaluate(_cz_case(), obs, POLICY)
     assert v.checks[0].measured is None
     assert POINTS[v.score] == 0.0
@@ -1714,11 +2387,21 @@ def test_m1_declared_default_fallback_earlier_unverified_write_fails_loudly():
     matching call agrees. Every matching call must be ok+noop+at-default, or
     the fallback refuses (proof4 review round 1's constructed S1 probe)."""
     calls = [_cz_call(0.5, False, 0.5), _cz_call(0.0, True, 0.0)]
-    obs = Observation(calls=calls,
-                      before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
-                      after=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}))
-    v = evaluate(_cz_case(steps=[Step("darkroom_set", {}, budget_s=3.5, write=True),
-                                 Step("darkroom_set", {}, budget_s=3.5, write=True)]), obs, POLICY)
+    obs = Observation(
+        calls=calls,
+        before=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+        after=_cz_snap("a", verified_defaults={"colorzones.strength": 0.0}),
+    )
+    v = evaluate(
+        _cz_case(
+            steps=[
+                Step("darkroom_set", {}, budget_s=3.5, write=True),
+                Step("darkroom_set", {}, budget_s=3.5, write=True),
+            ]
+        ),
+        obs,
+        POLICY,
+    )
     assert v.checks[0].measured is None
     assert POINTS[v.score] == 0.0
 
@@ -1726,24 +2409,50 @@ def test_m1_declared_default_fallback_earlier_unverified_write_fails_loudly():
 KEY = "colorbalancergb.shadows_chroma"
 #: the product's real clamp envelope (scouter/core/moves.py `_adjust_core`:
 #: outcome moved_to_limit, so registry.call answers ok:false), hand-built
-MOVED_TO_LIMIT = {"ok": False, "outcome": "moved_to_limit",
-                  "data": {"clamped": True, "cap": 0.0, "applied": 0.0, "requested": -0.075}}
+MOVED_TO_LIMIT = {
+    "ok": False,
+    "outcome": "moved_to_limit",
+    "data": {"clamped": True, "cap": 0.0, "applied": 0.0, "requested": -0.075},
+}
 
 
 def _chroma_delta_case(delta=-0.225, lo=0.0, hi=0.3):
-    chk = Check("M1", kind="delta", target={"key": KEY, "delta": delta, "unit": "%", "tol": 0.0075,
-                                            "step": 0.075, "from": 1, "lo": lo, "hi": hi})
-    return _edit_case([chk], {"changed": True, "key": KEY, "units": {KEY: "%"}},
-                      steps=[Step("darkroom_set", {}, budget_s=3.5, write=True),
-                             Step("darkroom_adjust", {}, budget_s=3.5, write=True)])
+    chk = Check(
+        "M1",
+        kind="delta",
+        target={
+            "key": KEY,
+            "delta": delta,
+            "unit": "%",
+            "tol": 0.0075,
+            "step": 0.075,
+            "from": 1,
+            "lo": lo,
+            "hi": hi,
+        },
+    )
+    return _edit_case(
+        [chk],
+        {"changed": True, "key": KEY, "units": {KEY: "%"}},
+        steps=[
+            Step("darkroom_set", {}, budget_s=3.5, write=True),
+            Step("darkroom_adjust", {}, budget_s=3.5, write=True),
+        ],
+    )
 
 
 def _chroma_obs(committed, adjust_env, set_env=None):
     snaps = [_snap(fp, **{KEY: v}) for fp, v in (("a", None), ("b", 0.15), ("c", committed))]
-    calls = [CallRecord("darkroom_set", {}, set_env or _ok(), write=True),
-             CallRecord("darkroom_adjust", {}, adjust_env, write=True)]
-    return Observation(calls=calls, before=snaps[0], after=snaps[2],
-                       extra={"snapshots": [x["params"] for x in snaps]})
+    calls = [
+        CallRecord("darkroom_set", {}, set_env or _ok(), write=True),
+        CallRecord("darkroom_adjust", {}, adjust_env, write=True),
+    ]
+    return Observation(
+        calls=calls,
+        before=snaps[0],
+        after=snaps[2],
+        extra={"snapshots": [x["params"] for x in snaps]},
+    )
 
 
 def test_delta_stopping_at_lower_bound_with_real_moved_to_limit_is_credited():
@@ -1834,12 +2543,29 @@ def test_n1_stop_short_of_bound_keeps_its_old_score():
 
 
 def test_n1_setup_step_never_triggers_the_rule():
-    chk = Check("M1", kind="delta", step=1,
-                target={"key": KEY, "delta": -0.225, "unit": "%", "tol": 0.0075,
-                        "step": 0.075, "from": 1, "lo": 0.0, "hi": 0.3})
-    case = _edit_case([chk], {"changed": True, "key": KEY, "units": {KEY: "%"}},
-                      steps=[Step("darkroom_set", {}, budget_s=3.5, write=True, setup=True),
-                             Step("darkroom_adjust", {}, budget_s=3.5, write=True, setup=True)])
+    chk = Check(
+        "M1",
+        kind="delta",
+        step=1,
+        target={
+            "key": KEY,
+            "delta": -0.225,
+            "unit": "%",
+            "tol": 0.0075,
+            "step": 0.075,
+            "from": 1,
+            "lo": 0.0,
+            "hi": 0.3,
+        },
+    )
+    case = _edit_case(
+        [chk],
+        {"changed": True, "key": KEY, "units": {KEY: "%"}},
+        steps=[
+            Step("darkroom_set", {}, budget_s=3.5, write=True, setup=True),
+            Step("darkroom_adjust", {}, budget_s=3.5, write=True, setup=True),
+        ],
+    )
     obs = _chroma_obs(0.0, _ok({"clamped": False}))
     assert "unreported clamp" not in (evaluate(case, obs, POLICY).silent_failure or "")
     case.steps[1].setup = False
@@ -1848,11 +2574,16 @@ def test_n1_setup_step_never_triggers_the_rule():
 
 # ---- fix/harness-r2: HB1 undo-and-disable, HB2 loud undo, L4 clip to black
 
+
 def _hb_undo_case(k, n_undo=1):
     chk = Check("M1", kind="restored", target={"from": 0, "keys": [k], "units": {k: "%"}})
-    return _edit_case([chk], None, kind="workflow",
-                      steps=[Step("darkroom_adjust", write=True)] +
-                            [Step("darkroom_undo_last", write=True)] * n_undo)
+    return _edit_case(
+        [chk],
+        None,
+        kind="workflow",
+        steps=[Step("darkroom_adjust", write=True)]
+        + [Step("darkroom_undo_last", write=True)] * n_undo,
+    )
 
 
 def test_hb1_absent_before_disabled_after_undo_is_restored_whatever_the_other_keys_hold():
@@ -1862,8 +2593,12 @@ def test_hb1_absent_before_disabled_after_undo_is_restored_whatever_the_other_ke
     tools = ["darkroom_adjust", "darkroom_undo_last"]
     envs = [_mv("colorbalancergb", "global_vibrance"), _ok({})]
     off_default = {**_cb(contrast=0.1), "colorbalancergb.__enabled": 0}
-    obs = _steps_obs(envs, [{}, _cb(global_vibrance=0.2), off_default],
-                     before_meta={"defaults": CB_DEFAULTS}, tools=tools)
+    obs = _steps_obs(
+        envs,
+        [{}, _cb(global_vibrance=0.2), off_default],
+        before_meta={"defaults": CB_DEFAULTS},
+        tools=tools,
+    )
     v = evaluate(_hb_undo_case(k), obs, POLICY)
     assert v.outcome == "verified" and v.silent_failure is None, (v.silent_failure, v.checks)
 
@@ -1872,11 +2607,19 @@ def test_hb1_an_enabled_module_left_at_a_non_default_value_is_still_not_restored
     k = "colorbalancergb.global_vibrance"
     tools = ["darkroom_adjust", "darkroom_undo_last"]
     envs = [_mv("colorbalancergb", "global_vibrance"), _ok({})]
-    obs = _steps_obs(envs, [{}, _cb(global_vibrance=0.2), _cb(global_vibrance=0.2)],
-                     before_meta={"defaults": CB_DEFAULTS}, tools=tools)
+    obs = _steps_obs(
+        envs,
+        [{}, _cb(global_vibrance=0.2), _cb(global_vibrance=0.2)],
+        before_meta={"defaults": CB_DEFAULTS},
+        tools=tools,
+    )
     assert evaluate(_hb_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
-    obs = _steps_obs(envs, [{}, _cb(global_vibrance=0.2), _cb(contrast=0.1)],
-                     before_meta={"defaults": CB_DEFAULTS}, tools=tools)
+    obs = _steps_obs(
+        envs,
+        [{}, _cb(global_vibrance=0.2), _cb(contrast=0.1)],
+        before_meta={"defaults": CB_DEFAULTS},
+        tools=tools,
+    )
     assert evaluate(_hb_undo_case(k), obs, POLICY).silent_failure.startswith("e:")
 
 
@@ -1903,9 +2646,13 @@ def test_hb2_two_ok_undos_that_restored_nothing_are_still_silent():
 
 def test_l4_a_patch_clipped_to_black_in_the_asked_direction_is_never_nan_or_verified():
     chk = Check("M2", stat="ev", region="patch:ramp_-4", sign=-1)
-    obs = _obs(_ok(), _snap("a"), _snap("b"),
-               stats_before={"patch:ramp_-4": {"ev": 0.03}},
-               stats_after={"patch:ramp_-4": {"ev": 0.0}})
+    obs = _obs(
+        _ok(),
+        _snap("a"),
+        _snap("b"),
+        stats_before={"patch:ramp_-4": {"ev": 0.03}},
+        stats_after={"patch:ramp_-4": {"ev": 0.0}},
+    )
     v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
     r = v.checks[0]
     assert r.measured is not None and r.measured == r.measured  # finite, not nan
@@ -1915,8 +2662,12 @@ def test_l4_a_patch_clipped_to_black_in_the_asked_direction_is_never_nan_or_veri
 
 def test_l4_clipping_to_black_against_the_asked_direction_still_fails():
     chk = Check("M2", stat="ev", region="patch:ramp_-4", sign=1)
-    obs = _obs(_ok(), _snap("a"), _snap("b"),
-               stats_before={"patch:ramp_-4": {"ev": 0.03}},
-               stats_after={"patch:ramp_-4": {"ev": 0.0}})
+    obs = _obs(
+        _ok(),
+        _snap("a"),
+        _snap("b"),
+        stats_before={"patch:ramp_-4": {"ev": 0.03}},
+        stats_after={"patch:ramp_-4": {"ev": 0.0}},
+    )
     v = evaluate(_edit_case([chk], {"changed": True}), obs, POLICY)
     assert v.checks[0].wrong_direction and v.silent_failure.startswith("c:")

@@ -1,4 +1,3 @@
-
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,24 +27,34 @@ def test_relaunch_session_blocked_is_returned_as_observation(tmp_path):
             self.root = tmp_path / "run"
             self.corpus = corpus
             self.staged = SimpleNamespace(
-                vars={"out_dir": str(tmp_path / "run" / "exports"),
-                      "relocate_root": str(tmp_path / "run" / "relocated")},
+                vars={
+                    "out_dir": str(tmp_path / "run" / "exports"),
+                    "relocate_root": str(tmp_path / "run" / "relocated"),
+                },
                 env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")},
                 job_frames=[],
             )
 
         def call(self, tool, args, budget_s, write=False):
-            return CallRecord(tool=tool, args=args, envelope={"ok": False}, error="timeout",
-                              write=write)
+            return CallRecord(
+                tool=tool, args=args, envelope={"ok": False}, error="timeout", write=write
+            )
 
         def relaunch(self, frame=None) -> None:
             raise SessionBlocked("darktable did not quit")
 
     session = FakeSession()
-    case = Case(id="blk-crash-test", layer="bulk", tier="P1", mode="tool",
-                steps=[Step("job_run", {}, 8.0, True)],
-                expect=Expect("workflow"), body="olympus", frame_role="card",
-                meta={"frames": 2, "kill_after_frame": 50})
+    case = Case(
+        id="blk-crash-test",
+        layer="bulk",
+        tier="P1",
+        mode="tool",
+        steps=[Step("job_run", {}, 8.0, True)],
+        expect=Expect("workflow"),
+        body="olympus",
+        frame_role="card",
+        meta={"frames": 2, "kill_after_frame": 50},
+    )
 
     obs = exec_bulk.run_bulk_case(session, case)
 
@@ -55,6 +64,7 @@ def test_relaunch_session_blocked_is_returned_as_observation(tmp_path):
 
 
 # -- t_90e75c20 round 2: per-case disk routing ------------------------------
+
 
 def test_run_bulk_case_routes_out_dir_and_library_root_under_the_case_workdir(tmp_path):
     """A session that offers `point_library_root` (the real ScouterSession,
@@ -73,8 +83,10 @@ def test_run_bulk_case_routes_out_dir_and_library_root_under_the_case_workdir(tm
             self.run_root = tmp_path / "rundir"
             self.corpus = corpus
             self.staged = SimpleNamespace(
-                vars={"out_dir": str(tmp_path / "run" / "exports"),
-                      "relocate_root": str(tmp_path / "run" / "relocated")},
+                vars={
+                    "out_dir": str(tmp_path / "run" / "exports"),
+                    "relocate_root": str(tmp_path / "run" / "relocated"),
+                },
                 env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")},
                 job_frames=[],
             )
@@ -83,17 +95,28 @@ def test_run_bulk_case_routes_out_dir_and_library_root_under_the_case_workdir(tm
             pointed.append(Path(new_root))
 
         def call(self, tool, args, budget_s, write=False):
-            return CallRecord(tool=tool, args=args, envelope={"ok": True, "outcome": "ok",
-                                                              "data": {}}, write=write)
+            return CallRecord(
+                tool=tool,
+                args=args,
+                envelope={"ok": True, "outcome": "ok", "data": {}},
+                write=write,
+            )
 
         def relaunch(self, frame=None) -> None:
             pass
 
     session = FakeSession()
-    case = Case(id="blk-import-and-cull-olympus-card", layer="bulk", tier="P1", mode="tool",
-                steps=[Step("library_import", {"source": "{card}", "confirm": True}, 6.0, True)],
-                expect=Expect("workflow", []), body="olympus", frame_role="card",
-                meta={"frames": 2})
+    case = Case(
+        id="blk-import-and-cull-olympus-card",
+        layer="bulk",
+        tier="P1",
+        mode="tool",
+        steps=[Step("library_import", {"source": "{card}", "confirm": True}, 6.0, True)],
+        expect=Expect("workflow", []),
+        body="olympus",
+        frame_role="card",
+        meta={"frames": 2},
+    )
 
     exec_bulk.run_bulk_case(session, case)
 
@@ -115,24 +138,37 @@ def test_run_bulk_case_without_point_library_root_keeps_the_old_shared_out_dir(t
             self.root = tmp_path / "run"
             self.corpus = corpus
             self.staged = SimpleNamespace(
-                vars={"out_dir": str(tmp_path / "run" / "exports"),
-                      "relocate_root": str(tmp_path / "run" / "relocated")},
+                vars={
+                    "out_dir": str(tmp_path / "run" / "exports"),
+                    "relocate_root": str(tmp_path / "run" / "relocated"),
+                },
                 env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")},
                 job_frames=[],
             )
 
         def call(self, tool, args, budget_s, write=False):
-            return CallRecord(tool=tool, args=args, envelope={"ok": True, "outcome": "ok",
-                                                              "data": {}}, write=write)
+            return CallRecord(
+                tool=tool,
+                args=args,
+                envelope={"ok": True, "outcome": "ok", "data": {}},
+                write=write,
+            )
 
         def relaunch(self, frame=None) -> None:
             pass
 
     session = FakeSession()
-    case = Case(id="blk-import-and-cull-olympus-card", layer="bulk", tier="P1", mode="tool",
-                steps=[Step("library_import", {"source": "{card}", "confirm": True}, 6.0, True)],
-                expect=Expect("workflow", []), body="olympus", frame_role="card",
-                meta={"frames": 2})
+    case = Case(
+        id="blk-import-and-cull-olympus-card",
+        layer="bulk",
+        tier="P1",
+        mode="tool",
+        steps=[Step("library_import", {"source": "{card}", "confirm": True}, 6.0, True)],
+        expect=Expect("workflow", []),
+        body="olympus",
+        frame_role="card",
+        meta={"frames": 2},
+    )
 
     exec_bulk.run_bulk_case(session, case)
 
@@ -140,6 +176,7 @@ def test_run_bulk_case_without_point_library_root_keeps_the_old_shared_out_dir(t
 
 
 # -- Batch 3 / night-2 triage C2 + C12 (bulk hero-open half, row 462) -------
+
 
 def _bulk_session(tmp_path, corpus, answers):
     """A FakeSession whose `call` answers in order (repeating the last
@@ -154,8 +191,10 @@ def _bulk_session(tmp_path, corpus, answers):
             self.root = tmp_path / "run"
             self.corpus = corpus
             self.staged = SimpleNamespace(
-                vars={"out_dir": str(tmp_path / "run" / "exports"),
-                      "relocate_root": str(tmp_path / "run" / "relocated")},
+                vars={
+                    "out_dir": str(tmp_path / "run" / "exports"),
+                    "relocate_root": str(tmp_path / "run" / "relocated"),
+                },
                 env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")},
                 job_frames=[],
             )
@@ -163,8 +202,13 @@ def _bulk_session(tmp_path, corpus, answers):
         def call(self, tool, args, budget_s, write=False):
             calls.append(tool)
             ans = answers[len(calls) - 1] if len(calls) <= len(answers) else answers[-1]
-            return CallRecord(tool=tool, args=args, envelope=ans.get("envelope", {"ok": True}),
-                              error=ans.get("error"), write=write)
+            return CallRecord(
+                tool=tool,
+                args=args,
+                envelope=ans.get("envelope", {"ok": True}),
+                error=ans.get("error"),
+                write=write,
+            )
 
         def relaunch(self, frame=None) -> None:
             relaunches.append(frame)
@@ -173,9 +217,17 @@ def _bulk_session(tmp_path, corpus, answers):
 
 
 def _bulk_case():
-    return Case(id="blk-wedge-test", layer="bulk", tier="P1", mode="tool",
-               steps=[Step("job_run", {}, 8.0, True)], expect=Expect("workflow"),
-               body="olympus", frame_role="card", meta={"frames": 2})
+    return Case(
+        id="blk-wedge-test",
+        layer="bulk",
+        tier="P1",
+        mode="tool",
+        steps=[Step("job_run", {}, 8.0, True)],
+        expect=Expect("workflow"),
+        body="olympus",
+        frame_role="card",
+        meta={"frames": 2},
+    )
 
 
 def test_bulk_bridge_timeout_relaunches_once_then_recovers(tmp_path):
@@ -238,14 +290,27 @@ def test_bulk_matches_recorded_c12_open_then_write_wedge_shape(tmp_path):
     trial.mkdir()
     (trial / "H.ORF").write_bytes(b"raw")
     corpus = Corpus({"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {}}, trial)
-    answers = [{"error": "not_in_darkroom"}, {"envelope": {"ok": True, "data": {}}},
-              {"error": "commit_timeout"}]
+    answers = [
+        {"error": "not_in_darkroom"},
+        {"envelope": {"ok": True, "data": {}}},
+        {"error": "commit_timeout"},
+    ]
     session, calls, relaunches = _bulk_session(tmp_path, corpus, answers)
     session.current_frame = "not-none-until-the-relaunch-resets-it"  # R1-2
-    case = Case(id="blk-copy_paste_history-olympus-card", layer="bulk", tier="P1", mode="tool",
-               steps=[Step("darkroom_open", {"image": "{job_frame:1}"}, 30.0, False),
-                      Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
-               expect=Expect("workflow"), body="olympus", frame_role="card", meta={"frames": 7})
+    case = Case(
+        id="blk-copy_paste_history-olympus-card",
+        layer="bulk",
+        tier="P1",
+        mode="tool",
+        steps=[
+            Step("darkroom_open", {"image": "{job_frame:1}"}, 30.0, False),
+            Step("darkroom_say", {"phrase": "brighter"}, 8.0, True),
+        ],
+        expect=Expect("workflow"),
+        body="olympus",
+        frame_role="card",
+        meta={"frames": 7},
+    )
 
     obs = exec_bulk.run_bulk_case(session, case)
 
@@ -268,12 +333,23 @@ def test_bulk_bridge_relaunch_bound_holds_across_steps(tmp_path):
     trial.mkdir()
     (trial / "H.ORF").write_bytes(b"raw")
     corpus = Corpus({"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {}}, trial)
-    answers = [{"error": "bridge_timeout"}, {"envelope": {"ok": True, "data": {}}},
-              {"error": "bridge_timeout"}]
+    answers = [
+        {"error": "bridge_timeout"},
+        {"envelope": {"ok": True, "data": {}}},
+        {"error": "bridge_timeout"},
+    ]
     session, calls, relaunches = _bulk_session(tmp_path, corpus, answers)
-    case = Case(id="blk-wedge-twice", layer="bulk", tier="P1", mode="tool",
-               steps=[Step("job_run", {}, 8.0, True), Step("job_run", {}, 8.0, True)],
-               expect=Expect("workflow"), body="olympus", frame_role="card", meta={"frames": 2})
+    case = Case(
+        id="blk-wedge-twice",
+        layer="bulk",
+        tier="P1",
+        mode="tool",
+        steps=[Step("job_run", {}, 8.0, True), Step("job_run", {}, 8.0, True)],
+        expect=Expect("workflow"),
+        body="olympus",
+        frame_role="card",
+        meta={"frames": 2},
+    )
 
     obs = exec_bulk.run_bulk_case(session, case)
 
@@ -283,6 +359,7 @@ def test_bulk_bridge_relaunch_bound_holds_across_steps(tmp_path):
 
 
 # -- final fix M1: the kill timer is stopped at case end -------------------------
+
 
 def test_kill_after_never_signals_once_stopped(tmp_path, monkeypatch):
     """A stopped killer returns without signalling even when a later case's
@@ -318,20 +395,35 @@ def test_run_bulk_case_stops_its_killer_in_finally(tmp_path, monkeypatch):
 
     monkeypatch.setattr(exec_bulk, "_kill_after", fake_killer)
     session = SimpleNamespace(
-        root=tmp_path / "run", corpus=corpus,
-        staged=SimpleNamespace(vars={"out_dir": str(tmp_path / "run" / "exports"),
-                                     "relocate_root": str(tmp_path / "run" / "relocated")},
-                               env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")},
-                               job_frames=[]),
-        call=lambda tool, args, budget_s, write=False: CallRecord(tool, args, {"ok": True}))
-    case = Case(id="blk-k", layer="bulk", tier="P1", mode="tool",
-                steps=[Step("job_run", {}, 8.0, True)], expect=Expect("workflow"),
-                body="olympus", frame_role="card", meta={"frames": 2, "kill_after_frame": 5})
+        root=tmp_path / "run",
+        corpus=corpus,
+        staged=SimpleNamespace(
+            vars={
+                "out_dir": str(tmp_path / "run" / "exports"),
+                "relocate_root": str(tmp_path / "run" / "relocated"),
+            },
+            env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")},
+            job_frames=[],
+        ),
+        call=lambda tool, args, budget_s, write=False: CallRecord(tool, args, {"ok": True}),
+    )
+    case = Case(
+        id="blk-k",
+        layer="bulk",
+        tier="P1",
+        mode="tool",
+        steps=[Step("job_run", {}, 8.0, True)],
+        expect=Expect("workflow"),
+        body="olympus",
+        frame_role="card",
+        meta={"frames": 2, "kill_after_frame": 5},
+    )
     exec_bulk.run_bulk_case(session, case)
     assert stops and stops[0] is not None and stops[0].is_set()
 
 
 # -- n1-bulk fix (a): valid job slugs ----------------------------------------
+
 
 def test_job_slug_for_real_recorded_case_ids():
     """RED: the old `f"htc-{case.id}"[-40:]` fails `validate_slug` for a real
@@ -346,8 +438,9 @@ def test_job_slug_for_real_recorded_case_ids():
         "blk-time_lapse_deflicker-olympus-card",
     ]
     old_broken = [f"htc-{cid}"[-40:] for cid in real_ids]
-    assert not all(scouter_paths.SLUG_RE.match(s) for s in old_broken), \
-        "the old formula was expected to still be broken for these ids"
+    assert not all(
+        scouter_paths.SLUG_RE.match(s) for s in old_broken
+    ), "the old formula was expected to still be broken for these ids"
 
     for cid in real_ids:
         slug = exec_bulk.job_slug_for(cid)
@@ -355,6 +448,7 @@ def test_job_slug_for_real_recorded_case_ids():
 
 
 # -- n1-bulk fix (b): frame refs resolve to the imported destination --------
+
 
 def _write_config(path, library_root):
     import json
@@ -389,33 +483,63 @@ def test_run_bulk_case_points_later_steps_at_the_imported_files(tmp_path):
             self.root = tmp_path / "run"
             self.corpus = corpus
             self.staged = SimpleNamespace(
-                vars={"out_dir": str(tmp_path / "run" / "exports"),
-                      "relocate_root": str(tmp_path / "run" / "relocated")},
+                vars={
+                    "out_dir": str(tmp_path / "run" / "exports"),
+                    "relocate_root": str(tmp_path / "run" / "relocated"),
+                },
                 env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")},
-                job_frames=[], config=config_path,
+                job_frames=[],
+                config=config_path,
             )
 
         def call(self, tool, args, budget_s, write=False):
             seen_args.append((tool, args))
             if tool == "library_import":
-                files = [{"source_name": f"DUP000{i}_H.ORF", "dest": f"raw/{name}",
-                          "sha256": "x", "seq": i + 1}
-                         for i, name in enumerate(dest_names)]
-                return CallRecord(tool=tool, args=args,
-                                  envelope={"ok": True, "data": {
-                                      "job_slug": job_slug, "date": date,
-                                      "files": files, "imported": len(files)}},
-                                  write=True)
-            return CallRecord(tool=tool, args=args, envelope={"ok": True, "data": {}},
-                              write=write)
+                files = [
+                    {
+                        "source_name": f"DUP000{i}_H.ORF",
+                        "dest": f"raw/{name}",
+                        "sha256": "x",
+                        "seq": i + 1,
+                    }
+                    for i, name in enumerate(dest_names)
+                ]
+                return CallRecord(
+                    tool=tool,
+                    args=args,
+                    envelope={
+                        "ok": True,
+                        "data": {
+                            "job_slug": job_slug,
+                            "date": date,
+                            "files": files,
+                            "imported": len(files),
+                        },
+                    },
+                    write=True,
+                )
+            return CallRecord(tool=tool, args=args, envelope={"ok": True, "data": {}}, write=write)
 
     session = FakeSession()
-    case = Case(id="blk-styles-olympus-card", layer="bulk", tier="P1", mode="tool",
-                steps=[Step("library_import", {"source": "{card}", "job_slug": "{job_slug}",
-                                               "confirm": True}, 30.0, True),
-                       Step("darkroom_open", {"image": "{job_frame:1}"}, 30.0, False)],
-                expect=Expect("workflow"), body="olympus", frame_role="card",
-                meta={"frames": 2})
+    case = Case(
+        id="blk-styles-olympus-card",
+        layer="bulk",
+        tier="P1",
+        mode="tool",
+        steps=[
+            Step(
+                "library_import",
+                {"source": "{card}", "job_slug": "{job_slug}", "confirm": True},
+                30.0,
+                True,
+            ),
+            Step("darkroom_open", {"image": "{job_frame:1}"}, 30.0, False),
+        ],
+        expect=Expect("workflow"),
+        body="olympus",
+        frame_role="card",
+        meta={"frames": 2},
+    )
 
     exec_bulk.run_bulk_case(session, case)
 
@@ -426,6 +550,7 @@ def test_run_bulk_case_points_later_steps_at_the_imported_files(tmp_path):
 
 
 # -- partial import: blocked, never a silent card-path fallback -------------
+
 
 def test_run_bulk_case_blocks_on_a_partial_import(tmp_path):
     """RED (before this follow-up): `_imported_frames` filled in a missing
@@ -454,10 +579,13 @@ def test_run_bulk_case_blocks_on_a_partial_import(tmp_path):
             self.root = tmp_path / "run"
             self.corpus = corpus
             self.staged = SimpleNamespace(
-                vars={"out_dir": str(tmp_path / "run" / "exports"),
-                      "relocate_root": str(tmp_path / "run" / "relocated")},
+                vars={
+                    "out_dir": str(tmp_path / "run" / "exports"),
+                    "relocate_root": str(tmp_path / "run" / "relocated"),
+                },
                 env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")},
-                job_frames=[], config=config_path,
+                job_frames=[],
+                config=config_path,
             )
 
         def call(self, tool, args, budget_s, write=False):
@@ -466,24 +594,50 @@ def test_run_bulk_case_blocks_on_a_partial_import(tmp_path):
                 # Only DUP0000 made it into the import's own manifest --
                 # DUP0001 (the card's second staged frame) is unaccounted
                 # for, a partial import.
-                files = [{"source_name": "DUP0000_H.ORF",
-                          "dest": f"raw/{date}_{job_slug}_em10iii_0001.orf",
-                          "sha256": "x", "seq": 1}]
-                return CallRecord(tool=tool, args=args,
-                                  envelope={"ok": True, "data": {
-                                      "job_slug": job_slug, "date": date,
-                                      "files": files, "imported": len(files)}},
-                                  write=True)
-            return CallRecord(tool=tool, args=args, envelope={"ok": True, "data": {}},
-                              write=write)
+                files = [
+                    {
+                        "source_name": "DUP0000_H.ORF",
+                        "dest": f"raw/{date}_{job_slug}_em10iii_0001.orf",
+                        "sha256": "x",
+                        "seq": 1,
+                    }
+                ]
+                return CallRecord(
+                    tool=tool,
+                    args=args,
+                    envelope={
+                        "ok": True,
+                        "data": {
+                            "job_slug": job_slug,
+                            "date": date,
+                            "files": files,
+                            "imported": len(files),
+                        },
+                    },
+                    write=True,
+                )
+            return CallRecord(tool=tool, args=args, envelope={"ok": True, "data": {}}, write=write)
 
     session = FakeSession()
-    case = Case(id="blk-styles-olympus-card", layer="bulk", tier="P1", mode="tool",
-                steps=[Step("library_import", {"source": "{card}", "job_slug": "{job_slug}",
-                                               "confirm": True}, 30.0, True),
-                       Step("darkroom_open", {"image": "{job_frame:1}"}, 30.0, False)],
-                expect=Expect("workflow"), body="olympus", frame_role="card",
-                meta={"frames": 2})
+    case = Case(
+        id="blk-styles-olympus-card",
+        layer="bulk",
+        tier="P1",
+        mode="tool",
+        steps=[
+            Step(
+                "library_import",
+                {"source": "{card}", "job_slug": "{job_slug}", "confirm": True},
+                30.0,
+                True,
+            ),
+            Step("darkroom_open", {"image": "{job_frame:1}"}, 30.0, False),
+        ],
+        expect=Expect("workflow"),
+        body="olympus",
+        frame_role="card",
+        meta={"frames": 2},
+    )
 
     obs = exec_bulk.run_bulk_case(session, case)
 
@@ -500,18 +654,25 @@ def test_imported_frames_raises_import_incomplete_naming_the_missing_source(tmp_
     (shared with `run_tool_case`), not re-exported here."""
     from tests.gauntlet import execute
 
-    envelope = {"ok": True, "data": {
-        "job_slug": "htc-x", "date": "2026-05-24",
-        "files": [{"source_name": "DUP0000_H.ORF", "dest": "raw/a.orf"}]}}
+    envelope = {
+        "ok": True,
+        "data": {
+            "job_slug": "htc-x",
+            "date": "2026-05-24",
+            "files": [{"source_name": "DUP0000_H.ORF", "dest": "raw/a.orf"}],
+        },
+    }
     session = SimpleNamespace(staged=SimpleNamespace(config=tmp_path / "config.json"))
     with pytest.raises(execute.ImportIncomplete) as exc_info:
-        execute._imported_frames(session, envelope,
-                                 [Path("card/DUP0000_H.ORF"), Path("card/DUP0001_H.ORF")])
+        execute._imported_frames(
+            session, envelope, [Path("card/DUP0000_H.ORF"), Path("card/DUP0001_H.ORF")]
+        )
     assert "import_incomplete" in str(exc_info.value)
     assert "DUP0001_H.ORF" in str(exc_info.value)
 
 
 # -- n1-bulk fix (c): the relocate root exists before the verb runs ---------
+
 
 def test_run_bulk_case_creates_the_relocate_root(tmp_path):
     """RED: `library_relocate` refuses `new_root` unless it already exists as
@@ -524,16 +685,29 @@ def test_run_bulk_case_creates_the_relocate_root(tmp_path):
     relocate_root = tmp_path / "run" / "relocated"
 
     session = SimpleNamespace(
-        root=tmp_path / "run", corpus=corpus,
+        root=tmp_path / "run",
+        corpus=corpus,
         staged=SimpleNamespace(
-            vars={"out_dir": str(tmp_path / "run" / "exports"),
-                  "relocate_root": str(relocate_root)},
-            env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")}, job_frames=[]),
-        call=lambda tool, args, budget_s, write=False: CallRecord(tool, args, {"ok": True}))
-    case = Case(id="blk-sidecar-handling-olympus-card", layer="bulk", tier="P1", mode="tool",
-                steps=[Step("library_relocate", {"new_root": "{relocate_root}"}, 30.0, True)],
-                expect=Expect("workflow"), body="olympus", frame_role="card",
-                meta={"frames": 1})
+            vars={
+                "out_dir": str(tmp_path / "run" / "exports"),
+                "relocate_root": str(relocate_root),
+            },
+            env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")},
+            job_frames=[],
+        ),
+        call=lambda tool, args, budget_s, write=False: CallRecord(tool, args, {"ok": True}),
+    )
+    case = Case(
+        id="blk-sidecar-handling-olympus-card",
+        layer="bulk",
+        tier="P1",
+        mode="tool",
+        steps=[Step("library_relocate", {"new_root": "{relocate_root}"}, 30.0, True)],
+        expect=Expect("workflow"),
+        body="olympus",
+        frame_role="card",
+        meta={"frames": 1},
+    )
 
     assert not relocate_root.exists()
     exec_bulk.run_bulk_case(session, case)
@@ -541,6 +715,7 @@ def test_run_bulk_case_creates_the_relocate_root(tmp_path):
 
 
 # -- n1-bulk fix (e): the false "silent" verdict ------------------------------
+
 
 def test_reported_n_excludes_librarys_own_import_count(tmp_path):
     """RED: `reported_n` took the max over EVERY write envelope, so an
@@ -553,27 +728,48 @@ def test_reported_n_excludes_librarys_own_import_count(tmp_path):
     (trial / "H.ORF").write_bytes(b"raw")
     corpus = Corpus({"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {}}, trial)
 
-    calls = iter([
-        CallRecord(tool="library_import", args={}, write=True,
-                  envelope={"ok": True, "data": {"imported": 7, "files": []}}),
-        CallRecord(tool="darkroom_open", args={}, write=False,
-                  envelope={"ok": False}, error="usage"),
-        CallRecord(tool="style_apply", args={}, write=True,
-                  envelope=None, error="usage"),
-    ])
+    calls = iter(
+        [
+            CallRecord(
+                tool="library_import",
+                args={},
+                write=True,
+                envelope={"ok": True, "data": {"imported": 7, "files": []}},
+            ),
+            CallRecord(
+                tool="darkroom_open", args={}, write=False, envelope={"ok": False}, error="usage"
+            ),
+            CallRecord(tool="style_apply", args={}, write=True, envelope=None, error="usage"),
+        ]
+    )
     session = SimpleNamespace(
-        root=tmp_path / "run", corpus=corpus,
+        root=tmp_path / "run",
+        corpus=corpus,
         staged=SimpleNamespace(
-            vars={"out_dir": str(tmp_path / "run" / "exports"),
-                  "relocate_root": str(tmp_path / "run" / "relocated")},
-            env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")}, job_frames=[]),
-        call=lambda tool, args, budget_s, write=False: next(calls))
-    case = Case(id="blk-styles-olympus-card", layer="bulk", tier="P1", mode="tool",
-                steps=[Step("library_import", {}, 30.0, True),
-                       Step("darkroom_open", {}, 30.0, False),
-                       Step("style_apply", {}, 30.0, True)],
-                expect=Expect("workflow"), body="olympus", frame_role="card",
-                meta={"frames": 7})
+            vars={
+                "out_dir": str(tmp_path / "run" / "exports"),
+                "relocate_root": str(tmp_path / "run" / "relocated"),
+            },
+            env={"SCOUTER_CACHE": str(tmp_path / "run" / "cache")},
+            job_frames=[],
+        ),
+        call=lambda tool, args, budget_s, write=False: next(calls),
+    )
+    case = Case(
+        id="blk-styles-olympus-card",
+        layer="bulk",
+        tier="P1",
+        mode="tool",
+        steps=[
+            Step("library_import", {}, 30.0, True),
+            Step("darkroom_open", {}, 30.0, False),
+            Step("style_apply", {}, 30.0, True),
+        ],
+        expect=Expect("workflow"),
+        body="olympus",
+        frame_role="card",
+        meta={"frames": 7},
+    )
 
     obs = exec_bulk.run_bulk_case(session, case)
 

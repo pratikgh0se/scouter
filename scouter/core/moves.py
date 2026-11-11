@@ -44,8 +44,10 @@ from scouter.types import AdjustResult, ResolvedImage, SayResult, ValueResult
 #: `_ratio` only ever uses `coeff_r`/`coeff_b` anyway -- the same set
 #: `wb._TEMPERATURE_COEFF_NAMES` already uses for exactly this reason.
 _TEMP_COEFFS = wb._TEMPERATURE_COEFF_NAMES
-_TINT_WARNING = ("Kelvin read from the r/b coefficient ratio against a table measured at "
-                 "tint 1.0; at another tint it is approximate")
+_TINT_WARNING = (
+    "Kelvin read from the r/b coefficient ratio against a table measured at "
+    "tint 1.0; at another tint it is approximate"
+)
 
 
 def require_row(module: str, param: str) -> vocab.ParamSpec:
@@ -53,7 +55,7 @@ def require_row(module: str, param: str) -> vocab.ParamSpec:
     if s is None:
         raise UsageError(
             f"{module}.{param} is not in the conversational vocabulary",
-            fix="`scouter darkroom set` reaches any pinned pair; `scouter vocab list` shows the words",
+            fix="`scouter darkroom set` reaches any pinned pair; `scouter vocab list` shows the words",  # noqa: E501
             detail={"module": module, "param": param},
         )
     return s
@@ -64,20 +66,33 @@ def gate(s: vocab.ParamSpec, *, relative: bool) -> None:
     st = vocab.status(s)
     if st in ("candidate", "unreachable"):
         alt = vocab.closest_live(s)
-        hint = s.note or (f"closest live word: {alt.module}.{alt.param} ({alt.ui})" if alt else
-                          "no live alternative yet")
+        hint = s.note or (
+            f"closest live word: {alt.module}.{alt.param} ({alt.ui})"
+            if alt
+            else "no live alternative yet"
+        )
         raise NotPinned(
             f"{s.module}.{s.param} has no pinned darktable action path (status {st}); {hint}",
-            detail={"module": s.module, "param": s.param, "status": st,
-                    "candidate_paths": list(s.candidate_paths)},
+            detail={
+                "module": s.module,
+                "param": s.param,
+                "status": st,
+                "candidate_paths": list(s.candidate_paths),
+            },
         )
     if relative and st == "absolute_only":
         raise ValueUnknown(
             f"{s.module}.{s.param}'s current value is not readable from the XMP yet",
-            fix=(f"set it absolutely: `scouter darkroom set {s.module} {s.param} <value>`; "
-                 "relative moves need its XMP slot pinned by a host probe"),
-            detail={"module": s.module, "param": s.param, "status": st,
-                    "reason": "no named XMP field for this parameter"},
+            fix=(
+                f"set it absolutely: `scouter darkroom set {s.module} {s.param} <value>`; "
+                "relative moves need its XMP slot pinned by a host probe"
+            ),
+            detail={
+                "module": s.module,
+                "param": s.param,
+                "status": st,
+                "reason": "no named XMP field for this parameter",
+            },
         )
 
 
@@ -109,8 +124,9 @@ _UNKNOWN_AFTER_NUDGE = (
 )
 
 
-def read_current(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int,
-                 job: str, *, flushed: bool = False) -> tuple[float | None, str, str | None]:
+def read_current(
+    resolved: ResolvedImage, s: vocab.ParamSpec, instance: int, job: str, *, flushed: bool = False
+) -> tuple[float | None, str, str | None]:
     """(value, source, reason). Source order: journal, xmp, wb_table, neutral.
 
     `flushed`: the caller's pre-read bounce was CONFIRMED (`_precommit`), so
@@ -133,7 +149,8 @@ def read_current(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int,
         result = wb.kelvin(coeffs, camera)
         return result.get("kelvin"), "wb_table", result.get("reason")
     raw, before, pending = darkroom._raw_and_before_state(
-        job, resolved.image_id, resolved.path, s.module, s.param, instance)
+        job, resolved.image_id, resolved.path, s.module, s.param, instance
+    )
     if pending and before.get("value") is not None:
         return float(before["value"]), "journal", None
     if pending and before.get("value_unknown") and not flushed:
@@ -169,8 +186,9 @@ def _fmt(s: vocab.ParamSpec, v: float | None) -> str:
     return "?" if v is None else explain.with_unit(s, f"{vocab.to_display(s, v):.4g}")
 
 
-def _summary(s: vocab.ParamSpec, delta: float, prev: float, shown: float | None,
-             clamped: bool, target: float) -> str:
+def _summary(
+    s: vocab.ParamSpec, delta: float, prev: float, shown: float | None, clamped: bool, target: float
+) -> str:
     d = explain.with_unit(s, f"{vocab.to_display(s, delta):+.3g}")
     line = f"{s.ui}: {d} ({_fmt(s, prev)} → {_fmt(s, shown if shown is not None else target)})"
     if clamped:
@@ -182,9 +200,19 @@ def _summary(s: vocab.ParamSpec, delta: float, prev: float, shown: float | None,
     return line
 
 
-def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedImage,
-                 instance: int, commit: bool, level: str, job: str,
-                 ms_precommit: int = 0, flushed: bool = False) -> AdjustResult:
+def _adjust_core(
+    module: str,
+    param: str,
+    delta: float,
+    *,
+    resolved: ResolvedImage,
+    instance: int,
+    commit: bool,
+    level: str,
+    job: str,
+    ms_precommit: int = 0,
+    flushed: bool = False,
+) -> AdjustResult:
     """Steps 5-11 of §6.2. The caller has gated, resolved and (maybe) pre-committed.
 
     `ms_precommit` (spec §16): the caller's own pre-commit bounce time, folded
@@ -199,8 +227,12 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
     if previous is None:
         raise ValueUnknown(
             f"cannot read {module}.{param}'s current value",
-            detail={"module": module, "param": param, "source_tried": source,
-                    "reason": reason or "unknown"},
+            detail={
+                "module": module,
+                "param": param,
+                "source_tried": source,
+                "reason": reason or "unknown",
+            },
         )
     warnings: list[str] = []
     target, clamped = vocab.clamp(s, previous + delta)
@@ -215,13 +247,30 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
         # plan[0] with ms_precommit/ms_read/ms_set (spec §16) -- ms_set is
         # always 0 here, since no set_fn call was ever made.
         return AdjustResult(
-            image_id=resolved.image_id, path=resolved.path, module=module, param=param,
-            instance=instance, unit=s.unit, delta=delta, previous=previous, target=target,
-            applied=previous, clamped=True, source=source, committed=False, noop=True,
+            image_id=resolved.image_id,
+            path=resolved.path,
+            module=module,
+            param=param,
+            instance=instance,
+            unit=s.unit,
+            delta=delta,
+            previous=previous,
+            target=target,
+            applied=previous,
+            clamped=True,
+            source=source,
+            committed=False,
+            noop=True,
             summary=f"{s.ui}: already at the limit ({_fmt(s, previous)}); nothing sent",
             warnings=warnings,
-            plan=[{"action": "darkroom.adjust", "ms_precommit": ms_precommit,
-                   "ms_read": int((time.monotonic() - t0) * 1000), "ms_set": 0}],
+            plan=[
+                {
+                    "action": "darkroom.adjust",
+                    "ms_precommit": ms_precommit,
+                    "ms_read": int((time.monotonic() - t0) * 1000),
+                    "ms_set": 0,
+                }
+            ],
         )
     t1 = time.monotonic()
     wb_before = _wb_ratio(resolved, instance) if s.value_source == "wb_table" and commit else None
@@ -232,14 +281,21 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
     # neutral it actually started from, including when the write landed
     # and the commit then timed out (final review #1b).
     result = _set_recording_before(
-        module, param, target, instance=instance, commit=commit, job=job,
-        fallback=(previous, "neutral") if source == "neutral" else None)
+        module,
+        param,
+        target,
+        instance=instance,
+        commit=commit,
+        job=job,
+        fallback=(previous, "neutral") if source == "neutral" else None,
+    )
     applied = result.applied
     if s.value_source == "wb_table":
         applied, _, _ = read_current(resolved, s, instance, job) if commit else (None, "", None)
         if commit:
-            warnings.extend(_verify_kelvin(resolved, s, instance, previous, target, applied,
-                                           wb_before))
+            warnings.extend(
+                _verify_kelvin(resolved, s, instance, previous, target, applied, wb_before)
+            )
     clamped = clamped or result.clamped
     warnings.extend(result.warnings)
     explain_lines = explain.lines([explain.MoveNote(s, previous, target)], level=level, job=job)
@@ -262,8 +318,9 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
     # verify against -- there is no XMP write to read), so it falls back to
     # trusting our own computed `target`, exactly as before I3.
     if commit:
-        applied_matches_cap = applied is not None and \
-            abs(applied - target) <= max(abs(s.step) * 0.5, 1e-9)
+        applied_matches_cap = applied is not None and abs(applied - target) <= max(
+            abs(s.step) * 0.5, 1e-9
+        )
         moved_to_limit = clamped and not result.noop and applied_matches_cap
         if clamped and not result.noop and not applied_matches_cap:
             warnings.append(
@@ -278,15 +335,33 @@ def _adjust_core(module: str, param: str, delta: float, *, resolved: ResolvedIma
     cap = (applied if applied is not None else target) if moved_to_limit else None
     return AdjustResult(
         outcome="moved_to_limit" if moved_to_limit else "ok",
-        image_id=resolved.image_id, path=resolved.path, module=module, param=param,
-        instance=instance, unit=s.unit, delta=delta, previous=previous, target=target,
-        applied=applied, clamped=clamped, source=source, committed=result.committed,
-        noop=result.noop, summary=_summary(s, delta, previous, applied, clamped, target),
-        explain=explain_lines, warnings=warnings,
-        requested=previous + delta, cap=cap,
-        plan=[{"action": "darkroom.adjust", "ms_precommit": ms_precommit,
-               "ms_read": int((t1 - t0) * 1000),
-               "ms_set": int((time.monotonic() - t1) * 1000)}],
+        image_id=resolved.image_id,
+        path=resolved.path,
+        module=module,
+        param=param,
+        instance=instance,
+        unit=s.unit,
+        delta=delta,
+        previous=previous,
+        target=target,
+        applied=applied,
+        clamped=clamped,
+        source=source,
+        committed=result.committed,
+        noop=result.noop,
+        summary=_summary(s, delta, previous, applied, clamped, target),
+        explain=explain_lines,
+        warnings=warnings,
+        requested=previous + delta,
+        cap=cap,
+        plan=[
+            {
+                "action": "darkroom.adjust",
+                "ms_precommit": ms_precommit,
+                "ms_read": int((t1 - t0) * 1000),
+                "ms_set": int((time.monotonic() - t1) * 1000),
+            }
+        ],
     )
 
 
@@ -309,9 +384,15 @@ def _wb_ratio(resolved: ResolvedImage, instance: int) -> float | None:
     return darkroom._rb_ratio(params)
 
 
-def _verify_kelvin(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int, previous: float,
-                   target: float, applied: float | None,
-                   before_ratio: float | None) -> list[str]:
+def _verify_kelvin(
+    resolved: ResolvedImage,
+    s: vocab.ParamSpec,
+    instance: int,
+    previous: float,
+    target: float,
+    applied: float | None,
+    before_ratio: float | None,
+) -> list[str]:
     """Row 433, night-1 A (`cov-phrase-warmer-olympus-bare`: 4925 K -> 5225 K
     reported ok, coefficients untouched). A Kelvin move is verified in the
     coefficient domain, where darktable's write is exact: the r/b ratio must
@@ -321,13 +402,23 @@ def _verify_kelvin(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int, p
     after_ratio = _wb_ratio(resolved, instance)
     camera = _camera_for(resolved.path)
     expected = wb.expected_ratio(camera, target) if camera else None
-    detail = {"module": s.module, "param": s.param, "requested": target, "expected": target,
-              "applied": applied, "previous": previous, "ratio_before": before_ratio,
-              "ratio_after": after_ratio, "ratio_expected": expected,
-              "tolerance": _WB_VERIFY_TOLERANCE}
+    detail = {
+        "module": s.module,
+        "param": s.param,
+        "requested": target,
+        "expected": target,
+        "applied": applied,
+        "previous": previous,
+        "ratio_before": before_ratio,
+        "ratio_after": after_ratio,
+        "ratio_expected": expected,
+        "tolerance": _WB_VERIFY_TOLERANCE,
+    }
     if after_ratio is None:
-        return [f"{s.ui}: the coefficients did not decode after the write, so the move could "
-                "not be verified"]
+        return [
+            f"{s.ui}: the coefficients did not decode after the write, so the move could "
+            "not be verified"
+        ]
     if before_ratio is not None and abs(after_ratio - before_ratio) <= 1e-6 * abs(before_ratio):
         raise WriteUnverified(
             f"{s.module}.{s.param}: darktable was sent {target:.0f} K and the commit reported "
@@ -336,8 +427,10 @@ def _verify_kelvin(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int, p
             detail=detail,
         )
     if expected is None:
-        return [f"{s.ui}: {target:.0f} K is outside the measured table, so the landed "
-                "coefficients could not be checked against it"]
+        return [
+            f"{s.ui}: {target:.0f} K is outside the measured table, so the landed "
+            "coefficients could not be checked against it"
+        ]
     if abs(after_ratio - expected) / abs(expected) > _WB_VERIFY_TOLERANCE:
         raise WriteUnverified(
             f"{s.module}.{s.param}: darktable was sent {target:.0f} K, but the sidecar's r/b "
@@ -349,8 +442,9 @@ def _verify_kelvin(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int, p
     return []
 
 
-def before_fallback(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int,
-                    job: str) -> tuple[float, str] | None:
+def before_fallback(
+    resolved: ResolvedImage, s: vocab.ParamSpec, instance: int, job: str
+) -> tuple[float, str] | None:
     """What a `set` move's journal entry must record as `before` (final review #1a).
 
     `darkroom.set_param` journals the XMP/journal value it reads
@@ -368,7 +462,8 @@ def before_fallback(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int,
     if s.value_source == "wb_table":
         return None
     raw, before, _ = darkroom._raw_and_before_state(
-        job, resolved.image_id, resolved.path, s.module, s.param, instance)
+        job, resolved.image_id, resolved.path, s.module, s.param, instance
+    )
     if before.get("value") is not None:
         return None
     if before.get("value_unknown"):
@@ -380,15 +475,19 @@ def before_fallback(resolved: ResolvedImage, s: vocab.ParamSpec, instance: int,
             return float(s.neutral), "neutral"
         if s.default is not None:
             return float(s.default), "default"
-        reason = (f"{s.module} has no active history entry and the vocabulary row declares "
-                  "no neutral or darktable default, so the move could not be undone")
+        reason = (
+            f"{s.module} has no active history entry and the vocabulary row declares "
+            "no neutral or darktable default, so the move could not be undone"
+        )
     else:
         reason = f"{s.module}.{s.param} did not decode from the XMP"
     raise ValueUnknown(
         f"cannot read {s.module}.{s.param}'s current value, so this move could not be undone",
-        fix=(f"Scouter refuses rather than make an edit it could not undo: set it in "
-             f"darktable, or with `scouter darkroom set {s.module} {s.param} <value>` "
-             "(undo_last cannot restore the value before it)"),
+        fix=(
+            f"Scouter refuses rather than make an edit it could not undo: set it in "
+            f"darktable, or with `scouter darkroom set {s.module} {s.param} <value>` "
+            "(undo_last cannot restore the value before it)"
+        ),
         detail={"module": s.module, "param": s.param, "reason": reason},
     )
 
@@ -412,8 +511,7 @@ def crop_margins(target_aspect: float, width: int, height: int) -> dict[str, flo
     return {"left": 0.0, "right": 1.0, "top": m, "bottom": 1 - m}
 
 
-def _patch_before(job: str, seq: int, module: str, param: str,
-                  fallback: tuple[float, str]) -> None:
+def _patch_before(job: str, seq: int, module: str, param: str, fallback: tuple[float, str]) -> None:
     """Record `fallback` as entry `seq`'s before -- only if that entry exists,
     is this module/param, actually landed (`after` set) and still has no
     readable before. `journal.set_before_neutral` re-checks and refuses."""
@@ -422,12 +520,21 @@ def _patch_before(job: str, seq: int, module: str, param: str,
         return
     if entry.before.get("value") is not None:
         return
-    journal.set_before_neutral(job, seq, module=module, param=param, value=fallback[0],
-                               source=fallback[1])
+    journal.set_before_neutral(
+        job, seq, module=module, param=param, value=fallback[0], source=fallback[1]
+    )
 
 
-def _set_recording_before(module: str, param: str, target: float, *, instance: int,
-                          commit: bool, job: str, fallback: tuple[float, str] | None):
+def _set_recording_before(
+    module: str,
+    param: str,
+    target: float,
+    *,
+    instance: int,
+    commit: bool,
+    job: str,
+    fallback: tuple[float, str] | None,
+):
     """`darkroom.set_param.__wrapped__`, then record `fallback` as the landed
     entry's before. The engine is untouched: this only patches the journal.
 
@@ -438,7 +545,7 @@ def _set_recording_before(module: str, param: str, target: float, *, instance: i
     "seq N ... never readable". `seq` is taken before the call, so a no-op
     shortcut (which begins no entry) or a write that failed before `begin`
     patches nothing.
-    """
+    """  # noqa: E501
     set_fn = getattr(darkroom.set_param, "__wrapped__", darkroom.set_param)
     seq = journal.next_seq(job)
     try:
@@ -461,8 +568,9 @@ def _set_recording_before(module: str, param: str, target: float, *, instance: i
     return result
 
 
-def _precommit(job: str, image_id: int, *,
-               expect_module: str | None = None) -> tuple[str | None, bool]:
+def _precommit(
+    job: str, image_id: int, *, expect_module: str | None = None
+) -> tuple[str | None, bool]:
     """One expect-no-change bounce (P3-R3). `(warning, confirmed)`.
 
     A timeout is a warning, not a failure. `confirmed` is True only when the
@@ -487,21 +595,32 @@ def _precommit(job: str, image_id: int, *,
     left open on this pre-flight bounce.
     """
     try:
-        result = darkroom._commit(job, image_id, strategy="auto", attempts=1,
-                                  expect_change=False, expect_module=expect_module)
+        result = darkroom._commit(
+            job,
+            image_id,
+            strategy="auto",
+            attempts=1,
+            expect_change=False,
+            expect_module=expect_module,
+        )
     except CommitTimeout as e:
-        return (f"pre-commit did not confirm ({e.code}); the value read may predate "
-                "darktable's live state"), False
+        return (
+            f"pre-commit did not confirm ({e.code}); the value read may predate "
+            "darktable's live state"
+        ), False
     return None, bool(result.confirmed and (result.committed or result.changed))
 
 
 def _contradiction() -> None:
-    raise UsageError("bounce and trust_sidecar contradict each other; pass one",
-                     detail={"bounce": True, "trust_sidecar": True})
+    raise UsageError(
+        "bounce and trust_sidecar contradict each other; pass one",
+        detail={"bounce": True, "trust_sidecar": True},
+    )
 
 
-def precommit_decision(job: str, resolved: ResolvedImage, *, bounce: bool = False,
-                       trust_sidecar: bool = False) -> tuple[bool, str]:
+def precommit_decision(
+    job: str, resolved: ResolvedImage, *, bounce: bool = False, trust_sidecar: bool = False
+) -> tuple[bool, str]:
     """Does this read need the pre-read bounce? `(bounce_it, reason)`.
 
     Product close, row 427 item 4: the bounce is ~2.7 s of a 4.1 s one-move
@@ -549,8 +668,14 @@ def precommit_decision(job: str, resolved: ResolvedImage, *, bounce: bool = Fals
     return False, "sidecar is newer than the last move on this image"
 
 
-def _maybe_precommit(job: str, resolved: ResolvedImage, *, bounce: bool,
-                     trust_sidecar: bool, expect_module: str | None = None) -> tuple[str | None, dict]:
+def _maybe_precommit(
+    job: str,
+    resolved: ResolvedImage,
+    *,
+    bounce: bool,
+    trust_sidecar: bool,
+    expect_module: str | None = None,
+) -> tuple[str | None, dict]:
     """Run the guard, and the bounce if it asks for one. `(warning, plan_row)`."""
     do_it, reason = precommit_decision(job, resolved, bounce=bounce, trust_sidecar=trust_sidecar)
     warning, confirmed = None, False
@@ -558,13 +683,19 @@ def _maybe_precommit(job: str, resolved: ResolvedImage, *, bounce: bool,
     if do_it:
         warning, confirmed = _precommit(job, resolved.image_id, expect_module=expect_module)
     ms = int((time.monotonic() - t0) * 1000) if do_it else 0
-    return warning, {"action": "precommit", "bounced": do_it, "reason": reason, "ms": ms,
-                     "flushed": confirmed}
+    return warning, {
+        "action": "precommit",
+        "bounced": do_it,
+        "reason": reason,
+        "ms": ms,
+        "flushed": confirmed,
+    }
 
 
 @metrics.instrumented("darkroom.get")
-def get(module: str, param: str, *, instance: int = 0, bounce: bool = False,
-        job: str | None = None) -> ValueResult:
+def get(
+    module: str, param: str, *, instance: int = 0, bounce: bool = False, job: str | None = None
+) -> ValueResult:
     """A parameter's current VALUE. Never commits or moves the view unless
     `bounce=True`, which first asks darktable to write pending edits."""
     job = job or current_job()
@@ -578,23 +709,43 @@ def get(module: str, param: str, *, instance: int = 0, bounce: bool = False,
     fresh, why = history.watermark_fresh(job, resolved.image_id, resolved.xmp_path)
     warnings: list[str] = [pre_warning] if pre_warning else []
     if not fresh and not bounce:
-        warnings.append(f"sidecar not known-fresh ({why}): darktable may hold newer, uncommitted "
-                        "changes; pass bounce to commit before reading")
+        warnings.append(
+            f"sidecar not known-fresh ({why}): darktable may hold newer, uncommitted "
+            "changes; pass bounce to commit before reading"
+        )
     if value is None:
         warnings.append(reason or f"{module}.{param} is not readable")
     return ValueResult(
-        image_id=resolved.image_id, path=resolved.path, module=module, param=param,
-        instance=instance, value=value,
+        image_id=resolved.image_id,
+        path=resolved.path,
+        module=module,
+        param=param,
+        instance=instance,
+        value=value,
         display_value=None if value is None else vocab.to_display(s, value),
-        unit=s.unit, source=source, enabled=darkroom._module_enabled(resolved.path, module, instance),
-        fresh=bool(fresh), status=vocab.status(s), warnings=warnings,
+        unit=s.unit,
+        source=source,
+        enabled=darkroom._module_enabled(resolved.path, module, instance),
+        fresh=bool(fresh),
+        status=vocab.status(s),
+        warnings=warnings,
     )
 
 
 @metrics.instrumented("darkroom.adjust")
-def adjust(module: str, param: str, delta: float, *, instance: int = 0, commit: bool = True,
-           trust_sidecar: bool = False, bounce: bool = False, educative: str | None = None,
-           dry_run: bool = False, job: str | None = None) -> AdjustResult:
+def adjust(
+    module: str,
+    param: str,
+    delta: float,
+    *,
+    instance: int = 0,
+    commit: bool = True,
+    trust_sidecar: bool = False,
+    bounce: bool = False,
+    educative: str | None = None,
+    dry_run: bool = False,
+    job: str | None = None,
+) -> AdjustResult:
     """Move one parameter by `delta` (internal units), relative to its current value."""
     job = job or current_job()
     s = require_row(module, param)
@@ -607,10 +758,21 @@ def adjust(module: str, param: str, delta: float, *, instance: int = 0, commit: 
         _contradiction()
     if dry_run:
         return AdjustResult(
-            outcome="dry_run", module=module, param=param, instance=instance, unit=s.unit,
+            outcome="dry_run",
+            module=module,
+            param=param,
+            instance=instance,
+            unit=s.unit,
             delta=delta,
-            plan=[{"action": "darkroom.adjust", "path": dtbridge.ACTION_PATHS[(module, param)],
-                   "delta": delta, "clamp": [s.lo, s.hi], "wraps": s.wraps}],
+            plan=[
+                {
+                    "action": "darkroom.adjust",
+                    "path": dtbridge.ACTION_PATHS[(module, param)],
+                    "delta": delta,
+                    "clamp": [s.lo, s.hi],
+                    "wraps": s.wraps,
+                }
+            ],
             reason="dry run: no darktable calls were made; the current value was not read",
         )
     resolved = darkroom._current_image()
@@ -639,20 +801,32 @@ def adjust(module: str, param: str, delta: float, *, instance: int = 0, commit: 
     module, param, instance = _target(routed)
     # Refused with nothing sent when the sidecar already shows preset 4 and
     # the route is unavailable; re-checked after the bounce below.
-    darkroom.refuse_wb_late(resolved.path, module, [param], instance,
-                            what=f"darkroom adjust {module}.{param}")
+    darkroom.refuse_wb_late(
+        resolved.path, module, [param], instance, what=f"darkroom adjust {module}.{param}"
+    )
     dtbridge.require_darkroom()
-    warning, pre = _maybe_precommit(job, resolved, bounce=bounce, trust_sidecar=trust_sidecar,
-                                    expect_module=module)
+    warning, pre = _maybe_precommit(
+        job, resolved, bounce=bounce, trust_sidecar=trust_sidecar, expect_module=module
+    )
     if pre["bounced"]:
         routed = _route()
         module, param, instance = _target(routed)
-        darkroom.refuse_wb_late(resolved.path, module, [param], instance,
-                                what=f"darkroom adjust {module}.{param}")
+        darkroom.refuse_wb_late(
+            resolved.path, module, [param], instance, what=f"darkroom adjust {module}.{param}"
+        )
     with darkroom.no_wb_reroute_scope():
-        result = _adjust_core(module, param, delta, resolved=resolved, instance=instance,
-                              commit=commit, level=level, job=job, ms_precommit=pre["ms"],
-                              flushed=pre["flushed"])
+        result = _adjust_core(
+            module,
+            param,
+            delta,
+            resolved=resolved,
+            instance=instance,
+            commit=commit,
+            level=level,
+            job=job,
+            ms_precommit=pre["ms"],
+            flushed=pre["flushed"],
+        )
     result.plan[0]["precommit"] = {"bounced": pre["bounced"], "reason": pre["reason"]}
     if routed is not None:
         result.warnings.append(darkroom.wb_routed_note(routed))
@@ -674,8 +848,13 @@ def _refusal(mv_module: str, param: str, kind: str) -> dict | None:
             try:
                 gate(s, relative=True)
             except ScouterError as e:
-                return {"module": "crop", "param": side, "code": e.code,
-                        "status": vocab.status(s), "message": e.message}
+                return {
+                    "module": "crop",
+                    "param": side,
+                    "code": e.code,
+                    "status": vocab.status(s),
+                    "message": e.message,
+                }
         return None
     s = vocab.spec(mv_module, param)
     if s is None:
@@ -683,13 +862,19 @@ def _refusal(mv_module: str, param: str, kind: str) -> dict | None:
     try:
         gate(s, relative=(kind in ("adjust", "toggle")))
     except ScouterError as e:
-        return {"module": mv_module, "param": param, "code": e.code, "status": vocab.status(s),
-                "message": e.message}
+        return {
+            "module": mv_module,
+            "param": param,
+            "code": e.code,
+            "status": vocab.status(s),
+            "message": e.message,
+        }
     return None
 
 
-def _route_wb(resolved: ResolvedImage, concrete: list[tuple[str, phrases.Move]]
-              ) -> tuple[list[tuple[str, phrases.Move]], dict | None]:
+def _route_wb(
+    resolved: ResolvedImage, concrete: list[tuple[str, phrases.Move]]
+) -> tuple[list[tuple[str, phrases.Move]], dict | None]:
     """Route A (decision rows 458/461): on a preset-4 white balance whose
     color calibration route is usable, every Kelvin move of the phrase goes
     to `channelmixerrgb.temperature` -- same notch, same sign, same unit.
@@ -700,13 +885,19 @@ def _route_wb(resolved: ResolvedImage, concrete: list[tuple[str, phrases.Move]]
     if route["route"] != "color_calibration":
         return concrete, None
     module, param = darkroom.COLORCAL_WB
-    return [(module, phrases.Move(module, param, mv.kind, mv.notches, mv.value))
-            if (m, mv.param) == ("temperature", "temperature") else (m, mv)
-            for m, mv in concrete], route
+    return [
+        (
+            (module, phrases.Move(module, param, mv.kind, mv.notches, mv.value))
+            if (m, mv.param) == ("temperature", "temperature")
+            else (m, mv)
+        )
+        for m, mv in concrete
+    ], route
 
 
-def _refuse_wb_late(phrase: str, key: str, resolved: ResolvedImage,
-                    concrete: list[tuple[str, phrases.Move]]) -> None:
+def _refuse_wb_late(
+    phrase: str, key: str, resolved: ResolvedImage, concrete: list[tuple[str, phrases.Move]]
+) -> None:
     """The whole phrase refuses, before any of its moves lands, when one of
     them would move a white balance in camera reference (late) mode (gauntlet
     §5.4 point 4: never a half-applied edit)."""
@@ -714,14 +905,25 @@ def _refuse_wb_late(phrase: str, key: str, resolved: ResolvedImage,
     if not wb_params:
         return
     darkroom.refuse_wb_late(
-        resolved.path, "temperature", wb_params, 0, what=f"'{phrase}'",
-        extra={"phrase": phrase, "key": key,
-               "refused": [{"module": "temperature", "param": p, "code": "module_unavailable"}
-                           for p in wb_params]})
+        resolved.path,
+        "temperature",
+        wb_params,
+        0,
+        what=f"'{phrase}'",
+        extra={
+            "phrase": phrase,
+            "key": key,
+            "refused": [
+                {"module": "temperature", "param": p, "code": "module_unavailable"}
+                for p in wb_params
+            ],
+        },
+    )
 
 
-def _raise_refused(phrase: str, key: str, refused: list[dict], total: int,
-                   why: str = "are not reachable") -> None:
+def _raise_refused(
+    phrase: str, key: str, refused: list[dict], total: int, why: str = "are not reachable"
+) -> None:
     first = refused[0]
     cls = {"not_pinned": NotPinned, "value_unknown": ValueUnknown}.get(first["code"], UsageError)
     raise cls(
@@ -732,9 +934,17 @@ def _raise_refused(phrase: str, key: str, refused: list[dict], total: int,
 
 
 @metrics.instrumented("darkroom.say")
-def say(phrase: str, *, amount: float | None = None, commit: bool = True,
-        trust_sidecar: bool = False, bounce: bool = False, educative: str | None = None,
-        dry_run: bool = False, job: str | None = None) -> SayResult:
+def say(
+    phrase: str,
+    *,
+    amount: float | None = None,
+    commit: bool = True,
+    trust_sidecar: bool = False,
+    bounce: bool = False,
+    educative: str | None = None,
+    dry_run: bool = False,
+    job: str | None = None,
+) -> SayResult:
     """A plain-words edit: every move of the phrase, as one undoable group (§6.3)."""
     job = job or current_job()
     res = phrases.resolve(phrase, amount)
@@ -743,7 +953,10 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
         _contradiction()
     if dry_run:
         return SayResult(
-            outcome="dry_run", phrase=phrase, key=res.key, intensity=res.intensity,
+            outcome="dry_run",
+            phrase=phrase,
+            key=res.key,
+            intensity=res.intensity,
             moves=[phrases.move_view(mv) for mv in res.moves],
             reason="dry run: no darktable calls; @tone was not routed against the image",
         )
@@ -753,8 +966,13 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
     # image resolved, so it is checked in a second pass below. This is what
     # makes `say("teal and orange")` refuse (not_pinned) with zero bridge
     # calls, including no `darkroom.current` lookup.
-    pre_refused = [r for r in (_refusal(mv.module, mv.param, mv.kind) for mv in res.moves
-                                if mv.module != phrases.TONE) if r]
+    pre_refused = [
+        r
+        for r in (
+            _refusal(mv.module, mv.param, mv.kind) for mv in res.moves if mv.module != phrases.TONE
+        )
+        if r
+    ]
     if pre_refused:
         _raise_refused(phrase, res.key, pre_refused, len(res.moves))
     resolved = darkroom._current_image()
@@ -793,12 +1011,24 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
         try:
             before_fallback(resolved, vocab.spec(module, mv.param), 0, job)
         except ValueUnknown as e:
-            unreadable.append({"module": module, "param": mv.param, "code": e.code,
-                               "status": vocab.status(vocab.spec(module, mv.param)),
-                               "message": e.message, "reason": e.detail.get("reason")})
+            unreadable.append(
+                {
+                    "module": module,
+                    "param": mv.param,
+                    "code": e.code,
+                    "status": vocab.status(vocab.spec(module, mv.param)),
+                    "message": e.message,
+                    "reason": e.detail.get("reason"),
+                }
+            )
     if unreadable:
-        _raise_refused(phrase, res.key, unreadable, len(concrete),
-                       why="have no readable current value to undo to")
+        _raise_refused(
+            phrase,
+            res.key,
+            unreadable,
+            len(concrete),
+            why="have no readable current value to undo to",
+        )
     landed: list[dict] = []
     notes: list[explain.MoveNote] = []
     failures: list[dict] = []
@@ -810,16 +1040,20 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
                 try:
                     if mv.kind == "toggle":
                         r = (darkroom.enable if mv.value else darkroom.disable)(
-                            module, instance=0, job=job)
-                        landed.append({**r.to_dict(), "summary": f"{s.ui}: "
-                                       f"{'on' if mv.value else 'off'}"})
+                            module, instance=0, job=job
+                        )
+                        landed.append(
+                            {**r.to_dict(), "summary": f"{s.ui}: " f"{'on' if mv.value else 'off'}"}
+                        )
                         continue
                     if mv.kind == "crop":
                         cur = dtbridge.call("darkroom.current")
                         w, h = int(cur.get("width") or 0), int(cur.get("height") or 0)
                         if not (w and h):
-                            raise ValueUnknown("the image size is unknown, so a crop preset "
-                                               "cannot be placed", detail={"reason": "no width/height"})
+                            raise ValueUnknown(
+                                "the image size is unknown, so a crop preset " "cannot be placed",
+                                detail={"reason": "no width/height"},
+                            )
                         # Fix round 1, I3: `darkroom.current`'s width/height are the
                         # RAW stored dimensions -- darktable's Lua image API does
                         # not reliably expose a post-orientation size (see
@@ -839,16 +1073,32 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
                         if degrees in (90, 270):
                             w, h = h, w
                         for side, v in crop_margins(float(mv.value), w, h).items():
-                            r = _set_recording_before("crop", side, v, instance=0, commit=commit,
-                                                      job=job, fallback=before_fallback(
-                                                          resolved, vocab.spec("crop", side), 0, job))
+                            r = _set_recording_before(
+                                "crop",
+                                side,
+                                v,
+                                instance=0,
+                                commit=commit,
+                                job=job,
+                                fallback=before_fallback(
+                                    resolved, vocab.spec("crop", side), 0, job
+                                ),
+                            )
                             landed.append({**r.to_dict(), "target": v})
                         continue
                     if mv.kind == "adjust":
                         delta = mv.value if mv.notches is None else mv.notches * s.step
-                        r = _adjust_core(module, mv.param, delta, resolved=resolved, instance=0,
-                                         commit=commit, level="off", job=job,
-                                         flushed=pre["flushed"])
+                        r = _adjust_core(
+                            module,
+                            mv.param,
+                            delta,
+                            resolved=resolved,
+                            instance=0,
+                            commit=commit,
+                            level="off",
+                            job=job,
+                            flushed=pre["flushed"],
+                        )
                         notes.append(explain.MoveNote(s, r.previous, r.target))
                         landed.append(r.to_dict())
                     else:
@@ -857,21 +1107,39 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
                         # have given the module a history entry since the gate.
                         fallback = before_fallback(resolved, s, 0, job)
                         r = _set_recording_before(
-                            module, mv.param, target, instance=0, commit=commit, job=job,
-                            fallback=fallback)
+                            module,
+                            mv.param,
+                            target,
+                            instance=0,
+                            commit=commit,
+                            job=job,
+                            fallback=fallback,
+                        )
                         if r.previous is None and fallback is not None and not r.noop:
                             r.previous = fallback[0]
                         notes.append(explain.MoveNote(s, r.previous, target, "set"))
-                        landed.append({**r.to_dict(), "target": target,
-                                       "summary": f"{s.ui}: set to {explain.with_unit(s, f'{vocab.to_display(s, target):.4g}')}"})
+                        landed.append(
+                            {
+                                **r.to_dict(),
+                                "target": target,
+                                "summary": f"{s.ui}: set to {explain.with_unit(s, f'{vocab.to_display(s, target):.4g}')}",  # noqa: E501
+                            }
+                        )
                 except ScouterError as e:
                     if not landed:
                         raise
                     # Row 433 / spec 5.4 point 4: a move that was SENT but did
                     # not verify is reported with what the sidecar really says
                     # (`detail`), so every write the phrase made is accounted for.
-                    failures.append({"module": module, "param": mv.param, "code": e.code,
-                                     "message": e.message, "detail": e.detail})
+                    failures.append(
+                        {
+                            "module": module,
+                            "param": mv.param,
+                            "code": e.code,
+                            "message": e.message,
+                            "detail": e.detail,
+                        }
+                    )
                     break
     finally:
         journal.GROUP.reset(token)
@@ -886,9 +1154,12 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
     # evaluate.py) check before calling a write "reported".
     all_moves_noop = bool(landed) and not failures and all(m.get("noop") for m in landed)
     noop_warning = (
-        [f"nothing to change: every move of {phrase!r} was already at its target "
-         "(nothing sent to darktable)"]
-        if all_moves_noop else []
+        [
+            f"nothing to change: every move of {phrase!r} was already at its target "
+            "(nothing sent to darktable)"
+        ]
+        if all_moves_noop
+        else []
     )
     # Pratik's ruling, row 471 (COV-D-residual-clamp-capped): a phrase with
     # any move that stopped at its own declared clamp is `moved_to_limit`
@@ -896,14 +1167,23 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
     # priority over a plain "ok" but not over `failures`' "partial" -- a
     # real error in a later move is still the more serious fact.
     moved_to_limit = [
-        {"module": m.get("module"), "param": m.get("param"), "requested": m.get("requested"),
-         "applied": m.get("applied"), "cap": m.get("cap")}
-        for m in landed if m.get("outcome") == "moved_to_limit"
+        {
+            "module": m.get("module"),
+            "param": m.get("param"),
+            "requested": m.get("requested"),
+            "applied": m.get("applied"),
+            "cap": m.get("cap"),
+        }
+        for m in landed
+        if m.get("outcome") == "moved_to_limit"
     ]
     clamp_warning = (
-        [f"moved to the limit: {len(moved_to_limit)} move(s) of {phrase!r} stopped at "
-         "their own declared clamp (see moved_to_limit)"]
-        if moved_to_limit and not failures else []
+        [
+            f"moved to the limit: {len(moved_to_limit)} move(s) of {phrase!r} stopped at "
+            "their own declared clamp (see moved_to_limit)"
+        ]
+        if moved_to_limit and not failures
+        else []
     )
     if failures:
         outcome = "partial"
@@ -915,22 +1195,42 @@ def say(phrase: str, *, amount: float | None = None, commit: bool = True,
         outcome=outcome,
         noop=all_moves_noop,
         moved_to_limit=moved_to_limit,
-        image_id=resolved.image_id, path=resolved.path, phrase=phrase, key=res.key,
-        intensity=res.intensity, group=group, moves=landed, refused=failures,
+        image_id=resolved.image_id,
+        path=resolved.path,
+        phrase=phrase,
+        key=res.key,
+        intensity=res.intensity,
+        group=group,
+        moves=landed,
+        refused=failures,
         summary="; ".join(m.get("summary", "") for m in landed),
         explain=explain.lines(notes, level=level, job=job),
         warnings=[w for w in [warning, wb_routed and darkroom.wb_routed_note(wb_routed)] if w]
-        + noop_warning + clamp_warning,
+        + noop_warning
+        + clamp_warning,
         plan=[pre],
     )
 
 
-EDUCATIVE_ARG = ArgSpec("educative", "str", default=None, choices=("off", "brief", "full"),
-                        help="explanation level for this call (default: config's educative)")
-TRUST_ARG = ArgSpec("trust_sidecar", "bool", default=False,
-                    help="never bounce before reading, even when the staleness guard would")
-BOUNCE_ARG = ArgSpec("bounce", "bool", default=False,
-                     help="force the pre-read commit bounce (after moving sliders by hand)")
+EDUCATIVE_ARG = ArgSpec(
+    "educative",
+    "str",
+    default=None,
+    choices=("off", "brief", "full"),
+    help="explanation level for this call (default: config's educative)",
+)
+TRUST_ARG = ArgSpec(
+    "trust_sidecar",
+    "bool",
+    default=False,
+    help="never bounce before reading, even when the staleness guard would",
+)
+BOUNCE_ARG = ArgSpec(
+    "bounce",
+    "bool",
+    default=False,
+    help="force the pre-read commit bounce (after moving sliders by hand)",
+)
 
 for verb in (
     Verb(
@@ -950,8 +1250,13 @@ for verb in (
         args=(
             darkroom.MODULE_ARG,
             darkroom.PARAM_ARG,
-            ArgSpec("delta", "float", required=True, positional=True,
-                    help="relative change in internal units (EV, K, or a fraction: 0.05 = 5%%)"),
+            ArgSpec(
+                "delta",
+                "float",
+                required=True,
+                positional=True,
+                help="relative change in internal units (EV, K, or a fraction: 0.05 = 5%%)",
+            ),
             darkroom.INSTANCE_ARG,
             darkroom.COMMIT_ARG,
             TRUST_ARG,
@@ -968,10 +1273,14 @@ for verb in (
         group="darkroom",
         fn=say,
         args=(
-            ArgSpec("phrase", "str", required=True, positional=True,
-                    help="plain words, e.g. 'a touch warmer' (quote it)"),
-            ArgSpec("amount", "float", default=None,
-                    help="multiplier on the phrase's step (0-5]"),
+            ArgSpec(
+                "phrase",
+                "str",
+                required=True,
+                positional=True,
+                help="plain words, e.g. 'a touch warmer' (quote it)",
+            ),
+            ArgSpec("amount", "float", default=None, help="multiplier on the phrase's step (0-5]"),
             darkroom.COMMIT_ARG,
             TRUST_ARG,
             BOUNCE_ARG,

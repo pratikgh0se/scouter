@@ -16,19 +16,32 @@ ENGINE = Path(__file__).resolve().parents[1]
 def _case(i: str = "a") -> Case:
     return Case(
         id=case_id("cov", "exposure.exposure", "sony_a7", f"set_{i}"),
-        layer="coverage", tier="P0", mode="tool",
-        steps=[Step("darkroom_set", {"module": "exposure", "param": "exposure", "value": 1.0},
-                    budget_s=3.5, write=True)],
-        expect=Expect("edit", checks=[Check("M1", target={"key": "exposure.exposure",
-                                                          "value": 1.0, "unit": "EV"})]),
-        body="sony_a7", frame_role="hero",
+        layer="coverage",
+        tier="P0",
+        mode="tool",
+        steps=[
+            Step(
+                "darkroom_set",
+                {"module": "exposure", "param": "exposure", "value": 1.0},
+                budget_s=3.5,
+                write=True,
+            )
+        ],
+        expect=Expect(
+            "edit",
+            checks=[Check("M1", target={"key": "exposure.exposure", "value": 1.0, "unit": "EV"})],
+        ),
+        body="sony_a7",
+        frame_role="hero",
     )
 
 
 def test_case_id_is_slugged_and_stable():
     assert case_id("scn", "r0001", "Olympus", "tool") == "scn-r0001-olympus-tool"
-    assert case_id("cov", "exposure.exposure", "sony a7", "set hi") == \
-        "cov-exposure.exposure-sony_a7-set_hi"
+    assert (
+        case_id("cov", "exposure.exposure", "sony a7", "set hi")
+        == "cov-exposure.exposure-sony_a7-set_hi"
+    )
 
 
 def test_jsonl_round_trip_is_byte_identical():
@@ -50,9 +63,12 @@ def test_bad_tier_mode_kind_refused():
 
 def test_budget_cap_counts_followups():
     c = _case()
-    c.followups = [{"sentence": "more", "steps": [{"tool": "darkroom_say",
-                                                   "args": {"phrase": "brighter"},
-                                                   "budget_s": 8.0}]}]
+    c.followups = [
+        {
+            "sentence": "more",
+            "steps": [{"tool": "darkroom_say", "args": {"phrase": "brighter"}, "budget_s": 8.0}],
+        }
+    ]
     assert c.budget_cap_s() == pytest.approx(3.5 + 30 + 8 + 30)
 
 
@@ -268,6 +284,7 @@ def test_retain_tolerates_a_path_vanishing_mid_walk(tmp_path, monkeypatch):
         if self.name == "f.bin":
             raise FileNotFoundError("vanished")
         return orig_unlink(self, *a, **k)
+
     monkeypatch.setattr(Path, "unlink", flaky_unlink)
     assert run.retain("c1") == 0  # freed nothing for the path that vanished, but never raised
 
@@ -289,8 +306,15 @@ def test_budget_cap_honours_a_case_declared_cap():
     """(final fix C1): a case whose work is not expressed as steps (an agent
     conversation) declares its own cap in meta["cap_s"]; the engine uses the
     larger of that and the step sum, never the bare 30 s fallback."""
-    c = Case(id="x", layer="l", tier="P0", mode="agent", steps=[], expect=Expect("refuse"),
-             meta={"cap_s": 1260.0})
+    c = Case(
+        id="x",
+        layer="l",
+        tier="P0",
+        mode="agent",
+        steps=[],
+        expect=Expect("refuse"),
+        meta={"cap_s": 1260.0},
+    )
     assert c.budget_cap_s() == pytest.approx(1260.0)
     c2 = _case()
     c2.meta["cap_s"] = 1.0  # a smaller declared cap never shrinks the step sum

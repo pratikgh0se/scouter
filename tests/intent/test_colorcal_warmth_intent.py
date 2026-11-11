@@ -22,21 +22,25 @@ class ColorCalWarmthIntentTest(_RouteFixture):
         if inp["temperature_preset"] == 4:
             self.preset_4()
         if inp["illuminant"] != 2 or "temperature_k" in inp:
-            self.colorcal(illuminant=inp["illuminant"],
-                          temperature=inp.get("temperature_k", FIXTURE_ILLUMINANT_K))
+            self.colorcal(
+                illuminant=inp["illuminant"],
+                temperature=inp.get("temperature_k", FIXTURE_ILLUMINANT_K),
+            )
         if not inp["colorcal_pinned"]:
             self.unpin()
         error = None
         result = None
         try:
             if inp["verb"] == "adjust":
-                result = moves.adjust.__wrapped__(inp["module"], inp["param"], inp["delta"],
-                                                  commit=False, job="job-test")
+                result = moves.adjust.__wrapped__(
+                    inp["module"], inp["param"], inp["delta"], commit=False, job="job-test"
+                )
             elif inp["verb"] == "say":
                 result = moves.say.__wrapped__(inp["phrase"], commit=False, job="job-test")
             else:
-                result = darkroom.set_param.__wrapped__(inp["module"], inp["param"], inp["value"],
-                                               commit=False, job="job-test")
+                result = darkroom.set_param.__wrapped__(
+                    inp["module"], inp["param"], inp["value"], commit=False, job="job-test"
+                )
         except ScouterError as e:
             error = e
         sent = self.sets()
@@ -68,6 +72,7 @@ class ColorCalWarmthIntentTest(_RouteFixture):
 def _make(ex: dict):
     def test(self: ColorCalWarmthIntentTest) -> None:
         self.run_example(ex)
+
     return test
 
 

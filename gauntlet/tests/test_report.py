@@ -48,14 +48,42 @@ def test_missing_cases_block_release(tmp_path):
 
 def test_roadmap_scoring():
     rs = [
-        {"id": "1", "layer": "scn", "tier": "P0", "mode": "tool", "source": {"id": "r1"},
-         "meta": {"roadmap_key": "lens"}, "verdict": {"outcome": "correct_refusal"}},
-        {"id": "2", "layer": "scn", "tier": "P1", "mode": "tool", "source": {"id": "r2"},
-         "meta": {"roadmap_key": "lens"}, "verdict": {"outcome": "correct_refusal"}},
-        {"id": "3", "layer": "scn", "tier": "P0", "mode": "agent", "source": {"id": "r1"},
-         "meta": {"roadmap_key": "lens"}, "verdict": {"outcome": "correct_refusal"}},
-        {"id": "4", "layer": "looks", "tier": "P1", "mode": "tool", "source": {},
-         "meta": {"gaps": ["grain", "grain"]}, "verdict": {"outcome": "verified"}},
+        {
+            "id": "1",
+            "layer": "scn",
+            "tier": "P0",
+            "mode": "tool",
+            "source": {"id": "r1"},
+            "meta": {"roadmap_key": "lens"},
+            "verdict": {"outcome": "correct_refusal"},
+        },
+        {
+            "id": "2",
+            "layer": "scn",
+            "tier": "P1",
+            "mode": "tool",
+            "source": {"id": "r2"},
+            "meta": {"roadmap_key": "lens"},
+            "verdict": {"outcome": "correct_refusal"},
+        },
+        {
+            "id": "3",
+            "layer": "scn",
+            "tier": "P0",
+            "mode": "agent",
+            "source": {"id": "r1"},
+            "meta": {"roadmap_key": "lens"},
+            "verdict": {"outcome": "correct_refusal"},
+        },
+        {
+            "id": "4",
+            "layer": "looks",
+            "tier": "P1",
+            "mode": "tool",
+            "source": {},
+            "meta": {"gaps": ["grain", "grain"]},
+            "verdict": {"outcome": "verified"},
+        },
     ]
     rows = {r["key"]: r for r in report.roadmap(rs)}
     assert rows["lens"]["score"] == 2 + 3 * 1 + 1
@@ -63,9 +91,17 @@ def test_roadmap_scoring():
 
 
 def test_timing_percentiles_and_contact_sheet(tmp_path):
-    rs = [{"id": "x", "layer": "l", "verdict": {"outcome": "verified", "score": "pass"},
-           "observation": {"calls": [{"tool": "t", "wall_s": w} for w in (1, 2, 3, 4)],
-                           "extra": {"previews": {"before": "p/b.jpg", "after": "p/a.jpg"}}}}]
+    rs = [
+        {
+            "id": "x",
+            "layer": "l",
+            "verdict": {"outcome": "verified", "score": "pass"},
+            "observation": {
+                "calls": [{"tool": "t", "wall_s": w} for w in (1, 2, 3, 4)],
+                "extra": {"previews": {"before": "p/b.jpg", "after": "p/a.jpg"}},
+            },
+        }
+    ]
     t = report.timing(rs)["percentiles"]["l:t"]
     assert (t["p50"], t["p90"], t["p99"]) == (2.0, 4.0, 4.0)
     sheet = report.contact_sheet(rs)
@@ -99,31 +135,63 @@ class _StubAdapter:
 
 
 def _case(cid, tier="P1"):
-    return Case(id=cid, layer="l", tier=tier, mode="tool",
-                steps=[Step("set", {}, budget_s=1.0, write=True)], expect=Expect("edit"))
+    return Case(
+        id=cid,
+        layer="l",
+        tier=tier,
+        mode="tool",
+        steps=[Step("set", {}, budget_s=1.0, write=True)],
+        expect=Expect("edit"),
+    )
 
 
-def _result(cid, tier="P1", *, score="fail", outcome="failed", blocked=None,
-            hang_evidence=None, crash_reports=None, started_at=0.0, checks=None):
-    obs = {"calls": [], "blocked": blocked, "hang_evidence": hang_evidence or [],
-           "crash_reports": crash_reports or []}
-    return {"id": cid, "layer": "l", "tier": tier, "mode": "tool", "source": {}, "meta": {},
-            "repro": f"repro {cid}", "started_at": started_at,
-            "verdict": {"score": score, "outcome": outcome, "checks": checks or []},
-            "observation": obs}
+def _result(
+    cid,
+    tier="P1",
+    *,
+    score="fail",
+    outcome="failed",
+    blocked=None,
+    hang_evidence=None,
+    crash_reports=None,
+    started_at=0.0,
+    checks=None,
+):
+    obs = {
+        "calls": [],
+        "blocked": blocked,
+        "hang_evidence": hang_evidence or [],
+        "crash_reports": crash_reports or [],
+    }
+    return {
+        "id": cid,
+        "layer": "l",
+        "tier": tier,
+        "mode": "tool",
+        "source": {},
+        "meta": {},
+        "repro": f"repro {cid}",
+        "started_at": started_at,
+        "verdict": {"score": score, "outcome": outcome, "checks": checks or []},
+        "observation": obs,
+    }
 
 
 def test_hard_cap_result_counts_as_a_hang_and_blocks_the_bar():
     case = _case("a-0")
-    result = _result("a-0", outcome="blocked", blocked="hard_cap",
-                     hang_evidence=["case exceeded its hard cap of 30s"])
+    result = _result(
+        "a-0",
+        outcome="blocked",
+        blocked="hard_cap",
+        hang_evidence=["case exceeded its hard cap of 30s"],
+    )
     adapter = _StubAdapter([LayerSpec("l", 1, 1, True)])
     rep = report.build(_StubRun(), adapter, [case], [result])
     assert rep["S8_signoff"]["hangs"] == 1
     assert not rep["S8_signoff"]["release_bar_met"]
     assert rep["S6_crashes_hangs"]["hangs"] == [
-        {"id": "a-0", "blocked": "hard_cap",
-         "evidence": ["case exceeded its hard cap of 30s"]}]
+        {"id": "a-0", "blocked": "hard_cap", "evidence": ["case exceeded its hard cap of 30s"]}
+    ]
     fixes = {f["id"]: f for f in rep["S3_non_pass"]}
     assert fixes["a-0"]["hang"] is True
 
@@ -145,9 +213,10 @@ def test_inherited_wedge_has_its_own_blocked_kind_never_a_hang():
 
 def test_skipped_cases_weigh_zero_and_are_listed_in_s8():
     cases = [_case("a-0"), _case("a-1")]
-    results = [_result("a-0", score="pass", outcome="verified"),
-               _result("a-1", score="fail", outcome="skipped",
-                       blocked="skipped: no modal hook")]
+    results = [
+        _result("a-0", score="pass", outcome="verified"),
+        _result("a-1", score="fail", outcome="skipped", blocked="skipped: no modal hook"),
+    ]
     adapter = _StubAdapter([LayerSpec("l", 1, 1, True)])
     rep = report.build(_StubRun(), adapter, cases, results)
     assert rep["S1_headline"]["fail"] == 1 and rep["S1_headline"]["partial"] == 0
@@ -164,8 +233,9 @@ def test_run_level_crash_not_attributed_to_any_case_blocks_the_bar():
     assert "session-close.ips" in rep["S6_crashes_hangs"]["crash_reports"]
     assert not rep["S8_signoff"]["release_bar_met"]
     # meta["crash_reports_run"] overrides asking the adapter.
-    rep2 = report.build(_StubRun(), adapter, [case], [result],
-                        meta={"crash_reports_run": ["preset.ips"]})
+    rep2 = report.build(
+        _StubRun(), adapter, [case], [result], meta={"crash_reports_run": ["preset.ips"]}
+    )
     assert rep2["S6_crashes_hangs"]["crash_reports"] == ["preset.ips"]
 
 
@@ -242,6 +312,7 @@ def test_no_blockers_method_means_no_blockers(tmp_path):
 
 
 # -- final fix I5: one full run of one commit ---------------------------------
+
 
 def test_results_carry_the_commit_and_a_clean_one_commit_run_meets_the_bar(tmp_path):
     a, run = _run(tmp_path)

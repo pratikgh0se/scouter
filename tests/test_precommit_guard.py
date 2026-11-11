@@ -32,9 +32,16 @@ PRE_SAY = (1, False, None)
 
 class PrecommitGuardTest(_MovesFixture):
     def _land_move(self, image_id: int = 12, *, sidecar_after: bool = True) -> None:
-        entry = journal.begin("job-test", verb="darkroom.set", image_id=image_id,
-                              path=str(self.raw), module="exposure", param="exposure",
-                              instance=0, before={"value": 1.55})
+        entry = journal.begin(
+            "job-test",
+            verb="darkroom.set",
+            image_id=image_id,
+            path=str(self.raw),
+            module="exposure",
+            param="exposure",
+            instance=0,
+            before={"value": 1.55},
+        )
         journal.complete("job-test", entry.seq, after={"value": 1.55})
         sidecar = str(self.raw) + ".xmp"
         now = time.time()
@@ -88,21 +95,24 @@ class PrecommitGuardTest(_MovesFixture):
 
     def test_bounce_forces_the_pre_read_commit(self) -> None:
         self._land_move()
-        moves.adjust.__wrapped__("exposure", "exposure", 0.3, commit=False, bounce=True,
-                                 job="job-test")
+        moves.adjust.__wrapped__(
+            "exposure", "exposure", 0.3, commit=False, bounce=True, job="job-test"
+        )
         self.assertEqual(self.commits, [PRE])
         moves.say.__wrapped__("a touch brighter", commit=False, bounce=True, job="job-test")
         self.assertEqual(self.commits, [PRE, PRE_SAY])
 
     def test_trust_sidecar_still_never_bounces(self) -> None:
-        moves.adjust.__wrapped__("exposure", "exposure", 0.3, commit=False,
-                                 trust_sidecar=True, job="job-test")
+        moves.adjust.__wrapped__(
+            "exposure", "exposure", 0.3, commit=False, trust_sidecar=True, job="job-test"
+        )
         self.assertEqual(self.commits, [])
 
     def test_bounce_and_trust_sidecar_together_are_a_usage_error(self) -> None:
         with self.assertRaises(UsageError):
-            moves.adjust.__wrapped__("exposure", "exposure", 0.3, bounce=True,
-                                     trust_sidecar=True, job="job-test")
+            moves.adjust.__wrapped__(
+                "exposure", "exposure", 0.3, bounce=True, trust_sidecar=True, job="job-test"
+            )
 
     def test_get_never_bounces_by_default_and_bounces_on_request(self) -> None:
         moves.get.__wrapped__("exposure", "exposure", job="job-test")

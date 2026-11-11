@@ -9,8 +9,11 @@ from scouter.core import phrases, vocab
 
 
 def _mags(phrase: str) -> dict[tuple[str, str], float]:
-    return {(m.module, m.param): abs(m.notches * phrases.row_for(m).step)
-            for m in phrases.resolve(phrase).moves if m.kind == "adjust"}
+    return {
+        (m.module, m.param): abs(m.notches * phrases.row_for(m).step)
+        for m in phrases.resolve(phrase).moves
+        if m.kind == "adjust"
+    }
 
 
 class PhraseLadderTest(unittest.TestCase):

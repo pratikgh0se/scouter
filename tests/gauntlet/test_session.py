@@ -1,6 +1,5 @@
 """Session + tool-mode execution against fakes: no darktable, no MCP server."""
 
-
 import json
 import time
 
@@ -87,14 +86,21 @@ def corpus(tmp_path):
     trial = tmp_path / "trial"
     trial.mkdir()
     (trial / "H.ORF").write_bytes(b"raw")
-    doc = {"frames": [{"rel": "H.ORF", "body": "olympus"}],
-           "roles": {"olympus": {"hero": "H.ORF", "dark": "H.ORF"}}}
+    doc = {
+        "frames": [{"rel": "H.ORF", "body": "olympus"}],
+        "roles": {"olympus": {"hero": "H.ORF", "dark": "H.ORF"}},
+    }
     return Corpus(doc, trial)
 
 
 def _session(corpus, tmp_path, dt=None, mcp=None):
-    s = sess.ScouterSession(corpus, tmp_path / "s1", "olympus", dt=dt or FakeDt(),
-                            mcp_factory=lambda env, cwd: mcp or FakeMcp())
+    s = sess.ScouterSession(
+        corpus,
+        tmp_path / "s1",
+        "olympus",
+        dt=dt or FakeDt(),
+        mcp_factory=lambda env, cwd: mcp or FakeMcp(),
+    )
     return s
 
 
@@ -120,6 +126,7 @@ def test_launch_retries_once_then_blocks(corpus, tmp_path):
 
 
 # -- t_90e75c20 round 2: redirecting the session's own library_root -------
+
 
 def test_point_library_root_rewrites_only_that_key(corpus, tmp_path):
     s = _session(corpus, tmp_path).open()
@@ -155,8 +162,12 @@ def test_session_env_is_isolated(corpus, tmp_path, monkeypatch):
     monkeypatch.setenv("SCOUTER_CONFIG", "/elsewhere/config.json")
     s = _session(corpus, tmp_path).open()
     env = s.staged.env
-    for k in ("SCOUTER_CONFIG", "SCOUTER_CACHE", "OBSIDIAN_VAULT_PATH",
-              "SCOUTER_DARKTABLE_LIBRARY_DB"):
+    for k in (
+        "SCOUTER_CONFIG",
+        "SCOUTER_CACHE",
+        "OBSIDIAN_VAULT_PATH",
+        "SCOUTER_DARKTABLE_LIBRARY_DB",
+    ):
         assert env[k].startswith(str(tmp_path / "s1"))
     assert env["SCOUTER_DARKTABLE_LIBRARY_DB"] == str(s.staged.library)
     assert s.staged.frames["hero"].read_bytes() == b"raw"
@@ -239,8 +250,10 @@ class LockedDt(FakeDt):
 #: system: 69648". The first cut's test used invented wording ("contains a
 #: pid 69648 that seems...") that happened to satisfy the old, too-narrow
 #: regex -- never the real one.
-REAL_LOCK_LINE = ("2026-09-26 13:45:06 [init] the database lock file contains a pid "
-                  "that seems to be alive in your system: 69648\n")
+REAL_LOCK_LINE = (
+    "2026-09-26 13:45:06 [init] the database lock file contains a pid "
+    "that seems to be alive in your system: 69648\n"
+)
 
 
 def test_library_lock_in_the_log_stops_the_session_fast(corpus, tmp_path):
@@ -309,8 +322,7 @@ class SlowLockDt(FakeDt):
     so a caller measuring elapsed time with `time.monotonic()` sees the
     genuine saving."""
 
-    def __init__(self, lock_line: str, *, write_after_polls: int = 2, poll_s: float = 0.05,
-                 **kw):
+    def __init__(self, lock_line: str, *, write_after_polls: int = 2, poll_s: float = 0.05, **kw):
         super().__init__(**kw)
         self.lock_line = lock_line
         self.write_after_polls = write_after_polls
@@ -334,8 +346,7 @@ class SlowLockDt(FakeDt):
         return {"ready": False}
 
 
-def test_lock_line_written_during_the_ready_wait_is_caught_within_about_a_second(
-        corpus, tmp_path):
+def test_lock_line_written_during_the_ready_wait_is_caught_within_about_a_second(corpus, tmp_path):
     """RED (before the fix): the lock check only ran once before the ready
     wait and once after `dt.ready(LAUNCH_READY_S)` returns -- a lock line
     darktable writes only DURING that wait (the real, common timing: the
@@ -362,9 +373,12 @@ def test_dtcontrol_ready_passes_stop_if_through_to_wait_gui_ready(monkeypatch):
     from scouter.core import dtprocess
 
     seen = {}
-    monkeypatch.setattr(dtprocess, "wait_gui_ready",
-                        lambda timeout_s, *, stop_if=None: seen.update(
-                            timeout_s=timeout_s, stop_if=stop_if) or {"ready": True})
+    monkeypatch.setattr(
+        dtprocess,
+        "wait_gui_ready",
+        lambda timeout_s, *, stop_if=None: seen.update(timeout_s=timeout_s, stop_if=stop_if)
+        or {"ready": True},
+    )
     marker = lambda: False  # noqa: E731 - identity is the whole point here
     sess.DtControl().ready(12.0, stop_if=marker)
     assert seen == {"timeout_s": 12.0, "stop_if": marker}
@@ -385,8 +399,9 @@ def test_stage_job_imports_the_staged_card_into_the_session_slug(corpus, tmp_pat
 
 
 def test_stage_job_records_a_failed_import_without_raising(corpus, tmp_path):
-    mcp = FakeMcp({"library_import": {"ok": False, "outcome": "error",
-                                      "error": {"code": "no_frames"}}})
+    mcp = FakeMcp(
+        {"library_import": {"ok": False, "outcome": "error", "error": {"code": "no_frames"}}}
+    )
     s = _session(corpus, tmp_path, mcp=mcp).open()
     s.stage_job()  # never raises
     assert s.job_stage_error == "no_frames"
@@ -436,9 +451,14 @@ def test_open_failure_after_launch_quits_our_darktable(corpus, tmp_path):
     with pytest.raises(RuntimeError, match="mcp server did not start"):
         s.open()
     assert dt.launches == 1 and dt.terminated == [False]
-    s2 = sess.ScouterSession(corpus, tmp_path / "s2", "olympus", dt=FakeDt(),
-                             mcp_factory=lambda env, cwd: FakeMcp(),
-                             floors_fn=lambda frame: ({}, False))
+    s2 = sess.ScouterSession(
+        corpus,
+        tmp_path / "s2",
+        "olympus",
+        dt=FakeDt(),
+        mcp_factory=lambda env, cwd: FakeMcp(),
+        floors_fn=lambda frame: ({}, False),
+    )
     with pytest.raises(sess.SessionBlocked, match="harness_bug"):
         s2.open()
     assert s2.dt.terminated == [False] and s2.mcp is None
@@ -449,8 +469,16 @@ def test_ensure_frame_sets_current_only_on_success(corpus, tmp_path):
     assert s.ensure_frame("dark") == s.staged.frames["dark"]
     assert s.current_frame == s.staged.frames["dark"]
 
-    bad = FakeMcp({"darkroom_open": {"ok": False, "outcome": "error",
-                                     "error": {"code": "not_found"}, "data": {}}})
+    bad = FakeMcp(
+        {
+            "darkroom_open": {
+                "ok": False,
+                "outcome": "error",
+                "error": {"code": "not_found"},
+                "data": {},
+            }
+        }
+    )
     s = _session(corpus, tmp_path, mcp=bad).open()
     hero = s.current_frame
     with pytest.raises(sess.SessionBlocked, match="frame dark"):
@@ -477,10 +505,17 @@ def test_ensure_frame_sets_current_only_on_success(corpus, tmp_path):
     assert [c[0] for c in slow_then_ok.calls] == ["darkroom_open", "darkroom_open"]
 
 
-WRONG_IMAGE = {"ok": False, "outcome": "error", "data": {},
-               "error": {"code": "not_in_darkroom", "detail": {"method": "darkroom.open"},
-                         "message": "handler raised: darktable_mcp.lua:1586: wrong image "
-                                    "loaded: asked for 2, darkroom shows 1 after 15000ms"}}
+WRONG_IMAGE = {
+    "ok": False,
+    "outcome": "error",
+    "data": {},
+    "error": {
+        "code": "not_in_darkroom",
+        "detail": {"method": "darkroom.open"},
+        "message": "handler raised: darktable_mcp.lua:1586: wrong image "
+        "loaded: asked for 2, darkroom shows 1 after 15000ms",
+    },
+}
 
 
 def test_smoke_s2_frame_imported_mid_session_relaunches_on_it(corpus, tmp_path):
@@ -538,11 +573,18 @@ def test_timeout_recovery_relaunches_at_most_once_then_blocks(corpus, tmp_path):
     assert dt.launches == 2 and len(mcp.calls) == 2
 
 
-BRIDGE_TIMEOUT = {"ok": False, "outcome": "error:bridge_timeout", "data": {},
-                  "error": {"code": "bridge_timeout",
-                            "message": "never left lighttable after 20s"}}
-COMMIT_TIMEOUT = {"ok": False, "outcome": "error:commit_timeout", "data": {},
-                  "error": {"code": "commit_timeout", "message": "no answer"}}
+BRIDGE_TIMEOUT = {
+    "ok": False,
+    "outcome": "error:bridge_timeout",
+    "data": {},
+    "error": {"code": "bridge_timeout", "message": "never left lighttable after 20s"},
+}
+COMMIT_TIMEOUT = {
+    "ok": False,
+    "outcome": "error:commit_timeout",
+    "data": {},
+    "error": {"code": "commit_timeout", "message": "no answer"},
+}
 
 
 @pytest.mark.parametrize("first_error", [BRIDGE_TIMEOUT, COMMIT_TIMEOUT])
@@ -566,8 +608,9 @@ def test_bridge_and_commit_timeout_relaunch_once_then_recover(corpus, tmp_path, 
 
 
 @pytest.mark.parametrize("code", ["bridge_timeout", "commit_timeout"])
-def test_bridge_and_commit_timeout_relaunches_at_most_once_then_marks_failed(corpus, tmp_path,
-                                                                             code):
+def test_bridge_and_commit_timeout_relaunches_at_most_once_then_marks_failed(
+    corpus, tmp_path, code
+):
     """A second bridge_timeout/commit_timeout after the one bounded relaunch
     must not retry again -- it blocks the case, tagged
     `bridge_relaunch_failed` so triage can tell this apart from a plain
@@ -602,6 +645,7 @@ def test_never_launches_a_second_darktable_when_quit_fails(corpus, tmp_path):
 
 
 # -- final fix I3: MCP-server deaths are crashes -----------------------------
+
 
 class _ExitedProc:
     def __init__(self, rc):
@@ -640,6 +684,7 @@ def test_a_live_mcp_transport_error_is_not_a_death(corpus, tmp_path):
 
 def test_close_quits_darktable_even_when_the_mcp_close_raises(corpus, tmp_path):
     """(final fix M2)."""
+
     class BadCloseMcp(FakeMcp):
         def close(self):
             raise BrokenPipeError("mcp stdin gone")
@@ -653,6 +698,7 @@ def test_close_quits_darktable_even_when_the_mcp_close_raises(corpus, tmp_path):
 
 # -- n1-bulk fix: stage()'s default job_slug must be a valid slug too -------
 
+
 def test_stage_job_slug_is_valid_for_a_body_with_an_underscore(tmp_path):
     """RED: the old `f"htc-{body}-{stamp}"[-40:]` kept `sony_a7`'s underscore
     (`SLUG_RE` forbids it) and sliced from the LEFT; `library.import` would
@@ -664,8 +710,10 @@ def test_stage_job_slug_is_valid_for_a_body_with_an_underscore(tmp_path):
     trial = tmp_path / "trial"
     trial.mkdir()
     (trial / "H.ORF").write_bytes(b"raw")
-    doc = {"frames": [{"rel": "H.ORF", "body": "sony_a7"}],
-           "roles": {"sony_a7": {"hero": "H.ORF", "dark": "H.ORF"}}}
+    doc = {
+        "frames": [{"rel": "H.ORF", "body": "sony_a7"}],
+        "roles": {"sony_a7": {"hero": "H.ORF", "dark": "H.ORF"}},
+    }
     corpus = Corpus(doc, trial)
 
     staged = sess.stage(corpus, "sony_a7", tmp_path / "run")
@@ -690,8 +738,16 @@ def test_reset_journal_truncates_the_real_journal_file(corpus, tmp_path, monkeyp
     s = _session(corpus, tmp_path).open()
     job = s.staged.env["SCOUTER_JOB"]
     monkeypatch.setenv("SCOUTER_CACHE", s.staged.env["SCOUTER_CACHE"])
-    journal.begin(job, verb="module.reset", image_id=1, path="x", module="temperature",
-                  param="", instance=0, before={})
+    journal.begin(
+        job,
+        verb="module.reset",
+        image_id=1,
+        path="x",
+        module="temperature",
+        param="",
+        instance=0,
+        before={},
+    )
     assert journal.latest_open(job) is not None
     assert paths.journal_path(job) == s.staged.cache / "journal" / f"{job}.jsonl"
 
@@ -711,18 +767,28 @@ def test_run_tool_case_resets_the_journal_before_its_own_steps(corpus, tmp_path)
     only ones with an explicit undo step -- an earlier case's leaked entry
     must never survive into ANY later case."""
     from gauntlet.case import Case, Expect, Step
-    from tests.gauntlet import execute, observe
+    from tests.gauntlet import execute
 
     s = _session(corpus, tmp_path).open()
     job = s.staged.env["SCOUTER_JOB"]
     journal_file = s.staged.cache / "journal" / f"{job}.jsonl"
     journal_file.parent.mkdir(parents=True, exist_ok=True)
-    journal_file.write_text('{"seq": 1, "ts": "x", "verb": "module.reset", "image_id": 1, '
-                            '"path": "x", "module": "temperature", "param": "", '
-                            '"instance": 0, "before": {}}\n', encoding="utf-8")
-    case = Case(id="c", layer="coverage", tier="P0", mode="tool",
-               steps=[Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
-               expect=Expect("edit"), body="olympus", frame_role="hero")
+    journal_file.write_text(
+        '{"seq": 1, "ts": "x", "verb": "module.reset", "image_id": 1, '
+        '"path": "x", "module": "temperature", "param": "", '
+        '"instance": 0, "before": {}}\n',
+        encoding="utf-8",
+    )
+    case = Case(
+        id="c",
+        layer="coverage",
+        tier="P0",
+        mode="tool",
+        steps=[Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
+        expect=Expect("edit"),
+        body="olympus",
+        frame_role="hero",
+    )
     obs = execute.run_tool_case(s, case)
     assert journal_file.read_text(encoding="utf-8") == ""
     assert obs.extra["journal_reset_entries"] == 1
@@ -752,29 +818,59 @@ class JournalAwareFakeMcp(FakeMcp):
 
             path = self._journal_path()
             path.parent.mkdir(parents=True, exist_ok=True)
-            entry = {"seq": 1, "ts": "x", "verb": "module.reset", "image_id": 1, "path": "x",
-                    "module": args.get("module", "temperature"), "param": "", "instance": 0,
-                    "before": {}, "after": None, "undone": False, "outcome": None,
-                    "commit": True, "note": None, "group": None}
+            entry = {
+                "seq": 1,
+                "ts": "x",
+                "verb": "module.reset",
+                "image_id": 1,
+                "path": "x",
+                "module": args.get("module", "temperature"),
+                "param": "",
+                "instance": 0,
+                "before": {},
+                "after": None,
+                "undone": False,
+                "outcome": None,
+                "commit": True,
+                "note": None,
+                "group": None,
+            }
             with open(path, "a", encoding="utf-8") as f:
                 f.write(_json.dumps(entry) + "\n")
             return {"ok": True, "outcome": "ok", "data": {}}
         if tool == "darkroom_undo_last":
             path = self._journal_path()
-            open_entries = [ln for ln in (path.read_text(encoding="utf-8").splitlines()
-                                          if path.exists() else []) if ln.strip()]
+            open_entries = [
+                ln
+                for ln in (path.read_text(encoding="utf-8").splitlines() if path.exists() else [])
+                if ln.strip()
+            ]
             if open_entries:
-                return {"ok": False, "outcome": "unsupported_undo", "error": {
-                    "code": "unsupported_undo",
-                    "message": "cannot undo the reset of temperature: its parameters were "
-                              "discarded", "fix": "darktable's own Ctrl-Z is the only way back"}}
-            return {"ok": False, "outcome": "noop", "error": {
-                "code": "noop", "message": "nothing to undo: journal is empty", "fix": ""}}
+                return {
+                    "ok": False,
+                    "outcome": "unsupported_undo",
+                    "error": {
+                        "code": "unsupported_undo",
+                        "message": "cannot undo the reset of temperature: its parameters were "
+                        "discarded",
+                        "fix": "darktable's own Ctrl-Z is the only way back",
+                    },
+                }
+            return {
+                "ok": False,
+                "outcome": "noop",
+                "error": {
+                    "code": "noop",
+                    "message": "nothing to undo: journal is empty",
+                    "fix": "",
+                },
+            }
         return super().call_tool(tool, args, timeout)
 
 
 def test_undo_after_the_previous_case_left_a_module_reset_answers_noop_not_unsupported_undo(
-        corpus, tmp_path, monkeypatch):
+    corpus, tmp_path, monkeypatch
+):
     """Fix round 3 (re-review R1): reset_journal must run AFTER isolate(),
     not before it. `isolate()` resets every module a PREVIOUS case touched
     (`session.touched`), and that reset itself writes a `module.reset`
@@ -794,12 +890,20 @@ def test_undo_after_the_previous_case_left_a_module_reset_answers_noop_not_unsup
     # Simulate: the PREVIOUS case touched (wrote to) the temperature module,
     # so this case's isolate() call resets it first.
     s.touched = {"temperature"}
-    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {
-        "fingerprint": "a", "params": {}, "units": {}})
+    monkeypatch.setattr(
+        observe, "snapshot", lambda p, k=None: {"fingerprint": "a", "params": {}, "units": {}}
+    )
 
-    case = Case(id="c", layer="coverage", tier="P0", mode="tool",
-               steps=[Step("darkroom_undo_last", {}, 3.5, True)],
-               expect=Expect("typed_error", codes=["noop"]), body="olympus", frame_role="hero")
+    case = Case(
+        id="c",
+        layer="coverage",
+        tier="P0",
+        mode="tool",
+        steps=[Step("darkroom_undo_last", {}, 3.5, True)],
+        expect=Expect("typed_error", codes=["noop"]),
+        body="olympus",
+        frame_role="hero",
+    )
     obs = execute.run_tool_case(s, case)
 
     assert obs.calls[-1].envelope["outcome"] == "noop", obs.calls[-1].envelope

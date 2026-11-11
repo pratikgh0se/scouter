@@ -11,8 +11,10 @@ def test_cli_handler_records_exit_and_json(tmp_path, monkeypatch):
         stdout = json.dumps({"ok": True, "outcome": "ok", "data": {}})
 
     monkeypatch.setattr(exec_guide.subprocess, "run", lambda *a, **k: P())
-    sess = SimpleNamespace(staged=SimpleNamespace(env={}, frames={"hero": tmp_path / "h.ORF"},
-                                                  vars={}, job_frames=[]), root=tmp_path)
+    sess = SimpleNamespace(
+        staged=SimpleNamespace(env={}, frames={"hero": tmp_path / "h.ORF"}, vars={}, job_frames=[]),
+        root=tmp_path,
+    )
     obs = SimpleNamespace(calls=[], extra={})
     step = SimpleNamespace(args={"argv": ["darkroom", "open", "{frame:hero}"]}, budget_s=10)
     rec = exec_guide.cli(sess, None, step, obs)
@@ -25,8 +27,10 @@ def test_cli_handler_reports_a_typed_hang_on_timeout(tmp_path, monkeypatch):
         raise subprocess.TimeoutExpired(cmd="scouter", timeout=40)
 
     monkeypatch.setattr(exec_guide.subprocess, "run", raise_timeout)
-    sess = SimpleNamespace(staged=SimpleNamespace(env={}, frames={"hero": tmp_path / "h.ORF"},
-                                                  vars={}, job_frames=[]), root=tmp_path)
+    sess = SimpleNamespace(
+        staged=SimpleNamespace(env={}, frames={"hero": tmp_path / "h.ORF"}, vars={}, job_frames=[]),
+        root=tmp_path,
+    )
     obs = SimpleNamespace(calls=[], extra={}, blocked=None, hang_evidence=[])
     step = SimpleNamespace(args={"argv": ["darkroom", "open", "{frame:hero}"]}, budget_s=10)
     rec = exec_guide.cli(sess, None, step, obs)

@@ -38,8 +38,8 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from gauntlet.adapter import Park
 from gauntlet.subset import stratified_subset as _generic_stratified_subset
@@ -73,8 +73,11 @@ def usage_fraction(*, now: float | None = None) -> tuple[float, float] | None:
         return None
     try:
         data = json.loads(USAGE_WINDOW_PATH.read_text(encoding="utf-8"))
-        util, reset_at, written_at = (data.get("utilization"), data.get("reset_at"),
-                                      data.get("written_at"))
+        util, reset_at, written_at = (
+            data.get("utilization"),
+            data.get("reset_at"),
+            data.get("written_at"),
+        )
         if util is None or reset_at is None or written_at is None:
             return None
         now = time.time() if now is None else now
@@ -85,9 +88,10 @@ def usage_fraction(*, now: float | None = None) -> tuple[float, float] | None:
         return None
 
 
-def check_usage_budget(threshold: float = DEFAULT_USAGE_THRESHOLD,
-                       usage_fn: Callable[[], tuple[float, float] | None] = usage_fraction
-                       ) -> None:
+def check_usage_budget(
+    threshold: float = DEFAULT_USAGE_THRESHOLD,
+    usage_fn: Callable[[], tuple[float, float] | None] = usage_fraction,
+) -> None:
     """Raises Park("usage_meter: ...", until=reset_at) when a real,
     non-stale usage reading is known and at or over `threshold`, so the
     runner resumes after the reset (spec: Park.until). No reading (no
@@ -106,5 +110,5 @@ def scouter_stratified_subset(cases, size: int, seed: int) -> list:
     (in/partial/out/impossible/workflow) and `meta["genre"]`. Thin binding
     over the generic, product-agnostic `gauntlet.subset.stratified_subset`."""
     return _generic_stratified_subset(
-        cases, size, seed,
-        key_fns=[lambda c: c.meta.get("class"), lambda c: c.meta.get("genre")])
+        cases, size, seed, key_fns=[lambda c: c.meta.get("class"), lambda c: c.meta.get("genre")]
+    )

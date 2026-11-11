@@ -79,7 +79,8 @@ class HistoryReadTest(unittest.TestCase):
             "CREATE TABLE history (imgid INTEGER, num INTEGER, module INTEGER, operation TEXT,"
             " op_params BLOB, enabled INTEGER, blendop_params BLOB, blendop_version INTEGER,"
             " multi_priority INTEGER, multi_name TEXT, multi_name_hand_edited INTEGER);"
-            "INSERT INTO images VALUES (12, 0);")
+            "INSERT INTO images VALUES (12, 0);"
+        )
         conn.commit()
         conn.close()
         self.sidecar.unlink()

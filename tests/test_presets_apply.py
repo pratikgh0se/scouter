@@ -1,10 +1,10 @@
 """Phase 3 task 8: apply a preset to the open image (bounce) or another image; to a job."""
+
 # mutation-check: targets-predate-range 55018012923d77440ffa3291dbf35b00a3a7fe15 -- presets.apply's one follow-up commit (f5f1e52) is untouched by this range; only the shared _MovesFixture commit tuple grew an expect_module slot. Proof: removing or flipping that _commit in presets.py fails it. :: PresetApplyTest.test_history_not_yet_advanced_commits_once_then_completes
 
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from unittest import mock
 
 from scouter.core import darkroom, journal, presets
@@ -18,20 +18,27 @@ class PresetApplyTest(_MovesFixture):
         super().setUp()
         self.bridge.responses["list_styles"] = {"styles": [{"name": "harbour-warm"}], "count": 1}
         self.history_end = iter([14, 16])
-        he = mock.patch("scouter.core.presets._history_end",
-                        side_effect=lambda path: next(self.history_end))
+        he = mock.patch(
+            "scouter.core.presets._history_end", side_effect=lambda path: next(self.history_end)
+        )
         he.start()
         self.addCleanup(he.stop)
         self.bridge.responses["darkroom.apply_style"] = lambda p: {
-            "applied": True, "name": p["name"], "image_id": p["image_id"], "view": "darkroom",
-            "left_ms": 150, "returned_ms": 50}
+            "applied": True,
+            "name": p["name"],
+            "image_id": p["image_id"],
+            "view": "darkroom",
+            "left_ms": 150,
+            "returned_ms": 50,
+        }
 
     def test_open_image_goes_through_the_bounce_method(self) -> None:
         r = presets.apply.__wrapped__("harbour-warm", job="job-test")
         self.assertIn("darkroom.apply_style", [m for m, _ in self.bridge.calls])
         self.assertNotIn("style.apply", [m for m, _ in self.bridge.calls])
-        self.assertEqual((r.applied_to, r.history_end_before, r.history_end_after),
-                         ("darkroom", 14, 16))
+        self.assertEqual(
+            (r.applied_to, r.history_end_before, r.history_end_after), ("darkroom", 14, 16)
+        )
         entry = journal.read_all("job-test")[-1]
         self.assertEqual((entry.verb, entry.after["history_end"]), ("preset.apply", 16))
 
@@ -60,13 +67,16 @@ class PresetApplyTest(_MovesFixture):
         silently restoring a value underneath the style."""
         darkroom.set_param.__wrapped__("exposure", "exposure", 1.8, commit=False, job="job-test")
         self.history_end = iter([14, 14, 14])
-        with mock.patch("scouter.core.darkroom._commit",
-                        side_effect=CommitTimeout("sidecar never advanced")):
+        with mock.patch(
+            "scouter.core.darkroom._commit", side_effect=CommitTimeout("sidecar never advanced")
+        ):
             r = presets.apply.__wrapped__("harbour-warm", job="job-test")
         self.assertEqual(r.outcome, "ok")
         self.assertIsNone(r.history_end_after)
-        self.assertTrue(any("commit after applying did not confirm (commit_timeout)" in w
-                            for w in r.warnings), r.warnings)
+        self.assertTrue(
+            any("commit after applying did not confirm (commit_timeout)" in w for w in r.warnings),
+            r.warnings,
+        )
         self.assertTrue(any("could not be verified" in w for w in r.warnings), r.warnings)
         entry = journal.read_all("job-test")[-1]
         self.assertEqual((entry.verb, entry.outcome), ("preset.apply", None))
@@ -75,8 +85,11 @@ class PresetApplyTest(_MovesFixture):
         with self.assertRaises(darkroom._UnsupportedUndo) as cm:
             darkroom.undo_last.__wrapped__(job="job-test")
         self.assertIn("appended some history item(s)", str(cm.exception))
-        self.assertEqual(len([m for m, _ in self.bridge.calls if m == "darkroom.action"]),
-                         sets_before, "nothing restored underneath the style")
+        self.assertEqual(
+            len([m for m, _ in self.bridge.calls if m == "darkroom.action"]),
+            sets_before,
+            "nothing restored underneath the style",
+        )
 
     def test_a_bridge_error_leaves_a_failed_entry(self) -> None:
         def boom(p):
@@ -100,8 +113,10 @@ class PresetApplyTest(_MovesFixture):
         self.assertEqual(sent[0]["name"], "Portra 400")
 
     def test_another_image_uses_the_library_path(self) -> None:
-        with mock.patch("scouter.core.style.apply.__wrapped__",
-                        return_value=StyleResult(name="harbour-warm", applied=1, image_id=7)) as ap:
+        with mock.patch(
+            "scouter.core.style.apply.__wrapped__",
+            return_value=StyleResult(name="harbour-warm", applied=1, image_id=7),
+        ) as ap:
             r = presets.apply.__wrapped__("harbour-warm", "7", job="job-test")
         ap.assert_called_once()
         self.assertEqual(r.applied_to, "library")
@@ -112,8 +127,10 @@ class PresetApplyTest(_MovesFixture):
         the view. `darkroom.current` answering "nothing loaded" must not
         block applying to ANOTHER, explicitly-named image."""
         self.bridge.responses["darkroom.current"] = {"view": "lighttable"}
-        with mock.patch("scouter.core.style.apply.__wrapped__",
-                        return_value=StyleResult(name="harbour-warm", applied=1, image_id=7)) as ap:
+        with mock.patch(
+            "scouter.core.style.apply.__wrapped__",
+            return_value=StyleResult(name="harbour-warm", applied=1, image_id=7),
+        ) as ap:
             r = presets.apply.__wrapped__("harbour-warm", "7", job="job-test")
         ap.assert_called_once()
         self.assertEqual(r.applied_to, "library")
@@ -163,9 +180,12 @@ class PresetApplyJobTest(_MovesFixture):
     def test_delegates_to_apply_set_unchanged(self) -> None:
         sentinel = StyleSetResult(outcome="dry_run")
         with mock.patch("scouter.core.style.apply_set.__wrapped__", return_value=sentinel) as a:
-            r = presets.apply_job.__wrapped__("harbour-warm", job_slug="harbour-wedding",
-                                              exclude=["1"], job="job-test")
+            r = presets.apply_job.__wrapped__(
+                "harbour-warm", job_slug="harbour-wedding", exclude=["1"], job="job-test"
+            )
         self.assertIs(r, sentinel)
         _, kwargs = a.call_args
-        self.assertEqual((kwargs["job_slug"], kwargs["exclude"], kwargs["confirm"]),
-                         ("harbour-wedding", ["1"], False))
+        self.assertEqual(
+            (kwargs["job_slug"], kwargs["exclude"], kwargs["confirm"]),
+            ("harbour-wedding", ["1"], False),
+        )

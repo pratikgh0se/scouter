@@ -27,7 +27,6 @@ import json
 import unittest
 from pathlib import Path
 
-from gauntlet import metrics as gmetrics
 from scouter.core import phrases, vocab
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "touch_floor_sensitivity.json"
@@ -53,57 +52,79 @@ SENSITIVITY = json.loads(FIXTURE.read_text())
 KNOWN_RESIDUAL = {
     ("deepen_shadows", "olympus"): {
         "residual": "step-below-floor",
-        "why": "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.50 needed)"},
+        "why": "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.50 needed)",
+    },
     ("deepen_shadows", "sony_a7"): {
         "residual": "step-below-floor",
-        "why": "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.08 needed)"},
+        "why": "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.08 needed)",
+    },
     ("lift_shadows", "olympus"): {
         "residual": "step-below-floor",
-        "why": "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.50 needed)"},
+        "why": "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.50 needed)",
+    },
     ("lift_shadows", "sony_a7"): {
         "residual": "step-below-floor",
-        "why": "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.08 needed)"},
+        "why": "shadows_luminance touch capped at the +-0.25 clamp (0.0625 < 0.08 needed)",
+    },
     ("more_vibrance", "olympus"): {
         "residual": "step-below-floor",
-        "why": "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.58 needed)"},
+        "why": "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.58 needed)",
+    },
     ("more_vibrance", "sony_a7"): {
         "residual": "step-below-floor",
-        "why": "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.45 needed)"},
+        "why": "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.45 needed)",
+    },
     ("less_vibrance", "olympus"): {
         "residual": "step-below-floor",
-        "why": "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.58 needed)"},
+        "why": "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.58 needed)",
+    },
     ("less_vibrance", "sony_a7"): {
         "residual": "step-below-floor",
-        "why": "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.45 needed)"},
+        "why": "global_vibrance touch capped by the step<=(hi-lo)/4 invariant (0.125 < 0.45 needed)",
+    },
     ("cool_shadows", "olympus"): {
         "residual": "step-below-floor",
-        "why": "shadows_chroma touch capped at the 0-0.3 clamp (0.0375 < 0.15 needed)"},
+        "why": "shadows_chroma touch capped at the 0-0.3 clamp (0.0375 < 0.15 needed)",
+    },
     ("teal_orange", "olympus"): {
         "residual": "step-below-floor",
-        "why": "shadows_chroma touch capped at the 0-0.3 clamp (0.0375 < 0.31 needed)"},
+        "why": "shadows_chroma touch capped at the 0-0.3 clamp (0.0375 < 0.31 needed)",
+    },
 }
 
 #: The 25 P0 case ids (see htc-triage-coverage.md), spelled out so the test
 #: fails loudly if the cluster's membership ever changes.
 P0_CASE_IDS = (
-    "cov-phrase-brighter_highlights-olympus-bare", "cov-phrase-brighter_highlights-sony_a7-bare",
+    "cov-phrase-brighter_highlights-olympus-bare",
+    "cov-phrase-brighter_highlights-sony_a7-bare",
     "cov-phrase-brighter_midtones-olympus-bare",
-    "cov-phrase-cool_shadows-olympus-bare", "cov-phrase-cool_shadows-sony_a7-bare",
-    "cov-phrase-deepen_shadows-olympus-bare", "cov-phrase-deepen_shadows-sony_a7-bare",
-    "cov-phrase-less_chroma-olympus-bare", "cov-phrase-less_chroma-sony_a7-bare",
-    "cov-phrase-less_saturation-olympus-bare", "cov-phrase-less_saturation-sony_a7-bare",
-    "cov-phrase-less_vibrance-olympus-bare", "cov-phrase-less_vibrance-sony_a7-bare",
-    "cov-phrase-lift_shadows-olympus-bare", "cov-phrase-lift_shadows-sony_a7-bare",
-    "cov-phrase-more_chroma-olympus-bare", "cov-phrase-more_chroma-sony_a7-bare",
-    "cov-phrase-more_saturation-olympus-bare", "cov-phrase-more_saturation-sony_a7-bare",
-    "cov-phrase-more_vibrance-olympus-bare", "cov-phrase-more_vibrance-sony_a7-bare",
-    "cov-phrase-tame_highlights-olympus-bare", "cov-phrase-tame_highlights-sony_a7-bare",
-    "cov-phrase-teal_orange-olympus-bare", "cov-phrase-teal_orange-sony_a7-bare",
+    "cov-phrase-cool_shadows-olympus-bare",
+    "cov-phrase-cool_shadows-sony_a7-bare",
+    "cov-phrase-deepen_shadows-olympus-bare",
+    "cov-phrase-deepen_shadows-sony_a7-bare",
+    "cov-phrase-less_chroma-olympus-bare",
+    "cov-phrase-less_chroma-sony_a7-bare",
+    "cov-phrase-less_saturation-olympus-bare",
+    "cov-phrase-less_saturation-sony_a7-bare",
+    "cov-phrase-less_vibrance-olympus-bare",
+    "cov-phrase-less_vibrance-sony_a7-bare",
+    "cov-phrase-lift_shadows-olympus-bare",
+    "cov-phrase-lift_shadows-sony_a7-bare",
+    "cov-phrase-more_chroma-olympus-bare",
+    "cov-phrase-more_chroma-sony_a7-bare",
+    "cov-phrase-more_saturation-olympus-bare",
+    "cov-phrase-more_saturation-sony_a7-bare",
+    "cov-phrase-more_vibrance-olympus-bare",
+    "cov-phrase-more_vibrance-sony_a7-bare",
+    "cov-phrase-tame_highlights-olympus-bare",
+    "cov-phrase-tame_highlights-sony_a7-bare",
+    "cov-phrase-teal_orange-olympus-bare",
+    "cov-phrase-teal_orange-sony_a7-bare",
 )
 
 
 def _case_key(case_id: str) -> tuple[str, str]:
-    rest = case_id[len("cov-phrase-"):-len("-bare")]
+    rest = case_id[len("cov-phrase-") : -len("-bare")]
     for body in ("olympus", "sony_a7"):
         if rest.endswith(f"-{body}"):
             return rest[: -len(f"-{body}")], body
@@ -136,14 +157,16 @@ class TouchFloorTest(unittest.TestCase):
                 achieved_stat_delta = sens * clamped_touch
                 if (key, body) in KNOWN_RESIDUAL:
                     self.assertLess(
-                        achieved_stat_delta, floor,
+                        achieved_stat_delta,
+                        floor,
                         f"{case_id} was a documented residual "
                         f"({KNOWN_RESIDUAL[(key, body)]['why']}) "
                         "but now clears its floor -- update KNOWN_RESIDUAL",
                     )
                 else:
                     self.assertGreaterEqual(
-                        achieved_stat_delta, floor,
+                        achieved_stat_delta,
+                        floor,
                         f"{case_id}: touch moves {entry['module']}.{entry['param']} by "
                         f"{clamped_touch}, predicted stat delta {achieved_stat_delta:.4f} "
                         f"< floor {floor} for stat {entry['stat']!r}",

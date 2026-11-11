@@ -23,17 +23,26 @@ from scouter.core import darkroom, dtbridge, moves, xmp
 from scouter.errors import CommitTimeout
 from tests.scouter_fakes import FakeBridge, TempCache, with_param_value
 
-EXAMPLES = {e["id"]: e for e in
-            json.loads((Path(__file__).parent /
-                       "batch3_late_flush_noop.json").read_text())["examples"]}
+EXAMPLES = {
+    e["id"]: e
+    for e in json.loads((Path(__file__).parent / "batch3_late_flush_noop.json").read_text())[
+        "examples"
+    ]
+}
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "P6281348.ORF.xmp"
 #: Recorded envelope facts for cov-synonym-more_contrast-punchier-olympus
 #: (night2-20260927/cases/, data.moves[0]): previous=1.5, applied/target=1.6,
 #: noop=True (wrong), warnings=["darktable wrote no new sidecar ..."].
-PUNCHIER_ENVELOPE = {"module": "sigmoid", "param": "contrast", "previous": 1.5,
-                     "applied": 1.6000000238418579, "requested": 1.6, "delta": 0.1,
-                     "recorded_noop": True,
-                     "recorded_warning": "darktable wrote no new sidecar for sigmoid.contrast"}
+PUNCHIER_ENVELOPE = {
+    "module": "sigmoid",
+    "param": "contrast",
+    "previous": 1.5,
+    "applied": 1.6000000238418579,
+    "requested": 1.6,
+    "delta": 0.1,
+    "recorded_noop": True,
+    "recorded_warning": "darktable wrote no new sidecar for sigmoid.contrast",
+}
 
 
 class LateFlushNoopIntentTest(unittest.TestCase):
@@ -44,14 +53,24 @@ class LateFlushNoopIntentTest(unittest.TestCase):
         self.raw.write_bytes(b"not really a raw")
         self.sidecar = Path(str(self.raw) + ".xmp")
         shutil.copy(FIXTURE, self.sidecar)
-        self.bridge = FakeBridge({
-            "darkroom.current": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
-                                 "source": "action_images"},
-            "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-            "darkroom.action": lambda p: {"nan": False, "status": p.get("value"),
-                                          "view": "darkroom", **p},
-            "module.enable": {"nan": False, "view": "darkroom"},
-        })
+        self.bridge = FakeBridge(
+            {
+                "darkroom.current": {
+                    "image_id": 12,
+                    "path": str(self.raw),
+                    "view": "darkroom",
+                    "source": "action_images",
+                },
+                "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+                "darkroom.action": lambda p: {
+                    "nan": False,
+                    "status": p.get("value"),
+                    "view": "darkroom",
+                    **p,
+                },
+                "module.enable": {"nan": False, "view": "darkroom"},
+            }
+        )
         dtbridge.set_bridge(self.bridge)
 
     def tearDown(self) -> None:
@@ -69,17 +88,21 @@ class LateFlushNoopIntentTest(unittest.TestCase):
         its contrast with a valid layout/modversion."""
         end = self._history_end(text)
         parsed = xmp.parse(text)
-        template = max((e for e in parsed.entries if e.operation == "sigmoid" and e.active),
-                       key=lambda e: e.num)
+        template = max(
+            (e for e in parsed.entries if e.operation == "sigmoid" and e.active),
+            key=lambda e: e.num,
+        )
         src = re.search(
-            rf'<rdf:li\s(?:(?!/>).)*?darktable:num="{template.num}"(?:(?!/>).)*?/>', text, re.S)
+            rf'<rdf:li\s(?:(?!/>).)*?darktable:num="{template.num}"(?:(?!/>).)*?/>', text, re.S
+        )
         assert src
         item = re.sub(r'darktable:num="\d+"', f'darktable:num="{end}"', src.group(0), count=1)
         close = text.index("</darktable:history>")
         seq_close = text.rindex("</rdf:Seq>", 0, close)
         text = text[:seq_close] + " " + item + "\n    " + text[seq_close:]
-        return re.sub(r'darktable:history_end="\d+"', f'darktable:history_end="{end + 1}"',
-                      text, count=1)
+        return re.sub(
+            r'darktable:history_end="\d+"', f'darktable:history_end="{end + 1}"', text, count=1
+        )
 
     def test_sigmoid_contrast_late_flush_reported_as_noop(self):
         fx = EXAMPLES["sigmoid-contrast-late-flush-reported-as-noop"]
@@ -121,8 +144,9 @@ class LateFlushNoopIntentTest(unittest.TestCase):
         self.assertTrue(move["committed"])
         self.assertFalse(move["noop"], "a landed late flush must not be reported as a noop")
         self.assertFalse(any("no new sidecar" in w for w in move["warnings"]), move["warnings"])
-        self.assertTrue(any("AFTER the commit timeout" in w for w in move["warnings"]),
-                        move["warnings"])
+        self.assertTrue(
+            any("AFTER the commit timeout" in w for w in move["warnings"]), move["warnings"]
+        )
 
     def test_genuine_early_noop_stays_a_noop(self):
         EXAMPLES["genuine_early_noop_stays_a_noop"]  # documents the case
@@ -131,8 +155,10 @@ class LateFlushNoopIntentTest(unittest.TestCase):
         # Oracle B, `enable`: it knows its real target (the module is
         # already enabled in the fixture), so its early-noop confirmation
         # is a genuine XMP readback, unaffected by t_fcf77055.
-        with mock.patch("scouter.core.darkroom._commit",
-                        side_effect=CommitTimeout("darktable did not write the sidecar in time")):
+        with mock.patch(
+            "scouter.core.darkroom._commit",
+            side_effect=CommitTimeout("darktable did not write the sidecar in time"),
+        ):
             result = darkroom.enable(module="exposure")
         self.assertTrue(result.committed)
         self.assertTrue(any("no new sidecar" in w for w in result.warnings), result.warnings)
@@ -147,10 +173,15 @@ class LateFlushNoopIntentTest(unittest.TestCase):
         shape of `test_genuine_early_noop_stays_a_noop` above (status
         matching the fixture's own unchanged value) is this test."""
         self.bridge.responses["darkroom.action"] = lambda p: {
-            "nan": False, "status": 1.5500002, "view": "darkroom", **p,
+            "nan": False,
+            "status": 1.5500002,
+            "view": "darkroom",
+            **p,
         }
-        with mock.patch("scouter.core.darkroom._commit",
-                        side_effect=CommitTimeout("darktable did not write the sidecar in time")):
+        with mock.patch(
+            "scouter.core.darkroom._commit",
+            side_effect=CommitTimeout("darktable did not write the sidecar in time"),
+        ):
             with self.assertRaises(CommitTimeout):
                 darkroom.nudge(module="exposure", param="exposure", steps=1)
 

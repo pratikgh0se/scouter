@@ -136,9 +136,11 @@ def _wb_item(check: bool) -> dict:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(blob)
             added.append(camera)
-    others = sorted(
-        p.stem for p in wb_dir.glob("*.json") if p.stem not in present + added
-    ) if wb_dir.is_dir() else []
+    others = (
+        sorted(p.stem for p in wb_dir.glob("*.json") if p.stem not in present + added)
+        if wb_dir.is_dir()
+        else []
+    )
     state = "missing" if missing else ("installed" if added else "ok")
     parts = []
     if present:
@@ -149,16 +151,23 @@ def _wb_item(check: bool) -> dict:
         parts.append(f"missing: {', '.join(missing)}")
     if others:
         parts.append(f"also calibrated: {', '.join(others)}")
-    return {"item": "wb_tables", "status": state,
-            "detail": f"{wb_dir} ({'; '.join(parts) or 'none shipped'})"}
+    return {
+        "item": "wb_tables",
+        "status": state,
+        "detail": f"{wb_dir} ({'; '.join(parts) or 'none shipped'})",
+    }
 
 
 def _config_item() -> dict:
     from scouter import paths
 
     cfg = Path(paths.config_path())
-    return {"item": "config", "status": "ok" if cfg.is_file() else "missing",
-            "detail": str(cfg), "required": False}
+    return {
+        "item": "config",
+        "status": "ok" if cfg.is_file() else "missing",
+        "detail": str(cfg),
+        "required": False,
+    }
 
 
 def _doctor_item(check: bool) -> dict:
@@ -173,10 +182,18 @@ def _doctor_item(check: bool) -> dict:
 
     report = _doctor()
     if report.get("ok"):
-        return {"item": "doctor", "status": "ok", "detail": f"view: {report.get('view')}",
-                "required": check}
-    return {"item": "doctor", "status": str(report.get("bridge") or "error"),
-            "detail": report.get("bridge_fix") or "bridge not answering", "required": check}
+        return {
+            "item": "doctor",
+            "status": "ok",
+            "detail": f"view: {report.get('view')}",
+            "required": check,
+        }
+    return {
+        "item": "doctor",
+        "status": str(report.get("bridge") or "error"),
+        "detail": report.get("bridge_fix") or "bridge not answering",
+        "required": check,
+    }
 
 
 def run(check: bool = False) -> dict:
@@ -186,11 +203,11 @@ def run(check: bool = False) -> dict:
     items.append(_doctor_item(check))
     root = repo_root()
     python = server_python(root)
-    installed_now = any(i["status"] in ("installed", "updated")
-                        for i in items if i["item"] in ("plugin", "luarc"))
+    installed_now = any(
+        i["status"] in ("installed", "updated") for i in items if i["item"] in ("plugin", "luarc")
+    )
     required_ok = all(
-        i["status"] in ("ok", "installed", "updated")
-        for i in items if i.get("required", True)
+        i["status"] in ("ok", "installed", "updated") for i in items if i.get("required", True)
     )
     nxt: list[str] = []
     by = {i["item"]: i for i in items}
@@ -199,18 +216,25 @@ def run(check: bool = False) -> dict:
     if check and by["wb_tables"]["status"] == "missing":
         nxt.append("run `scouter setup` to install the measured white-balance tables")
     if by["doctor"]["status"] != "ok" and not check:
-        nxt.append("doctor (darktable running with the plugin loaded and answering) was not "
-                   "required to complete this setup and was skipped; restart darktable (it "
-                   "loads the plugin at launch), open an image in the darkroom, then run "
-                   "`scouter setup --check` to verify it")
+        nxt.append(
+            "doctor (darktable running with the plugin loaded and answering) was not "
+            "required to complete this setup and was skipped; restart darktable (it "
+            "loads the plugin at launch), open an image in the darkroom, then run "
+            "`scouter setup --check` to verify it"
+        )
     elif installed_now or by["doctor"]["status"] != "ok":
-        nxt.append("restart darktable (it loads the plugin at launch), open an image in the "
-                   "darkroom, then run `scouter setup --check`")
+        nxt.append(
+            "restart darktable (it loads the plugin at launch), open an image in the "
+            "darkroom, then run `scouter setup --check`"
+        )
     if by["config"]["status"] == "missing":
-        nxt.append("run `scouter config init` and set library_root and the backup target "
-                   "(needed for library/job verbs, not for single-frame editing)")
-    nxt.append("register the MCP server in Claude Code once: " + mcp_command(
-        repo_root=root, python=python))
+        nxt.append(
+            "run `scouter config init` and set library_root and the backup target "
+            "(needed for library/job verbs, not for single-frame editing)"
+        )
+    nxt.append(
+        "register the MCP server in Claude Code once: " + mcp_command(repo_root=root, python=python)
+    )
     return {
         "verb": "setup",
         "check": check,

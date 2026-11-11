@@ -22,22 +22,41 @@ from gauntlet.evaluate import evaluate
 from tests.gauntlet.layers import coverage
 from tests.gauntlet.policy import load_policy
 
-FIXTURES = json.loads((Path(__file__).parent /
-                       "batch3_c5_evaluator_fixtures.json").read_text())
+FIXTURES = json.loads((Path(__file__).parent / "batch3_c5_evaluator_fixtures.json").read_text())
 POLICY = load_policy()
 CASES = {c.id: c for c in coverage.generate()}
 
 
 def _build_observation(o: dict) -> Observation:
-    calls = [CallRecord(c["tool"], c.get("args", {}), c.get("envelope"), c.get("wall_s", 0.0),
-                        c.get("ms"), c.get("bounced", False), c.get("error"), c.get("health"),
-                        c.get("write", False)) for c in o["calls"]]
-    return Observation(calls=calls, before=o.get("before", {}), after=o.get("after", {}),
-                      stats_before=o.get("stats_before", {}), stats_after=o.get("stats_after", {}),
-                      floors=o.get("floors", {}), agent_text=o.get("agent_text"),
-                      blocked=o.get("blocked"), crash_reports=o.get("crash_reports", []),
-                      hang_evidence=o.get("hang_evidence", []), healed=o.get("healed", False),
-                      extra=o.get("extra", {}), wall_s=o.get("wall_s", 0.0))
+    calls = [
+        CallRecord(
+            c["tool"],
+            c.get("args", {}),
+            c.get("envelope"),
+            c.get("wall_s", 0.0),
+            c.get("ms"),
+            c.get("bounced", False),
+            c.get("error"),
+            c.get("health"),
+            c.get("write", False),
+        )
+        for c in o["calls"]
+    ]
+    return Observation(
+        calls=calls,
+        before=o.get("before", {}),
+        after=o.get("after", {}),
+        stats_before=o.get("stats_before", {}),
+        stats_after=o.get("stats_after", {}),
+        floors=o.get("floors", {}),
+        agent_text=o.get("agent_text"),
+        blocked=o.get("blocked"),
+        crash_reports=o.get("crash_reports", []),
+        hang_evidence=o.get("hang_evidence", []),
+        healed=o.get("healed", False),
+        extra=o.get("extra", {}),
+        wall_s=o.get("wall_s", 0.0),
+    )
 
 
 def _assert_rule_evidence(rule: str, o: dict, case_id: str) -> None:

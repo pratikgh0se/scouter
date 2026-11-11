@@ -192,7 +192,9 @@ def build_parser() -> argparse.ArgumentParser:
             # optionals, so both positions are wired here; `default=SUPPRESS`
             # means "not given here" leaves whatever the top-level parser
             # already put in the namespace alone.
-            sub.add_argument("--pretty", dest="pretty", action="store_true", default=argparse.SUPPRESS)
+            sub.add_argument(
+                "--pretty", dest="pretty", action="store_true", default=argparse.SUPPRESS
+            )
 
     doctor = groups.add_parser(
         "doctor",
@@ -363,8 +365,9 @@ def _doctor_watchdog(report: dict) -> None:
     report["watchdog"] = h["state"]
     report["watchdog_line"] = f"watchdog: ping {h['state']} ({h.get('ping_ms')} ms)"
     report["gui_ready"] = h.get("gui_ready")
-    report["gui_ready_line"] = f"gui_ready: {str(h.get('gui_ready')).lower()} " \
-        f"({h.get('gui_ready_source') or '-'})"
+    report["gui_ready_line"] = (
+        f"gui_ready: {str(h.get('gui_ready')).lower()} " f"({h.get('gui_ready_source') or '-'})"
+    )
     owned = dtprocess.owned_pid()
     try:
         running: list[int] | None = dtprocess.running_pids()
@@ -391,8 +394,10 @@ def _doctor_watchdog(report: dict) -> None:
     except ScouterError:
         wd = config.WatchdogConfig()
     used = watchdog.heals_used(current_job())
-    report["auto_heal_line"] = (f"auto_heal: {'on' if wd.auto_heal else 'off'}, heals this job: "
-                                f"{used}/{wd.max_heals_per_job}")
+    report["auto_heal_line"] = (
+        f"auto_heal: {'on' if wd.auto_heal else 'off'}, heals this job: "
+        f"{used}/{wd.max_heals_per_job}"
+    )
 
 
 def _watchdog_health() -> dict:
@@ -525,9 +530,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if namespace.group == "doctor" and getattr(namespace, "ping", False):
         h = _watchdog_health()
-        return emit({"verb": "doctor", "watchdog": h["state"], "ping_ms": h.get("ping_ms"),
-                     "ok": h["state"] not in ("unresponsive", "not_running")},
-                    0 if h["state"] not in ("unresponsive", "not_running") else 1)
+        return emit(
+            {
+                "verb": "doctor",
+                "watchdog": h["state"],
+                "ping_ms": h.get("ping_ms"),
+                "ok": h["state"] not in ("unresponsive", "not_running"),
+            },
+            0 if h["state"] not in ("unresponsive", "not_running") else 1,
+        )
 
     if namespace.group == "doctor" and getattr(namespace, "heal", False):
         from scouter.core import watchdog
@@ -535,8 +546,10 @@ def main(argv: list[str] | None = None) -> int:
 
         res = watchdog.heal_darktable(current_job(), 60.0)
         watchdog.telemetry(current_job(), "watchdog.heal", res["outcome"], res.get("ms", 0), res)
-        return emit({"verb": "doctor", **res, "ok": res["outcome"] == "healed"},
-                    0 if res["outcome"] == "healed" else 1)
+        return emit(
+            {"verb": "doctor", **res, "ok": res["outcome"] == "healed"},
+            0 if res["outcome"] == "healed" else 1,
+        )
 
     if namespace.group == "doctor":
         report = _doctor()

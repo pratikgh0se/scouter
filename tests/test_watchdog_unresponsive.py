@@ -18,14 +18,22 @@ FIXTURE = Path(__file__).resolve().parent / "fixtures" / "P6281348.ORF.xmp"
 
 def _procs(running=None, owned=None, raises=None):
     """Patch dtprocess so no test ever runs pgrep/ps against the host."""
-    rp = (mock.patch.object(dtprocess, "running_pids", side_effect=raises) if raises
-          else mock.patch.object(dtprocess, "running_pids", return_value=running or []))
+    rp = (
+        mock.patch.object(dtprocess, "running_pids", side_effect=raises)
+        if raises
+        else mock.patch.object(dtprocess, "running_pids", return_value=running or [])
+    )
     return rp, mock.patch.object(dtprocess, "owned_pid", return_value=owned)
 
 
 def _dead_bridge(**extra) -> FakeBridge:
-    return FakeBridge(raises={"view.current": BridgeTimeoutError("t"),
-                              "darktable_mcp.diag": BridgeTimeoutError("t"), **extra})
+    return FakeBridge(
+        raises={
+            "view.current": BridgeTimeoutError("t"),
+            "darktable_mcp.diag": BridgeTimeoutError("t"),
+            **extra,
+        }
+    )
 
 
 class UnresponsiveTest(unittest.TestCase):
@@ -96,8 +104,12 @@ class UnresponsiveTest(unittest.TestCase):
         self.assertEqual(cm.exception.detail["running"], [])
 
     def test_timeout_with_live_ping_stays_bridge_timeout(self) -> None:
-        dtbridge.set_bridge(FakeBridge(raises={"view.current": BridgeTimeoutError("t")},
-                                       responses={"darktable_mcp.diag": {"gui_ready": True}}))
+        dtbridge.set_bridge(
+            FakeBridge(
+                raises={"view.current": BridgeTimeoutError("t")},
+                responses={"darktable_mcp.diag": {"gui_ready": True}},
+            )
+        )
         with self.assertRaises(BridgeTimeout) as cm:
             dtbridge.call("view.current")
         self.assertNotIsInstance(cm.exception, DarktableUnresponsive)
@@ -127,10 +139,11 @@ class UnresponsiveTest(unittest.TestCase):
         from scouter.cli import main as cli
 
         for state, code in (("alive", 0), ("starting", 0), ("unresponsive", 1)):
-            with mock.patch.object(dtbridge, "health", return_value={"state": state,
-                                                                     "ping_ms": 3}), \
-                    mock.patch.object(dtprocess, "running_pids", return_value=[4242]), \
-                    mock.patch("builtins.print") as out:
+            with (
+                mock.patch.object(dtbridge, "health", return_value={"state": state, "ping_ms": 3}),
+                mock.patch.object(dtprocess, "running_pids", return_value=[4242]),
+                mock.patch("builtins.print") as out,
+            ):
                 self.assertEqual(cli.main(["doctor", "--ping"]), code)
             self.assertEqual(json.loads(out.call_args[0][0])["watchdog"], state)
 
@@ -138,17 +151,24 @@ class UnresponsiveTest(unittest.TestCase):
         """Task 29 review carry-over: no process is not "unresponsive"."""
         from scouter.cli import main as cli
 
-        with mock.patch.object(dtbridge, "health", return_value={"state": "unresponsive",
-                                                                 "ping_ms": 5000}), \
-                mock.patch.object(dtprocess, "running_pids", return_value=[]), \
-                mock.patch("builtins.print") as out:
+        with (
+            mock.patch.object(
+                dtbridge, "health", return_value={"state": "unresponsive", "ping_ms": 5000}
+            ),
+            mock.patch.object(dtprocess, "running_pids", return_value=[]),
+            mock.patch("builtins.print") as out,
+        ):
             self.assertEqual(cli.main(["doctor", "--ping"]), 1)
         self.assertEqual(json.loads(out.call_args[0][0])["watchdog"], "not_running")
-        with mock.patch.object(dtbridge, "health", return_value={"state": "unresponsive",
-                                                                 "ping_ms": 5000}), \
-                mock.patch.object(dtprocess, "running_pids",
-                                  side_effect=subprocess.TimeoutExpired("pgrep", 5)), \
-                mock.patch("builtins.print") as out:
+        with (
+            mock.patch.object(
+                dtbridge, "health", return_value={"state": "unresponsive", "ping_ms": 5000}
+            ),
+            mock.patch.object(
+                dtprocess, "running_pids", side_effect=subprocess.TimeoutExpired("pgrep", 5)
+            ),
+            mock.patch("builtins.print") as out,
+        ):
             self.assertEqual(cli.main(["doctor", "--ping"]), 1)
         self.assertEqual(json.loads(out.call_args[0][0])["watchdog"], "unresponsive")
 
@@ -178,8 +198,13 @@ class DoctorWatchdogTest(unittest.TestCase):
     def test_watchdog_report_keys_when_alive(self) -> None:
         dtbridge.set_bridge(FakeBridge())
         code, report = self._doctor_json(*_procs(running=[4242]))
-        for key in ("watchdog", "watchdog_line", "gui_ready", "gui_ready_line",
-                    "darktable_pid_line"):
+        for key in (
+            "watchdog",
+            "watchdog_line",
+            "gui_ready",
+            "gui_ready_line",
+            "darktable_pid_line",
+        ):
             self.assertIn(key, report)
         self.assertEqual(report["watchdog"], "alive")
         self.assertEqual(report["darktable_pid_line"], "darktable pid: 4242 (user)")
@@ -188,8 +213,9 @@ class DoctorWatchdogTest(unittest.TestCase):
 
     def test_ok_is_false_when_the_ping_is_unresponsive(self) -> None:
         dtbridge.set_bridge(FakeBridge())
-        unresponsive = mock.patch.object(dtbridge, "health",
-                                         return_value={"state": "unresponsive", "ping_ms": 5000})
+        unresponsive = mock.patch.object(
+            dtbridge, "health", return_value={"state": "unresponsive", "ping_ms": 5000}
+        )
         code, report = self._doctor_json(unresponsive, *_procs(running=[4242]))
         self.assertEqual(report["bridge"], "ok")
         self.assertEqual(report["watchdog"], "unresponsive")
@@ -205,8 +231,7 @@ class DoctorWatchdogTest(unittest.TestCase):
 
     def test_pgrep_failure_is_unknown_not_a_traceback(self) -> None:
         dtbridge.set_bridge(FakeBridge())
-        code, report = self._doctor_json(
-            *_procs(raises=subprocess.TimeoutExpired("pgrep", 5)))
+        code, report = self._doctor_json(*_procs(raises=subprocess.TimeoutExpired("pgrep", 5)))
         self.assertEqual(report["darktable_pid_line"], "darktable pid: unknown (pid lookup failed)")
         self.assertIn("config_path", report)  # _doctor_config still ran
         self.assertIn("backup_gate", report)
@@ -221,8 +246,12 @@ class HistoryCommitWedgedTest(unittest.TestCase):
         self.raw.write_bytes(b"not really a raw")
         shutil.copy(FIXTURE, Path(str(self.raw) + ".xmp"))
         self.responses = {
-            "darkroom.current": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
-                                 "source": "action_images"},
+            "darkroom.current": {
+                "image_id": 12,
+                "path": str(self.raw),
+                "view": "darkroom",
+                "source": "action_images",
+            },
             "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
         }
 
@@ -231,13 +260,20 @@ class HistoryCommitWedgedTest(unittest.TestCase):
         self.cache.stop()
 
     def _commit(self):
-        return history.commit(image=str(self.raw), timeout_s=0.5, expect_change=True,
-                              job="job-test")
+        return history.commit(
+            image=str(self.raw), timeout_s=0.5, expect_change=True, job="job-test"
+        )
 
     def test_wedged_darktable_surfaces_unresponsive_not_commit_timeout(self) -> None:
-        dtbridge.set_bridge(FakeBridge(self.responses, raises={
-            "history.commit": BridgeTimeoutError("t"),
-            "darktable_mcp.diag": BridgeTimeoutError("t")}))
+        dtbridge.set_bridge(
+            FakeBridge(
+                self.responses,
+                raises={
+                    "history.commit": BridgeTimeoutError("t"),
+                    "darktable_mcp.diag": BridgeTimeoutError("t"),
+                },
+            )
+        )
         rp, op = _procs(running=[4242])
         with rp, op, self.assertRaises(DarktableUnresponsive) as cm:
             self._commit()
@@ -245,8 +281,9 @@ class HistoryCommitWedgedTest(unittest.TestCase):
         self.assertEqual(cm.exception.detail["last_method"], "history.commit")
 
     def test_slow_but_alive_darktable_is_still_commit_timeout(self) -> None:
-        dtbridge.set_bridge(FakeBridge(self.responses, raises={
-            "history.commit": BridgeTimeoutError("t")}))
+        dtbridge.set_bridge(
+            FakeBridge(self.responses, raises={"history.commit": BridgeTimeoutError("t")})
+        )
         rp, op = _procs(running=[4242])
         with rp, op, self.assertRaises(CommitTimeout):
             self._commit()

@@ -10,6 +10,7 @@ is now scoped to this repo's real test directories - `tests/`,
 
 `-k "not host"` excludes scouter's real darktable-requiring suite; this file
 carries no `host` in any test name, so it always runs with the rest."""
+
 import os
 import shutil
 import subprocess
@@ -121,7 +122,9 @@ def copy_gate_scaffolding(dest, repo_root):
     (dest / "tests").mkdir(parents=True, exist_ok=True)
     shutil.copy2(repo_root / "Makefile", dest / "Makefile")
     shutil.copy2(repo_root / "scripts" / "merge_gate.sh", dest / "scripts" / "merge_gate.sh")
-    shutil.copy2(repo_root / "scripts" / "mutation_check.sh", dest / "scripts" / "mutation_check.sh")
+    shutil.copy2(
+        repo_root / "scripts" / "mutation_check.sh", dest / "scripts" / "mutation_check.sh"
+    )
     # card t_7a05352a: mutation_check.sh now sources its interpreter
     # resolver from a sibling file rather than inlining the chain.
     shutil.copy2(repo_root / "scripts" / "_python.sh", dest / "scripts" / "_python.sh")
@@ -133,7 +136,9 @@ def copy_gate_scaffolding(dest, repo_root):
 PROD_BUGGY = "def add(a, b):\n    return a - b\n"
 PROD_FIXED = "def add(a, b):\n    return a + b\n"
 
-PLACEHOLDER_TEST = "from production import add\n\n\ndef test_placeholder():\n    assert callable(add)\n"
+PLACEHOLDER_TEST = (
+    "from production import add\n\n\ndef test_placeholder():\n    assert callable(add)\n"
+)
 
 DISCRIMINATING_TEST = (
     "from production import add\n\n\n"
@@ -180,9 +185,20 @@ class DiscriminatingTestPassesTheGate(SharedFixtureTestCase):
         self.assertEqual(flags_cell, "none")
 
     def test_cli_exit_code_zero_and_table_on_stdout(self):
-        p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
-                             "--base", self.base, "--head", self.head, "--repo", str(self.root)],
-                            capture_output=True, text=True)
+        p = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve().parent / "mutation_check.py"),
+                "--base",
+                self.base,
+                "--head",
+                self.head,
+                "--repo",
+                str(self.root),
+            ],
+            capture_output=True,
+            text=True,
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("| test file |", p.stdout)
 
@@ -208,9 +224,20 @@ class TautologicalTestFailsTheGate(SharedFixtureTestCase):
         self.assertIn("tautology", flags_cell)
 
     def test_cli_exit_code_nonzero(self):
-        p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
-                             "--base", self.base, "--head", self.head, "--repo", str(self.root)],
-                            capture_output=True, text=True)
+        p = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve().parent / "mutation_check.py"),
+                "--base",
+                self.base,
+                "--head",
+                self.head,
+                "--repo",
+                str(self.root),
+            ],
+            capture_output=True,
+            text=True,
+        )
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("did not fail (BAD)", p.stdout)
 
@@ -243,9 +270,20 @@ class ImportErrorIsNotDiscriminating(SharedFixtureTestCase):
         self.assertNotIn("FAIL (good)", weak_cell)
 
     def test_cli_exit_code_nonzero_and_table_says_error(self):
-        p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
-                             "--base", self.base, "--head", self.head, "--repo", str(self.root)],
-                            capture_output=True, text=True)
+        p = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve().parent / "mutation_check.py"),
+                "--base",
+                self.base,
+                "--head",
+                self.head,
+                "--repo",
+                str(self.root),
+            ],
+            capture_output=True,
+            text=True,
+        )
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("ERROR (not discriminating)", p.stdout)
 
@@ -275,7 +313,8 @@ class NewModuleImportErrorIsNotAFailure(unittest.TestCase):
                 root,
                 "from newmod import double\n\n\n"
                 "def test_double():\n"
-                "    assert double(3) == 6\n")
+                "    assert double(3) == 6\n",
+            )
             head = commit_all(root, "add newmod.py and cover it")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -299,10 +338,8 @@ class NewModuleImportErrorIsNotAFailure(unittest.TestCase):
 
             (root / "newmod.py").write_text("def double(x):\n    return x * 2\n")
             self._write_newmod_test(
-                root,
-                "from newmod import double\n\n\n"
-                "def test_double():\n"
-                "    double(3)\n")
+                root, "from newmod import double\n\n\n" "def test_double():\n" "    double(3)\n"
+            )
             head = commit_all(root, "add newmod.py, but the test asserts nothing")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -359,14 +396,25 @@ class TestSupportFilesAreNeverProduction(unittest.TestCase):
     one production file changed"."""
 
     def test_is_test_support_file_classification(self):
-        support = ["tests/conftest.py", "tests/scouter_fakes.py",
-                   "gauntlet/tests/__init__.py", "tests/gauntlet/conftest.py",
-                   "tests/fixtures/corpus.py"]
+        support = [
+            "tests/conftest.py",
+            "tests/scouter_fakes.py",
+            "gauntlet/tests/__init__.py",
+            "tests/gauntlet/conftest.py",
+            "tests/fixtures/corpus.py",
+        ]
         # Deliberately real harness code that lives under a test directory,
         # not a fake/mock/stub/conftest/fixture - must stay ordinary
         # production (this is the exact pair test_execute.py exists to cover).
-        production = ["scouter/paths.py", "gauntlet/evaluate.py", "production.py", "newmod.py",
-                       "tests/gauntlet/observe.py", "tests/gauntlet/execute.py", "tests/host_support.py"]
+        production = [
+            "scouter/paths.py",
+            "gauntlet/evaluate.py",
+            "production.py",
+            "newmod.py",
+            "tests/gauntlet/observe.py",
+            "tests/gauntlet/execute.py",
+            "tests/host_support.py",
+        ]
         for p in support:
             self.assertTrue(mc.is_test_support_file(p), p)
             self.assertFalse(mc.is_test_file(p), p)
@@ -425,7 +473,8 @@ class SharedProductionModulePlusNewModule(unittest.TestCase):
             base = commit_all(root, "base: errors.py + buggy production.py, no newmod yet")
 
             (root / "errors.py").write_text(
-                "class BadInput(Exception):\n    pass\n\n\nclass Extra(Exception):\n    pass\n")
+                "class BadInput(Exception):\n    pass\n\n\nclass Extra(Exception):\n    pass\n"
+            )
             (root / "production.py").write_text(PROD_FIXED)
             (root / "newmod.py").write_text("def double(x):\n    return x * 2\n")
             (root / "tests" / "test_production.py").write_text(
@@ -435,7 +484,8 @@ class SharedProductionModulePlusNewModule(unittest.TestCase):
                 "def test_add_and_double():\n"
                 "    assert add(2, 3) == 5\n"
                 "    assert double(3) == 6\n"
-                "    assert issubclass(BadInput, Exception)\n")
+                "    assert issubclass(BadInput, Exception)\n"
+            )
             head = commit_all(root, "extend errors.py, fix add(), add newmod.py, cover all three")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -463,7 +513,9 @@ class NoProductionChangeForThisTestFile(SharedFixtureTestCase):
         base = commit_all(root, "base: production.py (already correct) + buggy unrelated.py")
         (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
         write_test(root, DISCRIMINATING_TEST)
-        head = commit_all(root, "fix unrelated.py; add new tests for production.py, which did not change")
+        head = commit_all(
+            root, "fix unrelated.py; add new tests for production.py, which did not change"
+        )
         return base, head
 
     def test_new_tests_for_unchanged_code_read_n_a_no_production_change(self):
@@ -475,9 +527,20 @@ class NoProductionChangeForThisTestFile(SharedFixtureTestCase):
         self.assertIn("FAIL (good)", weak_cell)
 
     def test_cli_exit_code_zero(self):
-        p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
-                             "--base", self.base, "--head", self.head, "--repo", str(self.root)],
-                            capture_output=True, text=True)
+        p = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve().parent / "mutation_check.py"),
+                "--base",
+                self.base,
+                "--head",
+                self.head,
+                "--repo",
+                str(self.root),
+            ],
+            capture_output=True,
+            text=True,
+        )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("n/a (no production change)", p.stdout)
 
@@ -499,13 +562,17 @@ class NewModuleUnderATestDirectoryNotItselfATest(unittest.TestCase):
 
             # A new NON-test .py file under tests/ (a tool, not test_*.py).
             (root / "tests" / "toolkit.py").write_text("def triple(x):\n    return x * 3\n")
-            write_test(root,
-                       "import sys\nfrom pathlib import Path\n\n"
-                       "sys.path.insert(0, str(Path(__file__).resolve().parent))\n"
-                       "import toolkit\n\n\n"
-                       "def test_triple():\n"
-                       "    assert toolkit.triple(3) == 9\n")
-            head = commit_all(root, "add tests/toolkit.py (a tool, not a test) and cover it by bare-stem import")
+            write_test(
+                root,
+                "import sys\nfrom pathlib import Path\n\n"
+                "sys.path.insert(0, str(Path(__file__).resolve().parent))\n"
+                "import toolkit\n\n\n"
+                "def test_triple():\n"
+                "    assert toolkit.triple(3) == 9\n",
+            )
+            head = commit_all(
+                root, "add tests/toolkit.py (a tool, not a test) and cover it by bare-stem import"
+            )
 
             ok, rows, note = mc.check_range(root, base, head)
             self.assertIsNone(note)
@@ -537,17 +604,22 @@ class TargetsPredateRangeMarker(unittest.TestCase):
             marked_test = (
                 f"# mutation-check: targets-predate-range {base} -- "
                 "new tests for pre-existing production.py, killed 3 hand mutants "
-                ":: test_add_returns_the_sum\n"
-                + DISCRIMINATING_TEST)
+                ":: test_add_returns_the_sum\n" + DISCRIMINATING_TEST
+            )
             write_test(root, marked_test)
-            head = commit_all(root, "fix unrelated.py; add marked tests for untouched production.py")
+            head = commit_all(
+                root, "fix unrelated.py; add marked tests for untouched production.py"
+            )
 
             ok, rows, note = mc.check_range(root, base, head)
             self.assertIsNone(note)
             self.assertTrue(ok, rows)
             f, names, rev_cell, weak_cell, flags_cell = rows[0]
-            self.assertEqual(rev_cell, "n/a (targets predate range: new tests for pre-existing "
-                                        "production.py, killed 3 hand mutants)")
+            self.assertEqual(
+                rev_cell,
+                "n/a (targets predate range: new tests for pre-existing "
+                "production.py, killed 3 hand mutants)",
+            )
             self.assertIn("FAIL (good)", weak_cell)
 
     def test_a_marker_with_the_wrong_sha_is_reported_not_silently_ignored(self):
@@ -563,9 +635,12 @@ class TargetsPredateRangeMarker(unittest.TestCase):
             wrong_sha = "0" * 40
             marked_test = (
                 f"# mutation-check: targets-predate-range {wrong_sha} -- stale marker\n"
-                + DISCRIMINATING_TEST)
+                + DISCRIMINATING_TEST
+            )
             write_test(root, marked_test)
-            head = commit_all(root, "fix unrelated.py; test file carries a marker for the wrong base")
+            head = commit_all(
+                root, "fix unrelated.py; test file carries a marker for the wrong base"
+            )
 
             ok, rows, note = mc.check_range(root, base, head)
             self.assertIsNone(note)
@@ -582,15 +657,27 @@ class TargetsPredateRangeMarker(unittest.TestCase):
             write_test(root, PLACEHOLDER_TEST)
             base = commit_all(root, "base")
             (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
-            marked_test = (f"# mutation-check: targets-predate-range {base} -- pre-existing coverage "
-                            ":: test_add_returns_the_sum\n"
-                            + DISCRIMINATING_TEST)
+            marked_test = (
+                f"# mutation-check: targets-predate-range {base} -- pre-existing coverage "
+                ":: test_add_returns_the_sum\n" + DISCRIMINATING_TEST
+            )
             write_test(root, marked_test)
             head = commit_all(root, "fix unrelated.py; add marked tests")
 
-            p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
-                                 "--base", base, "--head", head, "--repo", str(root)],
-                                capture_output=True, text=True)
+            p = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parent / "mutation_check.py"),
+                    "--base",
+                    base,
+                    "--head",
+                    head,
+                    "--repo",
+                    str(root),
+                ],
+                capture_output=True,
+                text=True,
+            )
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertIn("targets predate range: pre-existing coverage", p.stdout)
 
@@ -604,30 +691,47 @@ class TargetsPredateRangeMarker(unittest.TestCase):
             base = commit_all(root, "base")
             (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
             wrong_sha = "1" * 40
-            marked_test = (f"# mutation-check: targets-predate-range {wrong_sha} -- stale marker\n"
-                            + DISCRIMINATING_TEST)
+            marked_test = (
+                f"# mutation-check: targets-predate-range {wrong_sha} -- stale marker\n"
+                + DISCRIMINATING_TEST
+            )
             write_test(root, marked_test)
             head = commit_all(root, "fix unrelated.py; stale marker")
 
-            p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
-                                 "--base", base, "--head", head, "--repo", str(root)],
-                                capture_output=True, text=True)
+            p = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parent / "mutation_check.py"),
+                    "--base",
+                    base,
+                    "--head",
+                    head,
+                    "--repo",
+                    str(root),
+                ],
+                capture_output=True,
+                text=True,
+            )
             self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
             self.assertIn("marker mismatch (BAD)", p.stdout)
 
     def test_extract_marker_only_scans_the_top_of_the_file(self):
-        buried = "\n".join([f"# line {i}" for i in range(30)]) + \
-            "\n# mutation-check: targets-predate-range abc1234 -- too late, buried\n"
+        buried = (
+            "\n".join([f"# line {i}" for i in range(30)])
+            + "\n# mutation-check: targets-predate-range abc1234 -- too late, buried\n"
+        )
         self.assertIsNone(mc.extract_marker(buried))
         top = "# mutation-check: targets-predate-range abc1234 -- right at the top\nimport os\n"
         self.assertEqual(mc.extract_marker(top), ("abc1234", "right at the top", None))
 
     def test_extract_marker_parses_the_per_test_ids_list(self):
-        top = ("# mutation-check: targets-predate-range abc1234 -- pre-existing coverage "
-               ":: test_a, test_b\nimport os\n")
+        top = (
+            "# mutation-check: targets-predate-range abc1234 -- pre-existing coverage "
+            ":: test_a, test_b\nimport os\n"
+        )
         self.assertEqual(
-            mc.extract_marker(top),
-            ("abc1234", "pre-existing coverage", ("test_a", "test_b")))
+            mc.extract_marker(top), ("abc1234", "pre-existing coverage", ("test_a", "test_b"))
+        )
 
 
 class MarkerIsPerTestAsOfRound13(unittest.TestCase):
@@ -658,8 +762,11 @@ class MarkerIsPerTestAsOfRound13(unittest.TestCase):
                 "    assert add(2, 3) == 5\n"
             )
             write_test(root, mixed_test)
-            head = commit_all(root, "fix add(); marker covers test_marked only, "
-                                     "test_add_returns_the_sum is genuinely new")
+            head = commit_all(
+                root,
+                "fix add(); marker covers test_marked only, "
+                "test_add_returns_the_sum is genuinely new",
+            )
 
             ok, rows, note = mc.check_range(root, base, head)
             self.assertIsNone(note)
@@ -672,7 +779,9 @@ class MarkerIsPerTestAsOfRound13(unittest.TestCase):
             # in the SAME file is still genuinely revert-checked.
             self.assertIn(
                 "test_marked: n/a (targets predate range: "
-                "pre-existing coverage for test_marked)", rev_cell)
+                "pre-existing coverage for test_marked)",
+                rev_cell,
+            )
             self.assertIn("test_add_returns_the_sum: FAIL (good)", rev_cell)
 
     def test_a_marker_with_no_ids_at_all_is_stale(self):
@@ -685,8 +794,10 @@ class MarkerIsPerTestAsOfRound13(unittest.TestCase):
             base = commit_all(root, "base")
 
             (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
-            marked_test = (f"# mutation-check: targets-predate-range {base} -- no ids at all\n"
-                            + DISCRIMINATING_TEST)
+            marked_test = (
+                f"# mutation-check: targets-predate-range {base} -- no ids at all\n"
+                + DISCRIMINATING_TEST
+            )
             write_test(root, marked_test)
             head = commit_all(root, "fix unrelated.py; file-level marker with no ids is stale")
 
@@ -708,9 +819,12 @@ class MarkerIsPerTestAsOfRound13(unittest.TestCase):
             (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
             marked_test = (
                 f"# mutation-check: targets-predate-range {base} -- wrong id "
-                ":: test_does_not_exist\n" + DISCRIMINATING_TEST)
+                ":: test_does_not_exist\n" + DISCRIMINATING_TEST
+            )
             write_test(root, marked_test)
-            head = commit_all(root, "fix unrelated.py; marker names a test id that isn't new/changed")
+            head = commit_all(
+                root, "fix unrelated.py; marker names a test id that isn't new/changed"
+            )
 
             ok, rows, note = mc.check_range(root, base, head)
             self.assertIsNone(note)
@@ -732,9 +846,12 @@ class MarkerIsPerTestAsOfRound13(unittest.TestCase):
             wrong_sha = "2" * 40
             marked_test = (
                 f"# mutation-check: targets-predate-range {wrong_sha} -- stale marker "
-                ":: test_add_returns_the_sum\n" + DISCRIMINATING_TEST)
+                ":: test_add_returns_the_sum\n" + DISCRIMINATING_TEST
+            )
             write_test(root, marked_test)
-            head = commit_all(root, "fix unrelated.py; wrong-sha marker with an otherwise-valid ids list")
+            head = commit_all(
+                root, "fix unrelated.py; wrong-sha marker with an otherwise-valid ids list"
+            )
 
             ok, rows, note = mc.check_range(root, base, head)
             self.assertIsNone(note)
@@ -752,10 +869,7 @@ class WeakeningTargetsOnlyTheChangedFunction(unittest.TestCase):
 
     def test_an_old_test_first_then_a_new_test_below_it_only_mutates_the_new_one(self):
         text = (
-            "def test_old():\n"
-            "    assert 1 == 1\n\n\n"
-            "def test_new():\n"
-            "    assert 2 == 2\n"
+            "def test_old():\n" "    assert 1 == 1\n\n\n" "def test_new():\n" "    assert 2 == 2\n"
         )
         # test_old's def is line 1, body line 2; test_new's def is line 5,
         # body line 6. Only the new function's range is passed - exactly
@@ -774,16 +888,21 @@ class WeakeningTargetsOnlyTheChangedFunction(unittest.TestCase):
             root = Path(tmp)
             init_repo(root)
             (root / "production.py").write_text(PROD_BUGGY)
-            write_test(root, "from production import add\n\n\ndef test_placeholder():\n    assert callable(add)\n")
+            write_test(
+                root,
+                "from production import add\n\n\ndef test_placeholder():\n    assert callable(add)\n",
+            )
             base = commit_all(root, "base: buggy add(), one old test")
 
             (root / "production.py").write_text(PROD_FIXED)
-            write_test(root,
-                       "from production import add\n\n\n"
-                       "def test_placeholder():\n"
-                       "    assert callable(add)\n\n\n"
-                       "def test_add_returns_the_sum():\n"
-                       "    assert add(2, 3) == 5\n")
+            write_test(
+                root,
+                "from production import add\n\n\n"
+                "def test_placeholder():\n"
+                "    assert callable(add)\n\n\n"
+                "def test_add_returns_the_sum():\n"
+                "    assert add(2, 3) == 5\n",
+            )
             head = commit_all(root, "fix add(); old test untouched, new test added below it")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -806,18 +925,22 @@ class WeakeningFallsBackToFileLevelWhenTheChangedFunctionHasNoAssert(unittest.Te
             root = Path(tmp)
             init_repo(root)
             (root / "production.py").write_text(PROD_FIXED)
-            write_test(root,
-                       "from production import add\n\n\n"
-                       "def test_old_with_a_real_check():\n"
-                       "    assert add(2, 3) == 5\n")
+            write_test(
+                root,
+                "from production import add\n\n\n"
+                "def test_old_with_a_real_check():\n"
+                "    assert add(2, 3) == 5\n",
+            )
             base = commit_all(root, "base: one old test with a real assertion")
 
-            write_test(root,
-                       "from production import add\n\n\n"
-                       "def test_old_with_a_real_check():\n"
-                       "    assert add(2, 3) == 5\n\n\n"
-                       "def test_new_makes_a_call_but_checks_nothing():\n"
-                       "    add(2, 3)\n")
+            write_test(
+                root,
+                "from production import add\n\n\n"
+                "def test_old_with_a_real_check():\n"
+                "    assert add(2, 3) == 5\n\n\n"
+                "def test_new_makes_a_call_but_checks_nothing():\n"
+                "    add(2, 3)\n",
+            )
             head = commit_all(root, "add a new test with no assert at all")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -851,15 +974,19 @@ class ReferencesProdFileResolvesToSpecificSubmodules(unittest.TestCase):
             root = Path(tmp)
             init_repo(root)
             self._make_pkg(root, "def get(x):\n    return x - x\n", "INCIDENTS = []\n")
-            write_test(root, "from pkg import db, incidents\n\n\ndef test_placeholder():\n    assert db\n")
+            write_test(
+                root, "from pkg import db, incidents\n\n\ndef test_placeholder():\n    assert db\n"
+            )
             base = commit_all(root, "base: buggy db.get(), incidents.py untouched throughout")
 
             (root / "pkg" / "db.py").write_text("def get(x):\n    return x\n")
-            write_test(root,
-                       "from pkg import db, incidents\n\n\n"
-                       "def test_get_returns_its_argument():\n"
-                       "    assert db.get(3) == 3\n"
-                       "    assert incidents.INCIDENTS == []\n")
+            write_test(
+                root,
+                "from pkg import db, incidents\n\n\n"
+                "def test_get_returns_its_argument():\n"
+                "    assert db.get(3) == 3\n"
+                "    assert incidents.INCIDENTS == []\n",
+            )
             head = commit_all(root, "fix db.get(); incidents.py never changes in this range")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -883,10 +1010,12 @@ class ReferencesProdFileResolvesToSpecificSubmodules(unittest.TestCase):
             base = commit_all(root, "base: db.py already correct, incidents.py about to change")
 
             (root / "pkg" / "incidents.py").write_text("INCIDENTS = ['fixed']\n")
-            write_test(root,
-                       "from pkg import db\n\n\n"
-                       "def test_get_returns_its_argument():\n"
-                       "    assert db.get(3) == 3\n")
+            write_test(
+                root,
+                "from pkg import db\n\n\n"
+                "def test_get_returns_its_argument():\n"
+                "    assert db.get(3) == 3\n",
+            )
             head = commit_all(root, "change incidents.py (unrelated); new test only imports db")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -910,14 +1039,18 @@ class ReferencesProdFileHandlesInitReexports(unittest.TestCase):
             (root / "pkg").mkdir()
             (root / "pkg" / "__init__.py").write_text("from pkg._core import shared\n")
             (root / "pkg" / "_core.py").write_text("def shared(x):\n    return x - x\n")
-            write_test(root, "from pkg import shared\n\n\ndef test_placeholder():\n    assert shared\n")
+            write_test(
+                root, "from pkg import shared\n\n\ndef test_placeholder():\n    assert shared\n"
+            )
             base = commit_all(root, "base: buggy shared(), re-exported through __init__")
 
             (root / "pkg" / "_core.py").write_text("def shared(x):\n    return x\n")
-            write_test(root,
-                       "from pkg import shared\n\n\n"
-                       "def test_shared_returns_its_argument():\n"
-                       "    assert shared(3) == 3\n")
+            write_test(
+                root,
+                "from pkg import shared\n\n\n"
+                "def test_shared_returns_its_argument():\n"
+                "    assert shared(3) == 3\n",
+            )
             head = commit_all(root, "fix _core.shared(), only ever imported via the pkg re-export")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -947,11 +1080,15 @@ class NoChangedTestFunctionsIsNotAFailure(unittest.TestCase):
             base = commit_all(root, "base: buggy unrelated.py, one placeholder test")
 
             (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
-            write_test(root,
-                       "def test_placeholder():\n    assert True\n\n\n"
-                       "def fake_commit(x, expect_module=None):\n"
-                       "    return x\n")
-            head = commit_all(root, "fix unrelated.py; add a non-test helper, no test function touched")
+            write_test(
+                root,
+                "def test_placeholder():\n    assert True\n\n\n"
+                "def fake_commit(x, expect_module=None):\n"
+                "    return x\n",
+            )
+            head = commit_all(
+                root, "fix unrelated.py; add a non-test helper, no test function touched"
+            )
 
             ok, rows, note = mc.check_range(root, base, head)
             self.assertIsNone(note)
@@ -969,15 +1106,28 @@ class NoChangedTestFunctionsIsNotAFailure(unittest.TestCase):
             write_test(root, "def test_placeholder():\n    assert True\n")
             base = commit_all(root, "base")
             (root / "unrelated.py").write_text("def sub(a, b):\n    return a - b\n")
-            write_test(root,
-                       "def test_placeholder():\n    assert True\n\n\n"
-                       "def fake_commit(x, expect_module=None):\n"
-                       "    return x\n")
+            write_test(
+                root,
+                "def test_placeholder():\n    assert True\n\n\n"
+                "def fake_commit(x, expect_module=None):\n"
+                "    return x\n",
+            )
             head = commit_all(root, "fix unrelated.py; helper-only edit")
 
-            p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
-                                 "--base", base, "--head", head, "--repo", str(root)],
-                                capture_output=True, text=True)
+            p = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parent / "mutation_check.py"),
+                    "--base",
+                    base,
+                    "--head",
+                    head,
+                    "--repo",
+                    str(root),
+                ],
+                capture_output=True,
+                text=True,
+            )
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertIn("n/a (no test functions changed)", p.stdout)
             self.assertNotIn("did not fail (BAD)", p.stdout)
@@ -990,18 +1140,22 @@ class NoChangedTestFunctionsIsNotAFailure(unittest.TestCase):
             root = Path(tmp)
             init_repo(root)
             (root / "production.py").write_text(PROD_FIXED)
-            write_test(root,
-                       "from production import add\n\n\n"
-                       "def test_old_with_a_real_check():\n"
-                       "    assert add(2, 3) == 5\n")
+            write_test(
+                root,
+                "from production import add\n\n\n"
+                "def test_old_with_a_real_check():\n"
+                "    assert add(2, 3) == 5\n",
+            )
             base = commit_all(root, "base: one old test with a real assertion")
 
-            write_test(root,
-                       "from production import add\n\n\n"
-                       "def test_old_with_a_real_check():\n"
-                       "    assert add(2, 3) == 5\n\n\n"
-                       "def test_new_makes_a_call_but_checks_nothing():\n"
-                       "    add(2, 3)\n")
+            write_test(
+                root,
+                "from production import add\n\n\n"
+                "def test_old_with_a_real_check():\n"
+                "    assert add(2, 3) == 5\n\n\n"
+                "def test_new_makes_a_call_but_checks_nothing():\n"
+                "    add(2, 3)\n",
+            )
             head = commit_all(root, "add a new test with no assert at all")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1040,8 +1194,10 @@ class B0InterpreterAndOutcomeClassification(unittest.TestCase):
         # that timed out under the old fixed 180s ceiling when a
         # merge_gate run over a large range selected nearly all of them.
         self.assertEqual(mc.pytest_timeout_budget([]), 180)
-        self.assertEqual(mc.pytest_timeout_budget(["a"] * 5), 180)   # 50 < 180 floor
-        self.assertEqual(mc.pytest_timeout_budget(["a"] * 18), 180)  # 180 == floor, not yet above it
+        self.assertEqual(mc.pytest_timeout_budget(["a"] * 5), 180)  # 50 < 180 floor
+        self.assertEqual(
+            mc.pytest_timeout_budget(["a"] * 18), 180
+        )  # 180 == floor, not yet above it
         self.assertEqual(mc.pytest_timeout_budget(["a"] * 19), 190)  # 190 > 180
         self.assertEqual(mc.pytest_timeout_budget(["a"] * 48), 480)
         self.assertEqual(mc.pytest_timeout_budget(["a"] * 100), 1000)
@@ -1055,12 +1211,16 @@ class B0InterpreterAndOutcomeClassification(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
             root = Path(tmp)
             init_repo(root)
-            write_test(root, "import time\n\n\ndef test_slow():\n    time.sleep(1)\n    assert True\n")
+            write_test(
+                root, "import time\n\n\ndef test_slow():\n    time.sleep(1)\n    assert True\n"
+            )
             commit_all(root, "one slow-ish test")
             ids = ["tests/test_production.py::test_slow"]
             rc, out = mc.run_pytest(root, ids, sys.executable, timeout=0.01)
             self.assertEqual(out, "timed out")
-            rc2, out2 = mc.run_pytest(root, ids, sys.executable)  # default: the formula, plenty of room
+            rc2, out2 = mc.run_pytest(
+                root, ids, sys.executable
+            )  # default: the formula, plenty of room
             self.assertNotEqual(out2, "timed out")
 
     def test_gate_python_prefers_the_repos_own_venv(self):
@@ -1097,10 +1257,21 @@ class B0InterpreterAndOutcomeClassification(unittest.TestCase):
             write_test(root, DISCRIMINATING_TEST)
             head = commit_all(root, "fix + a real test")
 
-            p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
-                                 "--base", base, "--head", head, "--repo", str(root)],
-                                capture_output=True, text=True,
-                                env={**os.environ, "PATH": "/usr/bin:/bin"})
+            p = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parent / "mutation_check.py"),
+                    "--base",
+                    base,
+                    "--head",
+                    head,
+                    "--repo",
+                    str(root),
+                ],
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PATH": "/usr/bin:/bin"},
+            )
             # Whether this reproduces depends on whether /usr/bin/python3 (if
             # any) happens to have pytest on this machine - assert the
             # INVARIANT the rule protects, not a specific outcome: it is
@@ -1131,14 +1302,17 @@ class B1RevertedSymbolImportError(unittest.TestCase):
             # errors.py gains a NEW class (a pure addition); production.py is
             # fixed. The new test imports both.
             (root / "errors.py").write_text(
-                "class Existing(Exception):\n    pass\n\n\nclass BadInput(Exception):\n    pass\n")
+                "class Existing(Exception):\n    pass\n\n\nclass BadInput(Exception):\n    pass\n"
+            )
             (root / "production.py").write_text(PROD_FIXED)
-            write_test(root,
-                       "from errors import BadInput\n"
-                       "from production import add\n\n\n"
-                       "def test_add_and_the_new_error_class():\n"
-                       "    assert add(2, 3) == 5\n"
-                       "    assert issubclass(BadInput, Exception)\n")
+            write_test(
+                root,
+                "from errors import BadInput\n"
+                "from production import add\n\n\n"
+                "def test_add_and_the_new_error_class():\n"
+                "    assert add(2, 3) == 5\n"
+                "    assert issubclass(BadInput, Exception)\n",
+            )
             head = commit_all(root, "fix add(); add errors.BadInput (pure addition); cover both")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1157,7 +1331,9 @@ class B1RevertedSymbolImportError(unittest.TestCase):
             write_test(root, PLACEHOLDER_TEST)
             base = commit_all(root, "base")
             (root / "production.py").write_text(PROD_FIXED)
-            write_test(root, IMPORT_ERROR_TEST)  # imports nonexistent_module_xyz - not range-related
+            write_test(
+                root, IMPORT_ERROR_TEST
+            )  # imports nonexistent_module_xyz - not range-related
             head = commit_all(root, "fix add(); new test imports a genuinely missing module")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1189,22 +1365,27 @@ class TwoModuleImportChainKeepsBothAndReruns(unittest.TestCase):
             init_repo(root)
             (root / "evaluate.py").write_text("def evaluate():\n    return True\n")
             (root / "policy.py").write_text(
-                "from evaluate import evaluate\n\n\n"
-                "def check():\n    return evaluate()\n")
+                "from evaluate import evaluate\n\n\n" "def check():\n    return evaluate()\n"
+            )
             (root / "production.py").write_text(PROD_BUGGY)
             (root / "tests").mkdir()
             (root / "tests" / "test_chain.py").write_text(
                 "from production import add\nfrom policy import check\n\n\n"
                 "def test_placeholder():\n"
-                "    assert callable(add) and callable(check)\n")
-            base = commit_all(root, "base: policy.py has no POLICY_TAG, evaluate.py has no KNOWN_FLAGS")
+                "    assert callable(add) and callable(check)\n"
+            )
+            base = commit_all(
+                root, "base: policy.py has no POLICY_TAG, evaluate.py has no KNOWN_FLAGS"
+            )
 
             (root / "evaluate.py").write_text(
-                "KNOWN_FLAGS = {'a', 'b'}\n\n\ndef evaluate():\n    return True\n")
+                "KNOWN_FLAGS = {'a', 'b'}\n\n\ndef evaluate():\n    return True\n"
+            )
             (root / "policy.py").write_text(
                 "from evaluate import evaluate, KNOWN_FLAGS\n\n\n"
                 "POLICY_TAG = 'n1-parity'\n\n\n"
-                "def check():\n    return evaluate() and bool(KNOWN_FLAGS)\n")
+                "def check():\n    return evaluate() and bool(KNOWN_FLAGS)\n"
+            )
             (root / "production.py").write_text(PROD_FIXED)
             (root / "tests" / "test_chain.py").write_text(
                 "from production import add\n"
@@ -1212,8 +1393,11 @@ class TwoModuleImportChainKeepsBothAndReruns(unittest.TestCase):
                 "def test_add_and_policy_tag():\n"
                 "    assert add(2, 3) == 5\n"
                 "    assert POLICY_TAG == 'n1-parity'\n"
-                "    assert check()\n")
-            head = commit_all(root, "fix add(); add policy.POLICY_TAG chained through evaluate.KNOWN_FLAGS")
+                "    assert check()\n"
+            )
+            head = commit_all(
+                root, "fix add(); add policy.POLICY_TAG chained through evaluate.KNOWN_FLAGS"
+            )
 
             ok, rows, note = mc.check_range(root, base, head)
             self.assertIsNone(note)
@@ -1246,13 +1430,12 @@ class ImportChainExceedingTheLimitIsUnresolved(unittest.TestCase):
 
             for k in range(n - 1):
                 (root / f"mod{k}.py").write_text(
-                    f"from mod{k + 1} import NEXT{k + 1}\n\n\n"
-                    f"OWN_{k} = {k}\nNEXT{k} = {k}\n")
+                    f"from mod{k + 1} import NEXT{k + 1}\n\n\n" f"OWN_{k} = {k}\nNEXT{k} = {k}\n"
+                )
             (root / f"mod{n - 1}.py").write_text(f"OWN_{n - 1} = {n - 1}\nNEXT{n - 1} = {n - 1}\n")
-            write_test(root,
-                       "from mod0 import NEXT0\n\n\n"
-                       "def test_next0():\n"
-                       "    assert NEXT0 == 0\n")
+            write_test(
+                root, "from mod0 import NEXT0\n\n\n" "def test_next0():\n" "    assert NEXT0 == 0\n"
+            )
             head = commit_all(root, "chain mod0 -> mod1 -> ... -> mod5, 5 hops deep")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1282,11 +1465,14 @@ class RuntimeAttributeErrorOnANewNameIsTreatedLikeCollection(unittest.TestCase):
             base = commit_all(root, "base: production.py has no NEW_FLAG yet")
 
             (root / "production.py").write_text(
-                "def add(a, b):\n    return a + b\n\n\nNEW_FLAG = True\n")
-            write_test(root,
-                       "import production\n\n\n"
-                       "def test_new_flag_is_true():\n"
-                       "    assert production.NEW_FLAG\n")
+                "def add(a, b):\n    return a + b\n\n\nNEW_FLAG = True\n"
+            )
+            write_test(
+                root,
+                "import production\n\n\n"
+                "def test_new_flag_is_true():\n"
+                "    assert production.NEW_FLAG\n",
+            )
             head = commit_all(root, "add production.NEW_FLAG, accessed via attribute not import")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1317,13 +1503,16 @@ class BareStemModuleResolvesAnAttributeError(unittest.TestCase):
             base = commit_all(root, "base: tools/prod.py has no NEW_FLAG yet")
 
             (root / "tools" / "prod.py").write_text(
-                "def add(a, b):\n    return a + b\n\nNEW_FLAG = True\n")
-            write_test(root,
-                       "import sys\nfrom pathlib import Path\n"
-                       "sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))\n"
-                       "import prod\n\n\n"
-                       "def test_new_flag():\n"
-                       "    assert prod.NEW_FLAG\n")
+                "def add(a, b):\n    return a + b\n\nNEW_FLAG = True\n"
+            )
+            write_test(
+                root,
+                "import sys\nfrom pathlib import Path\n"
+                "sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))\n"
+                "import prod\n\n\n"
+                "def test_new_flag():\n"
+                "    assert prod.NEW_FLAG\n",
+            )
             head = commit_all(root, "add tools/prod.NEW_FLAG, imported by bare stem")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1350,10 +1539,10 @@ class TopLevelNameScanCoversTuplesReexportsAndIfTry(unittest.TestCase):
             base = commit_all(root, "base: no NEW_A/NEW_B yet")
 
             (root / "production.py").write_text(PROD_FIXED + "\nNEW_A, NEW_B = True, True\n")
-            write_test(root,
-                       "import production\n\n\n"
-                       "def test_new_a():\n"
-                       "    assert production.NEW_A\n")
+            write_test(
+                root,
+                "import production\n\n\n" "def test_new_a():\n" "    assert production.NEW_A\n",
+            )
             head = commit_all(root, "add NEW_A, NEW_B via tuple assignment")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1374,11 +1563,15 @@ class TopLevelNameScanCoversTuplesReexportsAndIfTry(unittest.TestCase):
 
             (root / "production.py").write_text("from helpers import NEW_FLAG\n" + PROD_FIXED)
             (root / "helpers.py").write_text("X = 1\nNEW_FLAG = True\n")
-            write_test(root,
-                       "import production\n\n\n"
-                       "def test_new_flag():\n"
-                       "    assert production.NEW_FLAG\n")
-            head = commit_all(root, "re-export helpers.NEW_FLAG through production's top-level import")
+            write_test(
+                root,
+                "import production\n\n\n"
+                "def test_new_flag():\n"
+                "    assert production.NEW_FLAG\n",
+            )
+            head = commit_all(
+                root, "re-export helpers.NEW_FLAG through production's top-level import"
+            )
 
             ok, rows, note = mc.check_range(root, base, head)
             self.assertIsNone(note)
@@ -1400,11 +1593,15 @@ class TopLevelNameScanCoversTuplesReexportsAndIfTry(unittest.TestCase):
             base = commit_all(root, "base: no NEW_FLAG yet")
 
             (root / "production.py").write_text(
-                PROD_FIXED + "\ntry:\n    NEW_FLAG = True\nexcept Exception:\n    NEW_FLAG = False\n")
-            write_test(root,
-                       "import production\n\n\n"
-                       "def test_new_flag():\n"
-                       "    assert production.NEW_FLAG\n")
+                PROD_FIXED
+                + "\ntry:\n    NEW_FLAG = True\nexcept Exception:\n    NEW_FLAG = False\n"
+            )
+            write_test(
+                root,
+                "import production\n\n\n"
+                "def test_new_flag():\n"
+                "    assert production.NEW_FLAG\n",
+            )
             head = commit_all(root, "add NEW_FLAG, bound only inside a top-level try/except")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1429,13 +1626,17 @@ class PureAdditionCheckIgnoresImportChurn(unittest.TestCase):
             init_repo(root)
             (root / "production.py").write_text("import os\n" + PROD_FIXED)
             write_test(root, PLACEHOLDER_TEST)
-            base = commit_all(root, "base: production.py has an unused `import os`, no NEW_FLAG yet")
+            base = commit_all(
+                root, "base: production.py has an unused `import os`, no NEW_FLAG yet"
+            )
 
             (root / "production.py").write_text(PROD_FIXED + "\nNEW_FLAG = True\n")
-            write_test(root,
-                       "from production import add, NEW_FLAG\n\n\n"
-                       "def test_x():\n"
-                       "    assert NEW_FLAG\n")
+            write_test(
+                root,
+                "from production import add, NEW_FLAG\n\n\n"
+                "def test_x():\n"
+                "    assert NEW_FLAG\n",
+            )
             head = commit_all(root, "drop the unused `import os`; add NEW_FLAG")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1467,17 +1668,23 @@ class BareStemBackstopCoversAmbiguousCandidates(unittest.TestCase):
             (root / "b").mkdir(parents=True, exist_ok=True)
             (root / "b" / "prod.py").write_text("Y = 1\n")
             write_test(root, PLACEHOLDER_TEST)
-            base = commit_all(root, "base: a/prod.py and b/prod.py both exist, no NEW_FLAG anywhere")
+            base = commit_all(
+                root, "base: a/prod.py and b/prod.py both exist, no NEW_FLAG anywhere"
+            )
 
             (root / "a" / "prod.py").write_text("X = 1\nNEW_FLAG = True\n")
             (root / "b" / "prod.py").write_text("Y = 2\n")  # also changes, so BOTH are prod_files
-            write_test(root,
-                       "import sys\nfrom pathlib import Path\n"
-                       "sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'a'))\n"
-                       "import prod\n\n\n"
-                       "def test_x():\n"
-                       "    assert prod.NEW_FLAG\n")
-            head = commit_all(root, "a/prod.py gains NEW_FLAG; b/prod.py also changes (ambiguous bare stem)")
+            write_test(
+                root,
+                "import sys\nfrom pathlib import Path\n"
+                "sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'a'))\n"
+                "import prod\n\n\n"
+                "def test_x():\n"
+                "    assert prod.NEW_FLAG\n",
+            )
+            head = commit_all(
+                root, "a/prod.py gains NEW_FLAG; b/prod.py also changes (ambiguous bare stem)"
+            )
 
             ok, rows, note = mc.check_range(root, base, head)
             self.assertIsNone(note)
@@ -1513,14 +1720,19 @@ class FirstMatchMaskingResolvesLaterOccurrences(unittest.TestCase):
             base = commit_all(root, "base: no NEW_LOOP, no NEW_FLAG yet")
 
             (root / "production.py").write_text(
-                PROD_FIXED + "\nfor NEW_LOOP in [True]:\n    pass\nNEW_FLAG = True\n")
-            write_test(root,
-                       "import production\n\n\n"
-                       "def test_a_loop():\n"
-                       "    assert production.NEW_LOOP\n\n\n"
-                       "def test_z_flag():\n"
-                       "    assert production.NEW_FLAG\n")
-            head = commit_all(root, "add NEW_LOOP (for-bound, untracked) and NEW_FLAG (plain, resolvable)")
+                PROD_FIXED + "\nfor NEW_LOOP in [True]:\n    pass\nNEW_FLAG = True\n"
+            )
+            write_test(
+                root,
+                "import production\n\n\n"
+                "def test_a_loop():\n"
+                "    assert production.NEW_LOOP\n\n\n"
+                "def test_z_flag():\n"
+                "    assert production.NEW_FLAG\n",
+            )
+            head = commit_all(
+                root, "add NEW_LOOP (for-bound, untracked) and NEW_FLAG (plain, resolvable)"
+            )
 
             ok, rows, note = mc.check_range(root, base, head)
             self.assertIsNone(note)
@@ -1548,11 +1760,12 @@ class FailClosedBackstopCatchesAnUndetectedBinding(unittest.TestCase):
             write_test(root, PLACEHOLDER_TEST)
             base = commit_all(root, "base: no NEW_LOOP yet")
 
-            (root / "production.py").write_text(PROD_FIXED + "\nfor NEW_LOOP in [True]:\n    pass\n")
-            write_test(root,
-                       "import production\n\n\n"
-                       "def test_x():\n"
-                       "    assert production.NEW_LOOP\n")
+            (root / "production.py").write_text(
+                PROD_FIXED + "\nfor NEW_LOOP in [True]:\n    pass\n"
+            )
+            write_test(
+                root, "import production\n\n\n" "def test_x():\n" "    assert production.NEW_LOOP\n"
+            )
             head = commit_all(root, "add NEW_LOOP, bound only by a top-level for loop")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1584,13 +1797,18 @@ class NaptPartwayDownAChainIsAnErrorNotAQuietNA(unittest.TestCase):
             (root / "production.py").write_text(PROD_FIXED)
             (root / "m1.py").write_text("from m2 import Y\nA = 1\nX = 1\n")
             (root / "m2.py").write_text("B = 1\nY = 1\n")  # OLD removed: NOT a pure addition
-            write_test(root,
-                       "from production import add\nfrom m1 import X\n\n\n"
-                       "def test_add_and_x():\n"
-                       "    assert add(2, 3) == 5\n"
-                       "    assert X == 1\n")
-            head = commit_all(root, "fix add(); m1 gains X (pure addition) but imports m2.Y; "
-                                     "m2 loses OLD while gaining Y (not a pure addition)")
+            write_test(
+                root,
+                "from production import add\nfrom m1 import X\n\n\n"
+                "def test_add_and_x():\n"
+                "    assert add(2, 3) == 5\n"
+                "    assert X == 1\n",
+            )
+            head = commit_all(
+                root,
+                "fix add(); m1 gains X (pure addition) but imports m2.Y; "
+                "m2 loses OLD while gaining Y (not a pure addition)",
+            )
 
             ok, rows, note = mc.check_range(root, base, head)
             self.assertIsNone(note)
@@ -1620,10 +1838,12 @@ class SameModuleSymbolRepeatingStopsTheChainEarly(unittest.TestCase):
             base = commit_all(root, "base: no NEW_DEAD, no dead branch")
 
             (root / "production.py").write_text("if False:\n    NEW_DEAD = 1\n\nOK = 1\n")
-            write_test(root,
-                       "import production\n\n\n"
-                       "def test_dead_branch():\n"
-                       "    assert production.NEW_DEAD\n")
+            write_test(
+                root,
+                "import production\n\n\n"
+                "def test_dead_branch():\n"
+                "    assert production.NEW_DEAD\n",
+            )
             head = commit_all(root, "add NEW_DEAD only inside an `if False:` dead branch")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1662,22 +1882,25 @@ class KeptModuleRestoreDoesNotLeakBetweenTestFiles(unittest.TestCase):
 
             (root / "production.py").write_text(PROD_FIXED + "\nNEW_FLAG = True\n")
             (root / "tests" / "test_production.py").write_text(
-                "import production\n\n\n"
-                "def test_a():\n"
-                "    assert production.NEW_FLAG\n")
+                "import production\n\n\n" "def test_a():\n" "    assert production.NEW_FLAG\n"
+            )
             (root / "tests" / "test_second.py").write_text(
-                "import production\n\n\n"
-                "def test_b():\n"
-                "    assert production.NEW_FLAG\n")
-            head = commit_all(root, "add production.NEW_FLAG; two test files both use it via attribute")
+                "import production\n\n\n" "def test_b():\n" "    assert production.NEW_FLAG\n"
+            )
+            head = commit_all(
+                root, "add production.NEW_FLAG; two test files both use it via attribute"
+            )
 
             ok, rows, note = mc.check_range(root, base, head)
             self.assertIsNone(note)
             self.assertFalse(ok, rows)
             self.assertEqual(len(rows), 2)
             for f, names, rev_cell, weak_cell, flags_cell in rows:
-                self.assertIn("production.py kept at head for import of NEW_FLAG", rev_cell,
-                              f"{f} lost its kept-module label - the restore leaked across files")
+                self.assertIn(
+                    "production.py kept at head for import of NEW_FLAG",
+                    rev_cell,
+                    f"{f} lost its kept-module label - the restore leaked across files",
+                )
 
 
 class B3OnlyRealCollectedItemsAreSelected(unittest.TestCase):
@@ -1693,30 +1916,34 @@ class B3OnlyRealCollectedItemsAreSelected(unittest.TestCase):
             root = Path(tmp)
             init_repo(root)
             (root / "production.py").write_text(PROD_BUGGY)
-            write_test(root,
-                       "import unittest\nfrom production import add\n\n\n"
-                       "def _make(n, expected):\n"
-                       "    def test(self):\n"
-                       "        self.assertEqual(add(*n), expected)\n"
-                       "    return test\n\n\n"
-                       "class GeneratedTest(unittest.TestCase):\n"
-                       "    pass\n\n\n"
-                       "for _n, _expected in [((2, 3), 5), ((10, 5), 15)]:\n"
-                       "    setattr(GeneratedTest, f'test_add_{_n[0]}_{_n[1]}', _make(_n, _expected))\n")
+            write_test(
+                root,
+                "import unittest\nfrom production import add\n\n\n"
+                "def _make(n, expected):\n"
+                "    def test(self):\n"
+                "        self.assertEqual(add(*n), expected)\n"
+                "    return test\n\n\n"
+                "class GeneratedTest(unittest.TestCase):\n"
+                "    pass\n\n\n"
+                "for _n, _expected in [((2, 3), 5), ((10, 5), 15)]:\n"
+                "    setattr(GeneratedTest, f'test_add_{_n[0]}_{_n[1]}', _make(_n, _expected))\n",
+            )
             base = commit_all(root, "base: buggy add(), generated tests via setattr")
 
             (root / "production.py").write_text(PROD_FIXED)
-            write_test(root,
-                       "import unittest\nfrom production import add\n\n\n"
-                       "def _make(n, expected):\n"
-                       "    def test(self):\n"
-                       "        result = add(*n)\n"
-                       "        self.assertEqual(result, expected)\n"
-                       "    return test\n\n\n"
-                       "class GeneratedTest(unittest.TestCase):\n"
-                       "    pass\n\n\n"
-                       "for _n, _expected in [((2, 3), 5), ((10, 5), 15)]:\n"
-                       "    setattr(GeneratedTest, f'test_add_{_n[0]}_{_n[1]}', _make(_n, _expected))\n")
+            write_test(
+                root,
+                "import unittest\nfrom production import add\n\n\n"
+                "def _make(n, expected):\n"
+                "    def test(self):\n"
+                "        result = add(*n)\n"
+                "        self.assertEqual(result, expected)\n"
+                "    return test\n\n\n"
+                "class GeneratedTest(unittest.TestCase):\n"
+                "    pass\n\n\n"
+                "for _n, _expected in [((2, 3), 5), ((10, 5), 15)]:\n"
+                "    setattr(GeneratedTest, f'test_add_{_n[0]}_{_n[1]}', _make(_n, _expected))\n",
+            )
             head = commit_all(root, "fix add(); change the shared generated-test closure")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1732,12 +1959,14 @@ class B3OnlyRealCollectedItemsAreSelected(unittest.TestCase):
             self.assertEqual(flags_cell, "none")  # not a false "no assert" on the factory closure
 
     def test_nested_test_defs_are_excluded_from_test_defs_but_found_by_nested_test_like_defs(self):
-        source = ("def _make():\n"
-                   "    def test_inner(self):\n"
-                   "        assert True\n"
-                   "    return test_inner\n\n\n"
-                   "def test_outer():\n"
-                   "    assert True\n")
+        source = (
+            "def _make():\n"
+            "    def test_inner(self):\n"
+            "        assert True\n"
+            "    return test_inner\n\n\n"
+            "def test_outer():\n"
+            "    assert True\n"
+        )
         self.assertEqual(set(mc.test_defs(source).keys()), {(None, "test_outer")})
         self.assertEqual(set(mc.nested_test_like_defs(source).keys()), {(None, "test_inner")})
 
@@ -1756,13 +1985,15 @@ class B4StaticNoAssertFollowsSameFileHelpers(unittest.TestCase):
             init_repo(root)
             (root / "production.py").write_text(PROD_FIXED)
             base = commit_all(root, "base")
-            write_test(root,
-                       "import unittest\nfrom production import add\n\n\n"
-                       "class Checks(unittest.TestCase):\n"
-                       "    def check_sum(self, a, b, expected):\n"
-                       "        self.assertEqual(add(a, b), expected)\n\n"
-                       "    def test_add_via_helper(self):\n"
-                       "        self.check_sum(2, 3, 5)\n")
+            write_test(
+                root,
+                "import unittest\nfrom production import add\n\n\n"
+                "class Checks(unittest.TestCase):\n"
+                "    def check_sum(self, a, b, expected):\n"
+                "        self.assertEqual(add(a, b), expected)\n\n"
+                "    def test_add_via_helper(self):\n"
+                "        self.check_sum(2, 3, 5)\n",
+            )
             head = commit_all(root, "add a new test that only calls a same-class helper")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1782,10 +2013,12 @@ class B4StaticNoAssertFollowsSameFileHelpers(unittest.TestCase):
             init_repo(root)
             (root / "production.py").write_text(PROD_FIXED)
             base = commit_all(root, "base")
-            write_test(root,
-                       "from production import add\n\n\n"
-                       "def test_calls_nothing_useful():\n"
-                       "    add(2, 3)\n")
+            write_test(
+                root,
+                "from production import add\n\n\n"
+                "def test_calls_nothing_useful():\n"
+                "    add(2, 3)\n",
+            )
             head = commit_all(root, "add a new test that asserts nothing, calls nothing helpful")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1811,13 +2044,15 @@ class B5WeakenTargetsTheHelperAssertions(unittest.TestCase):
             init_repo(root)
             (root / "production.py").write_text(PROD_FIXED)
             base = commit_all(root, "base")
-            write_test(root,
-                       "import unittest\nfrom production import add\n\n\n"
-                       "class Checks(unittest.TestCase):\n"
-                       "    def check_sum(self, a, b, expected):\n"
-                       "        self.assertEqual(add(a, b), expected)\n\n"
-                       "    def test_add_via_helper(self):\n"
-                       "        self.check_sum(2, 3, 5)\n")
+            write_test(
+                root,
+                "import unittest\nfrom production import add\n\n\n"
+                "class Checks(unittest.TestCase):\n"
+                "    def check_sum(self, a, b, expected):\n"
+                "        self.assertEqual(add(a, b), expected)\n\n"
+                "    def test_add_via_helper(self):\n"
+                "        self.check_sum(2, 3, 5)\n",
+            )
             head = commit_all(root, "add a new test that only calls a same-class helper")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1839,15 +2074,17 @@ class B5WeakenTargetsTheHelperAssertions(unittest.TestCase):
             init_repo(root)
             (root / "production.py").write_text(PROD_FIXED)
             base = commit_all(root, "base")
-            write_test(root,
-                       "import unittest\nfrom production import add\n\n\n"
-                       "class Checks(unittest.TestCase):\n"
-                       "    def check_sum(self, a, b, expected, skip_first=False):\n"
-                       "        if not skip_first:\n"
-                       "            self.assertEqual(a + 0, a)\n"
-                       "        self.assertEqual(add(a, b), expected)\n\n"
-                       "    def test_add_via_helper(self):\n"
-                       "        self.check_sum(2, 3, 5, skip_first=True)\n")
+            write_test(
+                root,
+                "import unittest\nfrom production import add\n\n\n"
+                "class Checks(unittest.TestCase):\n"
+                "    def check_sum(self, a, b, expected, skip_first=False):\n"
+                "        if not skip_first:\n"
+                "            self.assertEqual(a + 0, a)\n"
+                "        self.assertEqual(add(a, b), expected)\n\n"
+                "    def test_add_via_helper(self):\n"
+                "        self.check_sum(2, 3, 5, skip_first=True)\n",
+            )
             head = commit_all(root, "add a new test whose helper has a dead-code first assertion")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1882,8 +2119,9 @@ class ScratchWorktreesNeverLeak(unittest.TestCase):
             after = git(root, "worktree", "list", "--porcelain")
 
             self.assertIsNone(note)
-            self.assertEqual(before, after,
-                              "check_range must leave `git worktree list` exactly as it found it")
+            self.assertEqual(
+                before, after, "check_range must leave `git worktree list` exactly as it found it"
+            )
 
     def test_worktree_prune_runs_even_when_check_range_is_interrupted(self):
         with tempfile.TemporaryDirectory(prefix="mc-fixture-") as tmp:
@@ -1905,7 +2143,7 @@ class ScratchWorktreesNeverLeak(unittest.TestCase):
                     # Let the FIRST scratch worktree get created, then blow up
                     # partway through the run as a stand-in for a genuine
                     # KeyboardInterrupt/SIGINT landing mid-check.
-                    result = real_sh(argv, *a, **kw)
+                    result = real_sh(argv, *a, **kw)  # noqa: F841
                     raise KeyboardInterrupt("simulated interrupt mid-run")
                 return real_sh(argv, *a, **kw)
 
@@ -1915,9 +2153,12 @@ class ScratchWorktreesNeverLeak(unittest.TestCase):
                     mc.check_range(root, base, head)
             after = git(root, "worktree", "list", "--porcelain")
 
-            self.assertEqual(before, after,
-                              "a git worktree prune) must run in check_range's own finally "
-                              "even when the run is interrupted, leaving no stale entry behind")
+            self.assertEqual(
+                before,
+                after,
+                "a git worktree prune) must run in check_range's own finally "
+                "even when the run is interrupted, leaving no stale entry behind",
+            )
 
 
 class SkippedTestIsFlagged(unittest.TestCase):
@@ -1928,11 +2169,13 @@ class SkippedTestIsFlagged(unittest.TestCase):
             (root / "production.py").write_text(PROD_BUGGY)
             base = commit_all(root, "base")
             (root / "production.py").write_text(PROD_FIXED)
-            write_test(root,
-                       "import pytest\nfrom production import add\n\n\n"
-                       "@pytest.mark.xfail\n"
-                       "def test_add_returns_the_sum():\n"
-                       "    assert add(2, 3) == 5\n")
+            write_test(
+                root,
+                "import pytest\nfrom production import add\n\n\n"
+                "@pytest.mark.xfail\n"
+                "def test_add_returns_the_sum():\n"
+                "    assert add(2, 3) == 5\n",
+            )
             head = commit_all(root, "fix add(), but mark the new test xfail")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -1968,7 +2211,10 @@ class MakeGateInvokesTheScript(unittest.TestCase):
 
             p = subprocess.run(
                 [str(self.REPO_ROOT / "scripts" / "merge_gate.sh"), base, head, str(root)],
-                capture_output=True, text=True, env=env_with_this_interpreter_on_path())
+                capture_output=True,
+                text=True,
+                env=env_with_this_interpreter_on_path(),
+            )
             self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
             self.assertIn("did not fail (BAD)", p.stdout)
 
@@ -1995,9 +2241,14 @@ class MakeGateInvokesTheScript(unittest.TestCase):
             head = commit_all(root, "fix + a real, discriminating test")
 
             copy_gate_scaffolding(root, self.REPO_ROOT)
-            p = subprocess.run(["make", "gate", f"BASE={base}", f"HEAD={head}"],
-                                cwd=root, capture_output=True, text=True, timeout=120,
-                                env=env_with_this_interpreter_on_path())
+            p = subprocess.run(
+                ["make", "gate", f"BASE={base}", f"HEAD={head}"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=env_with_this_interpreter_on_path(),
+            )
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertIn("| test file |", p.stdout)
 
@@ -2014,8 +2265,10 @@ class MakeGateInvokesTheScript(unittest.TestCase):
 
             p = subprocess.run(
                 [str(self.REPO_ROOT / "scripts" / "merge_gate.sh"), base, head, str(root)],
-                capture_output=True, text=True,
-                env={**env_with_this_interpreter_on_path(), "SCOUTER_SKIP_MUTATION_CHECK": "1"})
+                capture_output=True,
+                text=True,
+                env={**env_with_this_interpreter_on_path(), "SCOUTER_SKIP_MUTATION_CHECK": "1"},
+            )
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertIn("SCOUTER_SKIP_MUTATION_CHECK", p.stderr)
             self.assertIn("WARN", p.stderr)
@@ -2034,10 +2287,12 @@ class DarktableOnlyTestsAreNotAFailure(unittest.TestCase):
             (root / "production.py").write_text(PROD_BUGGY)
             base = commit_all(root, "base")
             (root / "production.py").write_text(PROD_FIXED)
-            write_test(root,
-                       "from production import add\n\n\n"
-                       "def test_host_needs_real_darktable():\n"
-                       "    assert add(2, 3) == 5\n")
+            write_test(
+                root,
+                "from production import add\n\n\n"
+                "def test_host_needs_real_darktable():\n"
+                "    assert add(2, 3) == 5\n",
+            )
             head = commit_all(root, "fix add(), only a host-only test covers it")
 
             ok, rows, note = mc.check_range(root, base, head)
@@ -2089,9 +2344,19 @@ class DirtyTreeRefusal(unittest.TestCase):
             base, head = self._fixture_with_dirty_path(root, "scouter/core/foo.py")
 
             p = subprocess.run(
-                [sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
-                 "--base", base, "--head", head, "--repo", str(root)],
-                capture_output=True, text=True)
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parent / "mutation_check.py"),
+                    "--base",
+                    base,
+                    "--head",
+                    head,
+                    "--repo",
+                    str(root),
+                ],
+                capture_output=True,
+                text=True,
+            )
             self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
             self.assertIn("environment error", p.stdout)
             self.assertIn("scouter/core/foo.py", p.stdout)
@@ -2103,9 +2368,20 @@ class DirtyTreeRefusal(unittest.TestCase):
             base, head = self._fixture_with_dirty_path(root, "scouter/core/foo.py")
 
             p = subprocess.run(
-                [sys.executable, str(Path(__file__).resolve().parent / "mutation_check.py"),
-                 "--base", base, "--head", head, "--repo", str(root), "--allow-dirty"],
-                capture_output=True, text=True)
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parent / "mutation_check.py"),
+                    "--base",
+                    base,
+                    "--head",
+                    head,
+                    "--repo",
+                    str(root),
+                    "--allow-dirty",
+                ],
+                capture_output=True,
+                text=True,
+            )
             self.assertNotEqual(p.returncode, 2, p.stdout + p.stderr)
             self.assertIn("WARN", p.stderr)
             self.assertIn("scouter/core/foo.py", p.stderr)
@@ -2118,7 +2394,10 @@ class DirtyTreeRefusal(unittest.TestCase):
 
             p = subprocess.run(
                 [str(self.REPO_ROOT / "scripts" / "merge_gate.sh"), base, head, str(root)],
-                capture_output=True, text=True, env=env_with_this_interpreter_on_path())
+                capture_output=True,
+                text=True,
+                env=env_with_this_interpreter_on_path(),
+            )
             self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
             self.assertIn("environment error", p.stdout + p.stderr)
             self.assertIn("scripts/helper.sh", p.stdout + p.stderr)
@@ -2129,9 +2408,17 @@ class DirtyTreeRefusal(unittest.TestCase):
             base, head = self._fixture_with_dirty_path(root, "scripts/helper.sh")
 
             p = subprocess.run(
-                [str(self.REPO_ROOT / "scripts" / "merge_gate.sh"), base, head, str(root),
-                 "--allow-dirty"],
-                capture_output=True, text=True, env=env_with_this_interpreter_on_path())
+                [
+                    str(self.REPO_ROOT / "scripts" / "merge_gate.sh"),
+                    base,
+                    head,
+                    str(root),
+                    "--allow-dirty",
+                ],
+                capture_output=True,
+                text=True,
+                env=env_with_this_interpreter_on_path(),
+            )
             self.assertNotEqual(p.returncode, 2, p.stdout + p.stderr)
             self.assertIn("WARN", p.stdout + p.stderr)
             self.assertIn("scripts/helper.sh", p.stdout + p.stderr)

@@ -22,18 +22,30 @@ VERSION = "chart-v1"
 
 #: X-Rite ColorChecker Classic, post-November-2009 formulation, sRGB 8-bit.
 COLORCHECKER_SRGB: tuple[tuple[str, tuple[int, int, int]], ...] = (
-    ("dark_skin", (115, 82, 68)), ("light_skin", (194, 150, 130)),
-    ("blue_sky", (98, 122, 157)), ("foliage", (87, 108, 67)),
-    ("blue_flower", (133, 128, 177)), ("bluish_green", (103, 189, 170)),
-    ("orange", (214, 126, 44)), ("purplish_blue", (80, 91, 166)),
-    ("moderate_red", (193, 90, 99)), ("purple", (94, 60, 108)),
-    ("yellow_green", (157, 188, 64)), ("orange_yellow", (224, 163, 46)),
-    ("blue", (56, 61, 150)), ("green", (70, 148, 73)),
-    ("red", (175, 54, 60)), ("yellow", (231, 199, 31)),
-    ("magenta", (187, 86, 149)), ("cyan", (8, 133, 161)),
-    ("white_9_5", (243, 243, 242)), ("neutral_8", (200, 200, 200)),
-    ("neutral_6_5", (160, 160, 160)), ("neutral_5", (122, 122, 121)),
-    ("neutral_3_5", (85, 85, 85)), ("black_2", (52, 52, 52)),
+    ("dark_skin", (115, 82, 68)),
+    ("light_skin", (194, 150, 130)),
+    ("blue_sky", (98, 122, 157)),
+    ("foliage", (87, 108, 67)),
+    ("blue_flower", (133, 128, 177)),
+    ("bluish_green", (103, 189, 170)),
+    ("orange", (214, 126, 44)),
+    ("purplish_blue", (80, 91, 166)),
+    ("moderate_red", (193, 90, 99)),
+    ("purple", (94, 60, 108)),
+    ("yellow_green", (157, 188, 64)),
+    ("orange_yellow", (224, 163, 46)),
+    ("blue", (56, 61, 150)),
+    ("green", (70, 148, 73)),
+    ("red", (175, 54, 60)),
+    ("yellow", (231, 199, 31)),
+    ("magenta", (187, 86, 149)),
+    ("cyan", (8, 133, 161)),
+    ("white_9_5", (243, 243, 242)),
+    ("neutral_8", (200, 200, 200)),
+    ("neutral_6_5", (160, 160, 160)),
+    ("neutral_5", (122, 122, 121)),
+    ("neutral_3_5", (85, 85, 85)),
+    ("black_2", (52, 52, 52)),
 )
 #: The 18 chromatic patches (the looks' saturation target set).
 CHROMATIC = tuple(name for name, _ in COLORCHECKER_SRGB[:18])
@@ -58,7 +70,7 @@ def layout() -> list[Patch]:
         lin = tuple(color.srgb_to_linear(c / 255.0) for c in rgb8)
         patches.append(Patch(name, 128 + col * 192, 128 + row * 192, PATCH, PATCH, lin))
     for j, k in enumerate(RAMP_K):
-        v = SURROUND * (2.0 ** k)
+        v = SURROUND * (2.0**k)
         patches.append(Patch(f"ramp_{k:+d}", 24 + j * 136, 896, PATCH, PATCH, (v, v, v)))
     return patches
 

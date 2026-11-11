@@ -46,10 +46,12 @@ from tests.gauntlet import observe
 from tests.gauntlet.layers import coverage
 from tests.gauntlet.policy import load_policy
 
-EXAMPLES = json.loads((Path(__file__).parent /
-                       "gauntlet_m1_declared_default.json").read_text())["examples"]
-FIXTURES_DIR = Path(__file__).parent.parent.parent / "gauntlet" / "tests" / "fixtures" / \
-    "proof4-20260929"
+EXAMPLES = json.loads((Path(__file__).parent / "gauntlet_m1_declared_default.json").read_text())[
+    "examples"
+]
+FIXTURES_DIR = (
+    Path(__file__).parent.parent.parent / "gauntlet" / "tests" / "fixtures" / "proof4-20260929"
+)
 POLICY = load_policy()
 CASES = {c.id: c for c in coverage.generate()}
 #: today's adapter knowledge (review round 1, I1 item 4): the recorded
@@ -59,8 +61,7 @@ VERIFIED_DEFAULTS = observe.verified_defaults()
 
 
 def _module_absent(after_params: dict, module: str) -> bool:
-    return not any(v is not None for k, v in after_params.items()
-                  if k.split(".", 1)[0] == module)
+    return not any(v is not None for k, v in after_params.items() if k.split(".", 1)[0] == module)
 
 
 def _run_case_example(ex: dict) -> None:
@@ -83,9 +84,20 @@ def _run_case_example(ex: dict) -> None:
 
     # oracle B: the fixed evaluator, on the same observation PLUS today's
     # adapter's verified_defaults (I1 item 4 -- explicit, not silent).
-    calls = [CallRecord(c["tool"], c.get("args", {}), c.get("envelope"), c.get("wall_s", 0.0),
-                        c.get("ms"), c.get("bounced", False), c.get("error"), c.get("health"),
-                        c.get("write", False)) for c in o["calls"]]
+    calls = [
+        CallRecord(
+            c["tool"],
+            c.get("args", {}),
+            c.get("envelope"),
+            c.get("wall_s", 0.0),
+            c.get("ms"),
+            c.get("bounced", False),
+            c.get("error"),
+            c.get("health"),
+            c.get("write", False),
+        )
+        for c in o["calls"]
+    ]
     before = {**o["before"], "verified_defaults": VERIFIED_DEFAULTS}
     after = {**o["after"], "verified_defaults": VERIFIED_DEFAULTS}
     obs = Observation(calls=calls, before=before, after=after, extra=o.get("extra", {}))
@@ -112,20 +124,39 @@ def _run_synthetic_example(ex: dict) -> None:
     verified_defaults = _resolve_verified_defaults(ex)
     chk = Check("M1", kind="equals", target={"key": key, "value": target, "unit": unit})
     steps = [Step("darkroom_set", {}, budget_s=3.5, write=True) for _ in ex["calls"]]
-    case = Case(id="synthetic", layer="coverage", tier="P0", mode="tool", steps=steps,
-               expect=Expect("edit", [chk], {"changed": False, "key": key, "units": {key: unit}}),
-               body="olympus", frame_role="hero", source={}, meta={})
+    case = Case(
+        id="synthetic",
+        layer="coverage",
+        tier="P0",
+        mode="tool",
+        steps=steps,
+        expect=Expect("edit", [chk], {"changed": False, "key": key, "units": {key: unit}}),
+        body="olympus",
+        frame_role="hero",
+        source={},
+        meta={},
+    )
     calls = []
     for c in ex["calls"]:
         cmod, cparam = c.get("module", module), c.get("param", param)
-        env = {"ok": c.get("ok", True),
-              "data": {"module": cmod, "param": cparam, "noop": c["noop"],
-                        "applied": c["applied"], "committed": True}}
-        calls.append(CallRecord("darkroom_set", {"module": cmod, "param": cparam}, env,
-                                write=True))
+        env = {
+            "ok": c.get("ok", True),
+            "data": {
+                "module": cmod,
+                "param": cparam,
+                "noop": c["noop"],
+                "applied": c["applied"],
+                "committed": True,
+            },
+        }
+        calls.append(CallRecord("darkroom_set", {"module": cmod, "param": cparam}, env, write=True))
     after_params = dict(ex.get("after_extra_params") or {})
-    snap = lambda params: {"fingerprint": "a", "history_end": 1, "params": params,  # noqa: E731
-                           "verified_defaults": verified_defaults}
+    snap = lambda params: {
+        "fingerprint": "a",
+        "history_end": 1,
+        "params": params,  # noqa: E731
+        "verified_defaults": verified_defaults,
+    }
     obs = Observation(calls=calls, before=snap({}), after=snap(after_params))
     v = evaluate(case, obs, POLICY)
 

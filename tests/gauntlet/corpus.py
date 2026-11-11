@@ -16,17 +16,38 @@ from pathlib import Path
 TRIAL = Path(os.environ.get("HTC_TRIAL", str(Path.home() / "Pictures/EditingTrial")))
 SCRATCH = Path.home() / "Pictures" / "ScouterScratch" / "gauntlet"
 RAW_EXT = {".orf", ".arw"}
-MODEL_BODY = {"E-M10 Mark III": "olympus", "E-M10MarkIII": "olympus", "ILCE-7": "sony_a7",
-              "NEX-5N": "sony_nex5n"}
+MODEL_BODY = {
+    "E-M10 Mark III": "olympus",
+    "E-M10MarkIII": "olympus",
+    "ILCE-7": "sony_a7",
+    "NEX-5N": "sony_nex5n",
+}
 #: The bench's frames block (editor_tasks.json) wins where it names a role.
 BENCH_ROLES = {
-    "olympus": {"dark": "P5240151.ORF", "bright": "P6281368.ORF", "blown": "P5240140.ORF",
-                "hero": "P6281348.ORF"},
-    "sony_a7": {"dark": "sony/DSC01425.ARW", "blown": "sony/DSC01431.ARW",
-                "hero": "sony/DSC01426.ARW"},
+    "olympus": {
+        "dark": "P5240151.ORF",
+        "bright": "P6281368.ORF",
+        "blown": "P5240140.ORF",
+        "hero": "P6281348.ORF",
+    },
+    "sony_a7": {
+        "dark": "sony/DSC01425.ARW",
+        "blown": "sony/DSC01431.ARW",
+        "hero": "sony/DSC01426.ARW",
+    },
 }
-ROLES = ("dark", "bright", "blown", "hero", "flat", "warm_cast", "cool_cast", "noisy", "neutral",
-         "hero_bright")
+ROLES = (
+    "dark",
+    "bright",
+    "blown",
+    "hero",
+    "flat",
+    "warm_cast",
+    "cool_cast",
+    "noisy",
+    "neutral",
+    "hero_bright",
+)
 FRAME_BYTES = 20 * 1024 * 1024
 
 #: Cluster D / row 458 (2026-09-27): the olympus `hero` (P6281348.ORF) surveys
@@ -149,8 +170,19 @@ def survey(render_stats, exif_model_iso, work: Path, root: Path | None = None) -
         model, iso = exif_model_iso(copy)
         body = MODEL_BODY.get(model.strip(), "unknown")
         s = render_stats(copy)
-        out.append(Surveyed(rel, body, int(iso or 0), s["L_mean"], s["spread"], s["p99"],
-                            s["clip_high"], s["rg"], s["bg"]))
+        out.append(
+            Surveyed(
+                rel,
+                body,
+                int(iso or 0),
+                s["L_mean"],
+                s["spread"],
+                s["p99"],
+                s["clip_high"],
+                s["rg"],
+                s["bg"],
+            )
+        )
         copy.unlink()
     return out
 
@@ -207,8 +239,11 @@ class Corpus:
 
     @staticmethod
     def write(path: Path, frames: list[Surveyed]) -> dict:
-        doc = {"schema": "scouter-gauntlet-corpus/1", "frames": [asdict(f) for f in frames],
-               "roles": pick_roles(frames)}
+        doc = {
+            "schema": "scouter-gauntlet-corpus/1",
+            "frames": [asdict(f) for f in frames],
+            "roles": pick_roles(frames),
+        }
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return doc

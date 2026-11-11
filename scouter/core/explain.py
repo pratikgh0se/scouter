@@ -17,61 +17,85 @@ from scouter.errors import ScouterError, UsageError
 LEVELS = ("off", "brief", "full")
 
 CONCEPTS: dict[str, tuple[str, str]] = {
-    "exposure": ("Scene-referred exposure",
-                 "Exposure scales all the light in the scene by the same factor, measured in EV "
-                 "(one EV doubles or halves it). In darktable's scene-referred workflow you set it "
-                 "first, so the subject sits at a sensible brightness, and let the tone mapper "
-                 "handle the extremes."),
-    "tone_mapper": ("Tone mapping",
-                    "Sigmoid (or filmic rgb) squeezes the scene's wide range of light into what a "
-                    "screen can show. Its contrast slider sets how steep that curve is in the "
-                    "middle: more contrast separates midtones but pushes shadows and highlights "
-                    "toward the ends."),
-    "white_balance": ("White balance",
-                      "White balance tells darktable what colour the light was. Raising the "
-                      "temperature slider says the light was bluer, so darktable compensates and "
-                      "the picture turns warmer; tint trades green against magenta. Get it right "
-                      "before any creative colour."),
-    "color_balance": ("Color balance rgb",
-                      "Color balance rgb is darktable's colour-grading module. Master sliders act "
-                      "on the whole image; the 4-ways tab grades shadows (lift), midtones (power) "
-                      "and highlights (gain) separately, each with luminance, hue and chroma."),
-    "chroma_saturation": ("Chroma, saturation, vibrance",
-                          "Chroma is colourfulness independent of brightness; saturation also "
-                          "darkens as colour increases, which reads more natural on skin; "
-                          "vibrance boosts the least colourful pixels most. Small numbers go a "
-                          "long way: 5 % is a visible move."),
-    "grading": ("Colour grading",
-                "A grade gives a look by tinting shadows and highlights differently, classically "
-                "cool shadows and warm highlights. Hue picks the tint, chroma picks how much; "
-                "keep chroma low and judge on a neutral grey or skin."),
-    "black_level": ("Black level",
-                    "Black level correction moves the point that renders as pure black. Deeper "
-                    "blacks add density; lifting them gives a faded, matte look. It is a strong "
-                    "control: a few thousandths are visible."),
-    "color_zones": ("Color zones",
-                    "Color zones adjusts hue, chroma and lightness by the colour a pixel already "
-                    "has (for example, only the blues). Scouter can reach only its global mix; "
-                    "the zone curves need darktable's own editor."),
-    "presets": ("Styles as presets",
-                "A darktable style is a saved list of module settings. Applying one appends those "
-                "settings to an image's history, so it acts like a filter you can stack; it never "
-                "replaces what is there, and each application is visible in the history panel."),
-    "finishing": ("Finishing touches",
-                  "Grain and vignette are the last things applied, after tone and colour are set. "
-                  "Grain adds visible texture that reads as film; a little goes a long way on "
-                  "smooth skies and skin. Vignette darkens or lightens the corners around the "
-                  "centre, drawing the eye inward or opening the frame back up."),
-    "geometry": ("Lens, rotation and crop",
-                 "Lens correction removes the profile's own distortion, vignetting and chromatic "
-                 "aberration -- turn it off only to see the raw optic. Rotation levels a tilted "
-                 "horizon, cropping the corners as it turns. A crop preset moves all four margins "
-                 "at once to centre a target aspect ratio inside the frame."),
-    "detail": ("Denoise and sharpen",
-               "Profiled denoise smooths sensor noise using a per-camera, per-ISO profile; "
-               "sharpen adds edge contrast so detail reads crisper on screen. They pull in "
-               "opposite directions, so push one and watch the other: too much denoise looks "
-               "waxy, too much sharpening halos high-contrast edges and amplifies noise."),
+    "exposure": (
+        "Scene-referred exposure",
+        "Exposure scales all the light in the scene by the same factor, measured in EV "
+        "(one EV doubles or halves it). In darktable's scene-referred workflow you set it "
+        "first, so the subject sits at a sensible brightness, and let the tone mapper "
+        "handle the extremes.",
+    ),
+    "tone_mapper": (
+        "Tone mapping",
+        "Sigmoid (or filmic rgb) squeezes the scene's wide range of light into what a "
+        "screen can show. Its contrast slider sets how steep that curve is in the "
+        "middle: more contrast separates midtones but pushes shadows and highlights "
+        "toward the ends.",
+    ),
+    "white_balance": (
+        "White balance",
+        "White balance tells darktable what colour the light was. Raising the "
+        "temperature slider says the light was bluer, so darktable compensates and "
+        "the picture turns warmer; tint trades green against magenta. Get it right "
+        "before any creative colour.",
+    ),
+    "color_balance": (
+        "Color balance rgb",
+        "Color balance rgb is darktable's colour-grading module. Master sliders act "
+        "on the whole image; the 4-ways tab grades shadows (lift), midtones (power) "
+        "and highlights (gain) separately, each with luminance, hue and chroma.",
+    ),
+    "chroma_saturation": (
+        "Chroma, saturation, vibrance",
+        "Chroma is colourfulness independent of brightness; saturation also "
+        "darkens as colour increases, which reads more natural on skin; "
+        "vibrance boosts the least colourful pixels most. Small numbers go a "
+        "long way: 5 % is a visible move.",
+    ),
+    "grading": (
+        "Colour grading",
+        "A grade gives a look by tinting shadows and highlights differently, classically "
+        "cool shadows and warm highlights. Hue picks the tint, chroma picks how much; "
+        "keep chroma low and judge on a neutral grey or skin.",
+    ),
+    "black_level": (
+        "Black level",
+        "Black level correction moves the point that renders as pure black. Deeper "
+        "blacks add density; lifting them gives a faded, matte look. It is a strong "
+        "control: a few thousandths are visible.",
+    ),
+    "color_zones": (
+        "Color zones",
+        "Color zones adjusts hue, chroma and lightness by the colour a pixel already "
+        "has (for example, only the blues). Scouter can reach only its global mix; "
+        "the zone curves need darktable's own editor.",
+    ),
+    "presets": (
+        "Styles as presets",
+        "A darktable style is a saved list of module settings. Applying one appends those "
+        "settings to an image's history, so it acts like a filter you can stack; it never "
+        "replaces what is there, and each application is visible in the history panel.",
+    ),
+    "finishing": (
+        "Finishing touches",
+        "Grain and vignette are the last things applied, after tone and colour are set. "
+        "Grain adds visible texture that reads as film; a little goes a long way on "
+        "smooth skies and skin. Vignette darkens or lightens the corners around the "
+        "centre, drawing the eye inward or opening the frame back up.",
+    ),
+    "geometry": (
+        "Lens, rotation and crop",
+        "Lens correction removes the profile's own distortion, vignetting and chromatic "
+        "aberration -- turn it off only to see the raw optic. Rotation levels a tilted "
+        "horizon, cropping the corners as it turns. A crop preset moves all four margins "
+        "at once to centre a target aspect ratio inside the frame.",
+    ),
+    "detail": (
+        "Denoise and sharpen",
+        "Profiled denoise smooths sensor noise using a per-camera, per-ISO profile; "
+        "sharpen adds edge contrast so detail reads crisper on screen. They pull in "
+        "opposite directions, so push one and watch the other: too much denoise looks "
+        "waxy, too much sharpening halos high-contrast edges and amplifies noise.",
+    ),
 }
 
 
@@ -86,8 +110,10 @@ class MoveNote:
 def resolve_level(override: str | None) -> str:
     if override is not None:
         if override not in LEVELS:
-            raise UsageError(f"educative must be one of {', '.join(LEVELS)}, got {override!r}",
-                             detail={"educative": override})
+            raise UsageError(
+                f"educative must be one of {', '.join(LEVELS)}, got {override!r}",
+                detail={"educative": override},
+            )
         return override
     try:
         from scouter import config
@@ -128,8 +154,10 @@ def brief_line(note: MoveNote) -> str:
     else:
         delta = _delta_display(s, note.previous, note.target)
         direction = "up" if delta >= 0 else "down"
-        head = (f"{s.ui} {direction} {with_unit(s, f'{delta:+.3g}')} "
-                f"({with_unit(s, prev)} → {with_unit(s, target)})")
+        head = (
+            f"{s.ui} {direction} {with_unit(s, f'{delta:+.3g}')} "
+            f"({with_unit(s, prev)} → {with_unit(s, target)})"
+        )
     return f"{head}: {s.why}; watch {s.watch}."
 
 
@@ -152,14 +180,18 @@ def _mark(job: str, concepts: list[str]) -> None:
         return
 
     def _mutate(state: dict) -> None:
-        state["explained_concepts"] = sorted(set(state.get("explained_concepts", [])) | set(concepts))
+        state["explained_concepts"] = sorted(
+            set(state.get("explained_concepts", [])) | set(concepts)
+        )
 
     paths.job_state_update(job, _mutate)
 
 
 def lines(notes: list[MoveNote], *, level: str, job: str) -> list[str]:
     if level not in LEVELS:
-        raise UsageError(f"educative must be one of {', '.join(LEVELS)}", detail={"educative": level})
+        raise UsageError(
+            f"educative must be one of {', '.join(LEVELS)}", detail={"educative": level}
+        )
     if level == "off" or not notes:
         return []
     if level == "brief":
@@ -177,17 +209,22 @@ def lines(notes: list[MoveNote], *, level: str, job: str) -> list[str]:
     return out
 
 
-def preset_lines(action: str, name: str, modules: list[str], items: int | None, *,
-                 level: str, job: str) -> list[str]:
+def preset_lines(
+    action: str, name: str, modules: list[str], items: int | None, *, level: str, job: str
+) -> list[str]:
     if level == "off":
         return []
     if action == "save":
-        line = (f"saved {len(modules)} module(s) ({', '.join(modules)}) as style '{name}': "
-                "apply it from darktable's styles panel or with preset apply.")
+        line = (
+            f"saved {len(modules)} module(s) ({', '.join(modules)}) as style '{name}': "
+            "apply it from darktable's styles panel or with preset apply."
+        )
     else:
         count = "some" if items is None else items
-        line = (f"applied style '{name}' ({count} history item(s) appended): compare with the "
-                "history panel; darktable's own history is the way back.")
+        line = (
+            f"applied style '{name}' ({count} history item(s) appended): compare with the "
+            "history panel; darktable's own history is the way back."
+        )
     out: list[str] = []
     if level == "full":
         new = _new_concepts(["presets"], job)

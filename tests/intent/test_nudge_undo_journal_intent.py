@@ -17,8 +17,10 @@ from scouter.core import darkroom, dtbridge, journal, xmp
 from scouter.errors import CommitTimeout, ScouterError
 from tests.scouter_fakes import FakeBridge, TempCache, with_param_value
 
-EXAMPLES = {e["id"]: e for e in
-            json.loads((Path(__file__).parent / "nudge_undo_journal.json").read_text())["examples"]}
+EXAMPLES = {
+    e["id"]: e
+    for e in json.loads((Path(__file__).parent / "nudge_undo_journal.json").read_text())["examples"]
+}
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "P6281348.ORF.xmp"
 
 
@@ -30,12 +32,18 @@ class NudgeUndoJournalIntentTest(unittest.TestCase):
         self.raw.write_bytes(b"not really a raw")
         self.sidecar = Path(str(self.raw) + ".xmp")
         shutil.copy(FIXTURE, self.sidecar)
-        self.bridge = FakeBridge({
-            "darkroom.current": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
-                                 "source": "action_images"},
-            "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-            "darkroom.action": lambda p: {"nan": False, "view": "darkroom", **p, "status": 0.5},
-        })
+        self.bridge = FakeBridge(
+            {
+                "darkroom.current": {
+                    "image_id": 12,
+                    "path": str(self.raw),
+                    "view": "darkroom",
+                    "source": "action_images",
+                },
+                "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+                "darkroom.action": lambda p: {"nan": False, "view": "darkroom", **p, "status": 0.5},
+            }
+        )
         dtbridge.set_bridge(self.bridge)
 
     def tearDown(self) -> None:
@@ -56,19 +64,24 @@ class NudgeUndoJournalIntentTest(unittest.TestCase):
         entries = journal.read_all("job-test")
         self.assertEqual(entries[-2].after.get("value"), fx["expect"]["journal_nudge_after_value"])
         self.assertEqual(entries[-1].before.get("value"), fx["expect"]["journal_set_before_value"])
-        self.assertAlmostEqual(self._sidecar_value("exposure", "exposure"),
-                               fx["input"]["sidecar_exposure"], places=5)
+        self.assertAlmostEqual(
+            self._sidecar_value("exposure", "exposure"), fx["input"]["sidecar_exposure"], places=5
+        )
         # Oracle B: the undo itself refuses and sends no restore of 0.5.
         with self.assertRaises(ScouterError):
             darkroom.undo_last(single=True)
-        restores = [p for m, p in self.bridge.calls
-                    if m == "darkroom.action" and p.get("effect") == "set"]
+        restores = [
+            p for m, p in self.bridge.calls if m == "darkroom.action" and p.get("effect") == "set"
+        ]
         self.assertEqual([p["value"] for p in restores], [2.0])
 
     def test_nudge_at_a_declared_hard_bound_is_an_honest_noop(self) -> None:
         fx = EXAMPLES["nudge-at-a-declared-hard-bound-is-an-honest-noop"]["input"]
-        self.sidecar.write_text(with_param_value(
-            self.sidecar.read_text(), fx["module"], fx["param"], fx["sidecar_skew"]))
+        self.sidecar.write_text(
+            with_param_value(
+                self.sidecar.read_text(), fx["module"], fx["param"], fx["sidecar_skew"]
+            )
+        )
         before_text = self.sidecar.read_text()
         with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
             result = darkroom.nudge(module=fx["module"], param=fx["param"], steps=fx["steps"])

@@ -53,15 +53,20 @@ def env() -> dict:
 def install_fix_plugin() -> tuple[Path, Path | None]:
     out = subprocess.run(
         [drv.PY, "-c", "from darktable_mcp.bridge.client import plugin_path; print(plugin_path())"],
-        env=env(), cwd=str(FIX), capture_output=True, text=True, check=True,
+        env=env(),
+        cwd=str(FIX),
+        capture_output=True,
+        text=True,
+        check=True,
     )
     plugin = Path(out.stdout.strip())
     backup = None
     if plugin.exists():
         backup = drv.RUN / "darktable_mcp.lua.before"
         shutil.copy2(plugin, backup)
-    subprocess.run([drv.PY, "-m", "darktable_mcp", "install-plugin"], env=env(), cwd=str(FIX),
-                   check=True)
+    subprocess.run(
+        [drv.PY, "-m", "darktable_mcp", "install-plugin"], env=env(), cwd=str(FIX), check=True
+    )
     fix_bytes = (FIX / "darktable_mcp" / "lua" / "darktable_mcp.lua").read_bytes()
     if plugin.read_bytes() != fix_bytes:
         raise SystemExit(f"installed plugin at {plugin} is not the fix worktree's copy")
@@ -108,12 +113,25 @@ def main() -> int:
     rows: list[tuple[str, float | None, int | None, str]] = []
     noop_ok: bool | None = None
     try:
-        if not dt.launch("launch darktable on the check frame", frame,
-                         drv.RUN / "library" / "library.db", settle_s=5.0):
+        if not dt.launch(
+            "launch darktable on the check frame",
+            frame,
+            drv.RUN / "library" / "library.db",
+            settle_s=5.0,
+        ):
             return 2
-        mcp = drv.Mcp([drv.PY, "-m", "scouter.mcp.server"], env(), drv.RUN / "mcp-server.stderr.log")
-        mcp.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
-                                   "clientInfo": {"name": "adjust-check", "version": "1"}}, 30)
+        mcp = drv.Mcp(
+            [drv.PY, "-m", "scouter.mcp.server"], env(), drv.RUN / "mcp-server.stderr.log"
+        )
+        mcp.request(
+            "initialize",
+            {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "adjust-check", "version": "1"},
+            },
+            30,
+        )
         mcp._send({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
 
         def call(label: str, tool: str, args: dict, timeout: float = 90) -> dict:
@@ -122,12 +140,15 @@ def main() -> int:
             secs = time.monotonic() - t0
             (drv.RUN / "steps").mkdir(exist_ok=True)
             (drv.RUN / "steps" / f"{len(rows):02d}-{tool}.json").write_text(
-                json.dumps(out, indent=2, default=str))
+                json.dumps(out, indent=2, default=str)
+            )
             print(f"{label}: ok={out.get('ok')} outcome={out.get('outcome')} {secs:.1f}s")
             return out
 
         def snapshot(label: str) -> None:
-            out = call(f"history_read ({label})", "history_read", {"image": str(frame), "source": "xmp"})
+            out = call(
+                f"history_read ({label})", "history_read", {"image": str(frame), "source": "xmp"}
+            )
             exp, end, n = exposure_and_length(out)
             rows.append((label, exp, end, f"{n} entries"))
 
@@ -137,26 +158,40 @@ def main() -> int:
         # 12s, as a no-op -- never hang, never commit_timeout.
         t0 = time.monotonic()
         try:
-            nc = call("history_commit (unedited frame, timeout_s=10)", "history_commit",
-                      {"image": str(frame), "timeout_s": 10}, timeout=30)
+            nc = call(
+                "history_commit (unedited frame, timeout_s=10)",
+                "history_commit",
+                {"image": str(frame), "timeout_s": 10},
+                timeout=30,
+            )
         except Exception as e:  # the bench saw TimeoutError from the transport
             nc = {"ok": False, "outcome": f"transport:{type(e).__name__}", "error": str(e)}
             print(f"  transport error: {e}")
         noop_secs = time.monotonic() - t0
         nd = nc.get("data") or {}
-        print(f"  noop commit: {noop_secs:.1f}s noop={nd.get('noop')} "
-              f"committed={nd.get('committed')} changed={nd.get('changed')} "
-              f"strategy={nd.get('strategy_used')}")
+        print(
+            f"  noop commit: {noop_secs:.1f}s noop={nd.get('noop')} "
+            f"committed={nd.get('committed')} changed={nd.get('changed')} "
+            f"strategy={nd.get('strategy_used')}"
+        )
         if not nc.get("ok"):
             print("  error:", json.dumps(nc.get("error"), default=str)[:600])
-        noop_ok = (bool(nc.get("ok")) and noop_secs < 12.0 and nd.get("noop") is True
-                   and nd.get("committed") is False)
+        noop_ok = (
+            bool(nc.get("ok"))
+            and noop_secs < 12.0
+            and nd.get("noop") is True
+            and nd.get("committed") is False
+        )
         snapshot("before")
-        say = call("darkroom_say 'brighter by 1 ev'", "darkroom_say", {"phrase": "brighter by 1 ev"})
+        say = call(
+            "darkroom_say 'brighter by 1 ev'", "darkroom_say", {"phrase": "brighter by 1 ev"}
+        )
         for mv in (say.get("data") or {}).get("moves") or []:
-            print(f"  move {mv.get('module')}.{mv.get('param')}: previous={mv.get('previous')} "
-                  f"applied={mv.get('applied')} target={mv.get('target')} "
-                  f"committed={mv.get('committed')} source={mv.get('source')}")
+            print(
+                f"  move {mv.get('module')}.{mv.get('param')}: previous={mv.get('previous')} "
+                f"applied={mv.get('applied')} target={mv.get('target')} "
+                f"committed={mv.get('committed')} source={mv.get('source')}"
+            )
         if not say.get("ok"):
             print("  error:", json.dumps(say.get("error"))[:600])
         snapshot("after say")

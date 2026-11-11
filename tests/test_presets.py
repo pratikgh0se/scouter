@@ -1,4 +1,5 @@
 """Phase 3 task 7: save the session's edits as a named darktable style; list presets."""
+
 # mutation-check: targets-predate-range 55018012923d77440ffa3291dbf35b00a3a7fe15 -- presets.save's flush (_commit attempts=1, expect_change=False; 75f68fd) is untouched by this range; only the shared _MovesFixture commit tuple grew an expect_module slot. Proof: dropping attempts=1 in presets.py fails it. :: PresetSaveTest.test_modules_default_to_this_sessions_edits
 
 from __future__ import annotations
@@ -11,8 +12,8 @@ from unittest import mock
 from scouter.core import darkroom, journal, presets
 from scouter.errors import CommitTimeout, UsageError, WrongView
 from scouter.types import StyleResult
-from tests.test_moves import _MovesFixture
 from tests.scouter_fakes import write_minimal_style_sidecar
+from tests.test_moves import _MovesFixture
 
 
 class _PresetFixture(_MovesFixture):
@@ -29,9 +30,16 @@ class _PresetFixture(_MovesFixture):
         dtstyle.write_text("<darktable_style/>")
 
         def fake_extract(image, name, modules, **kw):
-            self.extract_calls.append({"image": image, "name": name, "modules": list(modules), **kw})
-            return StyleResult(name=name, created=True, dtstyle_path=str(dtstyle),
-                               operations_included=list(modules), modules_honoured=True)
+            self.extract_calls.append(
+                {"image": image, "name": name, "modules": list(modules), **kw}
+            )
+            return StyleResult(
+                name=name,
+                created=True,
+                dtstyle_path=str(dtstyle),
+                operations_included=list(modules),
+                modules_honoured=True,
+            )
 
         p = mock.patch("scouter.core.style.extract.__wrapped__", side_effect=fake_extract)
         p.start()
@@ -54,11 +62,12 @@ class PresetSaveTest(_PresetFixture):
         """Final review #4: a CommitTimeout from the flush is downgraded to a
         warning (like moves._precommit); the save still happens."""
         self._edit()
-        with mock.patch("scouter.core.darkroom._commit",
-                        side_effect=CommitTimeout("no bounce")):
+        with mock.patch("scouter.core.darkroom._commit", side_effect=CommitTimeout("no bounce")):
             r = presets.save.__wrapped__("harbour-warm", job="job-test")
-        self.assertTrue(any("flush before saving did not confirm (commit_timeout)" in w
-                            for w in r.warnings), r.warnings)
+        self.assertTrue(
+            any("flush before saving did not confirm (commit_timeout)" in w for w in r.warnings),
+            r.warnings,
+        )
         self.assertEqual(len(self.extract_calls), 1)
 
     def test_flush_failure_other_than_a_timeout_propagates(self) -> None:
@@ -88,12 +97,34 @@ class PresetSaveTest(_PresetFixture):
             presets.save.__wrapped__("harbour-warm", job="job-test")
 
     def test_never_include_is_dropped_from_the_default(self) -> None:
-        with mock.patch.object(journal, "read_all", return_value=[
-            journal.Entry(seq=1, ts="t", verb="darkroom.set", image_id=12, path="p",
-                          module="crop", param="cx", instance=0, after={"value": 1.0}),
-            journal.Entry(seq=2, ts="t", verb="darkroom.set", image_id=12, path="p",
-                          module="exposure", param="exposure", instance=0, after={"value": 1.0}),
-        ]):
+        with mock.patch.object(
+            journal,
+            "read_all",
+            return_value=[
+                journal.Entry(
+                    seq=1,
+                    ts="t",
+                    verb="darkroom.set",
+                    image_id=12,
+                    path="p",
+                    module="crop",
+                    param="cx",
+                    instance=0,
+                    after={"value": 1.0},
+                ),
+                journal.Entry(
+                    seq=2,
+                    ts="t",
+                    verb="darkroom.set",
+                    image_id=12,
+                    path="p",
+                    module="exposure",
+                    param="exposure",
+                    instance=0,
+                    after={"value": 1.0},
+                ),
+            ],
+        ):
             self.assertEqual(presets.session_modules("job-test", 12), ["exposure"])
 
     def test_memory_copy_and_index(self) -> None:
@@ -191,4 +222,6 @@ class PresetRealExtractTest(_MovesFixture):
         r = presets.save.__wrapped__("real-one", job="job-test")
         self.assertTrue(r.dtstyle_path)
         self.assertTrue(str(r.dtstyle_path).endswith("real-one.dtstyle"))
-        self.assertIn("<operation>exposure</operation>", Path(r.dtstyle_path).read_text(encoding="utf-8"))
+        self.assertIn(
+            "<operation>exposure</operation>", Path(r.dtstyle_path).read_text(encoding="utf-8")
+        )

@@ -57,7 +57,8 @@ def test_resume_with_first_case_done_does_not_rerun_it(tmp_path, monkeypatch):
 def test_set_without_first_case_does_no_prerun(tmp_path, monkeypatch):
     seen = _patch(monkeypatch)
     main(_args(tmp_path) + ["generate", "--stamp", "s"])
-    assert main(_args(tmp_path) + ["run", "--stamp", "s", "--workers", "2",
-                                   "--prefix", "beta-"]) == 0
+    assert (
+        main(_args(tmp_path) + ["run", "--stamp", "s", "--workers", "2", "--prefix", "beta-"]) == 0
+    )
     assert seen["done_before"] == []
     assert sorted(i for s in seen["shards"] for i in s) == ["beta-0", "beta-1"]

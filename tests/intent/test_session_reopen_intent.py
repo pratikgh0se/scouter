@@ -16,8 +16,10 @@ from tests.gauntlet import execute, observe
 from tests.gauntlet.corpus import Corpus
 from tests.gauntlet.test_session import FakeDt, FakeMcp, _session
 
-EXAMPLES = {e["id"]: e for e in
-            json.loads((Path(__file__).parent / "session_reopen.json").read_text())["examples"]}
+EXAMPLES = {
+    e["id"]: e
+    for e in json.loads((Path(__file__).parent / "session_reopen.json").read_text())["examples"]
+}
 
 
 @pytest.fixture
@@ -25,8 +27,10 @@ def corpus(tmp_path):
     trial = tmp_path / "trial"
     trial.mkdir()
     (trial / "H.ORF").write_bytes(b"raw")
-    doc = {"frames": [{"rel": "H.ORF", "body": "olympus"}],
-           "roles": {"olympus": {"hero": "H.ORF", "dark": "H.ORF"}}}
+    doc = {
+        "frames": [{"rel": "H.ORF", "body": "olympus"}],
+        "roles": {"olympus": {"hero": "H.ORF", "dark": "H.ORF"}},
+    }
     return Corpus(doc, trial)
 
 
@@ -43,8 +47,11 @@ def test_refresh_then_write_not_refused(corpus, tmp_path):
 
     result = s.ensure_frame("dark")
     # Oracle A: exactly one darkroom_open reached the fake "job" transport.
-    assert [c[0] for c in mcp.calls] == ["darkroom_open"] == \
-        ["darkroom_open"] * ex["expect"]["open_calls_after_refresh"]
+    assert (
+        [c[0] for c in mcp.calls]
+        == ["darkroom_open"]
+        == ["darkroom_open"] * ex["expect"]["open_calls_after_refresh"]
+    )
     assert result == fresh and s.current_frame == fresh
 
 
@@ -54,11 +61,16 @@ def test_isolate_reset_of_absent_module_is_not_contamination(corpus, tmp_path, m
     s = _session(corpus, tmp_path, dt).open()
     frame = s.ensure_frame("hero")
     s.baselines[str(frame)] = {"sigmoid.contrast": None}  # oracle A input: module absent before
-    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {
-        "fingerprint": "x",
-        "params": {"sigmoid.contrast": 1.0, "sigmoid.__enabled": 1},  # at default after reset
-        "units": {"sigmoid.contrast": "ratio", "sigmoid.__enabled": "bool"},
-        "defaults": {"sigmoid.contrast": 1.0}})
+    monkeypatch.setattr(
+        observe,
+        "snapshot",
+        lambda p, k=None: {
+            "fingerprint": "x",
+            "params": {"sigmoid.contrast": 1.0, "sigmoid.__enabled": 1},  # at default after reset
+            "units": {"sigmoid.contrast": "ratio", "sigmoid.__enabled": "bool"},
+            "defaults": {"sigmoid.contrast": 1.0},
+        },
+    )
     # Oracle A: isolate()'s own verdict.
     assert execute.isolate(s, frame, "hero") is False
     # Oracle B: darktable was never relaunched (a second, independent signal).
@@ -71,7 +83,10 @@ def test_isolate_a_real_move_still_restages(corpus, tmp_path, monkeypatch):
     s = _session(corpus, tmp_path, dt).open()
     frame = s.ensure_frame("hero")
     s.baselines[str(frame)] = {"exposure.exposure": 0.7}
-    monkeypatch.setattr(observe, "snapshot", lambda p, k=None: {
-        "fingerprint": "x", "params": {"exposure.exposure": 1.3}, "units": {}})
+    monkeypatch.setattr(
+        observe,
+        "snapshot",
+        lambda p, k=None: {"fingerprint": "x", "params": {"exposure.exposure": 1.3}, "units": {}},
+    )
     assert execute.isolate(s, frame, "hero") is True
     assert dt.launches == 2

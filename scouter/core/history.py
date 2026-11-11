@@ -659,8 +659,12 @@ def commit(
     expect (a hand edit, or a batch), so any history change counts.
     See `commit_expecting` for the full contract."""
     return commit_expecting(
-        image, timeout_s=timeout_s, strategy=strategy, attempts=attempts,
-        expect_change=expect_change, job=job,
+        image,
+        timeout_s=timeout_s,
+        strategy=strategy,
+        attempts=attempts,
+        expect_change=expect_change,
+        job=job,
     )
 
 
@@ -714,7 +718,7 @@ def commit_expecting(
     edit made by hand in darktable seconds ago). And `timeout_s` now bounds
     the WHOLE call: the plugin gets `budget_ms` a little under it, and the
     bridge wait itself is capped at what is left.
-    """
+    """  # noqa: E501
     job = job or paths.current_job()
     started = time.monotonic()
     deadline = started + timeout_s
@@ -813,9 +817,10 @@ def commit_expecting(
         raise CommitTimeout(
             f"stale_rewrite: darktable rewrote {sidecar} with an older history, not this "
             f"edit ({result.get('detail')}); "
-            + {"restored": "the pre-commit sidecar was restored",
-               "healed": "a good write landed meanwhile, so the sidecar was left alone"}.get(
-                outcome, "the sidecar was NOT restored"),
+            + {
+                "restored": "the pre-commit sidecar was restored",
+                "healed": "a good write landed meanwhile, so the sidecar was left alone",
+            }.get(outcome, "the sidecar was NOT restored"),
             fix="leave and re-enter the darkroom (the bounce writes the in-memory history), "
             "then read the history back",
             detail={
@@ -1066,7 +1071,7 @@ for verb in (
                 "str",
                 choices=READ_SOURCES,
                 help="xmp (sidecar; an explicit xmp with no sidecar file is the error "
-                "no_sidecar; unset is lenient: ok, empty), db (darktable's library.db, read-only), or auto "
+                "no_sidecar; unset is lenient: ok, empty), db (darktable's library.db, read-only), or auto "  # noqa: E501
                 "(xmp unless it is stale -- missing, mid-write, or older than library.db's "
                 "last history change -- then db)",
             ),

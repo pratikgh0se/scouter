@@ -16,9 +16,11 @@ def test_layout_has_24_patches_and_an_11_step_ramp_inside_the_frame():
 def test_patches_do_not_overlap():
     pts = chart.layout()
     for i, a in enumerate(pts):
-        for b in pts[i + 1:]:
-            assert (a.x + a.w <= b.x or b.x + b.w <= a.x or
-                    a.y + a.h <= b.y or b.y + b.h <= a.y), (a.name, b.name)
+        for b in pts[i + 1 :]:
+            assert a.x + a.w <= b.x or b.x + b.w <= a.x or a.y + a.h <= b.y or b.y + b.h <= a.y, (
+                a.name,
+                b.name,
+            )
 
 
 def test_ramp_includes_the_looks_tone_points():

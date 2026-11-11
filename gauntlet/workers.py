@@ -9,8 +9,8 @@ import json
 import os
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from gauntlet.case import Case
 from gauntlet.store import RunDir
@@ -51,8 +51,9 @@ def owns_session_dir(dirname: str, shard: tuple[int, int]) -> bool:
     return head.isdigit() and int(head) % shard[1] == shard[0]
 
 
-def session_units(cases: list[Case], *, max_cases: int,
-                  atomic_layers: frozenset[str] = frozenset()) -> list[list[Case]]:
+def session_units(
+    cases: list[Case], *, max_cases: int, atomic_layers: frozenset[str] = frozenset()
+) -> list[list[Case]]:
     """Cases that share a darktable session. A session is one layer and one body
     (RoutedSession switches body, and the runner rotates a session after
     `max_cases`), so a unit is the layer+body cases in order, cut every
@@ -70,18 +71,21 @@ def session_units(cases: list[Case], *, max_cases: int,
     units = []
     for key, group in groups.items():
         cut = len(group) if len(key) == 1 or key[1] == "walkthrough" else max_cases
-        units.extend(group[i:i + cut] for i in range(0, len(group), cut))
+        units.extend(group[i : i + cut] for i in range(0, len(group), cut))
     return units
 
 
-def partition(cases: list[Case], n: int, *, max_cases: int,
-              atomic_layers: frozenset[str] = frozenset()) -> list[list[Case]]:
+def partition(
+    cases: list[Case], n: int, *, max_cases: int, atomic_layers: frozenset[str] = frozenset()
+) -> list[list[Case]]:
     """Deterministic, disjoint shards (union = `cases`, input order kept), whole
     units only, balanced by case count (largest unit first onto the lightest
     shard; the spread is at most one unit)."""
     order = {c.id: i for i, c in enumerate(cases)}
-    units = sorted(session_units(cases, max_cases=max_cases, atomic_layers=atomic_layers),
-                   key=lambda u: (-len(u), order[u[0].id]))
+    units = sorted(
+        session_units(cases, max_cases=max_cases, atomic_layers=atomic_layers),
+        key=lambda u: (-len(u), order[u[0].id]),
+    )
     shards: list[list[Case]] = [[] for _ in range(n)]
     for u in units:
         min(shards, key=len).extend(u)
@@ -104,8 +108,13 @@ def worker_env(run: RunDir, k: int, n: int, adapter, base: dict | None = None) -
     env = dict(os.environ if base is None else base)
     cache = d / "cache"
     cache.mkdir(parents=True, exist_ok=True)
-    env.update({"XDG_CACHE_HOME": str(cache), SHARD_ENV: f"{k}/{n}",
-                REGISTRY_ENV: str(workers_dir(run) / "pids")})
+    env.update(
+        {
+            "XDG_CACHE_HOME": str(cache),
+            SHARD_ENV: f"{k}/{n}",
+            REGISTRY_ENV: str(workers_dir(run) / "pids"),
+        }
+    )
     (workers_dir(run) / "pids").mkdir(parents=True, exist_ok=True)
     hook = getattr(adapter, "worker_env", None)
     if hook is not None:
@@ -159,9 +168,17 @@ def merge_logs(run: RunDir, shards: list[int]) -> None:
                 log.unlink()
 
 
-def run_parallel(run: RunDir, shards: list[list[Case]], argv_for: Callable[[int, int], list[str]],
-                 env_for: Callable[[int], dict], progress, *, popen=None,
-                 sleep=time.sleep, poll_s: float = 1.0) -> int:
+def run_parallel(
+    run: RunDir,
+    shards: list[list[Case]],
+    argv_for: Callable[[int, int], list[str]],
+    env_for: Callable[[int], dict],
+    progress,
+    *,
+    popen=None,
+    sleep=time.sleep,
+    poll_s: float = 1.0,
+) -> int:
     """Spawn one child per non-empty shard and wait. If any child parks or fails
     to finish, the others are asked to stop politely (a STOP file the runner
     checks before each case) so nothing is killed mid-case; exit 75 then and

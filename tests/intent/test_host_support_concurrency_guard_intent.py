@@ -13,9 +13,9 @@ from pathlib import Path
 
 from tests import host_support as hs
 
-EXAMPLES = json.loads(
-    (Path(__file__).parent / "host_support_concurrency_guard.json").read_text()
-)["examples"]
+EXAMPLES = json.loads((Path(__file__).parent / "host_support_concurrency_guard.json").read_text())[
+    "examples"
+]
 
 
 class HostSupportConcurrencyGuardIntentTest(unittest.TestCase):
@@ -26,7 +26,9 @@ class HostSupportConcurrencyGuardIntentTest(unittest.TestCase):
                 # A plain string is a fresh (age 0) file, same as before the
                 # staleness window existed. A {"name", "age_s"} entry backdates
                 # the file's mtime with os.utime -- no sleep, no injected clock.
-                rel, age_s = (entry, 0) if isinstance(entry, str) else (entry["name"], entry["age_s"])
+                rel, age_s = (
+                    (entry, 0) if isinstance(entry, str) else (entry["name"], entry["age_s"])
+                )
                 path = cache_dir / rel
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("{}")
@@ -53,8 +55,11 @@ class HostSupportConcurrencyGuardIntentTest(unittest.TestCase):
 def _make(ex: dict):
     def test(self: HostSupportConcurrencyGuardIntentTest) -> None:
         self.run_example(ex)
+
     return test
 
 
 for _ex in EXAMPLES:
-    setattr(HostSupportConcurrencyGuardIntentTest, "test_" + _ex["id"].replace("-", "_"), _make(_ex))
+    setattr(
+        HostSupportConcurrencyGuardIntentTest, "test_" + _ex["id"].replace("-", "_"), _make(_ex)
+    )

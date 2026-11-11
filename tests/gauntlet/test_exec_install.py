@@ -35,8 +35,14 @@ def test_first_launch_passes_the_rehearsal_env(tmp_path, monkeypatch):
         cfg.mkdir(parents=True, exist_ok=True)
         (cfg / "darktablerc").write_text("x")
         (cfg / "library.db").write_text("x")
-        return dtprocess.Launched(pid=1, start_time="t", exe="darktable",
-                                  library=str(library), configdir=str(configdir), frame=None)
+        return dtprocess.Launched(
+            pid=1,
+            start_time="t",
+            exe="darktable",
+            library=str(library),
+            configdir=str(configdir),
+            frame=None,
+        )
 
     monkeypatch.setattr(dtprocess, "launch", fake_launch)
     monkeypatch.setattr(dtprocess, "terminate", lambda pid, **kw: {"ok": True, "how": "fake"})
@@ -55,9 +61,15 @@ def test_run_case_reports_timeout_as_blocked(tmp_path):
         raise subprocess.TimeoutExpired(cmd=["x"], timeout=1)
 
     session.rehearsal.action = boom
-    case = Case(id="ins-x", layer="install", tier="P0", mode="cli",
-               steps=[Step("rehearsal", {"action": "setup"}, 120.0, False)],
-               expect=Expect("workflow"), meta={"action": "setup"})
+    case = Case(
+        id="ins-x",
+        layer="install",
+        tier="P0",
+        mode="cli",
+        steps=[Step("rehearsal", {"action": "setup"}, 120.0, False)],
+        expect=Expect("workflow"),
+        meta={"action": "setup"},
+    )
     obs = session.run_case(case)
     assert obs.blocked == "hang: install action setup exceeded its timeout"
     assert obs.hang_evidence and obs.extra["action_ok"] is False
@@ -89,20 +101,33 @@ def test_leak_check_finds_new_files(tmp_path):
 
 
 def _setup_payload(*, doctor_ok: bool, plugin_ok: bool = True) -> dict:
-    doctor = {"item": "doctor", "status": "ok" if doctor_ok else "bridge_timeout",
-              "detail": "view: darkroom" if doctor_ok else "bridge not answering"}
+    doctor = {
+        "item": "doctor",
+        "status": "ok" if doctor_ok else "bridge_timeout",
+        "detail": "view: darkroom" if doctor_ok else "bridge not answering",
+    }
     plugin = {"item": "plugin", "status": "ok" if plugin_ok else "failed"}
-    return {"verb": "setup", "check": False, "ok": doctor_ok and plugin_ok,
-            "items": [plugin, {"item": "luarc", "status": "ok"},
-                      {"item": "wb_tables", "status": "ok"},
-                      {"item": "config", "status": "missing", "required": False}, doctor],
-            "next": []}
+    return {
+        "verb": "setup",
+        "check": False,
+        "ok": doctor_ok and plugin_ok,
+        "items": [
+            plugin,
+            {"item": "luarc", "status": "ok"},
+            {"item": "wb_tables", "status": "ok"},
+            {"item": "config", "status": "missing", "required": False},
+            doctor,
+        ],
+        "next": [],
+    }
 
 
 def _fake_run(payload: dict, code: int):
     def run(argv, **kwargs):
-        return subprocess.CompletedProcess(argv, returncode=code, stdout=json.dumps(payload),
-                                           stderr="")
+        return subprocess.CompletedProcess(
+            argv, returncode=code, stdout=json.dumps(payload), stderr=""
+        )
+
     return run
 
 
@@ -121,9 +146,15 @@ def test_setup_without_darktable_is_marked_needs_darktable_not_a_bare_fail(tmp_p
 
     session = exec_install.InstallSession(tmp_path)
     session.rehearsal = r
-    case = Case(id="ins-04", layer="install", tier="P0", mode="cli",
-               steps=[Step("rehearsal", {"action": "setup"}, 120.0, False)],
-               expect=Expect("workflow"), meta={"action": "setup"})
+    case = Case(
+        id="ins-04",
+        layer="install",
+        tier="P0",
+        mode="cli",
+        steps=[Step("rehearsal", {"action": "setup"}, 120.0, False)],
+        expect=Expect("workflow"),
+        meta={"action": "setup"},
+    )
     obs = session.run_case(case)
     assert obs.blocked == "needs_darktable"
     assert "_needs_darktable" not in obs.extra["detail"]  # the internal marker never leaks
@@ -173,9 +204,15 @@ def test_plugin_failed_and_doctor_down_gives_no_marker_verdict_failed(tmp_path):
 
     session = exec_install.InstallSession(tmp_path)
     session.rehearsal = r
-    case = Case(id="ins-04", layer="install", tier="P0", mode="cli",
-               steps=[Step("rehearsal", {"action": "setup"}, 120.0, False)],
-               expect=Expect("workflow"), meta={"action": "setup"})
+    case = Case(
+        id="ins-04",
+        layer="install",
+        tier="P0",
+        mode="cli",
+        steps=[Step("rehearsal", {"action": "setup"}, 120.0, False)],
+        expect=Expect("workflow"),
+        meta={"action": "setup"},
+    )
     obs = session.run_case(case)
     assert obs.blocked is None  # not blocked: a real product failure
 
@@ -191,8 +228,9 @@ def test_setup_again_tree_changed_and_doctor_down_gives_failed_not_blocked(tmp_p
     def run(argv, **kwargs):
         # the second `scouter setup` call changes the tree (writes a new file)
         (tmp_path / "config" / "scouter" / "extra.json").write_text('{"b": 2}\n')
-        return subprocess.CompletedProcess(argv, returncode=1, stdout=json.dumps(payload),
-                                           stderr="")
+        return subprocess.CompletedProcess(
+            argv, returncode=1, stdout=json.dumps(payload), stderr=""
+        )
 
     r = exec_install.Rehearsal(tmp_path, run=run)
     ok, detail = r.action("setup_again")
@@ -216,10 +254,12 @@ def test_setup_runs_config_init_yes_after_setup(tmp_path):
             cfg_dir = tmp_path / "config" / "scouter"
             cfg_dir.mkdir(parents=True, exist_ok=True)
             (cfg_dir / "config.json").write_text('{"version": 1}\n')
-            return subprocess.CompletedProcess(argv, returncode=0,
-                                               stdout=json.dumps({"outcome": "ok"}), stderr="")
-        return subprocess.CompletedProcess(argv, returncode=0, stdout=json.dumps(setup_payload),
-                                           stderr="")
+            return subprocess.CompletedProcess(
+                argv, returncode=0, stdout=json.dumps({"outcome": "ok"}), stderr=""
+            )
+        return subprocess.CompletedProcess(
+            argv, returncode=0, stdout=json.dumps(setup_payload), stderr=""
+        )
 
     r = exec_install.Rehearsal(tmp_path, run=run)
     ok, detail = r.action("setup")
@@ -234,10 +274,12 @@ def test_a_failed_config_init_makes_setup_not_ok(tmp_path):
 
     def run(argv, **kwargs):
         if argv[-3:] == ["config", "init", "--yes"]:
-            return subprocess.CompletedProcess(argv, returncode=1,
-                                               stdout=json.dumps({"outcome": "error"}), stderr="")
-        return subprocess.CompletedProcess(argv, returncode=0, stdout=json.dumps(setup_payload),
-                                           stderr="")
+            return subprocess.CompletedProcess(
+                argv, returncode=1, stdout=json.dumps({"outcome": "error"}), stderr=""
+            )
+        return subprocess.CompletedProcess(
+            argv, returncode=0, stdout=json.dumps(setup_payload), stderr=""
+        )
 
     r = exec_install.Rehearsal(tmp_path, run=run)
     ok, detail = r.action("setup")
@@ -256,8 +298,9 @@ def test_rerun_existing_never_runs_config_init(tmp_path):
 
     def run(argv, **kwargs):
         calls.append(argv)
-        return subprocess.CompletedProcess(argv, returncode=0, stdout=json.dumps(setup_payload),
-                                           stderr="")
+        return subprocess.CompletedProcess(
+            argv, returncode=0, stdout=json.dumps(setup_payload), stderr=""
+        )
 
     r = exec_install.Rehearsal(tmp_path, run=run)
     ok, detail = r.action("rerun_existing")
@@ -272,8 +315,9 @@ def test_setup_again_never_runs_config_init(tmp_path):
 
     def run(argv, **kwargs):
         calls.append(argv)
-        return subprocess.CompletedProcess(argv, returncode=0, stdout=json.dumps(setup_payload),
-                                           stderr="")
+        return subprocess.CompletedProcess(
+            argv, returncode=0, stdout=json.dumps(setup_payload), stderr=""
+        )
 
     r = exec_install.Rehearsal(tmp_path, run=run)
     r.action("setup_again")
@@ -289,8 +333,9 @@ def test_rerun_existing_catches_a_setup_that_clobbers_the_config(tmp_path):
     def run(argv, **kwargs):
         # simulates a (hypothetical, buggy) `setup` that clobbers config.json
         (tmp_path / "config" / "scouter" / "config.json").write_text('{"clobbered": true}\n')
-        return subprocess.CompletedProcess(argv, returncode=0, stdout=json.dumps(setup_payload),
-                                           stderr="")
+        return subprocess.CompletedProcess(
+            argv, returncode=0, stdout=json.dumps(setup_payload), stderr=""
+        )
 
     r = exec_install.Rehearsal(tmp_path, run=run)
     ok, detail = r.action("rerun_existing")
@@ -313,10 +358,12 @@ def test_setup_still_runs_config_init_and_ins08_state_carries(tmp_path):
         if argv[-3:] == ["config", "init", "--yes"]:
             (tmp_path / "config" / "scouter").mkdir(parents=True, exist_ok=True)
             (tmp_path / "config" / "scouter" / "config.json").write_text('{"version": 1}\n')
-            return subprocess.CompletedProcess(argv, returncode=0,
-                                               stdout=json.dumps({"outcome": "ok"}), stderr="")
-        return subprocess.CompletedProcess(argv, returncode=0, stdout=json.dumps(setup_payload),
-                                           stderr="")
+            return subprocess.CompletedProcess(
+                argv, returncode=0, stdout=json.dumps({"outcome": "ok"}), stderr=""
+            )
+        return subprocess.CompletedProcess(
+            argv, returncode=0, stdout=json.dumps(setup_payload), stderr=""
+        )
 
     r = exec_install.Rehearsal(tmp_path, run=run)
     ok, detail = r.action("setup")
@@ -330,6 +377,7 @@ def test_setup_still_runs_config_init_and_ins08_state_carries(tmp_path):
 
 # ---- N14: the install layer owns and quits the darktable it launches ----
 
+
 class _FakeDt:
     """In-memory dtprocess: one darktable at a time, owner record per cache."""
 
@@ -338,15 +386,16 @@ class _FakeDt:
 
         self.dt = dtprocess
         self.alive = set(running)
-        self.records = {}      # cache_root -> Launched
-        self.signals = []      # (pid, sig) actually sent
+        self.records = {}  # cache_root -> Launched
+        self.signals = []  # (pid, sig) actually sent
         self.terminate_calls = []
         monkeypatch.setattr(dtprocess, "launch", self.launch)
         monkeypatch.setattr(dtprocess, "terminate", self.terminate)
         monkeypatch.setattr(dtprocess, "owned_pid", self.owned_pid)
         monkeypatch.setattr(dtprocess, "running_pids", lambda: sorted(self.alive))
-        monkeypatch.setattr(dtprocess, "_lstart",
-                            lambda pid: f"t{pid}" if pid in self.alive else None)
+        monkeypatch.setattr(
+            dtprocess, "_lstart", lambda pid: f"t{pid}" if pid in self.alive else None
+        )
         monkeypatch.setattr(exec_install.time, "sleep", lambda s: None)
         monkeypatch.setattr(os, "kill", self.kill)
 
@@ -356,8 +405,14 @@ class _FakeDt:
 
     def launch(self, frame, library, configdir=None, *, env=None, **kw):
         cache = env["SCOUTER_CACHE"]
-        rec = self.dt.Launched(pid=4242, start_time="t4242", exe="darktable",
-                               library=str(library), configdir=str(configdir), frame=None)
+        rec = self.dt.Launched(
+            pid=4242,
+            start_time="t4242",
+            exe="darktable",
+            library=str(library),
+            configdir=str(configdir),
+            frame=None,
+        )
         self.alive.add(4242)
         self.records[cache] = rec
         cfg = configdir
@@ -397,8 +452,9 @@ def test_first_launch_quits_through_the_rehearsal_owner_record(tmp_path, monkeyp
 
 def test_first_launch_fails_when_the_darktable_does_not_quit(tmp_path, monkeypatch):
     fake = _FakeDt(monkeypatch)
-    monkeypatch.setattr(fake.dt, "terminate",
-                        lambda pid=None, **kw: {"ok": False, "how": "SIGKILL", "pid": pid})
+    monkeypatch.setattr(
+        fake.dt, "terminate", lambda pid=None, **kw: {"ok": False, "how": "SIGKILL", "pid": pid}
+    )
     monkeypatch.setattr(fake, "kill", lambda pid, sig: fake.signals.append((pid, sig)))
     monkeypatch.setattr(os, "kill", fake.kill)
     r = exec_install.Rehearsal(tmp_path)
@@ -422,8 +478,9 @@ def test_cleanup_never_signals_a_reused_pid(tmp_path, monkeypatch):
     fake = _FakeDt(monkeypatch)
     r = exec_install.Rehearsal(tmp_path)
     fake.launch(None, tmp_path / "l.db", tmp_path / "cfg", env=r.env())
-    r.launched = fake.dt.Launched(pid=4242, start_time="OLD", exe="darktable",
-                                  library="x", configdir=None, frame=None)
+    r.launched = fake.dt.Launched(
+        pid=4242, start_time="OLD", exe="darktable", library="x", configdir=None, frame=None
+    )
     fake.records.clear()
     res = r.cleanup()
     assert res["ok"] and fake.signals == []  # start time differs: someone else's process
@@ -443,8 +500,9 @@ def test_layer_end_abort_and_close_quit_the_launched_darktable(tmp_path, monkeyp
     for how in ("abort", "close", "teardown"):
         fake = _FakeDt(monkeypatch)
         session = exec_install.InstallSession(tmp_path / how)
-        rec = fake.launch(None, tmp_path / "l.db", tmp_path / how / "cfg",
-                          env=session.rehearsal.env())
+        rec = fake.launch(
+            None, tmp_path / "l.db", tmp_path / how / "cfg", env=session.rehearsal.env()
+        )
         session.rehearsal.launched = rec  # as if ins-03 had been interrupted
         if how == "teardown":
             session.rehearsal.action("teardown")

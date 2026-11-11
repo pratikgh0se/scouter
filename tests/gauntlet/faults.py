@@ -62,9 +62,16 @@ def _snap(v: dict, path: Path) -> None:
         snaps.append({"path": str(path), "exists": False})
         return
     st = path.stat()
-    snaps.append({"path": str(path), "exists": True, "dir": path.is_dir(),
-                  "bytes": None if path.is_dir() else path.read_bytes(),
-                  "mode": st.st_mode & 0o7777, "ns": (st.st_atime_ns, st.st_mtime_ns)})
+    snaps.append(
+        {
+            "path": str(path),
+            "exists": True,
+            "dir": path.is_dir(),
+            "bytes": None if path.is_dir() else path.read_bytes(),
+            "mode": st.st_mode & 0o7777,
+            "ns": (st.st_atime_ns, st.st_mtime_ns),
+        }
+    )
 
 
 def _restore(snap: dict) -> None:
@@ -140,8 +147,9 @@ def arm(session, fault: str, v: dict | None = None, *, step_tool: str | None = N
             raise ValueError("kill_during_call needs the fault step's tool (step_tool=)")
         v["_relaunch"] = True
         v["_kill_on_tool"] = step_tool
-        timer = threading.Timer(KILL_DELAY_S, _owned_kill,
-                                kwargs={"cache_root": _cache_root(session)})
+        timer = threading.Timer(
+            KILL_DELAY_S, _owned_kill, kwargs={"cache_root": _cache_root(session)}
+        )
         timer.daemon = True
         v["_timer"] = timer
         _start_timer_on_call(session, v)
@@ -189,10 +197,14 @@ def arm(session, fault: str, v: dict | None = None, *, step_tool: str | None = N
         #: bridge (darktable's own connection). Engagement cannot be proven
         #: without a second darktable holding the lock, out of scope for scratch
         #: runs, so the case is declared unrunnable, never scored as a failure.
-        v["_skip"] = ("a lock file written by the runner does not engage the live bridge; "
-                      "needs a second darktable holding library.db (rob-r9)")
+        v["_skip"] = (
+            "a lock file written by the runner does not engage the live bridge; "
+            "needs a second darktable holding library.db (rob-r9)"
+        )
     elif fault == "unicode_path":
-        v["unicode_copy"] = str(copy_readonly(hero, session.root / "ünï cødé dir" / f"frâme {hero.name}"))  # noqa: E501
+        v["unicode_copy"] = str(
+            copy_readonly(hero, session.root / "ünï cødé dir" / f"frâme {hero.name}")
+        )  # noqa: E501
     elif fault == "long_path":
         v["long_copy"] = str(session.root / ("x" * 255) / hero.name)
     elif fault == "none":
@@ -249,9 +261,12 @@ def arm(session, fault: str, v: dict | None = None, *, step_tool: str | None = N
         #: imported files (the truncated frame keeps its card path).
         from tests.gauntlet.exec_parity import _imported_path
 
-        rec = session.call("library_import", {"source": str(card),
-                                              "job_slug": st.vars["job_slug"],
-                                              "confirm": True}, 300.0, write=True)
+        rec = session.call(
+            "library_import",
+            {"source": str(card), "job_slug": st.vars["job_slug"], "confirm": True},
+            300.0,
+            write=True,
+        )
         resolved = [_imported_path(session, rec.envelope, f.name) or f for f in frames]
         if all(r == f for r, f in zip(resolved, frames)):
             code = ((rec.envelope or {}).get("error") or {}).get("code") or rec.error
@@ -285,10 +300,12 @@ def disarm(session, v: dict) -> list[str]:
 
     timer = v.get("_timer")
     if timer is not None:
+
         def stop_timer():
             timer.cancel()
             if v.get("_timer_started"):
                 timer.join(5)
+
         guard("cancel kill timer", stop_timer)
     if v.get("_restore_call"):
         had_own, orig = v["_restore_call"]
@@ -298,6 +315,7 @@ def disarm(session, v: dict) -> list[str]:
                 session.call = orig
             else:
                 del session.call
+
         guard("restore session.call", restore_call)
     for snap in reversed(v.get("_restore", [])):
         guard(f"restore {snap['path']}", lambda snap=snap: _restore(snap))
@@ -326,13 +344,15 @@ def disarm(session, v: dict) -> list[str]:
 
         def restore_frames():
             session.staged.job_frames = old
+
         guard("restore job_frames", restore_frames)
     return errors
 
 
 def _hdiutil(*args: str, timeout: float = 60):
-    return subprocess.run(["hdiutil", *args], capture_output=True, text=True,
-                          timeout=timeout, check=True)
+    return subprocess.run(
+        ["hdiutil", *args], capture_output=True, text=True, timeout=timeout, check=True
+    )
 
 
 def _fill(mount: Path) -> None:
@@ -461,8 +481,10 @@ def run_fault_case(session, case: Case) -> Observation:
         dt = getattr(session, "dt", None)
         if dt is not None and dt.health() == "unresponsive":
             obs = Observation(blocked="inherited_wedge")
-            obs.hang_evidence.append("darktable was already unresponsive before this case's "
-                                     "own arm/steps ran (inherited from an earlier case)")
+            obs.hang_evidence.append(
+                "darktable was already unresponsive before this case's "
+                "own arm/steps ran (inherited from an earlier case)"
+            )
         else:
             if fault in _FREEZE_FAULTS:
                 role = case.frame_role or "hero"
@@ -588,14 +610,17 @@ def fence_and_recover(session, *, resume_on_quit_failure: bool = False) -> list[
             #: (N6): last resort -- never leave a SIGSTOPped darktable
             #: frozen forever just because the quit ladder itself did not
             #: confirm ok (nothing else in this fence will ever un-stick it).
-            guard("fence: last-resort SIGCONT",
-                 lambda: _owned_kill(signal.SIGCONT, _cache_root(session)))
+            guard(
+                "fence: last-resort SIGCONT",
+                lambda: _owned_kill(signal.SIGCONT, _cache_root(session)),
+            )
         return errors  # never launch a second darktable when quit did not confirm ok
     purge = getattr(session, "purge_spool", None)
     if purge is not None:
         guard("purge spool", purge)
-    frame = getattr(session, "current_frame", None) or \
-        (session.staged.frames["hero"] if getattr(session, "staged", None) else None)
+    frame = getattr(session, "current_frame", None) or (
+        session.staged.frames["hero"] if getattr(session, "staged", None) else None
+    )
     if not guard("launch darktable", lambda: launch_fn(frame)):
         return errors
     #: (N5): never trust the launch's own "gui_ready" as proof the JOB
@@ -611,9 +636,9 @@ def _post_facts(fault: str, obs: Observation, v: dict) -> None:
     import json as _json
 
     if fault == "unicode_path":
-        obs.extra["sidecar_changed"] = obs.before.get("fingerprint") != \
-            obs.after.get("fingerprint") or any(c.envelope and c.envelope.get("ok")
-                                                for c in obs.calls[1:])
+        obs.extra["sidecar_changed"] = obs.before.get("fingerprint") != obs.after.get(
+            "fingerprint"
+        ) or any(c.envelope and c.envelope.get("ok") for c in obs.calls[1:])
     if fault == "huge_job_one_timeout":
         text = _json.dumps([c.envelope for c in obs.calls])
         from tests.gauntlet.exec_bulk import reported_n
@@ -623,8 +648,9 @@ def _post_facts(fault: str, obs: Observation, v: dict) -> None:
     if fault == "wrong_wb_table":
         env = (obs.calls[-1].envelope or {}) if obs.calls else {}
         data = env.get("data") or {}
-        obs.extra["flagged_or_refused"] = (not env.get("ok")) or data.get("kelvin") is None \
-            or bool(data.get("warnings"))
+        obs.extra["flagged_or_refused"] = (
+            (not env.get("ok")) or data.get("kelvin") is None or bool(data.get("warnings"))
+        )
 
 
 def _fake_version(session) -> Observation:
@@ -639,17 +665,26 @@ def _fake_version(session) -> Observation:
     from scouter.core import dtbridge
     from tests.scouter_fakes import FakeBridge
 
-    keys = ("SCOUTER_CONFIG", "SCOUTER_CACHE", "SCOUTER_DARKTABLE_LIBRARY_DB", "SCOUTER_JOB",
-            "OBSIDIAN_VAULT_PATH")
+    keys = (
+        "SCOUTER_CONFIG",
+        "SCOUTER_CACHE",
+        "SCOUTER_DARKTABLE_LIBRARY_DB",
+        "SCOUTER_JOB",
+        "OBSIDIAN_VAULT_PATH",
+    )
     staged_env = session.staged.env
     if not staged_env.get("SCOUTER_CONFIG") or not staged_env.get("SCOUTER_CACHE"):
-        return Observation(blocked="harness_bug: fake_version needs an isolated "
-                                   "SCOUTER_CONFIG and SCOUTER_CACHE")
-    fake = FakeBridge(responses={"darktable_mcp.diag": {"darktable_version": "5.6.0",
-                                                        "gui_ready": True},
-                                 "view.current": {"view": "darkroom"},
-                                 "darkroom.status": {"position": 0.5, "nan": False,
-                                                     "view": "darkroom"}})
+        return Observation(
+            blocked="harness_bug: fake_version needs an isolated "
+            "SCOUTER_CONFIG and SCOUTER_CACHE"
+        )
+    fake = FakeBridge(
+        responses={
+            "darktable_mcp.diag": {"darktable_version": "5.6.0", "gui_ready": True},
+            "view.current": {"view": "darkroom"},
+            "darkroom.status": {"position": 0.5, "nan": False, "view": "darkroom"},
+        }
+    )
     saved = {k: os.environ.get(k) for k in keys}
     old = getattr(dtbridge, "_bridge", None)  # never construct a real Bridge here
     dtbridge.set_bridge(fake)
@@ -660,12 +695,14 @@ def _fake_version(session) -> Observation:
             else:
                 os.environ.pop(k, None)
         try:
-            env = registry.call("darkroom.status", "gauntlet", module="exposure",
-                                param="exposure")
+            env = registry.call("darkroom.status", "gauntlet", module="exposure", param="exposure")
             env = env if isinstance(env, dict) else getattr(env, "to_dict", lambda: {})()
         except Exception as e:  # noqa: BLE001 - a raise is an observation, not a crash
-            env = {"ok": False, "outcome": "error",
-                   "error": {"code": f"raised: {type(e).__name__}", "message": str(e)[:300]}}
+            env = {
+                "ok": False,
+                "outcome": "error",
+                "error": {"code": f"raised: {type(e).__name__}", "message": str(e)[:300]},
+            }
     finally:
         dtbridge.set_bridge(old)
         for k, val in saved.items():
@@ -691,9 +728,15 @@ def _two_clients(session, case: Case) -> Observation:
         except Exception as e:  # noqa: BLE001
             results.append({"ok": False, "error": {"code": f"transport: {e}"}})
 
-    threads = [threading.Thread(target=fire, args=(c, p)) for c, p in
-               ((session.mcp, "brighter"), (second, "warmer"), (session.mcp, "darker"),
-                (second, "cooler"))]
+    threads = [
+        threading.Thread(target=fire, args=(c, p))
+        for c, p in (
+            (session.mcp, "brighter"),
+            (second, "warmer"),
+            (session.mcp, "darker"),
+            (second, "cooler"),
+        )
+    ]
     for t in threads:
         t.start()
     for t in threads:
@@ -703,9 +746,14 @@ def _two_clients(session, case: Case) -> Observation:
     ok_calls = sum(1 for r in results if r.get("ok"))
     grew = (obs.after.get("history_end") or 0) - (obs.before.get("history_end") or 0)
     obs.calls = [CallRecord("darkroom_say", {}, r, write=True) for r in results]
-    obs.extra["no_interleaved_writes"] = grew >= 0 and all(
-        r.get("ok") or (r.get("error") or {}).get("code") in ("state_locked", "db_locked")
-        for r in results) and (ok_calls == 0 or grew >= 1)
+    obs.extra["no_interleaved_writes"] = (
+        grew >= 0
+        and all(
+            r.get("ok") or (r.get("error") or {}).get("code") in ("state_locked", "db_locked")
+            for r in results
+        )
+        and (ok_calls == 0 or grew >= 1)
+    )
     return obs
 
 
@@ -715,8 +763,9 @@ def _hang_case(session, case: Case) -> Observation:
     hung = 0
     allowed = set(case.meta.get("allowed_codes", []))
     for st in case.steps:
-        rec = session.call(st.tool, substitute(st.args, session, obs.calls), st.budget_s,
-                           write=st.write)
+        rec = session.call(
+            st.tool, substitute(st.args, session, obs.calls), st.budget_s, write=st.write
+        )
         obs.calls.append(rec)
         if rec.error == "timeout":
             hung += 1
@@ -734,8 +783,10 @@ def healed(env: dict | None) -> bool:
     env = env or {}
     data = env.get("data") or {}
     detail = (env.get("error") or {}).get("detail") or {}
-    return bool((isinstance(data, dict) and data.get("healed"))
-                or (isinstance(detail, dict) and detail.get("healed")))
+    return bool(
+        (isinstance(data, dict) and data.get("healed"))
+        or (isinstance(detail, dict) and detail.get("healed"))
+    )
 
 
 def watchdog_probe(session, case, step, obs) -> CallRecord:
@@ -760,8 +811,13 @@ def watchdog_probe(session, case, step, obs) -> CallRecord:
     env = dict(session.staged.env)
 
     def doctor(*flags):
-        p = subprocess.run([sys.executable, "-m", "scouter", "doctor", *flags], env=env,
-                           capture_output=True, text=True, timeout=90)
+        p = subprocess.run(
+            [sys.executable, "-m", "scouter", "doctor", *flags],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
         try:
             return p.returncode, _json.loads(p.stdout)
         except ValueError:
@@ -796,11 +852,11 @@ def watchdog_probe(session, case, step, obs) -> CallRecord:
                 ok = healed(first.envelope) and bool((first.envelope or {}).get("ok"))
             else:
                 _owned_kill(signal.SIGSTOP, cache_root)
-                second = session.call("darkroom_enable", {"module": "exposure"}, 90.0,
-                                      write=True)
+                second = session.call("darkroom_enable", {"module": "exposure"}, 90.0, write=True)
                 detail["second"] = second.envelope
-                ok = ((second.envelope or {}).get("error") or {}).get("code") == \
-                    "darktable_unresponsive"
+                ok = ((second.envelope or {}).get("error") or {}).get(
+                    "code"
+                ) == "darktable_unresponsive"
         finally:
             # auto_heal must never be left on, and the owned darktable never
             # left stopped: each undo runs even if the one before it raises.
@@ -826,8 +882,9 @@ def watchdog_probe(session, case, step, obs) -> CallRecord:
             sleeper.kill()
     obs.extra["scenario_ok"] = bool(ok)
     obs.extra["watchdog_detail"] = detail
-    return CallRecord("watchdog_probe", step.args, {"ok": bool(ok), "outcome": "ok",
-                                                    "data": detail})
+    return CallRecord(
+        "watchdog_probe", step.args, {"ok": bool(ok), "outcome": "ok", "data": detail}
+    )
 
 
 VIRTUAL["watchdog_probe"] = watchdog_probe

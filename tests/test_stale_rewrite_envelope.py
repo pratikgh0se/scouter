@@ -20,8 +20,11 @@ _REAL_COMMIT = darkroom._commit
 def _stale() -> CommitTimeout:
     return CommitTimeout(
         "stale_rewrite: older history",
-        detail={"stale_rewrite": "history_end went back from 76 to 54",
-                "stale_rewrite_restored": True, "strategy_used": "view_bounce_action"},
+        detail={
+            "stale_rewrite": "history_end went back from 76 to 54",
+            "stale_rewrite_restored": True,
+            "strategy_used": "view_bounce_action",
+        },
     )
 
 
@@ -42,8 +45,10 @@ class _Base(_MovesFixture):
         # re-route the fixture's `_commit` patch to the real one, faking only history
         p1 = mock.patch("scouter.core.darkroom._commit", side_effect=_REAL_COMMIT)
         p2 = mock.patch("scouter.core.history.commit_expecting", side_effect=fake)
-        p1.start(); p2.start()
-        self.addCleanup(p1.stop); self.addCleanup(p2.stop)
+        p1.start()
+        p2.start()
+        self.addCleanup(p1.stop)
+        self.addCleanup(p2.stop)
 
     def land(self) -> None:
         """What darktable's sidecar says after the last set landed (row 433)."""
@@ -52,7 +57,9 @@ class _Base(_MovesFixture):
         from scouter.core import dtbridge
         from tests.scouter_fakes import with_new_history_hash, with_param_value
 
-        acts = [p for m, p in self.bridge.calls if m == "darkroom.action" and p.get("effect") == "set"]
+        acts = [
+            p for m, p in self.bridge.calls if m == "darkroom.action" and p.get("effect") == "set"
+        ]
         if not acts:
             return
         key = next((k for k, v in dtbridge.ACTION_PATHS.items() if v == acts[-1]["path"]), None)
@@ -71,20 +78,37 @@ class _Base(_MovesFixture):
 
 class EnvelopeTest(_Base):
     def test_set(self) -> None:
-        self.check(registry.call("darkroom.set", "cli", module="exposure", param="exposure",
-                                 value=0.9, job="job-test"))
+        self.check(
+            registry.call(
+                "darkroom.set",
+                "cli",
+                module="exposure",
+                param="exposure",
+                value=0.9,
+                job="job-test",
+            )
+        )
 
     def test_adjust(self) -> None:
-        self.check(registry.call("darkroom.adjust", "cli", module="exposure", param="exposure",
-                                 delta=0.3, job="job-test"))
+        self.check(
+            registry.call(
+                "darkroom.adjust",
+                "cli",
+                module="exposure",
+                param="exposure",
+                delta=0.3,
+                job="job-test",
+            )
+        )
 
     def test_say(self) -> None:
         self.check(registry.call("darkroom.say", "cli", phrase="less contrast", job="job-test"))
 
     def test_no_flag_without_a_retry(self) -> None:
         self.calls = 99  # never stale
-        env = registry.call("darkroom.set", "cli", module="exposure", param="exposure",
-                            value=0.9, job="job-test")
+        env = registry.call(
+            "darkroom.set", "cli", module="exposure", param="exposure", value=0.9, job="job-test"
+        )
         self.assertNotIn("stale_rewrite_retried", env.data)
 
 

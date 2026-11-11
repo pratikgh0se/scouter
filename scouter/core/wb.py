@@ -342,11 +342,12 @@ def _off_curve(samples: list[dict], k: float, coeffs: list[float] | None) -> flo
         ms = [1e6 / p["kelvin"] for p in nearest]
         rs, bs = zip(*(norm(p) for p in nearest))
         r_t, b_t = _quad_interp(ms, list(rs), m), _quad_interp(ms, list(bs), m)
-    return ((r_obs - r_t) ** 2 + (b_obs - b_t) ** 2) ** 0.5 / (r_t ** 2 + b_t ** 2) ** 0.5
+    return ((r_obs - r_t) ** 2 + (b_obs - b_t) ** 2) ** 0.5 / (r_t**2 + b_t**2) ** 0.5
 
 
-def _invert(samples: list[dict], ratio: float, coeffs: list[float] | None = None,
-            *, strict: bool = False) -> tuple[float | None, dict]:
+def _invert(
+    samples: list[dict], ratio: float, coeffs: list[float] | None = None, *, strict: bool = False
+) -> tuple[float | None, dict]:
     """`strict=True` (the `wb.kelvin` verb's readback) answers None with a
     reason when the coefficients are off the calibrated curve; internal
     callers (relative moves, undo, style) keep the r/b answer and get an
@@ -360,11 +361,17 @@ def _invert(samples: list[dict], ratio: float, coeffs: list[float] | None = None
         info["approximate"] = True
         return k, info
     if dist is not None and dist > _OFF_CURVE_TOLERANCE:
-        return None, {**info, "interpolated": False, "exact": False, "reason": (
-            f"these coefficients are {100 * dist:.0f}% off the calibrated curve: the frame's "
-            "tint is not the table's calibrated tint, and r/b alone cannot give Kelvin at "
-            "another tint. Set tint back to 1.0, or re-run `scouter wb calibrate` "
-            "for this tint; the slider value itself was applied.")}
+        return None, {
+            **info,
+            "interpolated": False,
+            "exact": False,
+            "reason": (
+                f"these coefficients are {100 * dist:.0f}% off the calibrated curve: the frame's "
+                "tint is not the table's calibrated tint, and r/b alone cannot give Kelvin at "
+                "another tint. Set tint back to 1.0, or re-run `scouter wb calibrate` "
+                "for this tint; the slider value itself was applied."
+            ),
+        }
     return k, info
 
 
@@ -472,10 +479,7 @@ def _reason_with_table_context(camera: str, reason: str) -> str:
     except ValueError:
         table = None
     if not table:
-        return (
-            f"{reason}; {camera} also has no wb calibration table -- "
-            "run scouter wb calibrate"
-        )
+        return f"{reason}; {camera} also has no wb calibration table -- " "run scouter wb calibrate"
     return reason
 
 
@@ -494,7 +498,8 @@ def _no_table_result(camera: str, reason: str | None = None) -> dict:
 
 
 def _coeffs_and_camera_from_image(
-        image: str | int) -> tuple[list[float] | None, str, str | None, str]:
+    image: str | int,
+) -> tuple[list[float] | None, str, str | None, str]:
     """Resolve `image`'s active `temperature` coefficients and its camera slug.
 
     `coeffs` is `None` (with a `reason`) when the image has no sidecar, no
@@ -541,10 +546,12 @@ def _route_readback(path: str) -> tuple[dict, list[str]]:
             "white balance is in camera reference (late) mode: `kelvin` is the white balance "
             "module's as-shot value, which warmer/cooler do not move here; they move color "
             f"calibration's illuminant temperature, now {route.get('illuminant_kelvin')} K "
-            "(`route.illuminant_kelvin`)"]
+            "(`route.illuminant_kelvin`)"
+        ]
     return route, [
         "white balance is in camera reference (late) mode and Scouter cannot move warmth on "
-        f"this image: {route.get('reason')}"]
+        f"this image: {route.get('reason')}"
+    ]
 
 
 def _effective(route: dict, kelvin_value: float | None) -> dict:
@@ -553,15 +560,19 @@ def _effective(route: dict, kelvin_value: float | None) -> dict:
     balance route it is `kelvin`; when the route is unavailable nothing is
     known to carry warmth, so it is null and the note cites `route.reason`."""
     if route.get("route") == "unavailable":
-        return {"effective_kelvin": None,
-                "note": "no Kelvin carries warmth on this image, so none is claimed "
-                        f"(`kelvin` is the white balance module's estimate): {route.get('reason')}"}
+        return {
+            "effective_kelvin": None,
+            "note": "no Kelvin carries warmth on this image, so none is claimed "
+            f"(`kelvin` is the white balance module's estimate): {route.get('reason')}",
+        }
     if route.get("route") != "color_calibration":
         return {"effective_kelvin": kelvin_value, "note": None}
     k = route.get("illuminant_kelvin")
-    return {"effective_kelvin": k,
-            "note": f"warmth is carried by colour calibration's illuminant ({k} K); "
-                    "`kelvin` is the white balance module's estimate"}
+    return {
+        "effective_kelvin": k,
+        "note": f"warmth is carried by colour calibration's illuminant ({k} K); "
+        "`kelvin` is the white balance module's estimate",
+    }
 
 
 def kelvin(
@@ -599,11 +610,19 @@ def kelvin(
         route, route_warnings = _route_readback(path)
         if coeffs is None:
             out = _no_table_result(camera, _reason_with_table_context(camera, reason))
-            return {**out, "route": route, "warnings": out["warnings"] + route_warnings,
-                    **_effective(route, out["kelvin"])}
+            return {
+                **out,
+                "route": route,
+                "warnings": out["warnings"] + route_warnings,
+                **_effective(route, out["kelvin"]),
+            }
         result = _kelvin_from(coeffs, camera, strict=strict)
-        return {**result, "route": route, "warnings": result["warnings"] + route_warnings,
-                **_effective(route, result["kelvin"])}
+        return {
+            **result,
+            "route": route,
+            "warnings": result["warnings"] + route_warnings,
+            **_effective(route, result["kelvin"]),
+        }
     elif coeffs is None or camera is None:
         raise UsageError(
             "wb.kelvin needs image=..., or both coeffs and camera",
@@ -740,8 +759,11 @@ def _folder_plan(folder: Path, camera: str | None, scratch: str | None) -> dict:
 
     cfg = load_config()
     wanted = {"." + e.lower() for e in cfg.import_.extensions if e.upper() not in _NOT_RAW}
-    raws = sorted(p for p in folder.iterdir()
-                  if p.is_file() and p.suffix.lower() in wanted and not p.name.startswith("."))
+    raws = sorted(
+        p
+        for p in folder.iterdir()
+        if p.is_file() and p.suffix.lower() in wanted and not p.name.startswith(".")
+    )
     bodies: dict[str, list[Path]] = {}
     unreadable: list[str] = []
     for raw in raws:
@@ -844,9 +866,20 @@ def calibrate(
 
     folder = Path(str(image)).expanduser()
     if not str(image).isdigit() and folder.is_dir():
-        return _calibrate_folder(folder, ks, k_from, k_to, step, camera=camera, scratch=scratch,
-                                 allow_in_job=allow_in_job, confirm=confirm, dry_run=dry_run,
-                                 job=job, estimated_s=estimated_s)
+        return _calibrate_folder(
+            folder,
+            ks,
+            k_from,
+            k_to,
+            step,
+            camera=camera,
+            scratch=scratch,
+            allow_in_job=allow_in_job,
+            confirm=confirm,
+            dry_run=dry_run,
+            job=job,
+            estimated_s=estimated_s,
+        )
     if camera is not None or scratch is not None:
         raise UsageError(
             "camera and scratch apply to folder mode only (image is a folder of raws)",
@@ -1006,10 +1039,21 @@ def calibrate(
     )
 
 
-def _calibrate_folder(folder: Path, ks: list[int], k_from: int, k_to: int, step: int, *,
-                      camera: str | None, scratch: str | None, allow_in_job: bool,
-                      confirm: bool, dry_run: bool, job: str,
-                      estimated_s: float) -> CalibrateResult:
+def _calibrate_folder(
+    folder: Path,
+    ks: list[int],
+    k_from: int,
+    k_to: int,
+    step: int,
+    *,
+    camera: str | None,
+    scratch: str | None,
+    allow_in_job: bool,
+    confirm: bool,
+    dry_run: bool,
+    job: str,
+    estimated_s: float,
+) -> CalibrateResult:
     """Folder mode: one body, one scratch copy, then the ordinary sweep."""
     import shutil
 
@@ -1018,17 +1062,26 @@ def _calibrate_folder(folder: Path, ks: list[int], k_from: int, k_to: int, step:
     chosen: Path = plan_info["chosen"]
     copy: Path = plan_info["copy"]
     table_path = _table_path(cam)
-    extra = {"frames": plan_info["frames"], "source_image": str(chosen),
-             "scratch_copy": str(copy)}
-    warnings = ([f"camera model unreadable, skipped: {', '.join(plan_info['unreadable'])}"]
-                if plan_info["unreadable"] else [])
+    extra = {"frames": plan_info["frames"], "source_image": str(chosen), "scratch_copy": str(copy)}
+    warnings = (
+        [f"camera model unreadable, skipped: {', '.join(plan_info['unreadable'])}"]
+        if plan_info["unreadable"]
+        else []
+    )
     if dry_run or not confirm:
         plan = [{"action": "copy", "from": str(chosen), "to": str(copy)}] + [
-            {"action": "darkroom.set", "module": "temperature", "param": "temperature",
-             "value": k} for k in ks]
+            {"action": "darkroom.set", "module": "temperature", "param": "temperature", "value": k}
+            for k in ks
+        ]
         return CalibrateResult(
-            outcome="dry_run", camera=cam, table_path=str(table_path), ks=ks,
-            estimated_s=estimated_s, plan=plan, warnings=warnings, **extra,
+            outcome="dry_run",
+            camera=cam,
+            table_path=str(table_path),
+            ks=ks,
+            estimated_s=estimated_s,
+            plan=plan,
+            warnings=warnings,
+            **extra,
             reason=(
                 f"{'dry run' if dry_run else 'confirm required'}: {cam} has "
                 f"{len(plan_info['frames'])} frame(s) in {folder}; would copy {chosen.name} to "
@@ -1044,8 +1097,7 @@ def _calibrate_folder(folder: Path, ks: list[int], k_from: int, k_to: int, step:
     if not copy.exists() or copy.stat().st_size != chosen.stat().st_size:
         shutil.copy2(chosen, copy)
     inner = _unwrapped(calibrate)
-    result = inner(str(copy), k_from, k_to, step, allow_in_job=allow_in_job, confirm=True,
-                   job=job)
+    result = inner(str(copy), k_from, k_to, step, allow_in_job=allow_in_job, confirm=True, job=job)
     result.frames = extra["frames"]
     result.source_image = extra["source_image"]
     result.scratch_copy = extra["scratch_copy"]
@@ -1053,7 +1105,8 @@ def _calibrate_folder(folder: Path, ks: list[int], k_from: int, k_to: int, step:
     if result.camera and result.camera != cam:
         result.warnings.append(
             f"the copy's EXIF resolved to {result.camera!r}, not {cam!r}; the table was "
-            f"written as {result.camera}.json")
+            f"written as {result.camera}.json"
+        )
     return result
 
 
@@ -1080,15 +1133,28 @@ for verb in (
         group="wb",
         fn=calibrate,
         args=(
-            ArgSpec("image", "image", required=True, positional=True,
-                    help="a raw file, an image id, or a folder of raws (one body at a time)"),
+            ArgSpec(
+                "image",
+                "image",
+                required=True,
+                positional=True,
+                help="a raw file, an image id, or a folder of raws (one body at a time)",
+            ),
             ArgSpec("k_from", "int", default=2000, positional=True, help="first Kelvin point"),
             ArgSpec("k_to", "int", default=12000, positional=True, help="last Kelvin point"),
             ArgSpec("step", "int", default=500, help="Kelvin step between points"),
-            ArgSpec("camera", "str", default=None,
-                    help="folder mode: which body to calibrate when the folder is mixed"),
-            ArgSpec("scratch", "str", default=None,
-                    help="folder mode: where the scratch copy goes (default <cache>/wb-scratch)"),
+            ArgSpec(
+                "camera",
+                "str",
+                default=None,
+                help="folder mode: which body to calibrate when the folder is mixed",
+            ),
+            ArgSpec(
+                "scratch",
+                "str",
+                default=None,
+                help="folder mode: where the scratch copy goes (default <cache>/wb-scratch)",
+            ),
             ArgSpec(
                 "allow_in_job",
                 "bool",

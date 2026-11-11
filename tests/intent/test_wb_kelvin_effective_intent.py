@@ -17,8 +17,10 @@ EXAMPLES = json.loads((Path(__file__).parent / "wb_kelvin_effective.json").read_
 class WbKelvinEffectiveIntentTest(_RouteFixture):
     def run_example(self, ex: dict) -> None:
         inp, want = ex["input"], ex["expect"]
-        for target, value in (("scouter.core.exif.read_tags", {}),
-                              ("scouter.core.exif.camera_slug", "em10iii")):
+        for target, value in (
+            ("scouter.core.exif.read_tags", {}),
+            ("scouter.core.exif.camera_slug", "em10iii"),
+        ):
             p = mock.patch(target, return_value=value)
             p.start()
             self.addCleanup(p.stop)
@@ -32,8 +34,9 @@ class WbKelvinEffectiveIntentTest(_RouteFixture):
             self.unpin()
         r = wb.kelvin_verb.__wrapped__(str(self.raw), job="job-test")
         if "effective_kelvin" in want:
-            sidecar = xmp.latest_params(darkroom._read_sidecar_parsed(str(self.raw)),
-                                        "channelmixerrgb")["temperature"]
+            sidecar = xmp.latest_params(
+                darkroom._read_sidecar_parsed(str(self.raw)), "channelmixerrgb"
+            )["temperature"]
             self.assertAlmostEqual(sidecar, want["effective_kelvin"], places=1, msg=ex["id"])
             self.assertAlmostEqual(r.effective_kelvin, want["effective_kelvin"], places=1)
         if want["kelvin_is_effective"]:
@@ -53,6 +56,7 @@ class WbKelvinEffectiveIntentTest(_RouteFixture):
 def _make(ex: dict):
     def test(self: WbKelvinEffectiveIntentTest) -> None:
         self.run_example(ex)
+
     return test
 
 

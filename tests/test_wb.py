@@ -275,7 +275,9 @@ class _CalibrateFixture(_ConfigDirFixture):
 
         self.commit_calls: list[tuple] = []
 
-        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
+        def fake_commit(
+            job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None
+        ):
             self.commit_calls.append((job, image, strategy, attempts, expect_change))
             return CommitResult(committed=True, changed=expect_change, warnings=[])
 
@@ -513,7 +515,9 @@ class UndoRestoresEveryCoefficientTest(unittest.TestCase):
 
         self.commit_calls: list[tuple] = []
 
-        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
+        def fake_commit(
+            job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None
+        ):
             self.commit_calls.append((job, image, strategy, attempts, expect_change))
             return CommitResult(committed=True, changed=expect_change, warnings=[])
 
@@ -663,7 +667,9 @@ class UndoViaKelvinInversionTest(unittest.TestCase):
 
         self.commit_calls: list[tuple] = []
 
-        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
+        def fake_commit(
+            job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None
+        ):
             self.commit_calls.append((job, image, strategy, attempts, expect_change))
             return CommitResult(committed=True, changed=expect_change, warnings=[])
 

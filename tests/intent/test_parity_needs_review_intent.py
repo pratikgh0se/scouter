@@ -31,9 +31,12 @@ from tests.gauntlet.policy import load_policy
 from tests.gauntlet.test_exec_parity import corpus  # noqa: F401 (fixture)
 from tests.gauntlet.test_session import FakeMcp, _session
 
-EXAMPLES = {e["id"]: e for e in
-            json.loads((Path(__file__).parent / "parity_needs_review.json").read_text())[
-                "examples"]}
+EXAMPLES = {
+    e["id"]: e
+    for e in json.loads((Path(__file__).parent / "parity_needs_review.json").read_text())[
+        "examples"
+    ]
+}
 
 #: Oracle B (independent of evaluate()): does parity_pair's own reason
 #: field fire at all for this example. Never the exact wording -- that is
@@ -52,13 +55,26 @@ def _drive_parity_pair(ex_id, corpus, tmp_path, monkeypatch):
     mcp = FakeMcp(answers={"vocab_list": inp["mcp_envelope"]})
     s = _session(corpus, tmp_path, mcp=mcp).open()
     cli_code = 0 if inp["cli_envelope"]["ok"] else 2
-    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
-        a[0], cli_code, stdout=json.dumps(inp["cli_envelope"]), stderr=""))
-    case = Case(id=f"par-vocab-list-{ex_id}", layer="parity", tier="P1", mode="tool", steps=[],
-                expect=Expect("workflow", [Check("extra", target={"path": "envelopes_match",
-                                                                  "op": "truthy"})]),
-                body="olympus", frame_role="hero",
-                meta={"mcp": "vocab_list", "variant": inp["variant"]})
+    monkeypatch.setattr(
+        exec_parity.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(
+            a[0], cli_code, stdout=json.dumps(inp["cli_envelope"]), stderr=""
+        ),
+    )
+    case = Case(
+        id=f"par-vocab-list-{ex_id}",
+        layer="parity",
+        tier="P1",
+        mode="tool",
+        steps=[],
+        expect=Expect(
+            "workflow", [Check("extra", target={"path": "envelopes_match", "op": "truthy"})]
+        ),
+        body="olympus",
+        frame_role="hero",
+        meta={"mcp": "vocab_list", "variant": inp["variant"]},
+    )
     step = Step("parity_pair", {"verb": "vocab.list", "args": {}}, 60.0, False)
     obs = Observation()
     exec_parity.parity_pair(s, case, step, obs)

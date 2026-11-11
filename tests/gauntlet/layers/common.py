@@ -20,13 +20,34 @@ BODIES = ("olympus", "sony_a7")
 #: through the calibration table.
 CALIBRATED_BODIES = frozenset({"olympus"})
 #: Every MCP tool that can change the sidecar, the library or the disk.
-WRITE_TOOLS = frozenset({
-    "darkroom_set", "darkroom_nudge", "darkroom_enable", "darkroom_reset", "darkroom_undo_last",
-    "darkroom_adjust", "darkroom_say", "history_commit", "style_extract", "style_apply",
-    "style_apply_set", "export_run", "export_release", "library_import", "library_register",
-    "library_relocate", "cull_apply", "config_init", "backup_run", "wb_calibrate",
-    "preset_save", "preset_apply", "preset_apply_job", "job_run",
-})
+WRITE_TOOLS = frozenset(
+    {
+        "darkroom_set",
+        "darkroom_nudge",
+        "darkroom_enable",
+        "darkroom_reset",
+        "darkroom_undo_last",
+        "darkroom_adjust",
+        "darkroom_say",
+        "history_commit",
+        "style_extract",
+        "style_apply",
+        "style_apply_set",
+        "export_run",
+        "export_release",
+        "library_import",
+        "library_register",
+        "library_relocate",
+        "cull_apply",
+        "config_init",
+        "backup_run",
+        "wb_calibrate",
+        "preset_save",
+        "preset_apply",
+        "preset_apply_job",
+        "job_run",
+    }
+)
 #: Spec 5.3 budgets (s): single move 3.5 (row 427), commit 12, look plan 40.
 BUDGET_MOVE = 3.5
 BUDGET_SAY = 8.0
@@ -49,16 +70,29 @@ def key(module: str, param: str) -> str:
 
 
 def m1_equals(module: str, param: str, value: float, unit: str) -> Check:
-    return Check("M1", kind="equals",
-                 target={"key": key(module, param), "value": value, "unit": UNITS[unit]})
+    return Check(
+        "M1", kind="equals", target={"key": key(module, param), "value": value, "unit": UNITS[unit]}
+    )
 
 
-def m1_delta(module: str, param: str, delta: float, unit: str, step_size: float,
-             lo: float | None = None, hi: float | None = None) -> Check:
+def m1_delta(
+    module: str,
+    param: str,
+    delta: float,
+    unit: str,
+    step_size: float,
+    lo: float | None = None,
+    hi: float | None = None,
+) -> Check:
     """`lo`/`hi`: the declared range, so a move that stops at a bound and
     reports the clamp is credited (evaluate._delta_clamp_credited)."""
-    target = {"key": key(module, param), "delta": delta, "unit": UNITS[unit],
-              "tol": 0.1 * step_size, "step": step_size}
+    target = {
+        "key": key(module, param),
+        "delta": delta,
+        "unit": UNITS[unit],
+        "tol": 0.1 * step_size,
+        "step": step_size,
+    }
     if lo is not None and hi is not None:
         target.update(lo=lo, hi=hi)
     return Check("M1", kind="delta", target=target)
@@ -66,19 +100,29 @@ def m1_delta(module: str, param: str, delta: float, unit: str, step_size: float,
 
 def m1_restored(keys: list[str], units: dict[str, str], from_step: int = 0) -> Check:
     """Params after the last step equal snapshot `from_step` (0 = before the case)."""
-    return Check("M1", kind="restored", target={"keys": keys, "units": units,
-                                                "from": from_step})
+    return Check("M1", kind="restored", target={"keys": keys, "units": units, "from": from_step})
 
 
 def clamp_reported() -> Check:
-    return Check("envelope", target={"path": "data.clamped", "op": "truthy"},
-                 tags={"silent_if_fail": True, "why": "value clamped without saying so"})
+    return Check(
+        "envelope",
+        target={"path": "data.clamped", "op": "truthy"},
+        tags={"silent_if_fail": True, "why": "value clamped without saying so"},
+    )
 
 
-def boundary_check(module: str, param: str, unit: str, *, request: float | None = None,
-                   delta: float | None = None, bound: float | None = None,
-                   lo: float | None = None, hi: float | None = None,
-                   tol: float | None = None) -> Check:
+def boundary_check(
+    module: str,
+    param: str,
+    unit: str,
+    *,
+    request: float | None = None,
+    delta: float | None = None,
+    bound: float | None = None,
+    lo: float | None = None,
+    hi: float | None = None,
+    tol: float | None = None,
+) -> Check:
     """Soft-range boundary probe (spec 3.1's lo-step/hi+step, and an explicit
     phrase amount beyond a param's range): the world is honest whether or not
     it clamps. Pass when the decoded value equals the request (landed, no
@@ -102,9 +146,14 @@ def boundary_check(module: str, param: str, unit: str, *, request: float | None 
         t["hi"] = hi
     if tol is not None:
         t["tol"] = tol
-    return Check("boundary", target=t, tags={
-        "silent_if_fail": True,
-        "why": "value moved away from the request without reporting a clamp"})
+    return Check(
+        "boundary",
+        target=t,
+        tags={
+            "silent_if_fail": True,
+            "why": "value moved away from the request without reporting a clamp",
+        },
+    )
 
 
 def stat_check(p: PartCheck) -> Check:
@@ -113,12 +162,23 @@ def stat_check(p: PartCheck) -> Check:
     `lens.__enabled` once lens correction is in the vocabulary)."""
     if p.metric == "M1":
         return Check("M1", kind="equals", target={"key": p.stat, "value": 1, "unit": "bool"})
-    return Check(p.metric, stat=p.stat, region=p.region, sign=p.sign,
-                 kind="unchanged" if p.sign == 0 else "delta")
+    return Check(
+        p.metric,
+        stat=p.stat,
+        region=p.region,
+        sign=p.sign,
+        kind="unchanged" if p.sign == 0 else "delta",
+    )
 
 
-def sidecar(module: str | None, param: str | None, unit: str | None, *, changed: bool = True,
-            allowed: list[str] | None = None) -> dict:
+def sidecar(
+    module: str | None,
+    param: str | None,
+    unit: str | None,
+    *,
+    changed: bool = True,
+    allowed: list[str] | None = None,
+) -> dict:
     d: dict = {"changed": changed}
     if module and param:
         d["key"] = key(module, param)

@@ -7,9 +7,9 @@ import inspect
 import shutil
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 from gauntlet.adapter import Adapter, Observation, Park, RefuseRun
 from gauntlet.case import Case
@@ -114,6 +114,7 @@ def with_walkthrough_prefix(chosen: list[Case], layer_cases: list[Case]) -> list
     case is really tested rather than excluded. Runs after every other filter
     (only_failed, resume): a prefix step that passed earlier still has to run
     again in this session to rebuild the state."""
+
     def order(c: Case):
         return c.meta.get("order", 0) if c.meta.get("session") == "walkthrough" else None
 
@@ -125,26 +126,37 @@ def with_walkthrough_prefix(chosen: list[Case], layer_cases: list[Case]) -> list
     if not top:
         return chosen
     have = {c.id for c in chosen}
-    need = {c.id for c in layer_cases
-            if order(c) is not None and c.layer in top and order(c) < top[c.layer]}
+    need = {
+        c.id
+        for c in layer_cases
+        if order(c) is not None and c.layer in top and order(c) < top[c.layer]
+    }
     if not need - have:
         return chosen
     return [c for c in layer_cases if c.id in have | need]
 
 
 class Runner:
-    def __init__(self, adapter: Adapter, run: RunDir, *, commit: str = "",
-                 clock=time.monotonic, sleep=time.sleep, wall=time.time,
-                 session_max_cases: int = SESSION_MAX_CASES,
-                 session_max_s: float = SESSION_MAX_S,
-                 session_open_cap_s: float | None = None,
-                 max_consecutive_open_failures: int = MAX_CONSECUTIVE_OPEN_FAILURES,
-                 free_disk_gb: Callable[[Path], float] | None = None,
-                 disk_min_gb: float = DISK_MIN_GB,
-                 should_stop: Callable[[], bool] | None = None,
-                 session_prune: str = "passing",
-                 session_keep_nonpass_max: int = SESSION_KEEP_NONPASS_MAX,
-                 disk_prune_margin_gb: float = DISK_PRUNE_MARGIN_GB) -> None:
+    def __init__(
+        self,
+        adapter: Adapter,
+        run: RunDir,
+        *,
+        commit: str = "",
+        clock=time.monotonic,
+        sleep=time.sleep,
+        wall=time.time,
+        session_max_cases: int = SESSION_MAX_CASES,
+        session_max_s: float = SESSION_MAX_S,
+        session_open_cap_s: float | None = None,
+        max_consecutive_open_failures: int = MAX_CONSECUTIVE_OPEN_FAILURES,
+        free_disk_gb: Callable[[Path], float] | None = None,
+        disk_min_gb: float = DISK_MIN_GB,
+        should_stop: Callable[[], bool] | None = None,
+        session_prune: str = "passing",
+        session_keep_nonpass_max: int = SESSION_KEEP_NONPASS_MAX,
+        disk_prune_margin_gb: float = DISK_PRUNE_MARGIN_GB,
+    ) -> None:
         self.should_stop = should_stop
         self.adapter = adapter
         self.run = run.ensure()
@@ -176,26 +188,49 @@ class Runner:
         self._ledger: dict[Path, list[str]] = {}
         self._pruned: set[Path] = set()
 
-    def _select(self, cases: list[Case], layer: str, *, resume: bool, only_failed: bool,
-                case_ids: set[str] | None, tiers: set[str] | None = None,
-                prefixes: tuple[str, ...] = (), where: dict | None = None) -> list[Case]:
-        chosen = self._select_filtered(cases, layer, resume=resume, only_failed=only_failed,
-                                       case_ids=case_ids, tiers=tiers, prefixes=prefixes,
-                                       where=where)
+    def _select(
+        self,
+        cases: list[Case],
+        layer: str,
+        *,
+        resume: bool,
+        only_failed: bool,
+        case_ids: set[str] | None,
+        tiers: set[str] | None = None,
+        prefixes: tuple[str, ...] = (),
+        where: dict | None = None,
+    ) -> list[Case]:
+        chosen = self._select_filtered(
+            cases,
+            layer,
+            resume=resume,
+            only_failed=only_failed,
+            case_ids=case_ids,
+            tiers=tiers,
+            prefixes=prefixes,
+            where=where,
+        )
         return with_walkthrough_prefix(chosen, [c for c in cases if c.layer == layer])
 
-    def _select_filtered(self, cases: list[Case], layer: str, *, resume: bool,
-                         only_failed: bool, case_ids: set[str] | None,
-                         tiers: set[str] | None = None, prefixes: tuple[str, ...] = (),
-                         where: dict | None = None) -> list[Case]:
+    def _select_filtered(
+        self,
+        cases: list[Case],
+        layer: str,
+        *,
+        resume: bool,
+        only_failed: bool,
+        case_ids: set[str] | None,
+        tiers: set[str] | None = None,
+        prefixes: tuple[str, ...] = (),
+        where: dict | None = None,
+    ) -> list[Case]:
         chosen = [c for c in cases if c.layer == layer]
         if tiers:
             chosen = [c for c in chosen if c.tier in tiers]
         if prefixes:
             chosen = [c for c in chosen if c.id.startswith(prefixes)]
         if where:
-            chosen = [c for c in chosen
-                      if all(str(c.meta.get(k)) in vs for k, vs in where.items())]
+            chosen = [c for c in chosen if all(str(c.meta.get(k)) in vs for k, vs in where.items())]
         if case_ids:
             chosen = [c for c in chosen if c.id in case_ids]
         if only_failed:
@@ -210,10 +245,17 @@ class Runner:
             chosen = [c for c in chosen if c.id not in done]
         return chosen
 
-    def selection(self, layers: list[str] | None = None, *, resume: bool = True,
-                  only_failed: bool = False, case_ids: set[str] | None = None,
-                  tiers: set[str] | None = None, prefixes: tuple[str, ...] = (),
-                  where: dict | None = None) -> list[Case]:
+    def selection(
+        self,
+        layers: list[str] | None = None,
+        *,
+        resume: bool = True,
+        only_failed: bool = False,
+        case_ids: set[str] | None = None,
+        tiers: set[str] | None = None,
+        prefixes: tuple[str, ...] = (),
+        where: dict | None = None,
+    ) -> list[Case]:
         """The cases run_layers would run, layer by layer in layer order (the
         parallel parent shards this)."""
         cases = self.run.read_cases()
@@ -222,15 +264,32 @@ class Runner:
             specs = [s for s in specs if s.name in layers]
         out: list[Case] = []
         for spec in specs:
-            out.extend(self._select(cases, spec.name, resume=resume, only_failed=only_failed,
-                                    case_ids=case_ids, tiers=tiers, prefixes=prefixes,
-                                    where=where))
+            out.extend(
+                self._select(
+                    cases,
+                    spec.name,
+                    resume=resume,
+                    only_failed=only_failed,
+                    case_ids=case_ids,
+                    tiers=tiers,
+                    prefixes=prefixes,
+                    where=where,
+                )
+            )
         return out
 
-    def run_layers(self, layers: list[str] | None = None, *, resume: bool = True,
-                   only_failed: bool = False, case_ids: set[str] | None = None,
-                   wait_on_park: bool = False, tiers: set[str] | None = None,
-                   prefixes: tuple[str, ...] = (), where: dict | None = None) -> RunSummary:
+    def run_layers(
+        self,
+        layers: list[str] | None = None,
+        *,
+        resume: bool = True,
+        only_failed: bool = False,
+        case_ids: set[str] | None = None,
+        wait_on_park: bool = False,
+        tiers: set[str] | None = None,
+        prefixes: tuple[str, ...] = (),
+        where: dict | None = None,
+    ) -> RunSummary:
         cases = self.run.read_cases()
         specs = sorted(self.adapter.layers(), key=lambda s: s.order)
         if layers:
@@ -239,11 +298,19 @@ class Runner:
         refused: str | None = None
         for spec in specs:
             all_layer = [c for c in cases if c.layer == spec.name]
-            todo = self._select(cases, spec.name, resume=resume, only_failed=only_failed,
-                                case_ids=case_ids, tiers=tiers, prefixes=prefixes,
-                                where=where)
-            self.progress.layer(spec.name, len(all_layer),
-                                sum(c.tier == "P0" for c in all_layer), spec.live)
+            todo = self._select(
+                cases,
+                spec.name,
+                resume=resume,
+                only_failed=only_failed,
+                case_ids=case_ids,
+                tiers=tiers,
+                prefixes=prefixes,
+                where=where,
+            )
+            self.progress.layer(
+                spec.name, len(all_layer), sum(c.tier == "P0" for c in all_layer), spec.live
+            )
             if not todo:
                 continue
             refused = self._preflight(spec.name)
@@ -263,8 +330,9 @@ class Runner:
             #: purposes -- the distinct string only tells THIS loop to stop
             #: opening later layers, each of which would otherwise immediately
             #: re-park its own first case on the same disk floor.
-            self.progress.end_layer(spec.name, "parked" if status in (
-                "parked_disk", "stopped_early") else status)
+            self.progress.end_layer(
+                spec.name, "parked" if status in ("parked_disk", "stopped_early") else status
+            )
             if status == "stopped_crash":
                 summary.stopped_layers.append(spec.name)
             if status in ("parked_disk", "stopped_early"):
@@ -308,8 +376,7 @@ class Runner:
         fn = self.adapter.open_session
         kw = {"next_case": case} if _accepts(fn, "next_case") else {}
         try:
-            session = _call_with_cap(lambda: fn(layer, self.run, **kw),
-                                     self.session_open_cap_s)
+            session = _call_with_cap(lambda: fn(layer, self.run, **kw), self.session_open_cap_s)
             return session, None
         except RefuseRun as e:
             raise _Refused(e.reason) from e
@@ -351,8 +418,9 @@ class Runner:
         except Exception as e:  # noqa: BLE001 - never let cleanup kill the run
             return [f"abort failed: {type(e).__name__}: {e}"]
 
-    def _run_layer(self, layer: str, todo: list[Case], summary: RunSummary,
-                   wait_on_park: bool) -> str:
+    def _run_layer(
+        self, layer: str, todo: list[Case], summary: RunSummary, wait_on_park: bool
+    ) -> str:
         session = None
         started = 0.0
         count = 0
@@ -364,8 +432,9 @@ class Runner:
                 if self.should_stop is not None and self.should_stop():
                     summary.stopped_early = True
                     summary.skipped += len(todo) - i
-                    self.progress.log(f"- layer {layer}: stopped before {case.id} "
-                                      "(a sibling worker parked)")
+                    self.progress.log(
+                        f"- layer {layer}: stopped before {case.id} " "(a sibling worker parked)"
+                    )
                     return "stopped_early"
                 free_fn = self.free_disk_gb or free_disk_gb
                 free_gb = free_fn(self.run.root)
@@ -378,8 +447,11 @@ class Runner:
                     self.progress.park(layer, case.id, reason)
                     summary.parked.extend(c.id for c in todo[i:])
                     return "parked_disk"
-                if session is None or count >= self.session_max_cases or \
-                        self.clock() - started > self.session_max_s:
+                if (
+                    session is None
+                    or count >= self.session_max_cases
+                    or self.clock() - started > self.session_max_s
+                ):
                     if session is not None:
                         old, session = session, None
                         self._safe_close(old)
@@ -387,8 +459,9 @@ class Runner:
                     session, open_err = self._open_session(layer, case)
                     if session is None:
                         consecutive_open_failures += 1
-                        obs = Observation(blocked=f"session_open: {open_err}",
-                                          hang_evidence=[open_err or ""])
+                        obs = Observation(
+                            blocked=f"session_open: {open_err}", hang_evidence=[open_err or ""]
+                        )
                         t_wall = self.wall()
                         verdict = evaluate(case, obs, self.policy)
                         self._write(case, obs, verdict, t_wall)
@@ -400,7 +473,8 @@ class Runner:
                             self.progress.log(
                                 f"- layer {layer}: stopped after "
                                 f"{consecutive_open_failures} consecutive session-open "
-                                f"failures ({open_err})")
+                                f"failures ({open_err})"
+                            )
                             return "blocked"
                         continue
                     consecutive_open_failures = 0
@@ -409,8 +483,9 @@ class Runner:
                 t_wall = self.wall()
                 t0 = self.clock()
                 try:
-                    obs = _call_with_cap(lambda s=session, c=case: s.run_case(c),
-                                         self.case_cap_s(case))
+                    obs = _call_with_cap(
+                        lambda s=session, c=case: s.run_case(c), self.case_cap_s(case)
+                    )
                 except Park as p:
                     self.progress.park(layer, case.id, p.reason)
                     if wait_on_park and p.until and p.until - self.wall() < PARK_MAX_WAIT_S:
@@ -429,14 +504,18 @@ class Runner:
                     evidence = [str(e), *self._safe_abort(old)]
                     obs = Observation(blocked="hard_cap", hang_evidence=evidence)
                 except Exception as e:  # noqa: BLE001 - a harness error is a case result
-                    obs = Observation(blocked="harness_error",
-                                      hang_evidence=[f"{type(e).__name__}: {e}"])
+                    obs = Observation(
+                        blocked="harness_error", hang_evidence=[f"{type(e).__name__}: {e}"]
+                    )
                 obs.wall_s = obs.wall_s or (self.clock() - t0)
                 if self.adapter.crash_count() > crashes_before:
                     # (final fix I3): merge -- a session-recorded crash (e.g. an
                     # MCP-server death) must survive crash files appearing too.
-                    obs.crash_reports = list(dict.fromkeys(
-                        [*obs.crash_reports, *self.adapter.crash_reports_since(t_wall)]))
+                    obs.crash_reports = list(
+                        dict.fromkeys(
+                            [*obs.crash_reports, *self.adapter.crash_reports_since(t_wall)]
+                        )
+                    )
                 verdict = evaluate(case, obs, self.policy)
                 self._write(case, obs, verdict, t_wall)
                 self._retain(case)
@@ -486,8 +565,9 @@ class Runner:
             return
         self._pruned.add(root)
         if freed:
-            self.progress.log(f"- pruned closed session {root.parent.name}/{root.name}: "
-                              f"freed {freed} bytes")
+            self.progress.log(
+                f"- pruned closed session {root.parent.name}/{root.name}: " f"freed {freed} bytes"
+            )
 
     def _sweep(self, open_root: Path | None) -> None:
         """Prune every CLOSED session THIS runner opened and recorded (the
@@ -495,7 +575,7 @@ class Runner:
         a folder another worker opened is never in it, so never touched).
         Closed = in the ledger but not the open one: all-pass ones always (mode `passing`/`all`), every one in mode
         `all`, and non-pass ones beyond the newest `session_keep_nonpass_max`.
-        Verdicts come from the cases the runner itself scored in each folder."""
+        Verdicts come from the cases the runner itself scored in each folder."""  # noqa: E501
         if self.session_prune == "off":
             return
         kept: list[Path] = []
@@ -506,7 +586,7 @@ class Runner:
                 self._prune_one(root)
             else:
                 kept.append(root)
-        for root in kept[:max(0, len(kept) - self.session_keep_nonpass_max)]:
+        for root in kept[: max(0, len(kept) - self.session_keep_nonpass_max)]:
             self._prune_one(root)
 
     def _prune_for_disk(self, session, free_fn) -> None:
@@ -544,10 +624,17 @@ class Runner:
 
         prev = self.run.read_result(case.id)
         doc = {
-            "id": case.id, "layer": case.layer, "tier": case.tier, "mode": case.mode,
-            "body": case.body, "frame_role": case.frame_role, "source": case.source,
-            "meta": case.meta, "repro": case.repro.replace("<stamp>", self.run.stamp),
-            "started_at": t_wall, "wall_s": round(obs.wall_s, 3),
+            "id": case.id,
+            "layer": case.layer,
+            "tier": case.tier,
+            "mode": case.mode,
+            "body": case.body,
+            "frame_role": case.frame_role,
+            "source": case.source,
+            "meta": case.meta,
+            "repro": case.repro.replace("<stamp>", self.run.stamp),
+            "started_at": t_wall,
+            "wall_s": round(obs.wall_s, 3),
             #: (final fix I5): release bar 6 is "one full run of one commit".
             "commit": self.commit,
             "verdict": verdict.to_dict(),
@@ -556,9 +643,16 @@ class Runner:
         self.run.write_result(case.id, doc)
         prev_verdict = prev["verdict"] if prev else None
         prev_blocked = ((prev or {}).get("observation") or {}).get("blocked")
-        self.progress.record(case.layer, case.id, case.tier, verdict.to_dict(), obs.wall_s,
-                             prev_verdict=prev_verdict, blocked=obs.blocked,
-                             prev_blocked=prev_blocked)
+        self.progress.record(
+            case.layer,
+            case.id,
+            case.tier,
+            verdict.to_dict(),
+            obs.wall_s,
+            prev_verdict=prev_verdict,
+            blocked=obs.blocked,
+            prev_blocked=prev_blocked,
+        )
 
 
 def failed_verdict(note: str) -> Verdict:

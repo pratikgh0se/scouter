@@ -30,6 +30,7 @@ class SessionLimitIntentTest(unittest.TestCase):
 def _make(ex: dict):
     def test(self: SessionLimitIntentTest) -> None:
         self.run_example(ex)
+
     return test
 
 

@@ -16,7 +16,6 @@ import pytest
 from gauntlet import workers
 from gauntlet.case import Case, Expect, Step
 from gauntlet.cli import EXIT_PARKED, main
-from gauntlet.progress import Progress
 from gauntlet.runner import Runner
 from gauntlet.store import RunDir
 from gauntlet.tests.toy import ToyAdapter
@@ -35,8 +34,16 @@ def make_ok() -> ToyAdapter:
 
 
 def _case(cid, layer, body=None, **meta):
-    return Case(id=cid, layer=layer, tier="P1", mode="tool", steps=[Step("set")],
-                expect=Expect("edit"), body=body, meta=meta)
+    return Case(
+        id=cid,
+        layer=layer,
+        tier="P1",
+        mode="tool",
+        steps=[Step("set")],
+        expect=Expect("edit"),
+        body=body,
+        meta=meta,
+    )
 
 
 def _cases():
@@ -131,24 +138,29 @@ def test_worker_env_distinct_cache_configdir_and_plugin_seeded(tmp_path, fake_ho
         assert (cfg / "lua" / "darktable_mcp.lua").read_text() == "-- plugin\n"
         assert Path(e["XDG_CACHE_HOME"]).is_relative_to(run.root / "workers")
     # the user's own config is only read
-    assert sorted(p.name for p in (fake_home / ".config" / "darktable").iterdir()) == \
-        ["lua", "luarc"]
+    assert sorted(p.name for p in (fake_home / ".config" / "darktable").iterdir()) == [
+        "lua",
+        "luarc",
+    ]
 
 
 def test_worker_env_asserts_isolated_library(tmp_path, fake_home):
     adapter = ScouterAdapter(runs_root=tmp_path / "runs")
-    with mock.patch.object(host_support, "assert_isolated_library",
-                           side_effect=ValueError("not isolated")) as chk:
+    with mock.patch.object(
+        host_support, "assert_isolated_library", side_effect=ValueError("not isolated")
+    ) as chk:
         with pytest.raises(ValueError):
             adapter.worker_env(tmp_path / "runs" / "s" / "workers" / "w0")
     assert chk.call_args.args[0].name == "library.db"
     # and the real check refuses Pratik's library and anything outside scratch
     with pytest.raises(ValueError):
-        host_support.assert_isolated_library(host_support.REAL_LIBRARY,
-                                             scratch=host_support.REAL_LIBRARY.parent)
+        host_support.assert_isolated_library(
+            host_support.REAL_LIBRARY, scratch=host_support.REAL_LIBRARY.parent
+        )
     with pytest.raises(ValueError):
-        host_support.assert_isolated_library(tmp_path / "x" / "library.db",
-                                             scratch=tmp_path / "runs")
+        host_support.assert_isolated_library(
+            tmp_path / "x" / "library.db", scratch=tmp_path / "runs"
+        )
 
 
 def test_seed_copies_darktablerc_and_data_db_read_only_and_nothing_else(tmp_path):
@@ -178,7 +190,9 @@ def test_seed_copies_darktablerc_and_data_db_read_only_and_nothing_else(tmp_path
     with mock.patch.object(adapter_mod.sqlite3, "connect", spy):
         adapter_mod.seed_worker_config(src, tmp_path / "cfg")
     assert (tmp_path / "cfg" / "darktablerc").read_text() == "workflow=scene-referred\n"
-    got = sqlite3.connect(tmp_path / "cfg" / "data.db").execute("select name from styles").fetchall()
+    got = (
+        sqlite3.connect(tmp_path / "cfg" / "data.db").execute("select name from styles").fetchall()
+    )
     assert got == [("mine",)]
     assert (src / "data.db").stat().st_mtime == before
     assert opened[0][0].endswith("data.db?mode=ro") and opened[0][1] is True
@@ -216,8 +230,10 @@ def test_adopt_leftover_owner_ignores_sibling_sessions(tmp_path, monkeypatch):
     assert rec is not None and rec.parent.parent.name == "002-olympus"
     (tmp_path / "pc" / dtprocess.OWNER_FILE).unlink()
     # a worker owning neither number adopts nothing
-    assert adapter_mod.adopt_leftover_owner(run, tmp_path / "pc", owned_pid=owned,
-                                            shard=(0, 3)) is None
+    assert (
+        adapter_mod.adopt_leftover_owner(run, tmp_path / "pc", owned_pid=owned, shard=(0, 3))
+        is None
+    )
 
 
 # -- the guard ------------------------------------------------------------------
@@ -228,22 +244,27 @@ def test_unregistered_darktable_blocks():
 
 
 def test_registered_harness_pids_are_allowed():
-    assert not host_support._darktable_is_running(pids=lambda: [100, 200],
-                                                  registered=lambda: {100, 200})
+    assert not host_support._darktable_is_running(
+        pids=lambda: [100, 200], registered=lambda: {100, 200}
+    )
     assert not host_support._darktable_is_running(pids=lambda: [], registered=lambda: set())
 
 
 def test_one_unregistered_pid_among_registered_still_blocks():
     """Pratik's own darktable running beside two workers."""
-    assert host_support._darktable_is_running(pids=lambda: [100, 200, 999],
-                                              registered=lambda: {100, 200})
+    assert host_support._darktable_is_running(
+        pids=lambda: [100, 200, 999], registered=lambda: {100, 200}
+    )
 
 
 def test_assert_no_concurrent_blocks_with_clear_message(tmp_path):
     with pytest.raises(RuntimeError, match="another darktable is running"):
         host_support.assert_no_concurrent_darktable(
-            cache_dir=tmp_path, darktable_running=lambda: host_support._darktable_is_running(
-                pids=lambda: [999], registered=lambda: {100}))
+            cache_dir=tmp_path,
+            darktable_running=lambda: host_support._darktable_is_running(
+                pids=lambda: [999], registered=lambda: {100}
+            ),
+        )
 
 
 @pytest.fixture
@@ -330,7 +351,7 @@ class FakeProc:
 
 def _shards(n=2):
     cs = [_case(f"c-{i}", "a", "olympus") for i in range(4)]
-    return [cs[: len(cs) // 2], cs[len(cs) // 2:]][:n]
+    return [cs[: len(cs) // 2], cs[len(cs) // 2 :]][:n]
 
 
 class RecordingProgress:
@@ -354,8 +375,9 @@ def test_park_in_one_worker_stops_the_other_politely_and_exits_75(tmp_path):
         return procs[k]
 
     prog = RecordingProgress()
-    code = workers.run_parallel(run, _shards(), lambda k, n: [k], lambda k: {}, prog,
-                                popen=popen, sleep=lambda s: None)
+    code = workers.run_parallel(
+        run, _shards(), lambda k, n: [k], lambda k: {}, prog, popen=popen, sleep=lambda s: None
+    )
     assert code == EXIT_PARKED
     assert stop.exists()  # the sibling was asked to stop, never signalled
     assert [d["parked"] for d in prog.merged] == [["p0"], ["p1"]]
@@ -363,24 +385,40 @@ def test_park_in_one_worker_stops_the_other_politely_and_exits_75(tmp_path):
 
 def test_all_workers_clean_exits_zero_and_refusal_wins(tmp_path):
     run = RunDir(tmp_path, "s").ensure()
-    ok = workers.run_parallel(run, _shards(), lambda k, n: [k], lambda k: {},
-                              RecordingProgress(), sleep=lambda s: None,
-                              popen=lambda a, env: FakeProc([0], workers.stop_path(run)))
+    ok = workers.run_parallel(
+        run,
+        _shards(),
+        lambda k, n: [k],
+        lambda k: {},
+        RecordingProgress(),
+        sleep=lambda s: None,
+        popen=lambda a, env: FakeProc([0], workers.stop_path(run)),
+    )
     assert ok == 0
     refused = workers.run_parallel(
-        run, _shards(), lambda k, n: [k], lambda k: {}, RecordingProgress(),
+        run,
+        _shards(),
+        lambda k, n: [k],
+        lambda k: {},
+        RecordingProgress(),
         sleep=lambda s: None,
-        popen=lambda a, env: FakeProc([3 if a[0] == 1 else 75], workers.stop_path(run)))
+        popen=lambda a, env: FakeProc([3 if a[0] == 1 else 75], workers.stop_path(run)),
+    )
     assert refused == 3
 
 
 def test_empty_shards_are_not_spawned(tmp_path):
     run = RunDir(tmp_path, "s").ensure()
     spawned = []
-    workers.run_parallel(run, [_shards()[0], []], lambda k, n: [k], lambda k: {},
-                         RecordingProgress(), sleep=lambda s: None,
-                         popen=lambda a, env: spawned.append(a[0]) or
-                         FakeProc([0], workers.stop_path(run)))
+    workers.run_parallel(
+        run,
+        [_shards()[0], []],
+        lambda k, n: [k],
+        lambda k: {},
+        RecordingProgress(),
+        sleep=lambda s: None,
+        popen=lambda a, env: spawned.append(a[0]) or FakeProc([0], workers.stop_path(run)),
+    )
     assert spawned == [0]
 
 
@@ -428,8 +466,7 @@ def test_merge_of_shard_progress_and_logs_equals_a_single_run(tmp_path):
         child = RunDir(tmp_path / "par", "s")
         d = workers.shard_dir(run, k)
         child.progress_json, child.log_md = d / "progress.json", d / "log.md"
-        Runner(ToyAdapter(), child).run_layers(None, resume=False,
-                                               case_ids={c.id for c in shard})
+        Runner(ToyAdapter(), child).run_layers(None, resume=False, case_ids={c.id for c in shard})
     parent = Runner(ToyAdapter(), run)
     for spec in ToyAdapter().layers():
         mine = [c for c in cases if c.layer == spec.name]
@@ -507,11 +544,17 @@ def test_cli_filters_compose_with_workers(tmp_path, inproc):
     main(_cli(tmp_path) + ["generate", "--stamp", "s"])
     assert main(_cli(tmp_path) + ["run", "--stamp", "s", "--workers", "2", "--tier", "P0"]) == 0
     assert sorted(RunDir(tmp_path, "s").done_ids()) == ["alpha-0", "beta-0"]
-    assert main(_cli(tmp_path) + ["run", "--stamp", "s", "--workers", "2", "--prefix",
-                                  "beta-", "--rerun"]) == 0
+    assert (
+        main(
+            _cli(tmp_path)
+            + ["run", "--stamp", "s", "--workers", "2", "--prefix", "beta-", "--rerun"]
+        )
+        == 0
+    )
     assert sorted(RunDir(tmp_path, "s").done_ids()) == ["alpha-0", "beta-0", "beta-1"]
-    assert main(_cli(tmp_path) + ["run", "--stamp", "s", "--workers", "2", "--case",
-                                  "alpha-3"]) == 0
+    assert (
+        main(_cli(tmp_path) + ["run", "--stamp", "s", "--workers", "2", "--case", "alpha-3"]) == 0
+    )
     assert "alpha-3" in RunDir(tmp_path, "s").done_ids()
 
 
@@ -548,7 +591,7 @@ def _park_then_ids(tmp_path):
 def _spawned_ids(inproc):
     ids = []
     for argv, env in inproc.spawned:
-        k = argv[argv.index("--shard") + 1].split("/")[0]
+        k = argv[argv.index("--shard") + 1].split("/")[0]  # noqa: F841
         d = Path(env["XDG_CACHE_HOME"]).parent
         ids += (d / "cases.txt").read_text().split()
     return ids
@@ -558,8 +601,7 @@ def test_resume_with_case_list_runs_only_missing_ids(tmp_path, inproc):
     run, done, all_ids = _park_then_ids(tmp_path)
     inproc.spawned = []
     args = [x for i in all_ids for x in ("--case", i)]
-    assert main(_cli(tmp_path) + ["run", "--stamp", "s", "--workers", "2", "--resume"]
-                + args) == 0
+    assert main(_cli(tmp_path) + ["run", "--stamp", "s", "--workers", "2", "--resume"] + args) == 0
     ran = _spawned_ids(inproc)
     assert sorted(ran) == sorted(set(all_ids) - done)
     assert len(run.done_ids()) == 6
@@ -621,10 +663,13 @@ def test_guard_waits_for_a_registration_that_lands_in_the_grace(registry, monkey
         sleep(s)
         if t[0] >= 3:
             (registry / "54061.json").write_text(
-                json.dumps({"pid": 54061, "start_time": "start-54061"}))
+                json.dumps({"pid": 54061, "start_time": "start-54061"})
+            )
 
-    assert dtprocess.unregistered_foreign_pids(
-        grace_s=15, poll_s=1, clock=clock, sleep=slow_sleep) == []
+    assert (
+        dtprocess.unregistered_foreign_pids(grace_s=15, poll_s=1, clock=clock, sleep=slow_sleep)
+        == []
+    )
     assert t[0] < 15
 
 
@@ -632,8 +677,9 @@ def test_guard_still_blocks_a_pid_that_stays_unregistered(registry, monkeypatch)
     monkeypatch.setattr(dtprocess, "running_pids", lambda: [999])
     monkeypatch.setattr(dtprocess, "owned_pid", lambda cache_root=None: None)
     clock, sleep, t = _fake_time()
-    assert dtprocess.unregistered_foreign_pids(
-        grace_s=15, poll_s=1, clock=clock, sleep=sleep) == [999]
+    assert dtprocess.unregistered_foreign_pids(grace_s=15, poll_s=1, clock=clock, sleep=sleep) == [
+        999
+    ]
     assert t[0] >= 15
 
 

@@ -60,14 +60,18 @@ def test_no_coverage_case_nudges_into_a_soft_bound_unless_it_expects_the_noop():
 
 
 def _obs(env: dict, after_nudge: float = HI) -> Observation:
-    calls = [CallRecord("darkroom_set", {}, {"ok": True, "outcome": "ok", "data": {}}, 1.0,
-                        write=True),
-             CallRecord("darkroom_nudge", {}, env, 1.0, write=True)]
+    calls = [
+        CallRecord("darkroom_set", {}, {"ok": True, "outcome": "ok", "data": {}}, 1.0, write=True),
+        CallRecord("darkroom_nudge", {}, env, 1.0, write=True),
+    ]
     s1 = {**BASE, "channelmixerrgb.temperature": HI}
     s2 = {**BASE, "channelmixerrgb.temperature": after_nudge}
-    return Observation(calls=calls, before={"params": BASE, "fingerprint": "a"},
-                       after={"params": s2, "fingerprint": "b", "units": UNITS},
-                       extra={"snapshots": [BASE, s1, s2]})
+    return Observation(
+        calls=calls,
+        before={"params": BASE, "fingerprint": "a"},
+        after={"params": s2, "fingerprint": "b", "units": UNITS},
+        extra={"snapshots": [BASE, s1, s2]},
+    )
 
 
 def _noop(reason: str | None) -> dict:

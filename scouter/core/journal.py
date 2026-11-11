@@ -28,7 +28,9 @@ from scouter.errors import ScouterError
 
 #: Phase 3 §6.4: the move group every journal entry begun inside it belongs to.
 #: `darkroom.say` sets it around its moves; no write verb's signature changes.
-GROUP: contextvars.ContextVar[str | None] = contextvars.ContextVar("scouter_move_group", default=None)
+GROUP: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "scouter_move_group", default=None
+)
 
 
 class JournalCorrupt(ScouterError):
@@ -319,8 +321,9 @@ class BeforePatchRefused(ScouterError):
 BEFORE_FALLBACK_SOURCES = ("neutral", "default")
 
 
-def set_before_neutral(job: str, seq: int, *, module: str, param: str, value: float,
-                       source: str = "neutral") -> None:
+def set_before_neutral(
+    job: str, seq: int, *, module: str, param: str, value: float, source: str = "neutral"
+) -> None:
     """Patch a landed entry's `before` to record the declared NEUTRAL (or,
     with `source="default"`, the row's darktable DEFAULT) its move actually
     started from (phase 3 task 6 fix round 1, controller ruling; the
@@ -355,8 +358,12 @@ def set_before_neutral(job: str, seq: int, *, module: str, param: str, value: fl
             raise BeforePatchRefused(
                 f"journal seq {seq} is {entry.module}.{entry.param}, not {module}.{param}: "
                 "refusing to patch its before value",
-                detail={"job": job, "seq": seq, "entry": f"{entry.module}.{entry.param}",
-                        "requested": f"{module}.{param}"},
+                detail={
+                    "job": job,
+                    "seq": seq,
+                    "entry": f"{entry.module}.{entry.param}",
+                    "requested": f"{module}.{param}",
+                },
             )
         if entry.before.get("value") is not None:
             raise BeforePatchRefused(

@@ -135,7 +135,7 @@ def instrumented(verb_id: str) -> Callable[[F], F]:
     def decorate(fn: F) -> F:
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            from scouter import PHASE, _PROCESS_STARTED_MONOTONIC, __version__
+            from scouter import _PROCESS_STARTED_MONOTONIC, PHASE, __version__
 
             job = kwargs.get("job") or paths.current_job()
             kwargs["job"] = job

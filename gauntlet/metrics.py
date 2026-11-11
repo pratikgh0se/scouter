@@ -14,15 +14,45 @@ from gauntlet import color
 from gauntlet.raster import Raster8
 
 REGIONS = ("frame", "shadows", "highlights", "top", "centre", "corners")
-STATS = ("ev", "L", "p01L", "p99L", "spread", "clip_high", "clip_low",
-         "rb", "rg", "bg", "gm", "a", "b", "C", "noise", "sharp")
+STATS = (
+    "ev",
+    "L",
+    "p01L",
+    "p99L",
+    "spread",
+    "clip_high",
+    "clip_low",
+    "rb",
+    "rg",
+    "bg",
+    "gm",
+    "a",
+    "b",
+    "C",
+    "noise",
+    "sharp",
+)
 CLIP_HIGH, CLIP_LOW = 253, 2
 
 #: Spec 5.2 minimum floors (never below these).
-FLOOR_MIN = {"ev": 0.02, "L": 0.5, "p01L": 0.5, "p99L": 0.5, "spread": 0.5,
-             "rb": 0.002, "gm": 0.002, "a": 0.5, "b": 0.5, "C": 0.5,
-             "clip_high": 0.05, "clip_low": 0.05, "noise": 0.05, "sharp": 0.05,
-             "de00": 0.2}
+FLOOR_MIN = {
+    "ev": 0.02,
+    "L": 0.5,
+    "p01L": 0.5,
+    "p99L": 0.5,
+    "spread": 0.5,
+    "rb": 0.002,
+    "gm": 0.002,
+    "a": 0.5,
+    "b": 0.5,
+    "C": 0.5,
+    "clip_high": 0.05,
+    "clip_low": 0.05,
+    "noise": 0.05,
+    "sharp": 0.05,
+    "de00": 0.2,
+}
+
 
 #: Spec 5.1 M1 tolerances by unit.
 def tolerance(unit: str, value: float) -> float:
@@ -52,6 +82,7 @@ def param_equal(unit: str, a: float | None, b: float | None, tol: float | None =
 @dataclass(frozen=True)
 class Masks:
     """Pixel index lists per region, built once from the before image."""
+
     width: int
     height: int
     step: int
@@ -90,8 +121,19 @@ def build_masks(before: Raster8, max_samples: int = 60_000) -> Masks:
     q = max(1, len(Ls) // 4)
     shadows = sorted(i for _, i in Ls[:q])
     highlights = sorted(i for _, i in Ls[-q:])
-    return Masks(w, h, step, {"frame": frame, "shadows": shadows, "highlights": highlights,
-                              "top": top, "centre": centre, "corners": corners})
+    return Masks(
+        w,
+        h,
+        step,
+        {
+            "frame": frame,
+            "shadows": shadows,
+            "highlights": highlights,
+            "top": top,
+            "centre": centre,
+            "corners": corners,
+        },
+    )
 
 
 def _pct(sorted_vals: list[float], q: float) -> float:
@@ -104,8 +146,9 @@ def _pct(sorted_vals: list[float], q: float) -> float:
 def region_stats(r: Raster8, masks: Masks, regions: tuple[str, ...] = REGIONS) -> dict:
     """{region: {stat: value}} for the requested regions."""
     if (r.width, r.height) != (masks.width, masks.height):
-        raise ValueError(f"raster {r.width}x{r.height} does not match masks "
-                         f"{masks.width}x{masks.height}")
+        raise ValueError(
+            f"raster {r.width}x{r.height} does not match masks " f"{masks.width}x{masks.height}"
+        )
     out: dict[str, dict[str, float]] = {}
     data = r.data
     for name in regions:
@@ -159,7 +202,7 @@ def region_stats(r: Raster8, masks: Masks, regions: tuple[str, ...] = REGIONS) -
 
 
 #: Linear-mean floor an `ev` patch clipped to black is measured at (2^-16).
-EV_FLOOR = 2.0 ** -16
+EV_FLOOR = 2.0**-16
 
 
 def delta(stat: str, before: float, after: float) -> float:
@@ -183,8 +226,13 @@ def sharpness(r: Raster8, step: int = 4) -> float:
     vals: list[float] = []
     for y in range(1, r.height - 1, step):
         for x in range(1, r.width - 1, step):
-            lap = (4 * _green(r, x, y) - _green(r, x - 1, y) - _green(r, x + 1, y)
-                   - _green(r, x, y - 1) - _green(r, x, y + 1))
+            lap = (
+                4 * _green(r, x, y)
+                - _green(r, x - 1, y)
+                - _green(r, x + 1, y)
+                - _green(r, x, y - 1)
+                - _green(r, x, y + 1)
+            )
             vals.append(float(lap))
     if not vals:
         return 0.0
@@ -197,8 +245,9 @@ def noise(r: Raster8, block: int = 16) -> float:
     sds: list[tuple[float, float]] = []
     for by in range(0, r.height - block + 1, block):
         for bx in range(0, r.width - block + 1, block):
-            vals = [_green(r, x, y) for y in range(by, by + block, 2)
-                    for x in range(bx, bx + block, 2)]
+            vals = [
+                _green(r, x, y) for y in range(by, by + block, 2) for x in range(bx, bx + block, 2)
+            ]
             m = sum(vals) / len(vals)
             sd = math.sqrt(sum((v - m) ** 2 for v in vals) / len(vals))
             grad = abs(_green(r, bx, by) - _green(r, bx + block - 1, by + block - 1))

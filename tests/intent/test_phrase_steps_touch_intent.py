@@ -16,8 +16,11 @@ DOC = json.loads((Path(__file__).parent / "phrase_steps_touch.json").read_text()
 def _planned_delta(phrase: str, key: str) -> float:
     module, param = key.split(".")
     res = phrases.resolve(phrase)
-    (mv,) = [m for m in res.moves
-             if (phrases.row_for(m).module, phrases.row_for(m).param) == (module, param)]
+    (mv,) = [
+        m
+        for m in res.moves
+        if (phrases.row_for(m).module, phrases.row_for(m).param) == (module, param)
+    ]
     return abs(mv.notches * vocab.spec(module, param).step)
 
 

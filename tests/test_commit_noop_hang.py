@@ -58,8 +58,12 @@ class CommitNoopHangTest(unittest.TestCase):
                 "source": "action_images",
             },
             "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-            "darkroom.action": lambda p: {"nan": False, "status": p.get("value"),
-                                          "view": "darkroom", **p},
+            "darkroom.action": lambda p: {
+                "nan": False,
+                "status": p.get("value"),
+                "view": "darkroom",
+                **p,
+            },
         }
 
     def tearDown(self) -> None:
@@ -71,13 +75,25 @@ class CommitNoopHangTest(unittest.TestCase):
         to write; with expect_change it would fall back to a bounce that also
         writes nothing (slowly, on a cold darkroom)."""
         if params.get("expect_change", True) is False:
-            return {"strategy_used": "no_bounce", "ok": True, "view_after": "darkroom",
-                    "cpu_ms": 3, "sidecar_written": False, "attempts_used": 1,
-                    "expect_change": False}
+            return {
+                "strategy_used": "no_bounce",
+                "ok": True,
+                "view_after": "darkroom",
+                "cpu_ms": 3,
+                "sidecar_written": False,
+                "attempts_used": 1,
+                "expect_change": False,
+            }
         time.sleep(min(params.get("budget_ms", 60000), 60000) / 1000.0)
-        return {"strategy_used": "view_bounce_action", "ok": False,
-                "view_after": "darkroom", "cpu_ms": 9, "sidecar_written": False,
-                "attempts_used": 2, "expect_change": True}
+        return {
+            "strategy_used": "view_bounce_action",
+            "ok": False,
+            "view_after": "darkroom",
+            "cpu_ms": 9,
+            "sidecar_written": False,
+            "attempts_used": 2,
+            "expect_change": True,
+        }
 
     def test_nothing_pending_is_a_prompt_honest_noop(self) -> None:
         bridge = FakeBridge({**self.base, "history.commit": self._plugin_like})
@@ -105,15 +121,24 @@ class CommitNoopHangTest(unittest.TestCase):
             seen.append(dict(params))
             time.sleep(0.01)
             self.sidecar.write_text(with_new_history_hash(text))
-            return {"strategy_used": "no_bounce", "ok": True, "view_after": "darkroom",
-                    "cpu_ms": 4, "sidecar_written": True, "attempts_used": 1,
-                    "expect_change": params.get("expect_change", True)}
+            return {
+                "strategy_used": "no_bounce",
+                "ok": True,
+                "view_after": "darkroom",
+                "cpu_ms": 4,
+                "sidecar_written": True,
+                "attempts_used": 1,
+                "expect_change": params.get("expect_change", True),
+            }
 
         dtbridge.set_bridge(FakeBridge({**self.base, "history.commit": commit}))
-        darkroom.set_param(module="exposure", param="exposure", value=4.25, commit=False,
-                           job="job-test")
+        darkroom.set_param(
+            module="exposure", param="exposure", value=4.25, commit=False, job="job-test"
+        )
         result = history.commit(image=str(self.raw), timeout_s=2.0, job="job-test")
-        self.assertIs(seen[-1]["expect_change"], True, "a journalled pending write expects a change")
+        self.assertIs(
+            seen[-1]["expect_change"], True, "a journalled pending write expects a change"
+        )
         self.assertTrue(result.committed)
         self.assertFalse(result.noop)
 
@@ -127,8 +152,9 @@ class CommitNoopHangTest(unittest.TestCase):
         def run() -> None:
             started = time.monotonic()
             try:
-                history.commit(image=str(self.raw), timeout_s=0.5, expect_change=True,
-                               job="job-test")
+                history.commit(
+                    image=str(self.raw), timeout_s=0.5, expect_change=True, job="job-test"
+                )
                 outcome["result"] = "returned"
             except CommitTimeout as e:
                 outcome["result"] = e
@@ -139,8 +165,10 @@ class CommitNoopHangTest(unittest.TestCase):
         worker = threading.Thread(target=run, daemon=True)
         worker.start()
         worker.join(3.0)
-        self.assertFalse(worker.is_alive(), "history.commit(timeout_s=0.5) was still "
-                         "waiting on the bridge after 3s")
+        self.assertFalse(
+            worker.is_alive(),
+            "history.commit(timeout_s=0.5) was still " "waiting on the bridge after 3s",
+        )
         self.assertIsInstance(outcome["result"], CommitTimeout, outcome)
         self.assertLess(outcome["elapsed"], 1.0)
         self.assertIn("did not answer", str(outcome["result"]))

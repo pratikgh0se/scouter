@@ -39,7 +39,7 @@ def _mutate(fx: dict, mutation: str | None) -> None:
                 o["extra"]["snapshots"][1][k] = 0.0
     elif kind == "nested_code":
         for c in o["calls"]:
-            for r in (c["envelope"]["data"].get("refused") or []):
+            for r in c["envelope"]["data"].get("refused") or []:
                 r["code"] = arg
     else:
         raise AssertionError(mutation)
@@ -60,14 +60,22 @@ def test_example(ex: dict) -> None:
         assert all((c["envelope"].get("error") or {}).get("code") is None for c in calls)
     _mutate(fx, ex["mutation"])
     if "sidecar_after" in facts:
-        assert fx["observation"]["after"]["params"]["colorbalancergb.global_chroma"] \
-            == pytest.approx(facts["sidecar_after"], abs=1e-6)
+        assert fx["observation"]["after"]["params"][
+            "colorbalancergb.global_chroma"
+        ] == pytest.approx(facts["sidecar_after"], abs=1e-6)
     o = fx["observation"]
-    obs = Observation(calls=[CallRecord(**c) for c in o["calls"]], before=o["before"],
-                      after=o["after"], extra=o["extra"])
+    obs = Observation(
+        calls=[CallRecord(**c) for c in o["calls"]],
+        before=o["before"],
+        after=o["after"],
+        extra=o["extra"],
+    )
     # oracle B: the evaluator
     v = evaluate(Case.from_dict(fx["case"]), obs, POLICY)
-    assert (v.outcome, v.score) == (ex["expect"]["outcome"], ex["expect"]["score"]), \
-        (ex["id"], v.outcome, v.silent_failure)
+    assert (v.outcome, v.score) == (ex["expect"]["outcome"], ex["expect"]["score"]), (
+        ex["id"],
+        v.outcome,
+        v.silent_failure,
+    )
     if "reason" in ex["expect"]:
         assert (v.silent_failure or "").startswith(ex["expect"]["reason"]), ex["id"]

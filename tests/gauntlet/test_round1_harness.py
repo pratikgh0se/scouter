@@ -44,8 +44,12 @@ def obs_of(cid: str, mutate=None) -> Observation:
 def test_c6_phrases_the_vocabulary_serves_are_not_scored_as_refusals(scn):
     """`warm it up`, `brighten`, `open the shadows` are live vocabulary rows:
     their "out" requests are normal served edits, with a stat check."""
-    served = [c for c in scn.values() if c.meta["class"] == "out"
-              and c.meta["roadmap_key"] in ("temperature", "exposure", "toneequal")]
+    served = [
+        c
+        for c in scn.values()
+        if c.meta["class"] == "out"
+        and c.meta["roadmap_key"] in ("temperature", "exposure", "toneequal")
+    ]
     assert len(served) >= 40
     for c in served:
         assert c.expect.kind in ("edit", "typed_error"), c.id
@@ -61,8 +65,11 @@ def test_c6_unserved_phrases_still_expect_an_honest_refusal(scn):
     from scouter.core import phrases, vocab
     from scouter.errors import ScouterError
 
-    refuse = [c for c in scn.values() if c.meta["class"] in ("out", "impossible")
-              and not c.meta.get("served_out_class")]
+    refuse = [
+        c
+        for c in scn.values()
+        if c.meta["class"] in ("out", "impossible") and not c.meta.get("served_out_class")
+    ]
     assert len(refuse) > 300
     for c in refuse:
         assert c.expect.kind == "refuse", c.id
@@ -71,8 +78,9 @@ def test_c6_unserved_phrases_still_expect_an_honest_refusal(scn):
             res = phrases.resolve(phrase)
         except ScouterError:
             continue
-        assert any(vocab.status(phrases.row_for(m)) != "live" for m in res.moves), \
-            f"{c.id}: {phrase!r} is served but still expects a refusal"
+        assert any(
+            vocab.status(phrases.row_for(m)) != "live" for m in res.moves
+        ), f"{c.id}: {phrase!r} is served but still expects a refusal"
 
 
 # ------------------------------------------------------------ C9 silents
@@ -143,8 +151,9 @@ def test_c9_every_check_gapped_is_never_a_free_pass(scn):
 def test_c11_lens_on_setup_disable_is_snapshotted():
     case = next(c for c in coverage.generate() if c.id == "cov-p4-lens_on-olympus")
     assert case.steps[0].tool == "darkroom_disable"
-    assert case.steps[0].setup and case.steps[0].write, \
-        "the disable must re-snapshot, or the before snapshot predates it"
+    assert (
+        case.steps[0].setup and case.steps[0].write
+    ), "the disable must re-snapshot, or the before snapshot predates it"
 
 
 def test_c11_stale_before_snapshot_was_the_silent_failure_and_fixed_one_passes():
@@ -198,8 +207,9 @@ def test_c18_reset_explained_clears_only_the_explained_concepts(tmp_path):
 
     state = tmp_path / "state"
     state.mkdir()
-    (state / "job1.json").write_text(json.dumps(
-        {"explained_concepts": ["exposure"], "last_image": "x"}))
+    (state / "job1.json").write_text(
+        json.dumps({"explained_concepts": ["exposure"], "last_image": "x"})
+    )
     session = SimpleNamespace(staged=SimpleNamespace(env={"SCOUTER_JOB": "job1"}, cache=tmp_path))
     obs = Observation()
     rec = VIRTUAL["reset_explained"](session, None, None, obs)
@@ -214,12 +224,27 @@ def test_a_priori_confounded_gap_with_passing_checks_is_never_a_pass():
 
     ok = Check("envelope", step=0, target={"path": "ok", "op": "eq", "value": True})
     gap = Check("M6", stat="spread", sign=1, tags={"declared_gap": "confounded by x"})
-    case = Case(id="syn-confounded", layer="looks", tier="P1", mode="tool",
-                steps=[Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
-                expect=Expect("workflow", [ok, gap]), body="olympus", frame_role="hero",
-                meta={"look": True})
-    obs = Observation(calls=[CallRecord("darkroom_say", {"phrase": "brighter"},
-                                        {"ok": True, "outcome": "ok", "data": {}}, write=True)])
+    case = Case(
+        id="syn-confounded",
+        layer="looks",
+        tier="P1",
+        mode="tool",
+        steps=[Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
+        expect=Expect("workflow", [ok, gap]),
+        body="olympus",
+        frame_role="hero",
+        meta={"look": True},
+    )
+    obs = Observation(
+        calls=[
+            CallRecord(
+                "darkroom_say",
+                {"phrase": "brighter"},
+                {"ok": True, "outcome": "ok", "data": {}},
+                write=True,
+            )
+        ]
+    )
     v = evaluate(case, obs, POLICY)
     assert (v.score, v.outcome) == ("partial", "needs_review")
     assert any("one oracle (Z2)" in n for n in v.notes)

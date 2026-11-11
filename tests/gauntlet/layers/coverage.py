@@ -69,44 +69,80 @@ _wb_route_a_pinned_edit = checkmap.wb_route_a_pinned_edit
 def _wb_route_a_pinned_restore(route: dict, from_step: int = 0) -> Expect:
     to_key = route["m1_key"]
     return Expect("workflow", [m1_restored([to_key], {to_key: route["unit"]}, from_step)])
+
+
 #: Cluster D / row 458 (2026-09-27): the olympus `hero` frame surveys near
 #: the darkest in the corpus, so these 6 "touch" phrase cases -- olympus-body
 #: rows of tests/test_touch_floor.py's KNOWN_RESIDUAL -- can't clear their
 #: floor on it. They run on `hero_bright` (a normally-exposed stand-in;
 #: see corpus.EXTRA_ROLES) instead. The 4 sony_a7 KNOWN_RESIDUAL rows are
 #: unaffected -- no bright sony hero exists yet -- and stay on `hero`.
-BRIGHT_HERO_TOUCH_KEYS = frozenset({
-    "deepen_shadows", "lift_shadows", "more_vibrance", "less_vibrance", "cool_shadows",
-    "teal_orange",
-})
-OPPOSED = (("brighter", "darker"), ("more_contrast", "less_contrast"), ("warmer", "cooler"),
-           ("more_magenta", "more_green"), ("lift_shadows", "deepen_shadows"),
-           ("brighter_midtones", "darker_midtones"), ("brighter_highlights", "tame_highlights"),
-           ("deeper_blacks", "faded_blacks"), ("more_saturation", "less_saturation"),
-           ("more_vibrance", "less_vibrance"), ("more_chroma", "less_chroma"),
-           ("stronger_grade", "weaker_grade"))
-COMMUTATIVE = (("brighter", "warmer"), ("more_contrast", "more_saturation"),
-               ("lift_shadows", "cooler"), ("deeper_blacks", "more_vibrance"),
-               ("tame_highlights", "more_chroma"), ("brighter_midtones", "warmer"))
+BRIGHT_HERO_TOUCH_KEYS = frozenset(
+    {
+        "deepen_shadows",
+        "lift_shadows",
+        "more_vibrance",
+        "less_vibrance",
+        "cool_shadows",
+        "teal_orange",
+    }
+)
+OPPOSED = (
+    ("brighter", "darker"),
+    ("more_contrast", "less_contrast"),
+    ("warmer", "cooler"),
+    ("more_magenta", "more_green"),
+    ("lift_shadows", "deepen_shadows"),
+    ("brighter_midtones", "darker_midtones"),
+    ("brighter_highlights", "tame_highlights"),
+    ("deeper_blacks", "faded_blacks"),
+    ("more_saturation", "less_saturation"),
+    ("more_vibrance", "less_vibrance"),
+    ("more_chroma", "less_chroma"),
+    ("stronger_grade", "weaker_grade"),
+)
+COMMUTATIVE = (
+    ("brighter", "warmer"),
+    ("more_contrast", "more_saturation"),
+    ("lift_shadows", "cooler"),
+    ("deeper_blacks", "more_vibrance"),
+    ("tame_highlights", "more_chroma"),
+    ("brighter_midtones", "warmer"),
+)
 #: phrase key -> (metric, stat, region, sign) for the stat check on phrase cases.
 PHRASE_STAT = {
-    "brighter": ("M2", "L", "frame", 1), "darker": ("M2", "L", "frame", -1),
-    "more_contrast": ("M6", "spread", "frame", 1), "less_contrast": ("M6", "spread", "frame", -1),
-    "warmer": ("M4", "rb", "frame", 1), "cooler": ("M4", "rb", "frame", -1),
-    "lift_shadows": ("M2", "L", "shadows", 1), "deepen_shadows": ("M2", "L", "shadows", -1),
-    "brighter_midtones": ("M2", "L", "frame", 1), "darker_midtones": ("M2", "L", "frame", -1),
+    "brighter": ("M2", "L", "frame", 1),
+    "darker": ("M2", "L", "frame", -1),
+    "more_contrast": ("M6", "spread", "frame", 1),
+    "less_contrast": ("M6", "spread", "frame", -1),
+    "warmer": ("M4", "rb", "frame", 1),
+    "cooler": ("M4", "rb", "frame", -1),
+    "lift_shadows": ("M2", "L", "shadows", 1),
+    "deepen_shadows": ("M2", "L", "shadows", -1),
+    "brighter_midtones": ("M2", "L", "frame", 1),
+    "darker_midtones": ("M2", "L", "frame", -1),
     "brighter_highlights": ("M2", "L", "highlights", 1),
     "tame_highlights": ("M2", "L", "highlights", -1),
-    "deeper_blacks": ("M3", "p01L", "frame", -1), "faded_blacks": ("M3", "p01L", "frame", 1),
-    "more_saturation": ("M5", "C", "frame", 1), "less_saturation": ("M5", "C", "frame", -1),
-    "more_vibrance": ("M5", "C", "frame", 1), "less_vibrance": ("M5", "C", "frame", -1),
-    "more_chroma": ("M5", "C", "frame", 1), "less_chroma": ("M5", "C", "frame", -1),
-    "cool_shadows": ("M4", "b", "shadows", -1), "warm_highlights": ("M4", "b", "highlights", 1),
+    "deeper_blacks": ("M3", "p01L", "frame", -1),
+    "faded_blacks": ("M3", "p01L", "frame", 1),
+    "more_saturation": ("M5", "C", "frame", 1),
+    "less_saturation": ("M5", "C", "frame", -1),
+    "more_vibrance": ("M5", "C", "frame", 1),
+    "less_vibrance": ("M5", "C", "frame", -1),
+    "more_chroma": ("M5", "C", "frame", 1),
+    "less_chroma": ("M5", "C", "frame", -1),
+    "cool_shadows": ("M4", "b", "shadows", -1),
+    "warm_highlights": ("M4", "b", "highlights", 1),
     "teal_orange": ("M4", "b", "shadows", -1),
 }
 TINT_KEYS = {"more_magenta", "more_green"}
-EXPLICIT_BY_UNIT = {"EV": ("0.5 ev", 0.5), "K": ("500k", 500.0), "%": ("5%", 0.05),
-                    "ratio": ("0.2", 0.2), "°": ("20°", 20.0)}
+EXPLICIT_BY_UNIT = {
+    "EV": ("0.5 ev", 0.5),
+    "K": ("500k", 500.0),
+    "%": ("5%", 0.05),
+    "ratio": ("0.2", 0.2),
+    "°": ("20°", 20.0),
+}
 
 
 def _signed(label: str, n: int) -> str:
@@ -243,10 +279,28 @@ def _probe_lo_hi(s: vocab.ParamSpec) -> tuple[float, float]:
     return s.lo, s.hi
 
 
-def _case(cid: str, body: str, tier: str, steps: list, expect: Expect, *,
-          meta: dict | None = None, frame_role: str = "hero") -> Case:
-    return Case(id=cid, layer=LAYER, tier=tier, mode="tool", steps=steps, expect=expect,
-                body=body, frame_role=frame_role, source={"file": "vocab.py"}, meta=meta or {})
+def _case(
+    cid: str,
+    body: str,
+    tier: str,
+    steps: list,
+    expect: Expect,
+    *,
+    meta: dict | None = None,
+    frame_role: str = "hero",
+) -> Case:
+    return Case(
+        id=cid,
+        layer=LAYER,
+        tier=tier,
+        mode="tool",
+        steps=steps,
+        expect=expect,
+        body=body,
+        frame_role=frame_role,
+        source={"file": "vocab.py"},
+        meta=meta or {},
+    )
 
 
 def _set(s: vocab.ParamSpec, value: float, *, setup: bool = False):
@@ -325,8 +379,12 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
     o = len(pre)
     plo, phi = _probe_lo_hi(s)
     relative_ok = _wb_relative_ok(s, body)
-    values = [("set_lo", plo, "P0"), ("set_hi", phi, "P0"), ("set_mid", _mid(s), "P0"),
-              ("set_neutral", _neutral(s), "P1")]
+    values = [
+        ("set_lo", plo, "P0"),
+        ("set_hi", phi, "P0"),
+        ("set_mid", _mid(s), "P0"),
+        ("set_neutral", _neutral(s), "P1"),
+    ]
     for label, v, tier in values:
         if label == "set_hi" and s.wraps:
             # item 1: 360 wraps to 0, the module default -- move it off, so
@@ -336,8 +394,11 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
             out.append(_case(cid(label), body, tier, [_set(s, v)], _wb_refusal_expect(wb_route)))
             continue
         if wb_pinned_live:
-            out.append(_case(cid(label), body, tier, [_set(s, v)],
-                             _wb_route_a_pinned_edit(wb_route, value=v)))
+            out.append(
+                _case(
+                    cid(label), body, tier, [_set(s, v)], _wb_route_a_pinned_edit(wb_route, value=v)
+                )
+            )
             continue
         at_base = _at_baseline(s, v)
         lead = list(pre)
@@ -348,75 +409,159 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
             # set is then a real change on every frame.
             lead.append(_prep(s, _mid(s)))
             at_base = False
-        out.append(_case(cid(label), body, tier, [*lead, _set(s, v)],
-                         Expect("edit", [m1_equals(s.module, s.param, v, s.unit)],
-                                _side(s, changed=not at_base))))
+        out.append(
+            _case(
+                cid(label),
+                body,
+                tier,
+                [*lead, _set(s, v)],
+                Expect(
+                    "edit", [m1_equals(s.module, s.param, v, s.unit)], _side(s, changed=not at_base)
+                ),
+            )
+        )
     for label, v in (("set_lo_minus", plo - s.step), ("set_hi_plus", phi + s.step)):
         if wb_refused:
             out.append(_case(cid(label), body, "P1", [_set(s, v)], _wb_refusal_expect(wb_route)))
         elif wb_pinned_live:
-            out.append(_case(cid(label), body, "P1", [_set(s, v)],
-                             _wb_route_a_pinned_edit(wb_route, value=v)))
+            out.append(
+                _case(
+                    cid(label), body, "P1", [_set(s, v)], _wb_route_a_pinned_edit(wb_route, value=v)
+                )
+            )
         elif s.wraps:
             want = v % 360.0
-            out.append(_case(cid(label), body, "P1", [*pre, _set(s, v)],
-                             Expect("edit", [m1_equals(s.module, s.param, want, s.unit)],
-                                    _side(s))))
+            out.append(
+                _case(
+                    cid(label),
+                    body,
+                    "P1",
+                    [*pre, _set(s, v)],
+                    Expect("edit", [m1_equals(s.module, s.param, want, s.unit)], _side(s)),
+                )
+            )
         else:
             bound = plo if v < plo else phi
-            out.append(_case(cid(label), body, "P1", [*pre, _set(s, v)],
-                             Expect("edit", [boundary_check(s.module, s.param, s.unit,
-                                                             request=v, bound=bound)],
-                                    _side(s)),
-                             meta={"accept_refusal": True}))
+            out.append(
+                _case(
+                    cid(label),
+                    body,
+                    "P1",
+                    [*pre, _set(s, v)],
+                    Expect(
+                        "edit",
+                        [boundary_check(s.module, s.param, s.unit, request=v, bound=bound)],
+                        _side(s),
+                    ),
+                    meta={"accept_refusal": True},
+                )
+            )
     for n in (1, -1, 3, -3):
         tier = "P0" if abs(n) == 1 else "P1"
         if wb_refused:
-            out.append(_case(cid(_signed("adjust", n)), body, tier, [_adjust(s, n * s.step)],
-                             _wb_refusal_expect(wb_route)))
+            out.append(
+                _case(
+                    cid(_signed("adjust", n)),
+                    body,
+                    tier,
+                    [_adjust(s, n * s.step)],
+                    _wb_refusal_expect(wb_route),
+                )
+            )
         elif wb_pinned_live:
             #: Group B1 (canary-colorcal-20261108): self-contained. A relative
             #: move on a frame an earlier case left at the 12000 K limit is a
             #: noop; a mid-range prep set (routed to channelmixerrgb.temperature
             #: like the action) fixes the start.
-            out.append(_case(cid(_signed("adjust", n)), body, tier,
-                             [_prep(s, _mid(s)), _adjust(s, n * s.step)],
-                             _wb_route_a_pinned_edit(wb_route, sign=(1 if n > 0 else -1),
-                                                     start=1)))
+            out.append(
+                _case(
+                    cid(_signed("adjust", n)),
+                    body,
+                    tier,
+                    [_prep(s, _mid(s)), _adjust(s, n * s.step)],
+                    _wb_route_a_pinned_edit(wb_route, sign=(1 if n > 0 else -1), start=1),
+                )
+            )
         elif relative_ok:
-            chk = m1_delta(s.module, s.param, n * s.step, s.unit, s.step,
-                           None if s.wraps else s.lo, None if s.wraps else s.hi)
+            chk = m1_delta(
+                s.module,
+                s.param,
+                n * s.step,
+                s.unit,
+                s.step,
+                None if s.wraps else s.lo,
+                None if s.wraps else s.hi,
+            )
             chk.target["from"] = 1 + o
-            out.append(_case(cid(_signed("adjust", n)), body, tier,
-                             [*pre, _prep(s, _mid(s)), _adjust(s, n * s.step)],
-                             Expect("edit", [chk], _side(s))))
+            out.append(
+                _case(
+                    cid(_signed("adjust", n)),
+                    body,
+                    tier,
+                    [*pre, _prep(s, _mid(s)), _adjust(s, n * s.step)],
+                    Expect("edit", [chk], _side(s)),
+                )
+            )
         else:
             # item 4a: no calibration table to read the current Kelvin from
             # -> an honest `value_unknown` refusal, with no prep write (a
             # prep set would leave the sidecar changed, and an honest
             # refusal needs it untouched for `_honest_tool_refusal` to see).
-            out.append(_case(cid(_signed("adjust", n)), body, tier, [_adjust(s, n * s.step)],
-                             Expect("edit", []), meta={"accept_refusal": True}))
+            out.append(
+                _case(
+                    cid(_signed("adjust", n)),
+                    body,
+                    tier,
+                    [_adjust(s, n * s.step)],
+                    Expect("edit", []),
+                    meta={"accept_refusal": True},
+                )
+            )
     if wb_refused:
-        over = _case(cid("adjust_overflow"), body, "P1", [_adjust(s, 3 * s.step)],
-                     _wb_refusal_expect(wb_route))
+        over = _case(
+            cid("adjust_overflow"),
+            body,
+            "P1",
+            [_adjust(s, 3 * s.step)],
+            _wb_refusal_expect(wb_route),
+        )
     elif wb_pinned_live:
-        over = _case(cid("adjust_overflow"), body, "P1",
-                     [_prep(s, phi), _adjust(s, 3 * s.step)],
-                     _wb_route_a_pinned_edit(wb_route, sign=1, start=1))
+        over = _case(
+            cid("adjust_overflow"),
+            body,
+            "P1",
+            [_prep(s, phi), _adjust(s, 3 * s.step)],
+            _wb_route_a_pinned_edit(wb_route, sign=1, start=1),
+        )
     elif s.wraps:
-        over = _case(cid("adjust_overflow"), body, "P1",
-                     [*pre, _prep(s, s.hi - s.step), _adjust(s, 3 * s.step)],
-                     Expect("edit", [m1_equals(s.module, s.param, (s.hi + 2 * s.step) % 360,
-                                               s.unit)], _side(s)))
+        over = _case(
+            cid("adjust_overflow"),
+            body,
+            "P1",
+            [*pre, _prep(s, s.hi - s.step), _adjust(s, 3 * s.step)],
+            Expect(
+                "edit", [m1_equals(s.module, s.param, (s.hi + 2 * s.step) % 360, s.unit)], _side(s)
+            ),
+        )
     elif relative_ok:
-        over = _case(cid("adjust_overflow"), body, "P1",
-                     [*pre, _prep(s, s.hi - s.step), _adjust(s, 3 * s.step)],
-                     Expect("edit", [m1_equals(s.module, s.param, s.hi, s.unit),
-                                     clamp_reported()], _side(s)))
+        over = _case(
+            cid("adjust_overflow"),
+            body,
+            "P1",
+            [*pre, _prep(s, s.hi - s.step), _adjust(s, 3 * s.step)],
+            Expect(
+                "edit", [m1_equals(s.module, s.param, s.hi, s.unit), clamp_reported()], _side(s)
+            ),
+        )
     else:
-        over = _case(cid("adjust_overflow"), body, "P1", [_adjust(s, 3 * s.step)],
-                     Expect("edit", []), meta={"accept_refusal": True})
+        over = _case(
+            cid("adjust_overflow"),
+            body,
+            "P1",
+            [_adjust(s, 3 * s.step)],
+            Expect("edit", []),
+            meta={"accept_refusal": True},
+        )
     out.append(over)
     for n in (1, -1):
         #: Fix round 1 (review I4): darkroom.nudge never re-routes onto
@@ -424,32 +569,62 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
         #: pinned or not, unlike set/adjust (checkmap.wb_route_a_nudge_expect).
         if wb_route is not None:
             nudge_route = checkmap.wb_route_a_nudge_expect_for_hero(_CMAP)
-            out.append(_case(cid(_signed("nudge", n)), body, "P1",
-                             [step("darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param,
-                                   steps=n)],
-                             _wb_refusal_expect(nudge_route)))
+            out.append(
+                _case(
+                    cid(_signed("nudge", n)),
+                    body,
+                    "P1",
+                    [step("darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param, steps=n)],
+                    _wb_refusal_expect(nudge_route),
+                )
+            )
         elif relative_ok:
-            chg = Check("M1", kind="changed", sign=n,
-                       target={"key": k, "unit": s.unit, "from": 1 + o})
-            out.append(_case(cid(_signed("nudge", n)), body, "P1",
-                             [*pre, _prep(s, _nudge_precondition(s, n)),
-                              step("darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param,
-                                   steps=n)],
-                             Expect("edit", [chg], _side(s))))
+            chg = Check(
+                "M1", kind="changed", sign=n, target={"key": k, "unit": s.unit, "from": 1 + o}
+            )
+            out.append(
+                _case(
+                    cid(_signed("nudge", n)),
+                    body,
+                    "P1",
+                    [
+                        *pre,
+                        _prep(s, _nudge_precondition(s, n)),
+                        step(
+                            "darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param, steps=n
+                        ),
+                    ],
+                    Expect("edit", [chg], _side(s)),
+                )
+            )
         else:
-            out.append(_case(cid(_signed("nudge", n)), body, "P1",
-                             [step("darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param,
-                                   steps=n)],
-                             Expect("edit", []), meta={"accept_refusal": True}))
+            out.append(
+                _case(
+                    cid(_signed("nudge", n)),
+                    body,
+                    "P1",
+                    [step("darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param, steps=n)],
+                    Expect("edit", []),
+                    meta={"accept_refusal": True},
+                )
+            )
     soft = _soft_range(s)
     if soft is not None and relative_ok and not wb_refused and not wb_pinned_live:
         #: N12: at the soft max a GUI step cannot move, so the honest answer is
         #: a typed noop (`reason: soft_limit`), and the sidecar must not change.
-        out.append(_case(cid("nudge_up_soft_max"), body, "P1",
-                         [*pre, _prep(s, soft[1]),
-                          step("darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param,
-                               steps=1)],
-                         Expect("noop", codes=["soft_limit"])))
+        out.append(
+            _case(
+                cid("nudge_up_soft_max"),
+                body,
+                "P1",
+                [
+                    *pre,
+                    _prep(s, soft[1]),
+                    step("darkroom_nudge", BUDGET_MOVE, module=s.module, param=s.param, steps=1),
+                ],
+                Expect("noop", codes=["soft_limit"]),
+            )
+        )
     units = {k: s.unit}
     if wb_refused:
         # Fix round 1 (review I2): keep the antecedent's own refused
@@ -461,58 +636,162 @@ def param_cases(s: vocab.ParamSpec, body: str) -> list[Case]:
         # refuse_wb_late.
         undo_expect = checkmap.wb_route_a_undo_expect(_CMAP, wb_route)
         undo_exp = Expect("typed_error", codes=list(undo_expect["codes"]))
-        out.append(_case(cid("undo_after_set"), body, "P0",
-                         [_set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)], undo_exp))
-        out.append(_case(cid("undo_after_adjust"), body, "P1",
-                         [_adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)], undo_exp))
-        out.append(_case(cid("repeat_set"), body, "P1",
-                         [_set(s, _mid(s)), _set(s, _mid(s))], _wb_refusal_expect(wb_route)))
-        out.append(_case(cid("repeat_adjust"), body, "P1",
-                         [_adjust(s, s.step), _adjust(s, s.step)], _wb_refusal_expect(wb_route)))
+        out.append(
+            _case(
+                cid("undo_after_set"),
+                body,
+                "P0",
+                [_set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)],
+                undo_exp,
+            )
+        )
+        out.append(
+            _case(
+                cid("undo_after_adjust"),
+                body,
+                "P1",
+                [_adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)],
+                undo_exp,
+            )
+        )
+        out.append(
+            _case(
+                cid("repeat_set"),
+                body,
+                "P1",
+                [_set(s, _mid(s)), _set(s, _mid(s))],
+                _wb_refusal_expect(wb_route),
+            )
+        )
+        out.append(
+            _case(
+                cid("repeat_adjust"),
+                body,
+                "P1",
+                [_adjust(s, s.step), _adjust(s, s.step)],
+                _wb_refusal_expect(wb_route),
+            )
+        )
     elif wb_pinned_live:
         restore = _wb_route_a_pinned_restore(wb_route)
-        out.append(_case(cid("undo_after_set"), body, "P0",
-                         [_set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)], restore))
-        out.append(_case(cid("undo_after_adjust"), body, "P1",
-                         [_prep(s, _mid(s)), _adjust(s, s.step),
-                          step("darkroom_undo_last", BUDGET_MOVE)],
-                         _wb_route_a_pinned_restore(wb_route, 1)))
-        out.append(_case(cid("repeat_set"), body, "P1",
-                         [_set(s, _mid(s)), _set(s, _mid(s))],
-                         _wb_route_a_pinned_edit(wb_route, value=_mid(s))))
-        out.append(_case(cid("repeat_adjust"), body, "P1",
-                         [_prep(s, _mid(s)), _adjust(s, s.step), _adjust(s, s.step)],
-                         _wb_route_a_pinned_edit(wb_route, sign=1, start=1)))
+        out.append(
+            _case(
+                cid("undo_after_set"),
+                body,
+                "P0",
+                [_set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)],
+                restore,
+            )
+        )
+        out.append(
+            _case(
+                cid("undo_after_adjust"),
+                body,
+                "P1",
+                [_prep(s, _mid(s)), _adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)],
+                _wb_route_a_pinned_restore(wb_route, 1),
+            )
+        )
+        out.append(
+            _case(
+                cid("repeat_set"),
+                body,
+                "P1",
+                [_set(s, _mid(s)), _set(s, _mid(s))],
+                _wb_route_a_pinned_edit(wb_route, value=_mid(s)),
+            )
+        )
+        out.append(
+            _case(
+                cid("repeat_adjust"),
+                body,
+                "P1",
+                [_prep(s, _mid(s)), _adjust(s, s.step), _adjust(s, s.step)],
+                _wb_route_a_pinned_edit(wb_route, sign=1, start=1),
+            )
+        )
     else:
-        out.append(_case(cid("undo_after_set"), body, "P0",
-                         [*pre, _set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)],
-                         Expect("workflow", [m1_restored([k], units, o)])))
-        out.append(_case(cid("undo_after_adjust"), body, "P1",
-                         [*pre, _adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)],
-                         Expect("workflow", [m1_restored([k], units, o)])))
-        out.append(_case(cid("repeat_set"), body, "P1",
-                         [*pre, _set(s, _mid(s)), _set(s, _mid(s))],
-                         Expect("property", [Check("M1", kind="step_equal",
-                                                   target={"key": k, "a": 1 + o, "b": 2 + o,
-                                                           "unit": s.unit})], property="P1")))
-        out.append(_case(cid("repeat_adjust"), body, "P1",
-                         [*pre, _prep(s, _repeat_start(s)), _adjust(s, s.step), _adjust(s, s.step)],
-                         Expect("property", [Check("M1", kind="step_ratio",
-                                                   target={"key": k, "base": [1 + o, 2 + o],
-                                                           "double": [1 + o, 3 + o], "ratio": 2.0,
-                                                           "tol": 0.1})], property="P1")))
+        out.append(
+            _case(
+                cid("undo_after_set"),
+                body,
+                "P0",
+                [*pre, _set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)],
+                Expect("workflow", [m1_restored([k], units, o)]),
+            )
+        )
+        out.append(
+            _case(
+                cid("undo_after_adjust"),
+                body,
+                "P1",
+                [*pre, _adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)],
+                Expect("workflow", [m1_restored([k], units, o)]),
+            )
+        )
+        out.append(
+            _case(
+                cid("repeat_set"),
+                body,
+                "P1",
+                [*pre, _set(s, _mid(s)), _set(s, _mid(s))],
+                Expect(
+                    "property",
+                    [
+                        Check(
+                            "M1",
+                            kind="step_equal",
+                            target={"key": k, "a": 1 + o, "b": 2 + o, "unit": s.unit},
+                        )
+                    ],
+                    property="P1",
+                ),
+            )
+        )
+        out.append(
+            _case(
+                cid("repeat_adjust"),
+                body,
+                "P1",
+                [*pre, _prep(s, _repeat_start(s)), _adjust(s, s.step), _adjust(s, s.step)],
+                Expect(
+                    "property",
+                    [
+                        Check(
+                            "M1",
+                            kind="step_ratio",
+                            target={
+                                "key": k,
+                                "base": [1 + o, 2 + o],
+                                "double": [1 + o, 3 + o],
+                                "ratio": 2.0,
+                                "tol": 0.1,
+                            },
+                        )
+                    ],
+                    property="P1",
+                ),
+            )
+        )
     return out
 
 
 def hue_wrap_cases(body: str) -> list[Case]:
     out = []
     for s in [p for p in live_params() if p.wraps]:
-        for label, start, delta, want in (("wrap_up", 350.0, 20.0, 10.0),
-                                          ("wrap_down", 10.0, -20.0, 350.0)):
-            out.append(_case(case_id(PREFIX, key(s.module, s.param), body, label), body, "P1",
-                             [_set(s, start), _adjust(s, delta)],
-                             Expect("edit", [m1_equals(s.module, s.param, want, "°")],
-                                    _side(s))))
+        for label, start, delta, want in (
+            ("wrap_up", 350.0, 20.0, 10.0),
+            ("wrap_down", 10.0, -20.0, 350.0),
+        ):
+            out.append(
+                _case(
+                    case_id(PREFIX, key(s.module, s.param), body, label),
+                    body,
+                    "P1",
+                    [_set(s, start), _adjust(s, delta)],
+                    Expect("edit", [m1_equals(s.module, s.param, want, "°")], _side(s)),
+                )
+            )
     return out
 
 
@@ -521,25 +800,56 @@ def module_cases(body: str) -> list[Case]:
     mods = sorted({p.module for p in live_params()})
     for m in mods:
         first = next(p for p in live_params() if p.module == m)
-        out.append(_case(case_id(PREFIX, m, body, "reset"), body, "P1",
-                         [_set(first, _mid(first)),
-                          step("darkroom_reset", BUDGET_MOVE, module=m, confirm=True)],
-                         Expect("workflow", [Check("envelope", step=1,
-                                                   target={"path": "ok", "op": "eq",
-                                                           "value": True})],
-                                {"changed": True})))
-        en = Check("M1", kind="equals", target={"key": f"{m}.__enabled", "value": 1,
-                                                "unit": "bool"})
-        out.append(_case(case_id(PREFIX, m, body, "enable"), body, "P1",
-                         [step("darkroom_enable", BUDGET_MOVE, module=m)],
-                         Expect("workflow", [en])))
-        out.append(_case(case_id(PREFIX, m, body, "enable_twice"), body, "P1",
-                         [step("darkroom_enable", BUDGET_MOVE, module=m),
-                          step("darkroom_enable", BUDGET_MOVE, module=m)],
-                         Expect("property", [Check("M1", kind="step_equal",
-                                                   target={"key": f"{m}.__enabled", "a": 1,
-                                                           "b": 2, "unit": "bool"})],
-                                property="P1")))
+        out.append(
+            _case(
+                case_id(PREFIX, m, body, "reset"),
+                body,
+                "P1",
+                [
+                    _set(first, _mid(first)),
+                    step("darkroom_reset", BUDGET_MOVE, module=m, confirm=True),
+                ],
+                Expect(
+                    "workflow",
+                    [Check("envelope", step=1, target={"path": "ok", "op": "eq", "value": True})],
+                    {"changed": True},
+                ),
+            )
+        )
+        en = Check(
+            "M1", kind="equals", target={"key": f"{m}.__enabled", "value": 1, "unit": "bool"}
+        )
+        out.append(
+            _case(
+                case_id(PREFIX, m, body, "enable"),
+                body,
+                "P1",
+                [step("darkroom_enable", BUDGET_MOVE, module=m)],
+                Expect("workflow", [en]),
+            )
+        )
+        out.append(
+            _case(
+                case_id(PREFIX, m, body, "enable_twice"),
+                body,
+                "P1",
+                [
+                    step("darkroom_enable", BUDGET_MOVE, module=m),
+                    step("darkroom_enable", BUDGET_MOVE, module=m),
+                ],
+                Expect(
+                    "property",
+                    [
+                        Check(
+                            "M1",
+                            kind="step_equal",
+                            target={"key": f"{m}.__enabled", "a": 1, "b": 2, "unit": "bool"},
+                        )
+                    ],
+                    property="P1",
+                ),
+            )
+        )
     return out
 
 
@@ -559,13 +869,33 @@ def tint_cases(body: str) -> list[Case]:
     wb_route = _wb_route_a_tint()
     set_exp = _wb_refusal_expect(wb_route) if wb_route else Expect("edit", [], {"changed": True})
     for v in (0.8, 0.9, 1.1, 1.2):
-        out.append(_case(case_id(PREFIX, "temperature.tint", body, f"set_{v}"), body, "P1",
-                         [_set(t, v)], set_exp))
-    out.append(_case(case_id(PREFIX, "temperature.tint", body, "adjust"), body, "P1",
-                     [_adjust(t, 0.05)], Expect("typed_error", codes=["value_unknown"])))
-    out.append(_case(case_id(PREFIX, "temperature.tint", body, "say_more_magenta"), body, "P1",
-                     [step("darkroom_say", BUDGET_SAY, phrase="more magenta")],
-                     Expect("typed_error", codes=["value_unknown"])))
+        out.append(
+            _case(
+                case_id(PREFIX, "temperature.tint", body, f"set_{v}"),
+                body,
+                "P1",
+                [_set(t, v)],
+                set_exp,
+            )
+        )
+    out.append(
+        _case(
+            case_id(PREFIX, "temperature.tint", body, "adjust"),
+            body,
+            "P1",
+            [_adjust(t, 0.05)],
+            Expect("typed_error", codes=["value_unknown"]),
+        )
+    )
+    out.append(
+        _case(
+            case_id(PREFIX, "temperature.tint", body, "say_more_magenta"),
+            body,
+            "P1",
+            [step("darkroom_say", BUDGET_SAY, phrase="more magenta")],
+            Expect("typed_error", codes=["value_unknown"]),
+        )
+    )
     return out
 
 
@@ -573,10 +903,20 @@ def unreachable_cases(body: str) -> list[Case]:
     c = vocab.spec("colorzones", "curves")
     codes = ["unreachable", "not_pinned", "usage"]
     return [
-        _case(case_id(PREFIX, "colorzones.curves", body, "set"), body, "P1", [_set(c, 0.5)],
-              Expect("typed_error", codes=codes)),
-        _case(case_id(PREFIX, "colorzones.curves", body, "adjust"), body, "P1",
-              [_adjust(c, 0.1)], Expect("typed_error", codes=codes)),
+        _case(
+            case_id(PREFIX, "colorzones.curves", body, "set"),
+            body,
+            "P1",
+            [_set(c, 0.5)],
+            Expect("typed_error", codes=codes),
+        ),
+        _case(
+            case_id(PREFIX, "colorzones.curves", body, "adjust"),
+            body,
+            "P1",
+            [_adjust(c, 0.1)],
+            Expect("typed_error", codes=codes),
+        ),
     ]
 
 
@@ -588,8 +928,11 @@ def unreachable_cases(body: str) -> list[Case]:
 def _candidate_keys(p: phrases.Phrase) -> list[str]:
     keys: list[str] = []
     for mv in p.moves:
-        pairs = ([("crop", side) for side in moves.CROP_SIDES] if mv.kind == "crop"
-                 else [(mv.module, mv.param)])
+        pairs = (
+            [("crop", side) for side in moves.CROP_SIDES]
+            if mv.kind == "crop"
+            else [(mv.module, mv.param)]
+        )
         for module, param in pairs:
             s = vocab.spec(module, param)
             if s is not None and vocab.status(s) == "candidate":
@@ -659,9 +1002,14 @@ def _phrase_expect(p: phrases.Phrase, sign: float = 1.0, from_step: int = 0) -> 
             # the Expect already covers it, so no single-key M1 check here.
             continue
         else:
-            checks.append(Check("M1", kind="changed", sign=int(sign * (1 if mv.notches > 0 else -1)),  # noqa: E501
-                                target={"key": key(row.module, row.param), "unit": row.unit,
-                                        "from": from_step}))
+            checks.append(
+                Check(
+                    "M1",
+                    kind="changed",
+                    sign=int(sign * (1 if mv.notches > 0 else -1)),  # noqa: E501
+                    target={"key": key(row.module, row.param), "unit": row.unit, "from": from_step},
+                )
+            )
     metric, stat, region, sgn = PHRASE_STAT.get(p.key, (None, None, None, 0))
     if metric:
         checks.append(Check(metric, stat=stat, region=region, sign=sgn))
@@ -712,8 +1060,9 @@ def _wb_phrase_meta(p: phrases.Phrase, body: str) -> dict | None:
     with no calibration table on a param outside route A)."""
     if _phrase_wb_expect(p) is not None:
         return None
-    if p.key in WB_RELATIVE_PHRASE_KEYS and not _wb_relative_ok(vocab.spec("temperature",
-                                                                            "temperature"), body):
+    if p.key in WB_RELATIVE_PHRASE_KEYS and not _wb_relative_ok(
+        vocab.spec("temperature", "temperature"), body
+    ):
         return {"accept_refusal": True}
     return None
 
@@ -722,18 +1071,32 @@ def phrase_cases(body: str) -> list[Case]:
     out = []
     for p in phrases.PHRASES:
         syn = p.synonyms[0]
-        forms = [("bare", syn, "P0"), ("touch", f"{syn} a touch", "P1"),
-                 ("lot", f"{syn} a lot", "P1")]
+        forms = [
+            ("bare", syn, "P0"),
+            ("touch", f"{syn} a touch", "P1"),
+            ("lot", f"{syn} a lot", "P1"),
+        ]
         wb_meta = _wb_phrase_meta(p, body)
         cand_meta = _candidate_meta(p)
         pre = _graded_precondition(p)
         for label, text, tier in forms:
             exp = Expect("edit", []) if wb_meta else _phrase_expect(p, from_step=len(pre))
-            role = "hero_bright" if (label == "touch" and body == "olympus" and
-                                      p.key in BRIGHT_HERO_TOUCH_KEYS) else "hero"
-            out.append(_case(case_id(PREFIX, "phrase", p.key, body, label), body, tier,
-                             [*pre, step("darkroom_say", BUDGET_SAY, phrase=text)], exp,
-                             meta=wb_meta or cand_meta, frame_role=role))
+            role = (
+                "hero_bright"
+                if (label == "touch" and body == "olympus" and p.key in BRIGHT_HERO_TOUCH_KEYS)
+                else "hero"
+            )
+            out.append(
+                _case(
+                    case_id(PREFIX, "phrase", p.key, body, label),
+                    body,
+                    tier,
+                    [*pre, step("darkroom_say", BUDGET_SAY, phrase=text)],
+                    exp,
+                    meta=wb_meta or cand_meta,
+                    frame_role=role,
+                )
+            )
         row = _row(p.moves[0])
         by, amount = EXPLICIT_BY_UNIT.get(row.unit, ("0.2", 0.2))
         text = f"{syn} by {by}"
@@ -755,21 +1118,41 @@ def phrase_cases(body: str) -> list[Case]:
             exp = _phrase_expect(p)
         else:
             sgn = 1 if p.moves[0].notches > 0 else -1
-            exp = Expect("edit", [boundary_check(row.module, row.param, row.unit,
-                                                 delta=sgn * amount, lo=row.lo, hi=row.hi)],
-                         sidecar(row.module, row.param, row.unit))
-        out.append(_case(case_id(PREFIX, "phrase", p.key, body, "explicit"), body, "P1",
-                         [step("darkroom_say", BUDGET_SAY, phrase=text)], exp,
-                         meta=wb_meta or cand_meta))
+            exp = Expect(
+                "edit",
+                [
+                    boundary_check(
+                        row.module, row.param, row.unit, delta=sgn * amount, lo=row.lo, hi=row.hi
+                    )
+                ],
+                sidecar(row.module, row.param, row.unit),
+            )
+        out.append(
+            _case(
+                case_id(PREFIX, "phrase", p.key, body, "explicit"),
+                body,
+                "P1",
+                [step("darkroom_say", BUDGET_SAY, phrase=text)],
+                exp,
+                meta=wb_meta or cand_meta,
+            )
+        )
     for p in phrases.PHRASES:
         wb_meta = _wb_phrase_meta(p, body)
         cand_meta = _candidate_meta(p)
         pre = _graded_precondition(p)
         for syn in p.synonyms:
             exp = Expect("edit", []) if wb_meta else _phrase_expect(p, from_step=len(pre))
-            out.append(_case(case_id(PREFIX, "synonym", p.key, syn, body), body, "P1",
-                             [*pre, step("darkroom_say", BUDGET_SAY, phrase=syn)], exp,
-                             meta=wb_meta or cand_meta))
+            out.append(
+                _case(
+                    case_id(PREFIX, "synonym", p.key, syn, body),
+                    body,
+                    "P1",
+                    [*pre, step("darkroom_say", BUDGET_SAY, phrase=syn)],
+                    exp,
+                    meta=wb_meta or cand_meta,
+                )
+            )
     return out
 
 
@@ -797,20 +1180,43 @@ def property_cases(body: str) -> list[Case]:
                 # Fix round 1 (review I4): pinned and live -- the monotonic
                 # property is observed on the real target key, not `k`
                 # (which the write never touches once pinned).
-                exp = Expect("property", [Check("M1", kind="monotonic", target={
-                    "key": wb["m1_key"], "pairs": [[0, 1], [2, 3], [4, 5]]})], property="P4")
+                exp = Expect(
+                    "property",
+                    [
+                        Check(
+                            "M1",
+                            kind="monotonic",
+                            target={"key": wb["m1_key"], "pairs": [[0, 1], [2, 3], [4, 5]]},
+                        )
+                    ],
+                    property="P4",
+                )
         elif p.key in TINT_KEYS:
             exp = Expect("typed_error", codes=["value_unknown"])
         else:
-            exp = Expect("property", [Check("M1", kind="monotonic", target={
-                "key": k, "pairs": [[0, 1], [2, 3], [4, 5]]})], property="P4")
+            exp = Expect(
+                "property",
+                [
+                    Check(
+                        "M1", kind="monotonic", target={"key": k, "pairs": [[0, 1], [2, 3], [4, 5]]}
+                    )
+                ],
+                property="P4",
+            )
         pre: list = []
         if exp.kind == "property" and p.key in GRADED_PRECONDITION_KEYS:
             # night 3 group E: a "weaker" phrase on the clean frame is a typed
             # noop (nothing to weaken); start graded, as a setup step
             pre = [_setup_step(st) for st in _graded_precondition(p)]
-            exp = Expect("property", [Check("M1", kind="monotonic", target={
-                "key": k, "pairs": [[1, 2], [3, 4], [5, 6]]})], property="P4")
+            exp = Expect(
+                "property",
+                [
+                    Check(
+                        "M1", kind="monotonic", target={"key": k, "pairs": [[1, 2], [3, 4], [5, 6]]}
+                    )
+                ],
+                property="P4",
+            )
         elif exp.kind == "property" and len(p.moves) == 1 and p.moves[0].kind == "toggle":
             # a toggle has no magnitude to order: start in the opposite state
             # (setup) and expect every strength to land the same state
@@ -824,15 +1230,27 @@ def property_cases(body: str) -> list[Case]:
             #: the final state, and the evaluator's rule (a) fired. The
             #: setup step IS a write: take the before snapshot after it.
             pre[0].write = True
-            exp = Expect("property", [
-                Check("M1", kind="changed", target={"key": k, "unit": unit, "from": 1, "to": 2}),
-                Check("M1", kind="step_equal", target={"key": k, "a": 2, "b": 4, "unit": unit}),
-                Check("M1", kind="step_equal", target={"key": k, "a": 2, "b": 6, "unit": unit}),
-            ], property="P4")
-        out.append(_case(case_id(PREFIX, "p4", p.key, body), body, "P1",
-                         [*pre, say(f"{syn} a touch"), undo(), say(syn), undo(),
-                          say(f"{syn} a lot")],
-                         exp, meta=_candidate_meta(p)))
+            exp = Expect(
+                "property",
+                [
+                    Check(
+                        "M1", kind="changed", target={"key": k, "unit": unit, "from": 1, "to": 2}
+                    ),
+                    Check("M1", kind="step_equal", target={"key": k, "a": 2, "b": 4, "unit": unit}),
+                    Check("M1", kind="step_equal", target={"key": k, "a": 2, "b": 6, "unit": unit}),
+                ],
+                property="P4",
+            )
+        out.append(
+            _case(
+                case_id(PREFIX, "p4", p.key, body),
+                body,
+                "P1",
+                [*pre, say(f"{syn} a touch"), undo(), say(syn), undo(), say(f"{syn} a lot")],
+                exp,
+                meta=_candidate_meta(p),
+            )
+        )
     for a, b in OPPOSED:
         pa, pb = by_key[a], by_key[b]
         k, unit = _primary(pa)
@@ -844,17 +1262,34 @@ def property_cases(body: str) -> list[Case]:
                 # Fix round 1 (review I4): restore-check the real target
                 # key, not `k` (unaffected once pinned).
                 tk = wb["m1_key"]
-                exp = Expect("property", [m1_restored([tk], {tk: wb["unit"]}),
-                                          Check("M2", stat="L", region="frame", sign=0,
-                                                kind="unchanged")], property="P5")
+                exp = Expect(
+                    "property",
+                    [
+                        m1_restored([tk], {tk: wb["unit"]}),
+                        Check("M2", stat="L", region="frame", sign=0, kind="unchanged"),
+                    ],
+                    property="P5",
+                )
         elif a in TINT_KEYS:
             exp = Expect("typed_error", codes=["value_unknown"])
         else:
-            exp = Expect("property", [m1_restored([k], {k: unit}),
-                                      Check("M2", stat="L", region="frame", sign=0,
-                                            kind="unchanged")], property="P5")
-        out.append(_case(case_id(PREFIX, "p5", a, b, body), body, "P1",
-                         [say(pa.synonyms[0]), say(pb.synonyms[0])], exp))
+            exp = Expect(
+                "property",
+                [
+                    m1_restored([k], {k: unit}),
+                    Check("M2", stat="L", region="frame", sign=0, kind="unchanged"),
+                ],
+                property="P5",
+            )
+        out.append(
+            _case(
+                case_id(PREFIX, "p5", a, b, body),
+                body,
+                "P1",
+                [say(pa.synonyms[0]), say(pb.synonyms[0])],
+                exp,
+            )
+        )
     for a, b in COMMUTATIVE:
         pa, pb = by_key[a], by_key[b]
         ka, _ = _primary(pa)
@@ -882,26 +1317,54 @@ def property_cases(body: str) -> list[Case]:
             else:
                 ok_key, refused_route, refused_steps = ka, wb_b, (1, 4)
             codes = list(refused_route["codes"])
-            code_target = ({"path": "error.code", "op": "eq", "value": codes[0]} if
-                           len(codes) == 1 else
-                           {"path": "error.code", "op": "in", "value": codes})
+            code_target = (
+                {"path": "error.code", "op": "eq", "value": codes[0]}
+                if len(codes) == 1
+                else {"path": "error.code", "op": "in", "value": codes}
+            )
             checks = [Check("M1", kind="step_equal", target={"keys": [ok_key], "a": 2, "b": 6})]
             for i in refused_steps:
-                checks.append(Check("envelope", step=i, target={
-                    "path": "ok", "op": "eq", "value": False}))
+                checks.append(
+                    Check("envelope", step=i, target={"path": "ok", "op": "eq", "value": False})
+                )
                 checks.append(Check("envelope", step=i, target=code_target))
             exp = Expect("property", checks, property="P2")
         elif wb_b is not None:
             # Fix round 1 (review I4): pinned and live -- compare the real
             # target key, not `kb` (unaffected once pinned).
-            exp = Expect("property", [Check("M1", kind="step_equal", target={
-                "keys": [ka, wb_b["m1_key"]], "a": 2, "b": 6})], property="P2")
+            exp = Expect(
+                "property",
+                [
+                    Check(
+                        "M1",
+                        kind="step_equal",
+                        target={"keys": [ka, wb_b["m1_key"]], "a": 2, "b": 6},
+                    )
+                ],
+                property="P2",
+            )
         else:
-            exp = Expect("property", [Check("M1", kind="step_equal", target={
-                "keys": [ka, kb], "a": 2, "b": 6})], property="P2")
-        out.append(_case(case_id(PREFIX, "p2", a, b, body), body, "P1",
-                         [say(pa.synonyms[0]), say(pb.synonyms[0]), undo(), undo(),
-                          say(pb.synonyms[0]), say(pa.synonyms[0])], exp))
+            exp = Expect(
+                "property",
+                [Check("M1", kind="step_equal", target={"keys": [ka, kb], "a": 2, "b": 6})],
+                property="P2",
+            )
+        out.append(
+            _case(
+                case_id(PREFIX, "p2", a, b, body),
+                body,
+                "P1",
+                [
+                    say(pa.synonyms[0]),
+                    say(pb.synonyms[0]),
+                    undo(),
+                    undo(),
+                    say(pb.synonyms[0]),
+                    say(pa.synonyms[0]),
+                ],
+                exp,
+            )
+        )
     return out
 
 
@@ -916,64 +1379,160 @@ def nex5n_cases() -> list[Case]:
     wb_pinned_live = wb_route is not None and not wb_refused
     pre = [] if wb_route is not None else _tint_reset()
     out = []
-    for label, v in (("set_lo", s.lo), ("set_hi", s.hi), ("set_mid", _mid(s)),
-                     ("set_3200", 3200.0), ("set_5500", 5500.0), ("set_6500", 6500.0)):
+    for label, v in (
+        ("set_lo", s.lo),
+        ("set_hi", s.hi),
+        ("set_mid", _mid(s)),
+        ("set_3200", 3200.0),
+        ("set_5500", 5500.0),
+        ("set_6500", 6500.0),
+    ):
         if wb_refused:
-            out.append(_case(case_id(PREFIX, "wb", body, label), body, "P1", [_set(s, v)],
-                             _wb_refusal_expect(wb_route)))
+            out.append(
+                _case(
+                    case_id(PREFIX, "wb", body, label),
+                    body,
+                    "P1",
+                    [_set(s, v)],
+                    _wb_refusal_expect(wb_route),
+                )
+            )
             continue
         if wb_pinned_live:
-            out.append(_case(case_id(PREFIX, "wb", body, label), body, "P1", [_set(s, v)],
-                             _wb_route_a_pinned_edit(wb_route, value=v)))
+            out.append(
+                _case(
+                    case_id(PREFIX, "wb", body, label),
+                    body,
+                    "P1",
+                    [_set(s, v)],
+                    _wb_route_a_pinned_edit(wb_route, value=v),
+                )
+            )
             continue
-        out.append(_case(case_id(PREFIX, "wb", body, label), body, "P1", [*pre, _set(s, v)],
-                         Expect("edit", [m1_equals(s.module, s.param, v, s.unit)], _side(s))))
+        out.append(
+            _case(
+                case_id(PREFIX, "wb", body, label),
+                body,
+                "P1",
+                [*pre, _set(s, v)],
+                Expect("edit", [m1_equals(s.module, s.param, v, s.unit)], _side(s)),
+            )
+        )
     for n in (1, -1, 3, -3):
         if wb_refused:
-            out.append(_case(case_id(PREFIX, "wb", body, _signed("adjust", n)), body, "P1",
-                             [_adjust(s, n * s.step)], _wb_refusal_expect(wb_route)))
+            out.append(
+                _case(
+                    case_id(PREFIX, "wb", body, _signed("adjust", n)),
+                    body,
+                    "P1",
+                    [_adjust(s, n * s.step)],
+                    _wb_refusal_expect(wb_route),
+                )
+            )
             continue
         if wb_pinned_live:
-            out.append(_case(case_id(PREFIX, "wb", body, _signed("adjust", n)), body, "P1",
-                             [_adjust(s, n * s.step)],
-                             _wb_route_a_pinned_edit(wb_route, sign=(1 if n > 0 else -1))))
+            out.append(
+                _case(
+                    case_id(PREFIX, "wb", body, _signed("adjust", n)),
+                    body,
+                    "P1",
+                    [_adjust(s, n * s.step)],
+                    _wb_route_a_pinned_edit(wb_route, sign=(1 if n > 0 else -1)),
+                )
+            )
             continue
         chk = m1_delta(s.module, s.param, n * s.step, s.unit, s.step)
         chk.target["from"] = 2
-        out.append(_case(case_id(PREFIX, "wb", body, _signed("adjust", n)), body, "P1",
-                         [*pre, _set(s, _mid(s)), _adjust(s, n * s.step)],
-                         Expect("edit", [chk], _side(s))))
+        out.append(
+            _case(
+                case_id(PREFIX, "wb", body, _signed("adjust", n)),
+                body,
+                "P1",
+                [*pre, _set(s, _mid(s)), _adjust(s, n * s.step)],
+                Expect("edit", [chk], _side(s)),
+            )
+        )
     if wb_refused:
         # Fix round 1 (review I2): see param_cases' matching comment -- keep
         # the antecedent's own refused write as a real step, expect the
         # undo's own "noop" (an empty journal), not module_unavailable.
         undo_expect = checkmap.wb_route_a_undo_expect(_CMAP, wb_route)
         undo_exp = Expect("typed_error", codes=list(undo_expect["codes"]))
-        out.append(_case(case_id(PREFIX, "wb", body, "undo_after_set"), body, "P1",
-                         [_set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)], undo_exp))
-        out.append(_case(case_id(PREFIX, "wb", body, "undo_after_adjust"), body, "P1",
-                         [_adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)], undo_exp))
+        out.append(
+            _case(
+                case_id(PREFIX, "wb", body, "undo_after_set"),
+                body,
+                "P1",
+                [_set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)],
+                undo_exp,
+            )
+        )
+        out.append(
+            _case(
+                case_id(PREFIX, "wb", body, "undo_after_adjust"),
+                body,
+                "P1",
+                [_adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)],
+                undo_exp,
+            )
+        )
     elif wb_pinned_live:
         restore = _wb_route_a_pinned_restore(wb_route)
-        out.append(_case(case_id(PREFIX, "wb", body, "undo_after_set"), body, "P1",
-                         [_set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)], restore))
-        out.append(_case(case_id(PREFIX, "wb", body, "undo_after_adjust"), body, "P1",
-                         [_adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)], restore))
+        out.append(
+            _case(
+                case_id(PREFIX, "wb", body, "undo_after_set"),
+                body,
+                "P1",
+                [_set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)],
+                restore,
+            )
+        )
+        out.append(
+            _case(
+                case_id(PREFIX, "wb", body, "undo_after_adjust"),
+                body,
+                "P1",
+                [_adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)],
+                restore,
+            )
+        )
     else:
-        out.append(_case(case_id(PREFIX, "wb", body, "undo_after_set"), body, "P1",
-                         [*pre, _set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)],
-                         Expect("workflow", [m1_restored([k], {k: "K"}, 1)])))
-        out.append(_case(case_id(PREFIX, "wb", body, "undo_after_adjust"), body, "P1",
-                         [*pre, _adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)],
-                         Expect("workflow", [m1_restored([k], {k: "K"}, 1)])))
+        out.append(
+            _case(
+                case_id(PREFIX, "wb", body, "undo_after_set"),
+                body,
+                "P1",
+                [*pre, _set(s, _mid(s)), step("darkroom_undo_last", BUDGET_MOVE)],
+                Expect("workflow", [m1_restored([k], {k: "K"}, 1)]),
+            )
+        )
+        out.append(
+            _case(
+                case_id(PREFIX, "wb", body, "undo_after_adjust"),
+                body,
+                "P1",
+                [*pre, _adjust(s, s.step), step("darkroom_undo_last", BUDGET_MOVE)],
+                Expect("workflow", [m1_restored([k], {k: "K"}, 1)]),
+            )
+        )
     by_key = {p.key: p for p in phrases.PHRASES}
     for pk in ("warmer", "cooler"):
         p = by_key[pk]
-        for label, text in (("bare", p.synonyms[0]), ("touch", f"{p.synonyms[0]} a touch"),
-                            ("lot", f"{p.synonyms[0]} a lot"),
-                            ("explicit", f"{p.synonyms[0]} by 500k")):
-            out.append(_case(case_id(PREFIX, "wb", body, pk, label), body, "P1",
-                             [step("darkroom_say", BUDGET_SAY, phrase=text)], _phrase_expect(p)))
+        for label, text in (
+            ("bare", p.synonyms[0]),
+            ("touch", f"{p.synonyms[0]} a touch"),
+            ("lot", f"{p.synonyms[0]} a lot"),
+            ("explicit", f"{p.synonyms[0]} by 500k"),
+        ):
+            out.append(
+                _case(
+                    case_id(PREFIX, "wb", body, pk, label),
+                    body,
+                    "P1",
+                    [step("darkroom_say", BUDGET_SAY, phrase=text)],
+                    _phrase_expect(p),
+                )
+            )
     return out
 
 
@@ -999,7 +1558,17 @@ def expected_count() -> int:
     hues = sum(p.wraps for p in live_params())
     mods = len({p.module for p in live_params()})
     softs = sum(_soft_range(p) is not None for p in live_params())
-    per_body = (softs + live * (6 + 4 + 1 + 2 + 2 + 2) + hues * 2 + mods * 3 + 6 + 2 + keys * 4
-                + syns
-                + keys + len(OPPOSED) + len(COMMUTATIVE))
+    per_body = (
+        softs
+        + live * (6 + 4 + 1 + 2 + 2 + 2)
+        + hues * 2
+        + mods * 3
+        + 6
+        + 2
+        + keys * 4
+        + syns
+        + keys
+        + len(OPPOSED)
+        + len(COMMUTATIVE)
+    )
     return 2 * per_body + 20

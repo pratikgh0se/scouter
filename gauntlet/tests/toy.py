@@ -20,6 +20,7 @@ class ToySession:
             raise RefuseRun("foreign darktable: pid 4242")
         if behaviour == "sleep":
             import time
+
             time.sleep(case.meta.get("sleep_s", 5))
         if behaviour == "crash":
             self.adapter.crashes += 1
@@ -57,14 +58,21 @@ class ToyAdapter:
         out = []
         for i in range(n):
             cid = case_id(layer, i)
-            out.append(Case(
-                id=cid, layer=layer, tier="P0" if i == 0 else "P1", mode="tool",
-                steps=[Step("set", {"v": 1.0}, budget_s=0.5, write=True)],
-                expect=Expect("edit", checks=[Check("M1", kind="equals",
-                                                    target={"key": "x.v", "value": 1.0})],
-                              sidecar={"changed": True, "key": "x.v"}),
-                meta={"sleep_s": 5},
-            ))
+            out.append(
+                Case(
+                    id=cid,
+                    layer=layer,
+                    tier="P0" if i == 0 else "P1",
+                    mode="tool",
+                    steps=[Step("set", {"v": 1.0}, budget_s=0.5, write=True)],
+                    expect=Expect(
+                        "edit",
+                        checks=[Check("M1", kind="equals", target={"key": "x.v", "value": 1.0})],
+                        sidecar={"changed": True, "key": "x.v"},
+                    ),
+                    meta={"sleep_s": 5},
+                )
+            )
         return out
 
     def open_session(self, layer: str, run_root) -> ToySession:
@@ -88,6 +96,7 @@ class ToyAdapter:
 
     def policy(self):
         from gauntlet.evaluate import Policy
+
         return Policy(frozenset({"usage"}), frozenset({"bridge_timeout"}), ("can't",), ("done",))
 
 

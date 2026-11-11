@@ -335,7 +335,9 @@ def with_new_history_hash(text: str, module: str | None = None) -> str:
         assert end_m, "fixture sidecar has no history_end"
         end = int(end_m.group(1))
         top = re.search(
-            r'<rdf:li\s(?:(?!/>).)*?darktable:num="%d"(?:(?!/>).)*?/>' % (end - 1), text, re.S
+            rf'<rdf:li\s(?:(?!/>).)*?darktable:num="{end - 1}"(?:(?!/>).)*?/>',
+            text,
+            re.S,
         )
         assert top, f"fixture sidecar has no history item {end - 1}"
         item = re.sub(r'darktable:num="\d+"', f'darktable:num="{end}"', top.group(0))
@@ -393,9 +395,7 @@ def with_param_value(text: str, operation: str, param: str, value: float) -> str
         fmt, offset = "<f", slot * 4
     struct.pack_into(fmt, blob, offset, value)
     new_hex = bytes(blob).hex()
-    pattern = re.compile(
-        rf'(darktable:num="{target.num}".*?darktable:params=")[^"]*(")', re.S
-    )
+    pattern = re.compile(rf'(darktable:num="{target.num}".*?darktable:params=")[^"]*(")', re.S)
     new, count = pattern.subn(lambda m: m.group(1) + new_hex + m.group(2), text, count=1)
     if not count:
         raise AssertionError(f"could not rewrite {operation} num {target.num}")

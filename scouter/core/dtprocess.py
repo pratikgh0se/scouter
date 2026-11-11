@@ -21,8 +21,9 @@ from pathlib import Path
 
 from scouter import paths
 
-DARKTABLE = os.environ.get("SCOUTER_DARKTABLE",
-                           "/Applications/darktable.app/Contents/MacOS/darktable")
+DARKTABLE = os.environ.get(
+    "SCOUTER_DARKTABLE", "/Applications/darktable.app/Contents/MacOS/darktable"
+)
 OWNER_FILE = "darktable.owner.json"
 
 #: Children this process launched, so `_alive` can reap them: a discarded
@@ -62,8 +63,9 @@ def owner_path(cache_root: Path | None = None) -> Path:
 
 def _lstart(pid: int) -> str | None:
     try:
-        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True,
-                             text=True, timeout=5)
+        out = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=5
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
     return out.stdout.strip() or None
@@ -71,8 +73,9 @@ def _lstart(pid: int) -> str | None:
 
 def _comm(pid: int) -> str | None:
     try:
-        out = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)], capture_output=True,
-                             text=True, timeout=5)
+        out = subprocess.run(
+            ["ps", "-o", "comm=", "-p", str(pid)], capture_output=True, text=True, timeout=5
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
     return out.stdout.strip() or None
@@ -96,8 +99,9 @@ def running_pids() -> list[int]:
 
     Raises `subprocess.TimeoutExpired` / `OSError` when pgrep cannot answer:
     callers must treat that as "unknown", never as "none running"."""
-    out = subprocess.run(["pgrep", "-f", "MacOS/darktable( |$)"], capture_output=True, text=True,
-                         timeout=5)
+    out = subprocess.run(
+        ["pgrep", "-f", "MacOS/darktable( |$)"], capture_output=True, text=True, timeout=5
+    )
     return [int(x) for x in out.stdout.split() if x.strip().isdigit()]
 
 
@@ -174,9 +178,14 @@ def registered_pids(registry: Path | None = None) -> set[int]:
 REGISTRY_GRACE_S = 15.0
 
 
-def unregistered_foreign_pids(cache_root: Path | None = None, *, grace_s: float = 0.0,
-                              poll_s: float = 1.0, clock=time.monotonic,
-                              sleep=time.sleep) -> list[int]:
+def unregistered_foreign_pids(
+    cache_root: Path | None = None,
+    *,
+    grace_s: float = 0.0,
+    poll_s: float = 1.0,
+    clock=time.monotonic,
+    sleep=time.sleep,
+) -> list[int]:
     """The preflight/launch guard: a darktable that is neither this process's
     owned one nor registered by this gauntlet run. Pratik's own darktable is
     never registered, so it still blocks, but only after `grace_s` of
@@ -191,9 +200,15 @@ def unregistered_foreign_pids(cache_root: Path | None = None, *, grace_s: float 
         sleep(poll_s)
 
 
-def launch(frame: str | Path | None, library: str | Path, configdir: str | Path | None = None,
-           *, log_path: str | Path | None = None, exe: str = DARKTABLE,
-           env: dict[str, str] | None = None) -> Launched:
+def launch(
+    frame: str | Path | None,
+    library: str | Path,
+    configdir: str | Path | None = None,
+    *,
+    log_path: str | Path | None = None,
+    exe: str = DARKTABLE,
+    env: dict[str, str] | None = None,
+) -> Launched:
     argv = [exe, "--library", str(library)]
     if configdir:
         argv += ["--configdir", str(configdir)]
@@ -223,10 +238,18 @@ def launch(frame: str | Path | None, library: str | Path, configdir: str | Path 
             pass
         else:
             _children.pop(proc.pid, None)
-        raise LaunchError(f"could not read the start time of darktable pid {proc.pid}; "
-                          "stopped it rather than leave an unowned process")
-    rec = Launched(proc.pid, start, exe, str(library),
-                   str(configdir) if configdir else None, str(frame) if frame else None)
+        raise LaunchError(
+            f"could not read the start time of darktable pid {proc.pid}; "
+            "stopped it rather than leave an unowned process"
+        )
+    rec = Launched(
+        proc.pid,
+        start,
+        exe,
+        str(library),
+        str(configdir) if configdir else None,
+        str(frame) if frame else None,
+    )
     #: (fix round 1 review H3c): the owner record's cache root comes from
     #: THIS launch's own `env`, when given -- never just the ambient
     #: `os.environ` `owner_path()` would otherwise fall back to. See
@@ -237,16 +260,22 @@ def launch(frame: str | Path | None, library: str | Path, configdir: str | Path 
     registry = _registry_dir(env)
     if registry is not None:
         registry.mkdir(parents=True, exist_ok=True)
-        (registry / f"{rec.pid}.json").write_text(json.dumps(asdict(rec)) + "\n",
-                                                  encoding="utf-8")
+        (registry / f"{rec.pid}.json").write_text(json.dumps(asdict(rec)) + "\n", encoding="utf-8")
     op = owner_path(cache_root)
     op.parent.mkdir(parents=True, exist_ok=True)
     op.write_text(json.dumps(asdict(rec)) + "\n", encoding="utf-8")
     return rec
 
 
-def wait_gui_ready(timeout_s: float = 30.0, *, poll_s: float = 0.5, call=None,
-                   clock=time.monotonic, sleep=time.sleep, stop_if=None) -> dict:
+def wait_gui_ready(
+    timeout_s: float = 30.0,
+    *,
+    poll_s: float = 0.5,
+    call=None,
+    clock=time.monotonic,
+    sleep=time.sleep,
+    stop_if=None,
+) -> dict:
     """Poll `darktable_mcp.diag` until `gui_ready` is true (row 434). Never
     treats `view.current` as readiness (stall write-up 5).
 
@@ -275,9 +304,15 @@ def wait_gui_ready(timeout_s: float = 30.0, *, poll_s: float = 0.5, call=None,
     return {"ready": False, **last}
 
 
-def terminate(pid: int | None = None, *, responsive: bool | None = None,
-              kill=os.kill, alive=_alive, sleep=time.sleep,
-              cache_root: Path | None = None) -> dict:
+def terminate(
+    pid: int | None = None,
+    *,
+    responsive: bool | None = None,
+    kill=os.kill,
+    alive=_alive,
+    sleep=time.sleep,
+    cache_root: Path | None = None,
+) -> dict:
     """The quit ladder on an OWNED pid: osascript quit (skipped when the GUI is
     known not to answer), SIGTERM 10 s, SIGKILL. Refuses a pid Scouter did not
     launch with `refused_not_ours` and sends no signal.
@@ -307,8 +342,12 @@ def terminate(pid: int | None = None, *, responsive: bool | None = None,
                 responsive = False
     if responsive is not False:
         try:
-            subprocess.run(["osascript", "-e", 'tell application "darktable" to quit'],
-                           capture_output=True, timeout=20, check=False)
+            subprocess.run(
+                ["osascript", "-e", 'tell application "darktable" to quit'],
+                capture_output=True,
+                timeout=20,
+                check=False,
+            )
             steps.append("osascript")
         except (OSError, subprocess.TimeoutExpired):
             steps.append("osascript_timeout")
@@ -320,8 +359,7 @@ def terminate(pid: int | None = None, *, responsive: bool | None = None,
         # Re-check ownership before every signal: after the waits above the
         # pid may have exited and been reused by another process.
         if owned_pid(cache_root) != target:
-            return {"ok": not alive(target), "how": "gone_or_reused", "pid": target,
-                    "steps": steps}
+            return {"ok": not alive(target), "how": "gone_or_reused", "pid": target, "steps": steps}
         try:
             kill(target, sig)
         except ProcessLookupError:

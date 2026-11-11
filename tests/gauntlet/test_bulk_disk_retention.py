@@ -20,8 +20,7 @@ import pytest
 import scouter.config as scouter_config
 from gauntlet.case import Case, Expect, Step
 from gauntlet.runner import Runner
-from gauntlet.store import RunDir, case_workdir
-from tests.gauntlet import adapter as adapter_mod
+from gauntlet.store import RunDir
 from tests.gauntlet import session as sess
 from tests.gauntlet.adapter import ScouterAdapter
 from tests.gauntlet.corpus import Corpus
@@ -35,8 +34,12 @@ def _no_real_wb_tables(tmp_path, monkeypatch):
 
 @pytest.fixture
 def pinned_env(tmp_path, monkeypatch):
-    for k in ("SCOUTER_CONFIG", "SCOUTER_CACHE", "OBSIDIAN_VAULT_PATH",
-              "SCOUTER_DARKTABLE_LIBRARY_DB"):
+    for k in (
+        "SCOUTER_CONFIG",
+        "SCOUTER_CACHE",
+        "OBSIDIAN_VAULT_PATH",
+        "SCOUTER_DARKTABLE_LIBRARY_DB",
+    ):
         monkeypatch.setenv(k, str(tmp_path / "pinned" / k.lower()))
     return tmp_path
 
@@ -46,8 +49,7 @@ def fake_corpus(tmp_path):
     trial = tmp_path / "trial"
     trial.mkdir()
     (trial / "H.ORF").write_bytes(b"raw")
-    doc = {"frames": [{"rel": "H.ORF", "body": "olympus"}],
-           "roles": {"olympus": {"hero": "H.ORF"}}}
+    doc = {"frames": [{"rel": "H.ORF", "body": "olympus"}], "roles": {"olympus": {"hero": "H.ORF"}}}
     return Corpus(doc, trial)
 
 
@@ -79,9 +81,16 @@ class DiskFakeMcp:
                 (job_path / f.name).write_bytes(payload)
                 self.bytes_written += len(payload)
                 written.append({"source_name": f.name, "dest": f.name})
-            return {"ok": True, "outcome": "ok",
-                    "data": {"job_slug": args["job_slug"], "date": "2026-09-29",
-                             "files": written, "imported": len(written)}}
+            return {
+                "ok": True,
+                "outcome": "ok",
+                "data": {
+                    "job_slug": args["job_slug"],
+                    "date": "2026-09-29",
+                    "files": written,
+                    "imported": len(written),
+                },
+            }
         return {"ok": True, "outcome": "ok", "data": {}}
 
     def close(self) -> None:
@@ -90,10 +99,21 @@ class DiskFakeMcp:
 
 def _bulk_case(case_id: str) -> Case:
     return Case(
-        id=case_id, layer="bulk", tier="P1", mode="tool",
-        steps=[Step("library_import", {"source": "{card}", "job_slug": "{job_slug}",
-                                       "confirm": True}, 6.0, True)],
-        expect=Expect("workflow", []), body="olympus", frame_role="card",
+        id=case_id,
+        layer="bulk",
+        tier="P1",
+        mode="tool",
+        steps=[
+            Step(
+                "library_import",
+                {"source": "{card}", "job_slug": "{job_slug}", "confirm": True},
+                6.0,
+                True,
+            )
+        ],
+        expect=Expect("workflow", []),
+        body="olympus",
+        frame_role="card",
         meta={"frames": 2},
     )
 
@@ -112,8 +132,9 @@ def _routed_adapter(pinned_env, fake_corpus, run):
             mcps.append(mcp)
             return mcp
 
-        s = sess.ScouterSession(corpus, root, body, dt=FakeDt(), run_root=run_root,
-                                mcp_factory=mcp_factory)
+        s = sess.ScouterSession(
+            corpus, root, body, dt=FakeDt(), run_root=run_root, mcp_factory=mcp_factory
+        )
         return s
 
     a.session_factory = factory
@@ -139,8 +160,7 @@ def test_a_scored_bulk_case_holds_only_kept_files_after_retention(pinned_env, fa
     assert not work.exists() or list(work.rglob("*")) == []
 
 
-def test_a_second_bulk_case_in_the_same_body_never_sees_the_firsts_import(pinned_env,
-                                                                          fake_corpus):
+def test_a_second_bulk_case_in_the_same_body_never_sees_the_firsts_import(pinned_env, fake_corpus):
     """Two bulk cases of the same body share ONE session (RoutedSession
     reuses it -- no relaunch between them); each still gets its own
     library_root, so the second case's import can never land in, or read
@@ -171,8 +191,10 @@ def test_z2_a_tiny_runner_run_sums_bytes_before_and_after_retention(pinned_env, 
     against `RunDir.du()`'s own post-retention count for the bulk layer."""
     run = RunDir(pinned_env / "runs", "stamp").ensure()
     a, mcps = _routed_adapter(pinned_env, fake_corpus, run)
-    cases = [_bulk_case("blk-import-and-cull-olympus-card"),
-             _bulk_case("blk-import-and-cull-olympus-job")]
+    cases = [
+        _bulk_case("blk-import-and-cull-olympus-card"),
+        _bulk_case("blk-import-and-cull-olympus-job"),
+    ]
     run.write_cases(cases)
 
     summary = Runner(a, run).run_layers(layers=["bulk"])

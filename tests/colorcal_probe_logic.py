@@ -51,8 +51,10 @@ def route_verdict(ev: Evidence) -> tuple[str, str]:
             return "DO_NOT_PROMOTE", reason
     up = ev.base_rb + ev.floor
     down = ev.base_rb - ev.floor
-    detail = (f"r/b base {ev.base_rb:.4f} warm {ev.warm_rb:.4f} cool {ev.cool_rb:.4f} "
-              f"floor {ev.floor:.4f}")
+    detail = (
+        f"r/b base {ev.base_rb:.4f} warm {ev.warm_rb:.4f} cool {ev.cool_rb:.4f} "
+        f"floor {ev.floor:.4f}"
+    )
     if ev.warm_rb > up and ev.cool_rb < down:
         return "PROMOTE", detail
     if ev.warm_rb < down and ev.cool_rb > up:

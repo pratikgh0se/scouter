@@ -1,11 +1,11 @@
 """Runs tests/intent/htc_night2.json (Zenkai Rules Z1) against the real
 scripts/htc-night2.sh via subprocess, over a fake repo/runs-root -- two
 oracles per example (Z2): the exit code AND the printed stdout content."""
+
 from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import tempfile
 import unittest
@@ -56,10 +56,14 @@ class HtcNight2IntentTest(unittest.TestCase):
                 (night_dir / "runner.pid").write_text(str(os.getpid()), encoding="utf-8")
 
             env = dict(os.environ)
-            env.update({
-                "HTC_REPO": str(repo), "HTC_RUNS_ROOT": str(runs_root),
-                "HTC_TRIAL": str(trial), "PATH": f"{fake_bin}:{env['PATH']}",
-            })
+            env.update(
+                {
+                    "HTC_REPO": str(repo),
+                    "HTC_RUNS_ROOT": str(runs_root),
+                    "HTC_TRIAL": str(trial),
+                    "PATH": f"{fake_bin}:{env['PATH']}",
+                }
+            )
             if inp["stamp_env"]:
                 env["STAMP"] = inp["stamp_env"]
 
@@ -75,6 +79,7 @@ class HtcNight2IntentTest(unittest.TestCase):
 def _make(ex: dict):
     def test(self: HtcNight2IntentTest) -> None:
         self.run_example(ex)
+
     return test
 
 

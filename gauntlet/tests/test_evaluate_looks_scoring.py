@@ -20,34 +20,54 @@ def _snap(fp, **params):
 
 def _look_case(checks, meta=None, steps=None):
     meta = {"look": "x", **(meta or {})}
-    return Case(id="lk-x-chart", layer="looks", tier="P1", mode="tool",
-                steps=steps or [Step("look_plan", {"look_id": "x"}, 40.0, True)],
-                expect=Expect("edit", checks, {"changed": True}), meta=meta)
+    return Case(
+        id="lk-x-chart",
+        layer="looks",
+        tier="P1",
+        mode="tool",
+        steps=steps or [Step("look_plan", {"look_id": "x"}, 40.0, True)],
+        expect=Expect("edit", checks, {"changed": True}),
+        meta=meta,
+    )
 
 
 def _look_call(moves):
     ok = all(m["ok"] for m in moves)
-    return CallRecord("look_plan", {}, {"ok": ok, "outcome": "ok" if ok else "error:partial",
-                                        "data": {"moves": moves}}, write=True)
+    return CallRecord(
+        "look_plan",
+        {},
+        {"ok": ok, "outcome": "ok" if ok else "error:partial", "data": {"moves": moves}},
+        write=True,
+    )
 
 
 def _mv(param, value, ok=True, error=None, module="colorbalancergb"):
-    return {"tool": "darkroom_set", "module": module, "param": param, "value": value,
-            "ok": ok, "error": error}
+    return {
+        "tool": "darkroom_set",
+        "module": module,
+        "param": param,
+        "value": value,
+        "ok": ok,
+        "error": error,
+    }
 
 
 # ---- item 1: look_plan sub-moves count as landed requests; last write per key wins
+
 
 def test_look_plan_landed_but_sub_floor_move_is_imperceptible_not_silent():
     """'Faithful look, +0.06 shadows' on a dark raw: the sidecar shows
     shadows_luminance at the asked 0.0607, the L statistic moved +0.27 under
     the 0.5 floor. The edit is real and complete: imperceptible_step."""
     chk = Check("M2", stat="L", region="shadows", sign=1)
-    obs = Observation(calls=[_look_call([_mv("shadows_luminance", 0.0607)])],
-                      before=_snap("a", **{"colorbalancergb.shadows_luminance": 0.0}),
-                      after=_snap("b", **{"colorbalancergb.shadows_luminance": 0.0607}),
-                      stats_before={"shadows": {"L": 20.0}}, stats_after={"shadows": {"L": 20.27}},
-                      floors={"L": 0.5})
+    obs = Observation(
+        calls=[_look_call([_mv("shadows_luminance", 0.0607)])],
+        before=_snap("a", **{"colorbalancergb.shadows_luminance": 0.0}),
+        after=_snap("b", **{"colorbalancergb.shadows_luminance": 0.0607}),
+        stats_before={"shadows": {"L": 20.0}},
+        stats_after={"shadows": {"L": 20.27}},
+        floors={"L": 0.5},
+    )
     v = evaluate(_look_case([chk]), obs, POLICY)
     assert (v.score, v.outcome) == ("partial", "imperceptible_step")
 
@@ -56,11 +76,14 @@ def test_look_plan_sub_floor_move_that_did_not_land_stays_silent():
     """Control: the look_plan says it set 0.0607 but the sidecar still reads 0.0:
     nothing landed, so the sub-floor exemption must not apply."""
     chk = Check("M2", stat="L", region="shadows", sign=1)
-    obs = Observation(calls=[_look_call([_mv("shadows_luminance", 0.0607)])],
-                      before=_snap("a", **{"colorbalancergb.shadows_luminance": 0.0}),
-                      after=_snap("b", **{"colorbalancergb.shadows_luminance": 0.01}),
-                      stats_before={"shadows": {"L": 20.0}}, stats_after={"shadows": {"L": 20.27}},
-                      floors={"L": 0.5})
+    obs = Observation(
+        calls=[_look_call([_mv("shadows_luminance", 0.0607)])],
+        before=_snap("a", **{"colorbalancergb.shadows_luminance": 0.0}),
+        after=_snap("b", **{"colorbalancergb.shadows_luminance": 0.01}),
+        stats_before={"shadows": {"L": 20.0}},
+        stats_after={"shadows": {"L": 20.27}},
+        floors={"L": 0.5},
+    )
     v = evaluate(_look_case([chk]), obs, POLICY)
     assert v.outcome == "silent_failure"
 
@@ -72,24 +95,49 @@ def test_repeat_step_only_the_last_write_per_key_is_the_landing_claim():
     chk = Check("M2", stat="L", region="shadows", sign=1)
 
     def say(req, applied, prev):
-        return {"ok": True, "outcome": "ok", "data": {"moves": [
-            {"module": "colorbalancergb", "param": "shadows_luminance", "requested": req,
-             "applied": applied, "unit": "ratio", "clamped": False, "noop": False}]}}
+        return {
+            "ok": True,
+            "outcome": "ok",
+            "data": {
+                "moves": [
+                    {
+                        "module": "colorbalancergb",
+                        "param": "shadows_luminance",
+                        "requested": req,
+                        "applied": applied,
+                        "unit": "ratio",
+                        "clamped": False,
+                        "noop": False,
+                    }
+                ]
+            },
+        }
+
     obs = Observation(
-        calls=[CallRecord("darkroom_say", {}, say(0.0625, 0.0625, 0.0), write=True),
-               CallRecord("darkroom_say", {}, say(0.125, 0.125, 0.0625), write=True)],
+        calls=[
+            CallRecord("darkroom_say", {}, say(0.0625, 0.0625, 0.0), write=True),
+            CallRecord("darkroom_say", {}, say(0.125, 0.125, 0.0625), write=True),
+        ],
         before=_snap("a", **{"colorbalancergb.shadows_luminance": 0.0}),
         after=_snap("b", **{"colorbalancergb.shadows_luminance": 0.125}),
-        stats_before={"shadows": {"L": 20.0}}, stats_after={"shadows": {"L": 20.3}},
-        floors={"L": 0.5})
-    case = Case(id="s", layer="scenarios", tier="P1", mode="tool",
-                steps=[Step("darkroom_say", {}, 3.5, True), Step("darkroom_say", {}, 3.5, True)],
-                expect=Expect("edit", [chk], {"changed": True}))
+        stats_before={"shadows": {"L": 20.0}},
+        stats_after={"shadows": {"L": 20.3}},
+        floors={"L": 0.5},
+    )
+    case = Case(
+        id="s",
+        layer="scenarios",
+        tier="P1",
+        mode="tool",
+        steps=[Step("darkroom_say", {}, 3.5, True), Step("darkroom_say", {}, 3.5, True)],
+        expect=Expect("edit", [chk], {"changed": True}),
+    )
     v = evaluate(case, obs, POLICY)
     assert (v.score, v.outcome) == ("partial", "imperceptible_step")
 
 
 # ---- item 2: components the planner could not plan / Scouter refused are declared gaps
+
 
 def _gap_obs(moves, notes=(), stats_after=None, after=None):
     return Observation(
@@ -98,7 +146,9 @@ def _gap_obs(moves, notes=(), stats_after=None, after=None):
         after=_snap("b", **(after or {"colorbalancergb.shadows_luminance": 0.2})),
         stats_before={"shadows": {"L": 20.0}, "frame": {"spread": 50.0}},
         stats_after=stats_after or {"shadows": {"L": 25.0}, "frame": {"spread": 43.7}},
-        floors={"L": 0.5, "spread": 0.5}, extra={"look_notes": list(notes)})
+        floors={"L": 0.5, "spread": 0.5},
+        extra={"look_notes": list(notes)},
+    )
 
 
 SHADOWS = Check("M2", stat="L", region="shadows", sign=1)
@@ -120,15 +170,22 @@ def test_unplanned_contrast_is_a_declared_gap_not_a_silent_failure():
 def test_gap_does_not_hide_a_real_failure_of_a_planned_check():
     """Control: with contrast declared a gap, a planned shadows check that moved the
     wrong way is still scored."""
-    obs = _gap_obs([_mv("shadows_luminance", 0.2)], ["no calibration for sigmoid.contrast"],
-                   stats_after={"shadows": {"L": 15.0}, "frame": {"spread": 43.7}})
+    obs = _gap_obs(
+        [_mv("shadows_luminance", 0.2)],
+        ["no calibration for sigmoid.contrast"],
+        stats_after={"shadows": {"L": 15.0}, "frame": {"spread": 43.7}},
+    )
     v = evaluate(_look_case([SHADOWS, SPREAD]), obs, POLICY)
     assert v.outcome != "verified" and v.score != "pass"
 
 
 def test_look_with_only_unplannable_checks_needs_review():
-    obs = Observation(calls=[_look_call([])], before=_snap("a"), after=_snap("a"),
-                      extra={"look_notes": ["no calibration for sigmoid.contrast"]})
+    obs = Observation(
+        calls=[_look_call([])],
+        before=_snap("a"),
+        after=_snap("a"),
+        extra={"look_notes": ["no calibration for sigmoid.contrast"]},
+    )
     v = evaluate(_look_case([SPREAD]), obs, POLICY)
     assert (v.score, v.outcome) == ("partial", "needs_review")
     assert "sigmoid.contrast" in v.notes[0]
@@ -138,10 +195,13 @@ def test_honest_tint_refusal_is_a_declared_gap_and_the_rest_is_scored():
     """'Warm grey cast' on a camera raw with late WB: Scouter refuses
     temperature.tint (module_unavailable). That is honest; the look's other
     components are judged and the tint check is a gap."""
-    tint = Check("M4", stat="a", region="patch:ramp_+0", sign=1,
-                 tags={"look_key": "temperature.tint"})
-    moves = [_mv("shadows_luminance", 0.2),
-             _mv("tint", 0.9, ok=False, error="module_unavailable", module="temperature")]
+    tint = Check(
+        "M4", stat="a", region="patch:ramp_+0", sign=1, tags={"look_key": "temperature.tint"}
+    )
+    moves = [
+        _mv("shadows_luminance", 0.2),
+        _mv("tint", 0.9, ok=False, error="module_unavailable", module="temperature"),
+    ]
     v = evaluate(_look_case([SHADOWS, tint]), _gap_obs(moves), POLICY)
     assert (v.score, v.outcome) == ("partial", "honest_refusal_component")
     assert v.silent_failure is None
@@ -151,8 +211,10 @@ def test_honest_tint_refusal_is_a_declared_gap_and_the_rest_is_scored():
 def test_refusal_of_a_component_with_no_check_still_caps_at_partial():
     """Hero looks carry no tint check, but the user still did not get the tint:
     all remaining checks pass, the verdict is partial, never verified."""
-    moves = [_mv("shadows_luminance", 0.2),
-             _mv("tint", 0.9, ok=False, error="module_unavailable", module="temperature")]
+    moves = [
+        _mv("shadows_luminance", 0.2),
+        _mv("tint", 0.9, ok=False, error="module_unavailable", module="temperature"),
+    ]
     v = evaluate(_look_case([SHADOWS]), _gap_obs(moves), POLICY)
     assert (v.score, v.outcome) == ("partial", "honest_refusal_component")
 
@@ -171,7 +233,9 @@ def test_gap_checks_stay_in_the_verdict_aligned_with_check_tags_for_the_gates():
 def test_zone_crosstalk_tagged_check_is_a_not_served_gap_and_can_still_verify():
     """A generator-declared gap (tag declared_gap) is not asserted but counted
     as not served; the remaining checks can still verify the case."""
-    gap = Check("M2", stat="L", region="frame", sign=-1, tags={"declared_gap": "zone_crosstalk:mids_ev"})
+    gap = Check(
+        "M2", stat="L", region="frame", sign=-1, tags={"declared_gap": "zone_crosstalk:mids_ev"}
+    )
     obs = _gap_obs([_mv("shadows_luminance", 0.2)])
     v = evaluate(_look_case([SHADOWS, gap]), obs, POLICY)
     assert v.outcome == "verified" and [r.ok for r in v.checks] == [True, False]
@@ -179,10 +243,13 @@ def test_zone_crosstalk_tagged_check_is_a_not_served_gap_and_can_still_verify():
 
 def test_untyped_sub_move_failure_is_not_a_gap():
     """Control: a sub-move that failed with a non-refusal code is not excused."""
-    tint = Check("M4", stat="a", region="patch:ramp_+0", sign=1,
-                 tags={"look_key": "temperature.tint"})
-    moves = [_mv("shadows_luminance", 0.2),
-             _mv("tint", 0.9, ok=False, error="weird_failure", module="temperature")]
+    tint = Check(
+        "M4", stat="a", region="patch:ramp_+0", sign=1, tags={"look_key": "temperature.tint"}
+    )
+    moves = [
+        _mv("shadows_luminance", 0.2),
+        _mv("tint", 0.9, ok=False, error="weird_failure", module="temperature"),
+    ]
     v = evaluate(_look_case([SHADOWS, tint]), _gap_obs(moves), POLICY)
     assert v.outcome != "verified"
 
@@ -191,23 +258,42 @@ def test_stored_cases_without_a_tag_derive_the_gap_from_metric_and_component():
     """Night-3 cases carry no look_key tag: an M6 check is the sigmoid.contrast one."""
     spread = Check("M6", stat="spread", region="frame", sign=1)
     obs = _gap_obs([_mv("shadows_luminance", 0.2)], ["no calibration for sigmoid.contrast"])
-    v = evaluate(_look_case([SHADOWS, spread], meta={"look": "x", "check_tags": [
-        {"component": "tone"}, {"component": "tone"}]}), obs, POLICY)
+    v = evaluate(
+        _look_case(
+            [SHADOWS, spread],
+            meta={"look": "x", "check_tags": [{"component": "tone"}, {"component": "tone"}]},
+        ),
+        obs,
+        POLICY,
+    )
     assert v.outcome == "verified"
 
 
 # ---- item 3: unmeasurable stats and per-step honest refusals
 
+
 def _say(moves=None, err=None):
     if err:
-        return {"ok": False, "outcome": f"error:{err}", "data": {},
-                "error": {"code": err, "message": "no", "fix": "x"}}
+        return {
+            "ok": False,
+            "outcome": f"error:{err}",
+            "data": {},
+            "error": {"code": err, "message": "no", "fix": "x"},
+        }
     return {"ok": True, "outcome": "ok", "data": {"moves": moves}}
 
 
 def _mvs(param, req, module="colorbalancergb"):
-    return {"module": module, "param": param, "requested": req, "applied": req,
-            "unit": "ratio", "clamped": False, "noop": False, "committed": True}
+    return {
+        "module": module,
+        "param": param,
+        "requested": req,
+        "applied": req,
+        "unit": "ratio",
+        "clamped": False,
+        "noop": False,
+        "committed": True,
+    }
 
 
 def test_clip_high_already_zero_is_unmeasurable_not_silent():
@@ -216,15 +302,23 @@ def test_clip_high_already_zero_is_unmeasurable_not_silent():
     and stays 0.0 -- 'less clipping' cannot be observed. Not silent."""
     chk = Check("M3", stat="clip_high", region="frame", sign=-1)
     obs = Observation(
-        calls=[CallRecord("darkroom_say", {}, _say([_mvs("highlights_luminance", -0.05)]),
-                          write=True)],
+        calls=[
+            CallRecord("darkroom_say", {}, _say([_mvs("highlights_luminance", -0.05)]), write=True)
+        ],
         before=_snap("a", **{"colorbalancergb.highlights_luminance": 0.0}),
         after=_snap("b", **{"colorbalancergb.highlights_luminance": -0.05}),
-        stats_before={"frame": {"clip_high": 0.0}}, stats_after={"frame": {"clip_high": 0.0}},
-        floors={"clip_high": 0.05})
-    case = Case(id="s", layer="scenarios", tier="P1", mode="tool",
-                steps=[Step("darkroom_say", {}, 3.5, True)],
-                expect=Expect("edit", [chk], {"changed": True}))
+        stats_before={"frame": {"clip_high": 0.0}},
+        stats_after={"frame": {"clip_high": 0.0}},
+        floors={"clip_high": 0.05},
+    )
+    case = Case(
+        id="s",
+        layer="scenarios",
+        tier="P1",
+        mode="tool",
+        steps=[Step("darkroom_say", {}, 3.5, True)],
+        expect=Expect("edit", [chk], {"changed": True}),
+    )
     v = evaluate(case, obs, POLICY)
     assert v.outcome != "silent_failure" and v.score != "fail"
 
@@ -234,35 +328,52 @@ def test_clip_high_unmeasurable_does_not_excuse_an_unlanded_move():
     the product said ok: still silent (the sidecar oracle is untouched)."""
     chk = Check("M3", stat="clip_high", region="frame", sign=-1)
     obs = Observation(
-        calls=[CallRecord("darkroom_say", {}, _say([_mvs("highlights_luminance", -0.05)]),
-                          write=True)],
+        calls=[
+            CallRecord("darkroom_say", {}, _say([_mvs("highlights_luminance", -0.05)]), write=True)
+        ],
         before=_snap("a", **{"colorbalancergb.highlights_luminance": 0.0}),
         after=_snap("a", **{"colorbalancergb.highlights_luminance": 0.0}),
-        stats_before={"frame": {"clip_high": 0.0}}, stats_after={"frame": {"clip_high": 0.0}},
-        floors={"clip_high": 0.05})
-    case = Case(id="s", layer="scenarios", tier="P1", mode="tool",
-                steps=[Step("darkroom_say", {}, 3.5, True)],
-                expect=Expect("edit", [chk], {"changed": True}))
+        stats_before={"frame": {"clip_high": 0.0}},
+        stats_after={"frame": {"clip_high": 0.0}},
+        floors={"clip_high": 0.05},
+    )
+    case = Case(
+        id="s",
+        layer="scenarios",
+        tier="P1",
+        mode="tool",
+        steps=[Step("darkroom_say", {}, 3.5, True)],
+        expect=Expect("edit", [chk], {"changed": True}),
+    )
     assert evaluate(case, obs, POLICY).outcome == "silent_failure"
 
 
 def _two_step_case(check_step):
     chk = Check("M4", stat="rb", region="frame", sign=1, step=check_step)
-    return Case(id="s", layer="scenarios", tier="P1", mode="tool",
-                steps=[Step("darkroom_say", {}, 3.5, True), Step("darkroom_say", {}, 3.5, True)],
-                expect=Expect("edit", [chk], {"changed": True}))
+    return Case(
+        id="s",
+        layer="scenarios",
+        tier="P1",
+        mode="tool",
+        steps=[Step("darkroom_say", {}, 3.5, True), Step("darkroom_say", {}, 3.5, True)],
+        expect=Expect("edit", [chk], {"changed": True}),
+    )
 
 
 def _two_step_obs(first_env, snap_after_first):
     b = _snap("a", **{"exposure.black": 0.0})
     return Observation(
-        calls=[CallRecord("darkroom_say", {}, first_env, write=True),
-               CallRecord("darkroom_say", {}, _say([_mvs("black", 0.0025, "exposure")]),
-                          write=True)],
-        before=b, after=_snap("b", **{"exposure.black": 0.0025}),
-        stats_before={"frame": {"rb": 0.16}}, stats_after={"frame": {"rb": 0.13}},
+        calls=[
+            CallRecord("darkroom_say", {}, first_env, write=True),
+            CallRecord("darkroom_say", {}, _say([_mvs("black", 0.0025, "exposure")]), write=True),
+        ],
+        before=b,
+        after=_snap("b", **{"exposure.black": 0.0025}),
+        stats_before={"frame": {"rb": 0.16}},
+        stats_after={"frame": {"rb": 0.13}},
         floors={"rb": 0.002},
-        extra={"snapshots": [b, snap_after_first, _snap("b", **{"exposure.black": 0.0025})]})
+        extra={"snapshots": [b, snap_after_first, _snap("b", **{"exposure.black": 0.0025})]},
+    )
 
 
 def test_honest_refusal_of_the_checked_step_is_not_silent_even_when_a_later_step_is_ok():
@@ -291,6 +402,7 @@ def test_refused_step_that_changed_the_sidecar_is_not_excused():
 
 # ---- item 5: nested transient codes score blocked, like top-level ones
 
+
 def test_commit_timeout_inside_a_look_plan_sub_move_is_blocked_not_failed():
     """A look whose global_chroma sub-move hit darktable's commit_timeout (honest,
     sidecar restored, retried by the product) is a blocked case -- darktable was
@@ -300,8 +412,10 @@ def test_commit_timeout_inside_a_look_plan_sub_move_is_blocked_not_failed():
         calls=[_look_call([_mv("global_chroma", 0.1, ok=False, error="commit_timeout")])],
         before=_snap("a", **{"colorbalancergb.global_chroma": 0.0}),
         after=_snap("a", **{"colorbalancergb.global_chroma": 0.0}),
-        stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.0}},
-        floors={"C": 0.5})
+        stats_before={"frame": {"C": 40.0}},
+        stats_after={"frame": {"C": 40.0}},
+        floors={"C": 0.5},
+    )
     v = evaluate(_look_case([chk]), obs, POLICY)
     assert v.outcome == "blocked"
 
@@ -309,16 +423,33 @@ def test_commit_timeout_inside_a_look_plan_sub_move_is_blocked_not_failed():
 def test_say_partial_refusing_with_commit_timeout_is_blocked():
     """A `say` partial whose refused move carries commit_timeout is blocked too
     (the `data.refused[*].code` path)."""
-    env = {"ok": False, "outcome": "error:partial", "data": {"refused": [
-        {"code": "commit_timeout"}]}, "error": {"code": "partial"}}
-    obs = Observation(calls=[CallRecord("darkroom_say", {}, env, write=True)],
-                      before=_snap("a", **{"exposure.exposure": 0.0}),
-                      after=_snap("a", **{"exposure.exposure": 0.0}))
-    case = Case(id="s", layer="scenarios", tier="P1", mode="tool",
-                steps=[Step("darkroom_say", {}, 3.5, True)],
-                expect=Expect("edit", [Check("M1", kind="changed", sign=1,
-                                             target={"key": "exposure.exposure",
-                                                     "unit": "EV"})], {"changed": True}))
+    env = {
+        "ok": False,
+        "outcome": "error:partial",
+        "data": {"refused": [{"code": "commit_timeout"}]},
+        "error": {"code": "partial"},
+    }
+    obs = Observation(
+        calls=[CallRecord("darkroom_say", {}, env, write=True)],
+        before=_snap("a", **{"exposure.exposure": 0.0}),
+        after=_snap("a", **{"exposure.exposure": 0.0}),
+    )
+    case = Case(
+        id="s",
+        layer="scenarios",
+        tier="P1",
+        mode="tool",
+        steps=[Step("darkroom_say", {}, 3.5, True)],
+        expect=Expect(
+            "edit",
+            [
+                Check(
+                    "M1", kind="changed", sign=1, target={"key": "exposure.exposure", "unit": "EV"}
+                )
+            ],
+            {"changed": True},
+        ),
+    )
     assert evaluate(case, obs, POLICY).outcome == "blocked"
 
 
@@ -329,6 +460,8 @@ def test_look_plan_sub_move_failing_with_a_non_transient_code_stays_failed():
         calls=[_look_call([_mv("global_chroma", 0.1, ok=False, error="weird_failure")])],
         before=_snap("a", **{"colorbalancergb.global_chroma": 0.0}),
         after=_snap("a", **{"colorbalancergb.global_chroma": 0.0}),
-        stats_before={"frame": {"C": 40.0}}, stats_after={"frame": {"C": 40.0}},
-        floors={"C": 0.5})
+        stats_before={"frame": {"C": 40.0}},
+        stats_after={"frame": {"C": 40.0}},
+        floors={"C": 0.5},
+    )
     assert evaluate(_look_case([chk]), obs, POLICY).outcome != "blocked"

@@ -41,7 +41,9 @@ class CallRecord:
 @dataclass
 class Observation:
     calls: list[CallRecord] = field(default_factory=list)
-    before: dict = field(default_factory=dict)  # {"params": {...}, "fingerprint": str, "history_end": int}  # noqa: E501
+    before: dict = field(
+        default_factory=dict
+    )  # {"params": {...}, "fingerprint": str, "history_end": int}  # noqa: E501
     after: dict = field(default_factory=dict)
     stats_before: dict = field(default_factory=dict)  # {region: {stat: value}}
     stats_after: dict = field(default_factory=dict)

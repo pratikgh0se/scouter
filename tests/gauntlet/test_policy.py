@@ -33,32 +33,48 @@ def test_active_flags_empty_by_default():
 
 def test_active_flags_rejects_an_unknown_name():
     with pytest.raises(ValueError, match="not_a_real_flag") as exc_info:
-        policy_module._active_flags([{"name": "not_a_real_flag", "reason": "x", "card": "y",
-                                     "expires": "2099-01-01"}])
+        policy_module._active_flags(
+            [{"name": "not_a_real_flag", "reason": "x", "card": "y", "expires": "2099-01-01"}]
+        )
     assert isinstance(exc_info.value, policy_module.UnknownFlagError)
     assert "not_a_real_flag" in str(exc_info.value)
 
 
 def test_active_flags_rejects_a_missing_field():
     with pytest.raises(ValueError, match="reason") as exc_info:
-        policy_module._active_flags([{"name": "parity.same_failure_is_pass", "card": "y",
-                                     "expires": "2099-01-01"}])
+        policy_module._active_flags(
+            [{"name": "parity.same_failure_is_pass", "card": "y", "expires": "2099-01-01"}]
+        )
     assert isinstance(exc_info.value, policy_module.UnknownFlagError)
     assert "reason" in str(exc_info.value)
 
 
 def test_active_flags_accepts_a_valid_unexpired_entry():
     flags = policy_module._active_flags(
-        [{"name": "parity.same_failure_is_pass", "reason": "row 488 trial",
-         "card": "scouter-row-488", "expires": "2099-01-01"}])
+        [
+            {
+                "name": "parity.same_failure_is_pass",
+                "reason": "row 488 trial",
+                "card": "scouter-row-488",
+                "expires": "2099-01-01",
+            }
+        ]
+    )
     assert flags == frozenset({"parity.same_failure_is_pass"})
 
 
 def test_active_flags_drops_an_expired_entry_with_a_warning():
     with pytest.warns(UserWarning, match="expired"):
         flags = policy_module._active_flags(
-            [{"name": "parity.same_failure_is_pass", "reason": "x", "card": "y",
-             "expires": "2000-01-01"}])
+            [
+                {
+                    "name": "parity.same_failure_is_pass",
+                    "reason": "x",
+                    "card": "y",
+                    "expires": "2000-01-01",
+                }
+            ]
+        )
     assert flags == frozenset()
 
 

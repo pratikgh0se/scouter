@@ -30,13 +30,23 @@ class _NudgeFixture(unittest.TestCase):
         self.raw.write_bytes(b"not really a raw")
         self.sidecar = Path(str(self.raw) + ".xmp")
         shutil.copy(FIXTURE, self.sidecar)
-        self.bridge = FakeBridge({
-            "darkroom.current": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
-                                 "source": "action_images"},
-            "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-            "darkroom.action": lambda p: {"nan": False, "view": "darkroom", **p,
-                                          "status": SLIDER_POSITION},
-        })
+        self.bridge = FakeBridge(
+            {
+                "darkroom.current": {
+                    "image_id": 12,
+                    "path": str(self.raw),
+                    "view": "darkroom",
+                    "source": "action_images",
+                },
+                "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+                "darkroom.action": lambda p: {
+                    "nan": False,
+                    "view": "darkroom",
+                    **p,
+                    "status": SLIDER_POSITION,
+                },
+            }
+        )
         dtbridge.set_bridge(self.bridge)
 
     def tearDown(self) -> None:
@@ -47,8 +57,9 @@ class _NudgeFixture(unittest.TestCase):
         return CommitTimeout("darktable did not write the sidecar in time")
 
     def _set_actions(self) -> list[dict]:
-        return [p for m, p in self.bridge.calls
-                if m == "darkroom.action" and p.get("effect") == "set"]
+        return [
+            p for m, p in self.bridge.calls if m == "darkroom.action" and p.get("effect") == "set"
+        ]
 
 
 class UncommittedNudgeJournalTest(_NudgeFixture):
@@ -69,7 +80,8 @@ class UncommittedNudgeJournalTest(_NudgeFixture):
     def test_the_pending_uncommitted_flag_survives_an_unknown_value(self) -> None:
         darkroom.nudge(module="exposure", param="exposure", steps=1, commit=False)
         raw, before, pending = darkroom._raw_and_before_state(
-            JOB, 12, str(self.raw), "exposure", "exposure", 0)
+            JOB, 12, str(self.raw), "exposure", "exposure", 0
+        )
         self.assertTrue(pending)
         self.assertIsNone(before.get("value"))
         self.assertAlmostEqual(raw["value"], 1.5500002, places=5)
@@ -88,7 +100,8 @@ class UncommittedNudgeJournalTest(_NudgeFixture):
 class NudgeAtALimitTest(_NudgeFixture):
     def _put_skew_at(self, value: float) -> None:
         self.sidecar.write_text(
-            with_param_value(self.sidecar.read_text(), "sigmoid", "skew", value))
+            with_param_value(self.sidecar.read_text(), "sigmoid", "skew", value)
+        )
 
     def test_a_nudge_at_a_declared_bound_is_an_honest_noop(self) -> None:
         self._put_skew_at(1.0)
@@ -99,28 +112,34 @@ class NudgeAtALimitTest(_NudgeFixture):
         self.assertTrue(result.committed)
         self.assertAlmostEqual(result.applied, 1.0, places=5)
         # oracle 2: the sidecar still reads the bound
-        self.assertAlmostEqual(darkroom._read_value(str(self.raw), "sigmoid", "skew", 0),
-                               1.0, places=5)
+        self.assertAlmostEqual(
+            darkroom._read_value(str(self.raw), "sigmoid", "skew", 0), 1.0, places=5
+        )
 
     def test_a_nudge_away_from_the_bound_is_not_a_noop(self) -> None:
         self._put_skew_at(1.0)
         with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
             with self.assertRaises(CommitTimeout):
                 darkroom.nudge(module="sigmoid", param="skew", steps=-1)
-        self.assertAlmostEqual(darkroom._read_value(str(self.raw), "sigmoid", "skew", 0),
-                               1.0, places=5)
+        self.assertAlmostEqual(
+            darkroom._read_value(str(self.raw), "sigmoid", "skew", 0), 1.0, places=5
+        )
         self.assertEqual(self._set_actions(), [])
 
     def _with_cloned_sigmoid_item(self, text: str) -> str:
         """A new top-of-history sigmoid item with the SAME params (value stays)."""
         end = int(re.search(r'darktable:history_end="(\d+)"', text).group(1))
-        items = [m for m in re.finditer(r'<rdf:li\s(?:(?!/>).)*?/>', text, re.S)
-                 if 'darktable:operation="sigmoid"' in m.group(0)]
+        items = [
+            m
+            for m in re.finditer(r"<rdf:li\s(?:(?!/>).)*?/>", text, re.S)
+            if 'darktable:operation="sigmoid"' in m.group(0)
+        ]
         item = re.sub(r'darktable:num="\d+"', f'darktable:num="{end}"', items[-1].group(0), count=1)
         seq_close = text.rindex("</rdf:Seq>", 0, text.index("</darktable:history>"))
         text = text[:seq_close] + " " + item + "\n    " + text[seq_close:]
-        return re.sub(r'darktable:history_end="\d+"', f'darktable:history_end="{end + 1}"',
-                      text, count=1)
+        return re.sub(
+            r'darktable:history_end="\d+"', f'darktable:history_end="{end + 1}"', text, count=1
+        )
 
     def test_a_bound_value_with_an_advanced_history_is_not_a_noop(self) -> None:
         self._put_skew_at(1.0)
@@ -134,8 +153,9 @@ class NudgeAtALimitTest(_NudgeFixture):
             with self.assertRaises(CommitTimeout):
                 darkroom.nudge(module="sigmoid", param="skew", steps=1)
         # the value really is still at the bound: only the history oracle refuses
-        self.assertAlmostEqual(darkroom._read_value(str(self.raw), "sigmoid", "skew", 0),
-                               1.0, places=5)
+        self.assertAlmostEqual(
+            darkroom._read_value(str(self.raw), "sigmoid", "skew", 0), 1.0, places=5
+        )
 
     def test_a_timeout_off_a_bound_says_read_the_value_and_not_to_retry(self) -> None:
         with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
@@ -146,8 +166,9 @@ class NudgeAtALimitTest(_NudgeFixture):
         self.assertIn("read the value", fix)
         self.assertIn("do not retry", fix)
         self.assertNotIn("first", fix)
-        self.assertAlmostEqual(darkroom._read_value(str(self.raw), "exposure", "exposure", 0),
-                               1.5500002, places=5)
+        self.assertAlmostEqual(
+            darkroom._read_value(str(self.raw), "exposure", "exposure", 0), 1.5500002, places=5
+        )
         self.assertEqual(caught.exception.detail.get("param"), "exposure")
 
 
@@ -165,10 +186,16 @@ class NudgeAtASoftLimitTest(_NudgeFixture):
 
     def _nudge(self, value: float, steps: int, position: float):
         self.bridge.responses["darkroom.action"] = lambda p: {
-            "nan": False, "view": "darkroom", **p, "status": position}
-        with mock.patch("scouter.core.darkroom._read_state", return_value=self._state(value)), \
-                mock.patch("scouter.core.darkroom._read_value", return_value=value), \
-                mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()) as commit:
+            "nan": False,
+            "view": "darkroom",
+            **p,
+            "status": position,
+        }
+        with (
+            mock.patch("scouter.core.darkroom._read_state", return_value=self._state(value)),
+            mock.patch("scouter.core.darkroom._read_value", return_value=value),
+            mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()) as commit,
+        ):
             result = darkroom.nudge(module=self.MODULE, param=self.PARAM, steps=steps)
         return result, commit
 
@@ -188,8 +215,14 @@ class NudgeAtASoftLimitTest(_NudgeFixture):
         self.assertIn("darkroom_set", text)
         # oracle 2: nothing was sent to move the slider and nothing waited for a commit
         commit.assert_not_called()
-        self.assertEqual([p for m, p in self.bridge.calls if m == "darkroom.action"
-                          and p.get("effect") in ("up", "down")], [])
+        self.assertEqual(
+            [
+                p
+                for m, p in self.bridge.calls
+                if m == "darkroom.action" and p.get("effect") in ("up", "down")
+            ],
+            [],
+        )
         self.assertEqual(journal.read_all(JOB), [])
 
     def test_nudge_up_from_beyond_the_soft_max_is_the_same_noop(self) -> None:
@@ -201,8 +234,13 @@ class NudgeAtASoftLimitTest(_NudgeFixture):
     def test_nudge_down_from_the_soft_max_still_goes_to_darktable(self) -> None:
         with self.assertRaises(CommitTimeout):  # the double never writes; it must be SENT
             self._nudge(7000.0, -1, position=1.0)
-        self.assertTrue([p for m, p in self.bridge.calls
-                         if m == "darkroom.action" and p.get("effect") == "down"])
+        self.assertTrue(
+            [
+                p
+                for m, p in self.bridge.calls
+                if m == "darkroom.action" and p.get("effect") == "down"
+            ]
+        )
 
     def test_nudge_down_at_the_soft_min_is_a_prompt_noop(self) -> None:
         result, commit = self._nudge(2000.0, -1, position=0.0)
@@ -214,8 +252,9 @@ class NudgeAtASoftLimitTest(_NudgeFixture):
         # the sidecar reads the soft max but the slider is mid-range: do not guess
         with self.assertRaises(CommitTimeout):
             self._nudge(7000.0, 1, position=0.5)
-        self.assertTrue([p for m, p in self.bridge.calls
-                         if m == "darkroom.action" and p.get("effect") == "up"])
+        self.assertTrue(
+            [p for m, p in self.bridge.calls if m == "darkroom.action" and p.get("effect") == "up"]
+        )
 
 
 class UnknownValueReadersTest(_NudgeFixture):
@@ -228,11 +267,11 @@ class UnknownValueReadersTest(_NudgeFixture):
         self._nudge_uncommitted()
         calls_before = len(self.bridge.calls)
         with self.assertRaises(ValueUnknown) as caught:
-            moves.adjust(module="exposure", param="exposure", delta=0.5, commit=False,
-                         trust_sidecar=True)
+            moves.adjust(
+                module="exposure", param="exposure", delta=0.5, commit=False, trust_sidecar=True
+            )
         # oracle 1: nothing was sent after the refusal; oracle 2: the reason is the truth
-        self.assertNotIn("darkroom.action",
-                         [m for m, _ in self.bridge.calls[calls_before:]])
+        self.assertNotIn("darkroom.action", [m for m, _ in self.bridge.calls[calls_before:]])
         self.assertEqual(self._set_actions(), [])
         self.assertIn("bounce", caught.exception.detail["reason"])
 
@@ -242,8 +281,9 @@ class UnknownValueReadersTest(_NudgeFixture):
         # oracle 1: no value; oracle 2: the sidecar does still hold the stale one
         self.assertIsNone(result.value)
         self.assertTrue(any("uncommitted nudge" in w for w in result.warnings))
-        self.assertAlmostEqual(darkroom._read_value(str(self.raw), "exposure", "exposure", 0),
-                               1.5500002, places=5)
+        self.assertAlmostEqual(
+            darkroom._read_value(str(self.raw), "exposure", "exposure", 0), 1.5500002, places=5
+        )
 
     def test_get_with_bounce_reads_the_flushed_sidecar(self) -> None:
         self._nudge_uncommitted()
@@ -255,8 +295,9 @@ class UnknownValueReadersTest(_NudgeFixture):
     def test_adjust_with_bounce_moves_from_the_flushed_sidecar_value(self) -> None:
         self._nudge_uncommitted()
         with mock.patch("scouter.core.moves._precommit", return_value=(None, True)):
-            result = moves.adjust(module="exposure", param="exposure", delta=0.5,
-                                  commit=False, bounce=True)
+            result = moves.adjust(
+                module="exposure", param="exposure", delta=0.5, commit=False, bounce=True
+            )
         self.assertAlmostEqual(result.previous, 1.5500002, places=5)
         self.assertAlmostEqual(self._set_actions()[-1]["value"], 2.0500002, places=5)
 
@@ -276,31 +317,38 @@ class UnknownValueReadersTest(_NudgeFixture):
 
     def test_adjust_with_an_unconfirmed_bounce_still_refuses(self) -> None:
         with mock.patch("scouter.core.darkroom._commit", return_value=self._unconfirmed()):
-            self._assert_unflushed_refusal(lambda: moves.adjust(
-                module="exposure", param="exposure", delta=0.5, commit=False, bounce=True))
+            self._assert_unflushed_refusal(
+                lambda: moves.adjust(
+                    module="exposure", param="exposure", delta=0.5, commit=False, bounce=True
+                )
+            )
 
     def test_adjust_by_default_with_an_unconfirmed_bounce_still_refuses(self) -> None:
         with mock.patch("scouter.core.darkroom._commit", return_value=self._unconfirmed()):
-            self._assert_unflushed_refusal(lambda: moves.adjust(
-                module="exposure", param="exposure", delta=0.5, commit=False))
+            self._assert_unflushed_refusal(
+                lambda: moves.adjust(module="exposure", param="exposure", delta=0.5, commit=False)
+            )
 
     def test_adjust_with_a_timed_out_bounce_still_refuses(self) -> None:
         with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
-            self._assert_unflushed_refusal(lambda: moves.adjust(
-                module="exposure", param="exposure", delta=0.5, commit=False, bounce=True))
+            self._assert_unflushed_refusal(
+                lambda: moves.adjust(
+                    module="exposure", param="exposure", delta=0.5, commit=False, bounce=True
+                )
+            )
 
     def test_get_with_an_unconfirmed_bounce_does_not_report_the_stale_value(self) -> None:
         self._nudge_uncommitted()
         with mock.patch("scouter.core.darkroom._commit", return_value=self._unconfirmed()):
             result = moves.get(module="exposure", param="exposure", bounce=True)
         self.assertIsNone(result.value)
-        self.assertAlmostEqual(darkroom._read_value(str(self.raw), "exposure", "exposure", 0),
-                               1.5500002, places=5)
+        self.assertAlmostEqual(
+            darkroom._read_value(str(self.raw), "exposure", "exposure", 0), 1.5500002, places=5
+        )
 
     def test_say_with_an_unconfirmed_bounce_refuses_and_a_confirmed_one_moves(self) -> None:
         with mock.patch("scouter.core.darkroom._commit", return_value=self._unconfirmed()):
-            self._assert_unflushed_refusal(lambda: moves.say(
-                "brighter", commit=False, bounce=True))
+            self._assert_unflushed_refusal(lambda: moves.say("brighter", commit=False, bounce=True))
         confirmed = CommitResult(committed=True, changed=True, confirmed=True)
         with mock.patch("scouter.core.darkroom._commit", return_value=confirmed):
             result = moves.say("brighter", commit=False, bounce=True)
@@ -317,11 +365,20 @@ class UnknownValueReadersTest(_NudgeFixture):
 
     def test_a_journal_entry_written_before_the_fix_is_still_unknown(self) -> None:
         resolved = darkroom._current_image()
-        old = journal.begin(JOB, verb="darkroom.nudge", image_id=12, path=resolved.path,
-                            module="exposure", param="exposure", instance=0,
-                            before={"value": 1.5500002}, commit=False)
-        journal.complete(JOB, old.seq, after={"steps": 1, "steps_landed": 1,
-                                              "value": SLIDER_POSITION})
+        old = journal.begin(
+            JOB,
+            verb="darkroom.nudge",
+            image_id=12,
+            path=resolved.path,
+            module="exposure",
+            param="exposure",
+            instance=0,
+            before={"value": 1.5500002},
+            commit=False,
+        )
+        journal.complete(
+            JOB, old.seq, after={"steps": 1, "steps_landed": 1, "value": SLIDER_POSITION}
+        )
         darkroom.set_param(module="exposure", param="exposure", value=2.0, commit=False)
         set_entry = journal.read_all(JOB)[-1]
         self.assertIsNone(set_entry.before.get("value"))

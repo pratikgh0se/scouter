@@ -36,8 +36,13 @@ from gauntlet.case import Case, Check
 
 PASS, PARTIAL, FAIL = "pass", "partial", "fail"
 OUTCOMES = {
-    "verified": PASS, "correct_refusal": PASS, "over_budget": PASS,
-    "partial": PARTIAL, "collateral": PARTIAL, "drift": PARTIAL, "needs_review": PARTIAL,
+    "verified": PASS,
+    "correct_refusal": PASS,
+    "over_budget": PASS,
+    "partial": PARTIAL,
+    "collateral": PARTIAL,
+    "drift": PARTIAL,
+    "needs_review": PARTIAL,
     #: Row 475 (I2 ruling, provisional -- Pratik to confirm): a plain `ok`
     #: move that landed exactly the requested (unclamped) step, whose only
     #: failing check reads "below noise floor", is neither `verified`
@@ -47,12 +52,17 @@ OUTCOMES = {
     "imperceptible_step": PARTIAL,
     #: Night 3: Scouter honestly refused one component of a look; capped at partial.
     "honest_refusal_component": PARTIAL,
-    "silent_failure": FAIL, "wrong_refusal": FAIL, "unexpected_edit": FAIL,
+    "silent_failure": FAIL,
+    "wrong_refusal": FAIL,
+    "unexpected_edit": FAIL,
     #: `evaluate()`'s `out_of_scope_policy` branch returns this outcome for
     #: a write before the user picks between offered options, distinct from
     #: the generic `unexpected_edit` every other refuse-kind write earns.
     "unrequested_edit": FAIL,
-    "failed": FAIL, "failed_hang": FAIL, "crash": FAIL, "blocked": FAIL,
+    "failed": FAIL,
+    "failed_hang": FAIL,
+    "crash": FAIL,
+    "blocked": FAIL,
     #: A case the harness declares unrunnable (rob-h2, rob-r9). Its own label,
     #: but it weighs 0 like a fail: a skip must never improve a gate (Z4).
     "skipped": FAIL,
@@ -129,8 +139,9 @@ def is_hang(outcome: str | None, blocked: str | None) -> bool:
     from rob-r11's single true hang). It falls through to `blocked` below
     (still a FAIL) without ever matching `b.startswith("hang")`."""
     b = blocked or ""
-    return canonical_outcome(outcome or "") == "failed_hang" or b == "hard_cap" \
-        or b.startswith("hang")
+    return (
+        canonical_outcome(outcome or "") == "failed_hang" or b == "hard_cap" or b.startswith("hang")
+    )
 
 
 def canonical_outcome(label: str) -> str:
@@ -198,8 +209,11 @@ def _differs(unit: str, a: object, b: object, null_equiv: object = None) -> bool
 
 
 def _diff_keys(b: dict, a: dict, units: dict, null_equiv: dict) -> list[str]:
-    return sorted(k for k in set(a) | set(b)
-                  if _differs(units.get(k, "ratio"), a.get(k), b.get(k), null_equiv.get(k)))
+    return sorted(
+        k
+        for k in set(a) | set(b)
+        if _differs(units.get(k, "ratio"), a.get(k), b.get(k), null_equiv.get(k))
+    )
 
 
 def _module(key: str) -> str:
@@ -238,13 +252,17 @@ def _absent_equiv(before: dict, after: dict, key: str, defaults: dict) -> bool:
     """None-before vs a value after for a key whose module was absent before and
     is at its defaults after (night-1 fix, bug 3), or is disabled after (HB1)."""
     m = _module(key)
-    return before.get(key) is None and after.get(key) is not None \
-        and _module_absent(before, m) and (_module_at_default(after, m, defaults)
-                                           or _module_disabled(after, m))
+    return (
+        before.get(key) is None
+        and after.get(key) is not None
+        and _module_absent(before, m)
+        and (_module_at_default(after, m, defaults) or _module_disabled(after, m))
+    )
 
 
-def _m1_default_fallback(key: str, unit: str, after: dict, verified_defaults: dict,
-                          obs: Observation) -> float | None:
+def _m1_default_fallback(
+    key: str, unit: str, after: dict, verified_defaults: dict, obs: Observation
+) -> float | None:
     """M1's declared-default fallback (decision rows 548, 554): a scored key
     absent from `after` reads as the module's own declared default IF (a)
     the key has a REAL, host-probed default (`verified_defaults`, vocab's
@@ -269,8 +287,11 @@ def _m1_default_fallback(key: str, unit: str, after: dict, verified_defaults: di
         return None
     default_val = verified_defaults[key]
     param = key.split(".", 1)[1] if "." in key else key
-    matched = [c for c in obs.calls
-               if (c.args or {}).get("module") == module and (c.args or {}).get("param") == param]
+    matched = [
+        c
+        for c in obs.calls
+        if (c.args or {}).get("module") == module and (c.args or {}).get("param") == param
+    ]
     if not matched:
         return None
     for c in matched:
@@ -328,8 +349,11 @@ def _before_value(snap: dict, key: str, unit: str, obs: Observation) -> tuple[fl
 
 def _env_ok(c: CallRecord) -> bool:
     env = c.envelope or {}
-    return bool(env.get("ok")) and env.get("outcome", "ok") not in NOOP_OUTCOMES \
+    return (
+        bool(env.get("ok"))
+        and env.get("outcome", "ok") not in NOOP_OUTCOMES
         and not (env.get("data") or {}).get("noop")
+    )
 
 
 def _code(c: CallRecord) -> str | None:
@@ -382,11 +406,20 @@ def _check_m1(i: int, ch: Check, obs: Observation) -> CheckResult:
         if not ok and _delta_clamp_credited(t, b, a, tol, obs, ch.step):
             return CheckResult(i, "M1", True, d, t["delta"], note="clamped_at_bound")
         if not ok and _delta_unreported_clamp(t, b, a, tol, obs, ch.step):
-            return CheckResult(i, "M1", False, d, t["delta"], note="unreported_clamp",
-                               magnitude_only=True)
+            return CheckResult(
+                i, "M1", False, d, t["delta"], note="unreported_clamp", magnitude_only=True
+            )
         wrong = (d * t["delta"]) < 0
-        return CheckResult(i, "M1", ok, d, t["delta"], wrong_direction=wrong,
-                           magnitude_only=not ok and not wrong and abs(d) > 0, note=b_note)
+        return CheckResult(
+            i,
+            "M1",
+            ok,
+            d,
+            t["delta"],
+            wrong_direction=wrong,
+            magnitude_only=not ok and not wrong and abs(d) > 0,
+            note=b_note,
+        )
     if kind == "changed":
         b = snaps[t.get("from", 0)].get(t["key"])
         a = snaps[t.get("to", -1)].get(t["key"])
@@ -429,8 +462,9 @@ def _check_m1(i: int, ch: Check, obs: Observation) -> CheckResult:
         if not base or dbl is None:
             return CheckResult(i, "M1", False, (base, dbl), t["ratio"], note="no base delta")
         r = dbl / base
-        return CheckResult(i, "M1", abs(r - t["ratio"]) <= t.get("tol", 0.1) * t["ratio"],
-                           r, t["ratio"])
+        return CheckResult(
+            i, "M1", abs(r - t["ratio"]) <= t.get("tol", 0.1) * t["ratio"], r, t["ratio"]
+        )
     if kind == "monotonic":
         k = t["key"]
         mags = []
@@ -469,21 +503,40 @@ def _check_stat(i: int, ch: Check, obs: Observation) -> CheckResult:
     #: Night 3 (scenarios r0029/r0043): a clipping fraction already at its floor
     #: cannot fall further. The stat is unmeasurable for "less clipping", which
     #: is neither a pass nor a product failure (the sidecar oracle still reads).
-    if (ch.stat in ("clip_high", "clip_low") and ch.sign < 0 and sb <= floor
-            and not ok and not wrong):
+    if (
+        ch.stat in ("clip_high", "clip_low")
+        and ch.sign < 0
+        and sb <= floor
+        and not ok
+        and not wrong
+    ):
         return CheckResult(i, ch.metric, False, d, ch.sign, note=UNMEASURABLE)
     if ok and ch.stat == "ev" and ch.kind != "frac" and sa <= 0:
         # L4: the patch clipped to black, the asked darker direction, but the
         # measured drop is only a lower bound: never a verified pass, never a
         # silent failure (magnitude_only: scored partial)
-        return CheckResult(i, ch.metric, False, d, ch.sign, magnitude_only=True,
-                           note="clipped to black: measured drop is a lower bound")
+        return CheckResult(
+            i,
+            ch.metric,
+            False,
+            d,
+            ch.sign,
+            magnitude_only=True,
+            note="clipped to black: measured drop is a lower bound",
+        )
     t = ch.target or {}
     if ok and "value" in t:
         within = abs(d - t["value"]) <= t.get("tol", 0.0)
         return CheckResult(i, ch.metric, within, d, t["value"], magnitude_only=not within)
-    return CheckResult(i, ch.metric, ok, d, ch.sign, wrong_direction=wrong,
-                       note="" if ok or wrong else "below noise floor")
+    return CheckResult(
+        i,
+        ch.metric,
+        ok,
+        d,
+        ch.sign,
+        wrong_direction=wrong,
+        note="" if ok or wrong else "below noise floor",
+    )
 
 
 def _check_chart(i: int, ch: Check, obs: Observation) -> CheckResult:
@@ -491,8 +544,9 @@ def _check_chart(i: int, ch: Check, obs: Observation) -> CheckResult:
     if not des:
         return CheckResult(i, "M9", False, None, "<2.3", note="unmeasured")
     v = metrics.de_verdict(list(des))
-    return CheckResult(i, "M9", v == "pass", max(des) if des else 0.0, "<2.3",
-                       magnitude_only=v == "drift", note=v)
+    return CheckResult(
+        i, "M9", v == "pass", max(des) if des else 0.0, "<2.3", magnitude_only=v == "drift", note=v
+    )
 
 
 def _check_envelope(i: int, ch: Check, obs: Observation) -> CheckResult:
@@ -508,8 +562,9 @@ def _check_envelope(i: int, ch: Check, obs: Observation) -> CheckResult:
     if op == "eq":
         ok = got == t.get("value")
     elif op == "contains":
-        ok = isinstance(got, (str, list)) and str(t["value"]).lower() in \
-            (got.lower() if isinstance(got, str) else [str(x).lower() for x in got])
+        ok = isinstance(got, (str, list)) and str(t["value"]).lower() in (
+            got.lower() if isinstance(got, str) else [str(x).lower() for x in got]
+        )
     elif op == "exists":
         ok = got is not None
     elif op == "truthy":
@@ -544,15 +599,21 @@ def _boundary_clamped(obs: Observation, idx: int, key_: str) -> bool:
     if data.get("clamped"):
         return True
     for m in data.get("moves") or ():
-        if isinstance(m, dict) and m.get("clamped") and \
-                f"{m.get('module')}.{m.get('param')}" == key_:
+        if (
+            isinstance(m, dict)
+            and m.get("clamped")
+            and f"{m.get('module')}.{m.get('param')}" == key_
+        ):
             return True
-    return any(isinstance(m, dict) and f"{m.get('module')}.{m.get('param')}" == key_
-              for m in data.get("moved_to_limit") or ())
+    return any(
+        isinstance(m, dict) and f"{m.get('module')}.{m.get('param')}" == key_
+        for m in data.get("moved_to_limit") or ()
+    )
 
 
-def _delta_clamp_credited(t: dict, b: float, a: float, tol: float, obs: Observation,
-                          step: int | None) -> bool:
+def _delta_clamp_credited(
+    t: dict, b: float, a: float, tol: float, obs: Observation, step: int | None
+) -> bool:
     """A relative move that stops at a declared bound AND says so is correct.
     Oracle 1: the committed value equals the bound (`lo`/`hi` in the target)
     that the full ask would overshoot. Oracle 2: the call's envelope reports
@@ -565,8 +626,9 @@ def _delta_clamp_credited(t: dict, b: float, a: float, tol: float, obs: Observat
     return abs(a - bound) <= tol and _boundary_clamped(obs, -1 if step is None else step, t["key"])
 
 
-def _delta_unreported_clamp(t: dict, b: float, a: float, tol: float, obs: Observation,
-                            step: int | None) -> bool:
+def _delta_unreported_clamp(
+    t: dict, b: float, a: float, tol: float, obs: Observation, step: int | None
+) -> bool:
     """N1: the mirror of `_delta_clamp_credited`. A relative move whose full
     ask overshoots a declared bound, that LANDED on that bound (the product
     clamped), whose own call answered a plain ok (not a noop, so an honest
@@ -634,8 +696,9 @@ def _check_file(i: int, ch: Check, obs: Observation) -> CheckResult:
 def _check_text(i: int, ch: Check, obs: Observation) -> CheckResult:
     pat = (ch.target or {}).get("regex", "")
     if obs.agent_text is None and obs.extra.get("stdout") is None:
-        return CheckResult(i, "text", False, None, (ch.target or {}).get("present", True),
-                           note="unmeasured")
+        return CheckResult(
+            i, "text", False, None, (ch.target or {}).get("present", True), note="unmeasured"
+        )
     text = obs.agent_text or obs.extra.get("stdout") or ""
     found = re.search(pat, text, re.I) is not None
     want = (ch.target or {}).get("present", True)
@@ -643,7 +706,7 @@ def _check_text(i: int, ch: Check, obs: Observation) -> CheckResult:
 
 
 def _check_verb(i: int, ch: Check, obs: Observation) -> CheckResult:
-    """"Did the agent actually call the tool this workflow verb needs" --
+    """ "Did the agent actually call the tool this workflow verb needs" --
     not "was the agent's LAST recorded call, whatever it was, ok". A
     clarify-only conversation whose last call is any successful READ
     (`scout_stats`, `library_jobs`, `darkroom_describe_history`, ...) must
@@ -658,8 +721,9 @@ def _check_verb(i: int, ch: Check, obs: Observation) -> CheckResult:
         for c in obs.calls:
             if c.write and (c.envelope or {}).get("ok"):
                 return CheckResult(i, "verb", True, c.tool, "any write call ok")
-        return CheckResult(i, "verb", False, None, "any write call ok",
-                           note="no successful write call")
+        return CheckResult(
+            i, "verb", False, None, "any write call ok", note="no successful write call"
+        )
     verbs = set(t.get("any_of") or [])
     for c in obs.calls:
         env = c.envelope or {}
@@ -693,16 +757,27 @@ def _check_undo(i: int, ch: Check, obs: Observation) -> CheckResult:
         for c in obs.calls
     )
     if not undo_called:
-        return CheckResult(i, "undo", False, {"undo_called": False}, "a successful undo call",
-                           note="no successful darkroom.undo_last call")
+        return CheckResult(
+            i,
+            "undo",
+            False,
+            {"undo_called": False},
+            "a successful undo call",
+            note="no successful darkroom.undo_last call",
+        )
     before_end = (obs.before or {}).get("history_end")
     after_end = (obs.after or {}).get("history_end")
-    decremented = (before_end is not None and after_end is not None and after_end < before_end)
+    decremented = before_end is not None and after_end is not None and after_end < before_end
     restored = _check_m1(i, Check("M1", kind="restored", target={"keys": [], "units": {}}), obs)
     ok = decremented or restored.ok
-    return CheckResult(i, "undo", ok, {"history_end": [before_end, after_end],
-                                       "restored": restored.ok}, "decremented OR restored",
-                       note=None if ok else "neither history_end decremented nor params restored")
+    return CheckResult(
+        i,
+        "undo",
+        ok,
+        {"history_end": [before_end, after_end], "restored": restored.ok},
+        "decremented OR restored",
+        note=None if ok else "neither history_end decremented nor params restored",
+    )
 
 
 def run_check(i: int, ch: Check, obs: Observation) -> CheckResult:
@@ -736,8 +811,9 @@ def _fingerprint_changed(obs: Observation) -> bool:
 
 def _changed_keys(obs: Observation, units: dict) -> list[str]:
     """Keys whose value changed before -> after (strict epsilon, bug 2)."""
-    return _diff_keys(_params(obs.before), _params(obs.after), _units(obs, units),
-                      _meta(obs, "null_equiv"))
+    return _diff_keys(
+        _params(obs.before), _params(obs.after), _units(obs, units), _meta(obs, "null_equiv")
+    )
 
 
 def _step_snaps(obs: Observation) -> list[dict] | None:
@@ -751,8 +827,9 @@ def _step_snaps(obs: Observation) -> list[dict] | None:
 
 def _step_changed(obs: Observation, snaps: list[dict], i: int, units: dict) -> bool:
     """Did call i itself change params (snaps[i] -> snaps[i + 1], strict)?"""
-    return bool(_diff_keys(snaps[i] or {}, snaps[i + 1] or {}, _units(obs, units),
-                           _meta(obs, "null_equiv")))
+    return bool(
+        _diff_keys(snaps[i] or {}, snaps[i + 1] or {}, _units(obs, units), _meta(obs, "null_equiv"))
+    )
 
 
 def _last_write_changed_keys(obs: Observation, units: dict) -> set[str] | None:
@@ -766,8 +843,14 @@ def _last_write_changed_keys(obs: Observation, units: dict) -> set[str] | None:
     idx = [i for i, c in enumerate(obs.calls) if c.write]
     if not idx:
         return set()
-    return set(_diff_keys(snaps[idx[-1]] or {}, snaps[idx[-1] + 1] or {},
-                          _units(obs, units), _meta(obs, "null_equiv")))
+    return set(
+        _diff_keys(
+            snaps[idx[-1]] or {},
+            snaps[idx[-1] + 1] or {},
+            _units(obs, units),
+            _meta(obs, "null_equiv"),
+        )
+    )
 
 
 def _relevant_changed_keys(obs: Observation, units: dict) -> list[str]:
@@ -810,11 +893,15 @@ def _reported_keys(writes: list[CallRecord], every: bool = False) -> list[str] |
         data = (c.envelope or {}).get("data") or {}
         moves = data.get("moves")
         if isinstance(moves, list) and moves:
-            found = {f"{m['module']}.{m['param']}" for m in moves
-                     if isinstance(m, dict) and not m.get("noop")
-                     and m.get("committed") is not False
-                     and isinstance(m.get("module"), str)
-                     and isinstance(m.get("param"), str)}
+            found = {
+                f"{m['module']}.{m['param']}"
+                for m in moves
+                if isinstance(m, dict)
+                and not m.get("noop")
+                and m.get("committed") is not False
+                and isinstance(m.get("module"), str)
+                and isinstance(m.get("param"), str)
+            }
         elif isinstance(data.get("module"), str) and isinstance(data.get("param"), str):
             found = {f"{data['module']}.{data['param']}"}
         elif "key" in data:
@@ -832,8 +919,12 @@ def _reported_keys(writes: list[CallRecord], every: bool = False) -> list[str] |
 def _all_moves_noop(c: CallRecord) -> bool:
     """An ok envelope whose moves list is non-empty and every move answered noop."""
     moves = ((c.envelope or {}).get("data") or {}).get("moves")
-    return (_env_ok(c) and isinstance(moves, list) and bool(moves)
-            and all(isinstance(m, dict) and m.get("noop") for m in moves))
+    return (
+        _env_ok(c)
+        and isinstance(moves, list)
+        and bool(moves)
+        and all(isinstance(m, dict) and m.get("noop") for m in moves)
+    )
 
 
 def _m1_key_unchanged(case: Case, obs: Observation) -> str | None:
@@ -841,8 +932,11 @@ def _m1_key_unchanged(case: Case, obs: Observation) -> str | None:
     snaps = obs.extra.get("snapshots") or [_params(obs.before), _params(obs.after)]
     for ch in case.expect.checks:
         t = ch.target or {}
-        if ch.metric != "M1" or ch.kind not in ("equals", "within", "delta", "changed") \
-                or "key" not in t:
+        if (
+            ch.metric != "M1"
+            or ch.kind not in ("equals", "within", "delta", "changed")
+            or "key" not in t
+        ):
             continue
         try:
             b, a = snaps[t.get("from", 0)], snaps[t.get("to", -1)]
@@ -884,8 +978,11 @@ def _noop_case_unchanged(case: Case, obs: Observation) -> bool:
     if snaps is None:
         return False  # cannot attribute the change to a step: do not credit the noop
     units = _units(obs)
-    return not any(_step_changed(obs, snaps, i, units)
-                   for i, st in enumerate(case.steps) if not st.setup and i < len(obs.calls))
+    return not any(
+        _step_changed(obs, snaps, i, units)
+        for i, st in enumerate(case.steps)
+        if not st.setup and i < len(obs.calls)
+    )
 
 
 def _noop_rule(case: Case, obs: Observation, units: dict) -> str | None:
@@ -911,8 +1008,12 @@ def _noop_rule(case: Case, obs: Observation, units: dict) -> str | None:
         produced = whole and any(i not in silent for i in idx)
     if noop_changed:
         return "f: answered noop but the sidecar changed"
-    if noop and not produced and case.expect.kind == "edit" and \
-            (case.expect.sidecar or {}).get("changed"):
+    if (
+        noop
+        and not produced
+        and case.expect.kind == "edit"
+        and (case.expect.sidecar or {}).get("changed")
+    ):
         return "f: answered noop for a request that needed a change"
     if allnoop_changed:
         return "f: every move answered noop but the sidecar changed"
@@ -938,8 +1039,9 @@ def _moved_to_limit_claims(obs: Observation) -> list[dict]:
         if isinstance(mtl, list):
             claims.extend(m for m in mtl if isinstance(m, dict))
         elif data.get("module") and data.get("param"):
-            claims.append({"module": data.get("module"), "param": data.get("param"),
-                           "cap": data.get("cap")})
+            claims.append(
+                {"module": data.get("module"), "param": data.get("param"), "cap": data.get("cap")}
+            )
     return claims
 
 
@@ -954,8 +1056,7 @@ def _any_moved_to_limit(obs: Observation) -> bool:
     skip rules (a)-(f) the way an unrecognised envelope shape would).
     Used only to decide whether the claim needs verifying (`reported`
     below) -- never, on its own, to score a verdict."""
-    return any((c.envelope or {}).get("outcome") == "moved_to_limit"
-               for c in obs.calls if c.write)
+    return any((c.envelope or {}).get("outcome") == "moved_to_limit" for c in obs.calls if c.write)
 
 
 def _verified_clamped_params(obs: Observation, units: dict) -> set[str]:
@@ -985,8 +1086,9 @@ def _verified_clamped_params(obs: Observation, units: dict) -> set[str]:
     return verified
 
 
-def _writes_landed_as_requested(obs: Observation, units: dict,
-                                refusal_codes: frozenset | tuple = ()) -> bool:
+def _writes_landed_as_requested(
+    obs: Observation, units: dict, refusal_codes: frozenset | tuple = ()
+) -> bool:
     """Row 475 (I2 ruling), tightened by review round 2 (R1): every
     non-noop write's claimed `module.param` (`AdjustResult`'s own
     `module`/`param`/`requested`, flat on a single `darkroom.adjust`'s
@@ -1046,9 +1148,9 @@ def _writes_landed_as_requested(obs: Observation, units: dict,
     return bool(last)
 
 
-def _imperceptible_step_residual(case: Case, results: list[CheckResult],
-                                 obs: Observation, refusal_codes: frozenset | tuple = ()
-                                 ) -> Verdict | None:
+def _imperceptible_step_residual(
+    case: Case, results: list[CheckResult], obs: Observation, refusal_codes: frozenset | tuple = ()
+) -> Verdict | None:
     """Row 475 (I2 ruling, option A, provisional -- Pratik to confirm): the
     real night-1 D-bare-step-below-perceptual-floor rows are plain `ok`,
     never `moved_to_limit` (KNOWN_RESIDUAL's "cap" is the
@@ -1066,8 +1168,9 @@ def _imperceptible_step_residual(case: Case, results: list[CheckResult],
     non_passing = [r for r in results if not r.ok]
     #: an unmeasurable stat (already at its floor) is the same story as a
     #: below-floor one: the verified edit simply cannot register on it.
-    if not non_passing or any(r.note not in ("below noise floor", UNMEASURABLE)
-                              for r in non_passing):
+    if not non_passing or any(
+        r.note not in ("below noise floor", UNMEASURABLE) for r in non_passing
+    ):
         return None
     sidecar = case.expect.sidecar or {}
     if not _writes_landed_as_requested(obs, sidecar.get("units", {}), refusal_codes):
@@ -1075,8 +1178,9 @@ def _imperceptible_step_residual(case: Case, results: list[CheckResult],
     return Verdict(PARTIAL, "imperceptible_step", results, notes=["residual: step-below-floor"])
 
 
-def _moved_to_limit_residual(case: Case, results: list[CheckResult],
-                             obs: Observation) -> Verdict | None:
+def _moved_to_limit_residual(
+    case: Case, results: list[CheckResult], obs: Observation
+) -> Verdict | None:
     """Row 471 (COV-D-residual-clamp-capped, Pratik's ruling), tightened by
     review round 1 (I1): score `correct_refusal` only when every
     non-passing check reads "below noise floor" AND names (via
@@ -1124,8 +1228,9 @@ def _action_writes(case: Case, obs: Observation) -> list[CallRecord]:
     steps = case.steps
     if not any(st.setup for st in steps):
         return writes
-    action = [c for i, c in enumerate(obs.calls)
-              if c.write and not (i < len(steps) and steps[i].setup)]
+    action = [
+        c for i, c in enumerate(obs.calls) if c.write and not (i < len(steps) and steps[i].setup)
+    ]
     return action or writes
 
 
@@ -1141,16 +1246,22 @@ def _claimed_moves(c: CallRecord) -> list[tuple[str, float]] | None:
             if not isinstance(m, dict) or m.get("noop") or m.get("committed") is False:
                 continue
             applied = _num(m.get("applied"))
-            if applied is None or not isinstance(m.get("module"), str) \
-                    or not isinstance(m.get("param"), str):
+            if (
+                applied is None
+                or not isinstance(m.get("module"), str)
+                or not isinstance(m.get("param"), str)
+            ):
                 return None
             out.append((f"{m['module']}.{m['param']}", applied))
         return out
     if data.get("noop"):
         return []
     applied = _num(data.get("applied"))
-    if applied is None or not isinstance(data.get("module"), str) \
-            or not isinstance(data.get("param"), str):
+    if (
+        applied is None
+        or not isinstance(data.get("module"), str)
+        or not isinstance(data.get("param"), str)
+    ):
         return None
     return [(f"{data['module']}.{data['param']}", applied)]
 
@@ -1192,8 +1303,11 @@ def _honest_final_step(case: Case, obs: Observation) -> bool:
             return False
     i = idx[id(final)]
     allowed = _owned([k for k, _ in _claimed_moves(final) or []], obs)
-    stray = [k for k in _diff_keys(snaps[i] or {}, snaps[i + 1] or {}, units, null_equiv)
-             if k not in allowed and not k.endswith(".__enabled")]
+    stray = [
+        k
+        for k in _diff_keys(snaps[i] or {}, snaps[i + 1] or {}, units, null_equiv)
+        if k not in allowed and not k.endswith(".__enabled")
+    ]
     return not stray
 
 
@@ -1216,8 +1330,9 @@ def _step_honestly_refused(obs: Observation, step: int | None, policy: Policy) -
     return snaps is not None and not _step_changed(obs, snaps, step, {})
 
 
-def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
-                   policy: Policy) -> str | None:
+def silent_failure(
+    case: Case, obs: Observation, results: list[CheckResult], policy: Policy
+) -> str | None:
     """Spec 1 conditions (a)-(f). Only asked when the product reported success."""
     writes = [c for c in obs.calls if c.write]
     # Review round 1 (I1): `moved_to_limit` is a claim of movement, exactly
@@ -1233,8 +1348,9 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     #: Generalised again (night 3): an earlier ok action step does not make the
     #: failing LAST step's honest partial/refusal look like a claim (see
     #: `_honest_final_step`, which also re-verifies every claim in the sidecar).
-    reported = (any(_env_ok(c) for c in _action_writes(case, obs))
-                and not _honest_final_step(case, obs)) or _any_moved_to_limit(obs)
+    reported = (
+        any(_env_ok(c) for c in _action_writes(case, obs)) and not _honest_final_step(case, obs)
+    ) or _any_moved_to_limit(obs)
     # Row 459 (night-1, COV-undo-first-introduction): rule (e) below must ask
     # the undo call's OWN ok/refusal, not "was any write ok" -- an earlier ok
     # `set` (introducing the module) must not make an honestly-refused
@@ -1244,15 +1360,19 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     #: code, e.g. a stale_rewrite `commit_timeout`): the product did report the
     #: failure, so a not-restored result is not an unreported one. The case is
     #: scored by the loud code (blocked when transient), never silent.
-    undo_was_loud = any(_code(c) for c in writes
-                        if c.tool.endswith("undo_last") and not (c.envelope or {}).get("ok"))
+    undo_was_loud = any(
+        _code(c)
+        for c in writes
+        if c.tool.endswith("undo_last") and not (c.envelope or {}).get("ok")
+    )
     if case.mode == "agent" and obs.agent_text:
         reported = reported or _claims(obs.agent_text, policy.claim_markers)
     sidecar = case.expect.sidecar or {}
     units = sidecar.get("units", {})
     rule_f = _noop_rule(case, obs, units)
-    if rule_f == "f: answered noop for a request that needed a change" and \
-            _honest_noop_at_target(case, obs):
+    if rule_f == "f: answered noop for a request that needed a change" and _honest_noop_at_target(
+        case, obs
+    ):
         # C5: the noop is honest (the pre-write snapshot already met the
         # target) -- return None straight away, not just skip this rule,
         # so (a)-(e) below (which all assume something SHOULD have moved)
@@ -1262,8 +1382,11 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
         return rule_f
     if not reported:
         return None
-    if sidecar.get("changed") and not _fingerprint_changed(obs) and \
-            not _net_zero_write_landed(obs, units):
+    if (
+        sidecar.get("changed")
+        and not _fingerprint_changed(obs)
+        and not _net_zero_write_landed(obs, units)
+    ):
         return "a: reported ok but the sidecar history did not change"
     fallback = [sidecar["key"]] if sidecar.get("key") else []
     keys = _reported_keys(writes)
@@ -1305,20 +1428,32 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
     # (or any other kind) keeps its ordinary rule (c) scoring, not a silent
     # exception with nothing to label it.
     verified_clamped = _verified_clamped_params(obs, units)
-    landed_as_requested = case.expect.kind == "edit" and not _any_moved_to_limit(obs) \
+    landed_as_requested = (
+        case.expect.kind == "edit"
+        and not _any_moved_to_limit(obs)
         and _writes_landed_as_requested(obs, units, policy.refusal_codes)
+    )
     for r, ch in zip(results, case.expect.checks):
         # N1: only action steps count; a setup step's own landing is not the
         # product's claim about the request under test.
         sidx = ch.step if ch.step is not None else len(case.steps) - 1
-        if ch.metric == "M1" and r.note == "unreported_clamp" and not (
-                0 <= sidx < len(case.steps) and case.steps[sidx].setup):
-            return (f"g: unreported clamp: {ch.target.get('key')} landed at its bound "
-                    f"({r.measured!r} of the asked {r.expected!r}) with ok and no clamp report")
+        if (
+            ch.metric == "M1"
+            and r.note == "unreported_clamp"
+            and not (0 <= sidx < len(case.steps) and case.steps[sidx].setup)
+        ):
+            return (
+                f"g: unreported clamp: {ch.target.get('key')} landed at its bound "
+                f"({r.measured!r} of the asked {r.expected!r}) with ok and no clamp report"
+            )
         if ch.tags.get("silent_if_fail") and not r.ok:
             return f"c: {ch.tags.get('why', 'a required report is missing')}"
-        if ch.metric in ("M2", "M3", "M4", "M5", "M6") and ch.sign and not r.ok \
-                and not r.magnitude_only:
+        if (
+            ch.metric in ("M2", "M3", "M4", "M5", "M6")
+            and ch.sign
+            and not r.ok
+            and not r.magnitude_only
+        ):
             if r.note == UNMEASURABLE:
                 continue
             if _step_honestly_refused(obs, ch.step, policy):
@@ -1331,8 +1466,9 @@ def silent_failure(case: Case, obs: Observation, results: list[CheckResult],
         if ch.kind == "restored" and not r.ok and undo_reported_ok and not undo_was_loud:
             return f"e: undo reported ok but {r.measured} were not restored"
     rep, chg, ver = (obs.extra.get(k) for k in ("reported_n", "changed_n", "verified_n"))
-    if isinstance(rep, int) and ((isinstance(chg, int) and chg < rep) or
-                                 (isinstance(ver, int) and ver < rep)):
+    if isinstance(rep, int) and (
+        (isinstance(chg, int) and chg < rep) or (isinstance(ver, int) and ver < rep)
+    ):
         return f"d: reported {rep} frames, {chg} sidecars changed, {ver} exports verified"
     return None
 
@@ -1349,8 +1485,11 @@ def _refusal_matches_meta(case: Case, call: CallRecord) -> bool:
     keys = meta.get("candidate_keys")
     if keys:
         detail = ((call.envelope or {}).get("error") or {}).get("detail") or {}
-        named = {f"{r.get('module')}.{r.get('param')}" for r in detail.get("refused") or ()
-                if isinstance(r, dict)}
+        named = {
+            f"{r.get('module')}.{r.get('param')}"
+            for r in detail.get("refused") or ()
+            if isinstance(r, dict)
+        }
         if not named & set(keys):
             return False
     return True
@@ -1382,16 +1521,20 @@ def _sidecar_miss(case: Case, obs: Observation) -> str | None:
     sc = case.expect.sidecar or {}
     units = sc.get("units", {})
     moved = _fingerprint_changed(obs) or _net_zero_write_landed(obs, units)
-    honest_noop = _noop_rule(case, obs, units) == \
-        "f: answered noop for a request that needed a change" and \
-        _honest_noop_at_target(case, obs)
+    honest_noop = _noop_rule(
+        case, obs, units
+    ) == "f: answered noop for a request that needed a change" and _honest_noop_at_target(case, obs)
     if sc.get("changed") is True and not moved and not honest_noop:
         return "sidecar expected to change but did not"
     if sc.get("changed") is False and moved:
         return "sidecar expected unchanged but changed"
     key = sc.get("key")
-    if key and sc.get("changed") and not honest_noop and \
-            not _owned([key], obs) & set(_relevant_changed_keys(obs, units)):
+    if (
+        key
+        and sc.get("changed")
+        and not honest_noop
+        and not _owned([key], obs) & set(_relevant_changed_keys(obs, units))
+    ):
         return f"sidecar {key} expected to change but did not"
     return None
 
@@ -1479,13 +1622,18 @@ def _look_gap_keys(case: Case, obs: Observation, policy: Policy) -> dict[str, st
         if c.tool != "look_plan":
             continue
         for m in ((c.envelope or {}).get("data") or {}).get("moves") or []:
-            if isinstance(m, dict) and m.get("ok") is False and m.get("error") in policy.refusal_codes:
+            if (
+                isinstance(m, dict)
+                and m.get("ok") is False
+                and m.get("error") in policy.refusal_codes
+            ):
                 out[f"{m.get('module')}.{m.get('param')}"] = f"refused {m['error']}"
     return out
 
 
-def _confounded_gaps(case: Case, obs: Observation, policy: Policy
-                     ) -> tuple[dict[int, str], set[int]]:
+def _confounded_gaps(
+    case: Case, obs: Observation, policy: Policy
+) -> tuple[dict[int, str], set[int]]:
     """Round 1 C9: ({check index: reason}, refused indices) for checks whose
     failure cannot be attributed to the step that owns them.
 
@@ -1507,9 +1655,14 @@ def _confounded_gaps(case: Case, obs: Observation, policy: Policy
         why = ch.tags.get("gap_if_fail")
         if why and not run_check(i, ch, obs).ok:
             out[i] = str(why)
-        elif (multi and ch.metric in ("M2", "M3", "M4", "M5", "M6") and ch.sign
-              and ch.step is not None and _step_honestly_refused(obs, ch.step, policy)
-              and not run_check(i, ch, obs).ok):
+        elif (
+            multi
+            and ch.metric in ("M2", "M3", "M4", "M5", "M6")
+            and ch.sign
+            and ch.step is not None
+            and _step_honestly_refused(obs, ch.step, policy)
+            and not run_check(i, ch, obs).ok
+        ):
             c = obs.calls[ch.step]
             out[i] = f"step {ch.step} honestly refused ({_code(c)})"
             refused.add(i)
@@ -1522,24 +1675,31 @@ def _confounded_gaps(case: Case, obs: Observation, policy: Policy
 
 def evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     if not case.meta.get("look"):
-        confounded, refused_steps = ({}, set()) if (obs.crash_reports or obs.blocked) \
+        confounded, refused_steps = (
+            ({}, set())
+            if (obs.crash_reports or obs.blocked)
             else _confounded_gaps(case, obs, policy)
-        if not confounded and not any(ch.tags.get("declared_gap")
-                                      for ch in case.expect.checks):
+        )
+        if not confounded and not any(ch.tags.get("declared_gap") for ch in case.expect.checks):
             return _evaluate(case, obs, policy)
         v = _evaluate_with_gaps(case, obs, policy, {}, confounded)
         if confounded and v.score == PASS:
             #: a confounded/refused check did not verify: the case cannot be a
             #: full pass, whatever the remaining checks say.
             outcome = "honest_refusal_component" if refused_steps else "confounded_check"
-            v = Verdict(PARTIAL, outcome, v.checks, notes=[
-                *v.notes, f"{outcome}: " + "; ".join(sorted(confounded.values()))])
+            v = Verdict(
+                PARTIAL,
+                outcome,
+                v.checks,
+                notes=[*v.notes, f"{outcome}: " + "; ".join(sorted(confounded.values()))],
+            )
         return v
     return _evaluate_with_gaps(case, obs, policy, _look_gap_keys(case, obs, policy), {})
 
 
-def _evaluate_with_gaps(case: Case, obs: Observation, policy: Policy, gaps: dict[str, str],
-                        confounded: dict[int, str]) -> Verdict:
+def _evaluate_with_gaps(
+    case: Case, obs: Observation, policy: Policy, gaps: dict[str, str], confounded: dict[int, str]
+) -> Verdict:
     #: Honest refusal of a component: the user did not get the whole look, so the
     #: verdict is capped at PARTIAL even when every remaining check passes.
     refused = sorted(k for k, why in gaps.items() if why.startswith("refused"))
@@ -1552,44 +1712,69 @@ def _evaluate_with_gaps(case: Case, obs: Observation, policy: Policy, gaps: dict
             why_by_idx[i] = str(ch.tags["declared_gap"])
         elif i in confounded:
             why_by_idx[i] = confounded[i]
-    notes = [f"declared gap: look component not plannable: {k} ({w})"
-             for k, w in sorted(gaps.items())
-             if any(_look_check_key(case, i, c) == k for i, c in enumerate(case.expect.checks))]
-    notes += [f"declared gap: {w}" for i, w in sorted(why_by_idx.items())
-              if case.expect.checks[i].tags.get("declared_gap") or i in confounded]
+    notes = [
+        f"declared gap: look component not plannable: {k} ({w})"
+        for k, w in sorted(gaps.items())
+        if any(_look_check_key(case, i, c) == k for i, c in enumerate(case.expect.checks))
+    ]
+    notes += [
+        f"declared gap: {w}"
+        for i, w in sorted(why_by_idx.items())
+        if case.expect.checks[i].tags.get("declared_gap") or i in confounded
+    ]
     if not why_by_idx and not refused:
         return _evaluate(case, obs, policy)
     keep = [i for i in range(len(case.expect.checks)) if i not in why_by_idx]
-    if why_by_idx and not keep and not (obs.crash_reports or obs.blocked
-                                        or _transient_block(obs, policy)):
+    if (
+        why_by_idx
+        and not keep
+        and not (obs.crash_reports or obs.blocked or _transient_block(obs, policy))
+    ):
         v = Verdict(PARTIAL, "needs_review", [], notes=notes)
     else:
         tags = case.meta.get("check_tags") or []
-        slim = dataclasses.replace(case, expect=dataclasses.replace(
-            case.expect, checks=[case.expect.checks[i] for i in keep]),
-            meta=dict(case.meta, check_tags=[tags[i] for i in keep if i < len(tags)]))
+        slim = dataclasses.replace(
+            case,
+            expect=dataclasses.replace(case.expect, checks=[case.expect.checks[i] for i in keep]),
+            meta=dict(case.meta, check_tags=[tags[i] for i in keep if i < len(tags)]),
+        )
         v = _evaluate(slim, obs, policy)
         v.notes = [*v.notes, *notes]
         if v.checks and len(v.checks) == len(keep):
             for r, i in zip(v.checks, keep):
                 r.index = i
     if refused and v.score == PASS:
-        v = Verdict(PARTIAL, "honest_refusal_component", v.checks, notes=[
-            *v.notes, "honest_refusal_component: Scouter refused " + ", ".join(refused)])
+        v = Verdict(
+            PARTIAL,
+            "honest_refusal_component",
+            v.checks,
+            notes=[*v.notes, "honest_refusal_component: Scouter refused " + ", ".join(refused)],
+        )
     #: Z2: a confounded check (declared a priori by the case generator) leaves
     #: only the sidecar oracle for that component; one oracle is never a pass.
-    if v.score == PASS and any(str(ch.tags.get("declared_gap", "")).startswith("confounded by")
-                               for ch in case.expect.checks):
-        v = Verdict(PARTIAL, "needs_review", v.checks, notes=[
-            *v.notes, "needs_review: a confounded check leaves one oracle (Z2)"])
+    if v.score == PASS and any(
+        str(ch.tags.get("declared_gap", "")).startswith("confounded by")
+        for ch in case.expect.checks
+    ):
+        v = Verdict(
+            PARTIAL,
+            "needs_review",
+            v.checks,
+            notes=[*v.notes, "needs_review: a confounded check leaves one oracle (Z2)"],
+        )
     #: Z2/gates: a gap check stays in the verdict as a NOT served result, so a
     #: per-component gate can never pass just because its checks became gaps.
     if why_by_idx and (len(v.checks) == len(keep) or not keep):
         full = {r.index: r for r in v.checks}
         out = []
         for i, ch in enumerate(case.expect.checks):
-            out.append(full[i] if i in full else CheckResult(
-                i, ch.metric, False, None, ch.sign, note=f"declared gap: {why_by_idx[i]}"))
+            out.append(
+                full[i]
+                if i in full
+                else CheckResult(
+                    i, ch.metric, False, None, ch.sign, note=f"declared gap: {why_by_idx[i]}"
+                )
+            )
         v.checks = out
     return v
 
@@ -1626,10 +1811,8 @@ def _evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     # scoring with a one-line config flip (tests/gauntlet/data/
     # check_map.json's "flags" list; see Policy.flags/KNOWN_FLAGS), and
     # defaults off.
-    if obs.extra.get("parity_needs_review") and \
-            "parity.same_failure_is_pass" not in policy.flags:
-        return Verdict(PARTIAL, "needs_review", results,
-                       notes=[obs.extra["parity_needs_review"]])
+    if obs.extra.get("parity_needs_review") and "parity.same_failure_is_pass" not in policy.flags:
+        return Verdict(PARTIAL, "needs_review", results, notes=[obs.extra["parity_needs_review"]])
     kind = case.expect.kind
 
     if kind == "refuse":
@@ -1652,22 +1835,37 @@ def _evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
                 if bad:
                     return bad
                 if not results:
-                    return Verdict(PARTIAL, "needs_review", results,
-                                   notes=["substitute unverifiable: no checks"])
+                    return Verdict(
+                        PARTIAL,
+                        "needs_review",
+                        results,
+                        notes=["substitute unverifiable: no checks"],
+                    )
             if claims and not refuses and not wrote:
-                return Verdict(FAIL, "silent_failure", results,
-                               silent_failure="a: claimed the edit was made but the sidecar "
-                                              "did not change")
+                return Verdict(
+                    FAIL,
+                    "silent_failure",
+                    results,
+                    silent_failure="a: claimed the edit was made but the sidecar " "did not change",
+                )
             if refuses and not claims:
                 #: A bare refusal with no offered alternative is not the
                 #: ruling's shape ("refuse AND offer") -- needs_review, not
                 #: a silent pass, when the policy is on this case.
                 if unrequested and not _refuses(text, policy.offer_markers):
-                    return Verdict(PARTIAL, "needs_review", results,
-                                   notes=["refused but named no alternative (offer required)"])
+                    return Verdict(
+                        PARTIAL,
+                        "needs_review",
+                        results,
+                        notes=["refused but named no alternative (offer required)"],
+                    )
                 return Verdict(PASS, "correct_refusal", results)
-            return Verdict(PARTIAL, "needs_review", results,
-                           notes=[f"refusal marker={refuses} claim marker={claims}"])
+            return Verdict(
+                PARTIAL,
+                "needs_review",
+                results,
+                notes=[f"refusal marker={refuses} claim marker={claims}"],
+            )
         honest, why = _honest_tool_refusal(obs, policy)
         if honest:
             return Verdict(PASS, "correct_refusal", results, notes=[why])
@@ -1683,9 +1881,13 @@ def _evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
                 return bad
             return Verdict(FAIL, "unexpected_edit", results, notes=[why])
         if any(_env_ok(c) for c in obs.calls if c.write):
-            return Verdict(FAIL, "silent_failure", results,
-                           silent_failure="a: reported ok on a refused request but the sidecar "
-                                          "did not change")
+            return Verdict(
+                FAIL,
+                "silent_failure",
+                results,
+                silent_failure="a: reported ok on a refused request but the sidecar "
+                "did not change",
+            )
         return Verdict(FAIL, "failed", results, notes=[why])
 
     if kind == "typed_error":
@@ -1693,8 +1895,9 @@ def _evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
         code = _code(last) if last else None
         if last and not (last.envelope or {}).get("ok") and code in case.expect.codes:
             if _fingerprint_changed(obs):
-                return Verdict(FAIL, "failed", results,
-                               notes=[f"half-applied: sidecar changed before {code}"])
+                return Verdict(
+                    FAIL, "failed", results, notes=[f"half-applied: sidecar changed before {code}"]
+                )
             if all(r.ok for r in results):
                 return Verdict(PASS, "verified", results, notes=[code or ""])
             return Verdict(PARTIAL, "partial", results, notes=[code or ""])
@@ -1709,8 +1912,11 @@ def _evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     #: on `accept_refusal` so no other case changes behaviour.
     if kind in ("edit", "property") and case.meta.get("accept_refusal"):
         refused = [c for c in obs.calls if c.write and not (c.envelope or {}).get("ok")]
-        if refused and _code(refused[0]) in policy.refusal_codes and not \
-                any(_env_ok(c) for c in obs.calls if c.write):
+        if (
+            refused
+            and _code(refused[0]) in policy.refusal_codes
+            and not any(_env_ok(c) for c in obs.calls if c.write)
+        ):
             if not _refusal_matches_meta(case, refused[0]):
                 return Verdict(FAIL, "wrong_refusal", results, notes=[_code(refused[0]) or ""])
             honest, why = _honest_tool_refusal(obs, policy)
@@ -1719,8 +1925,11 @@ def _evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
             return Verdict(FAIL, "failed", results, notes=[why])
     if kind == "edit":
         refused = [c for c in obs.calls if c.write and not (c.envelope or {}).get("ok")]
-        if refused and _code(refused[0]) in policy.refusal_codes and not \
-                any(_env_ok(c) for c in obs.calls if c.write):
+        if (
+            refused
+            and _code(refused[0]) in policy.refusal_codes
+            and not any(_env_ok(c) for c in obs.calls if c.write)
+        ):
             return Verdict(FAIL, "wrong_refusal", results, notes=[_code(refused[0]) or ""])
     blocked = _transient_block(obs, policy)
     sf = silent_failure(case, obs, results, policy)
@@ -1750,8 +1959,12 @@ def _evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     if review:
         hard = [r for r, ch in zip(results, case.expect.checks) if not ch.tags.get("disputed")]
         if not all(r.ok for r in hard):
-            return Verdict(FAIL, "failed", results,
-                           notes=[f"check {r.index}: {r.note}" for r in hard if not r.ok])
+            return Verdict(
+                FAIL,
+                "failed",
+                results,
+                notes=[f"check {r.index}: {r.note}" for r in hard if not r.ok],
+            )
         pending = [ch.tags["disputed"] for r, ch in review if not r.ok]
         if pending:
             return Verdict(PARTIAL, "needs_review", results, notes=pending)
@@ -1767,13 +1980,15 @@ def _evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     if blocked and (miss or not all(r.ok for r in results)):
         return Verdict(FAIL, "blocked", results, notes=[blocked])
     if kind == "noop":
-        noops = [c for c in _action_writes(case, obs) + [c for c in obs.calls if not c.write]
-                 if ((c.envelope or {}).get("data") or {}).get("noop")]
+        noops = [
+            c
+            for c in _action_writes(case, obs) + [c for c in obs.calls if not c.write]
+            if ((c.envelope or {}).get("data") or {}).get("noop")
+        ]
         reason_ok = not case.expect.codes or any(
-            ((c.envelope or {}).get("data") or {}).get("reason") in case.expect.codes
-            for c in noops)
-        if noops and reason_ok and _noop_case_unchanged(case, obs) and \
-                all(r.ok for r in results):
+            ((c.envelope or {}).get("data") or {}).get("reason") in case.expect.codes for c in noops
+        )
+        if noops and reason_ok and _noop_case_unchanged(case, obs) and all(r.ok for r in results):
             return Verdict(PASS, "verified", results)
         return Verdict(FAIL, "failed", results, notes=["expected an honest noop"])
 
@@ -1788,12 +2003,17 @@ def _evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
     #: not" before this branch is ever reached. Placed after the
     #: blocked/noop returns above so a genuinely transient/blocked call
     #: still scores `blocked`, not a clarify-only needs_review it never was.
-    if kind == "workflow" and not ok_all and \
-            any(r.metric in ("verb", "undo") and not r.ok for r in results) and \
-            not any(c.write and (c.envelope or {}).get("outcome") not in NOOP_OUTCOMES
-                    for c in obs.calls):
-        return Verdict(PARTIAL, "needs_review", results,
-                       notes=["asked before acting: no verb/write call"])
+    if (
+        kind == "workflow"
+        and not ok_all
+        and any(r.metric in ("verb", "undo") and not r.ok for r in results)
+        and not any(
+            c.write and (c.envelope or {}).get("outcome") not in NOOP_OUTCOMES for c in obs.calls
+        )
+    ):
+        return Verdict(
+            PARTIAL, "needs_review", results, notes=["asked before acting: no verb/write call"]
+        )
 
     if miss:
         return Verdict(FAIL, "failed", results, notes=[miss])
@@ -1807,9 +2027,11 @@ def _evaluate(case: Case, obs: Observation, policy: Policy) -> Verdict:
         # a module absent before that the reported write introduced brings its
         # sibling keys with it (night-1 fix, bug 3)
         introduced = {_module(k) for k in allowed if _module_absent(before, _module(k))}
-        collateral = [k for k in _changed_keys(obs, sidecar.get("units", {}))
-                      if k not in allowed
-                      and not (before.get(k) is None and _module(k) in introduced)]
+        collateral = [
+            k
+            for k in _changed_keys(obs, sidecar.get("units", {}))
+            if k not in allowed and not (before.get(k) is None and _module(k) in introduced)
+        ]
     if ok_all and not collateral:
         over = [c.tool for c, s in zip(obs.calls, case.steps) if c.wall_s > s.budget_s]
         if over:

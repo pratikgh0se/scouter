@@ -11,13 +11,19 @@ import pytest
 
 from scouter.core import dtprocess
 
-SLEEPER = [sys.executable, "-c", "import signal,time\n"
-           "signal.signal(signal.SIGTERM, signal.SIG_IGN)\nwhile True: time.sleep(1)"]
+SLEEPER = [
+    sys.executable,
+    "-c",
+    "import signal,time\n"
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN)\nwhile True: time.sleep(1)",
+]
 
 
 @pytest.fixture
 def owner(tmp_path, monkeypatch):
-    monkeypatch.setattr(dtprocess, "owner_path", lambda cache_root=None: tmp_path / "darktable.owner.json")
+    monkeypatch.setattr(
+        dtprocess, "owner_path", lambda cache_root=None: tmp_path / "darktable.owner.json"
+    )
     return tmp_path
 
 
@@ -42,8 +48,7 @@ def test_launch_writes_owner_file_and_owned_pid_matches(owner, monkeypatch, tmp_
     assert dtprocess.owned_pid() is None
 
 
-def test_launch_without_start_time_stops_child_and_writes_no_owner(owner, monkeypatch,
-                                                                    tmp_path):
+def test_launch_without_start_time_stops_child_and_writes_no_owner(owner, monkeypatch, tmp_path):
     fake = tmp_path / "darktable"
     fake.write_text("#!/bin/sh\nexec sleep 30\n")
     fake.chmod(0o755)
@@ -101,6 +106,7 @@ def test_launch_writes_owner_record_under_envs_scouter_cache_not_ambient(monkeyp
     fallback `paths.cache_root()` would otherwise use -- the plausible
     cause of night 1's r11/r12/r13/r15 falling through to the generic
     `bridge_timeout` instead of `darktable_unresponsive` (H3 review)."""
+
     class FakeProc:
         pid = 424242
 
@@ -116,8 +122,7 @@ def test_launch_writes_owner_record_under_envs_scouter_cache_not_ambient(monkeyp
     right = tmp_path / "session-cache"
     monkeypatch.setattr(dtprocess.paths, "cache_root", lambda: ambient_wrong)
     try:
-        dtprocess.launch(None, tmp_path / "lib" / "library.db",
-                         env={"SCOUTER_CACHE": str(right)})
+        dtprocess.launch(None, tmp_path / "lib" / "library.db", env={"SCOUTER_CACHE": str(right)})
     finally:
         dtprocess._children.pop(424242, None)
     assert (right / "darktable.owner.json").exists()
@@ -128,9 +133,18 @@ def test_foreign_pid_is_refused_and_never_signalled(owner):
     # A genuinely owned record (this test process: live pid, real lstart and
     # comm); `kill` is a recorder, so nothing is ever signalled.
     me = os.getpid()
-    (owner / "darktable.owner.json").write_text(json.dumps({
-        "pid": me, "start_time": dtprocess._lstart(me), "exe": dtprocess._comm(me),
-        "library": "/l", "configdir": None, "frame": None}))
+    (owner / "darktable.owner.json").write_text(
+        json.dumps(
+            {
+                "pid": me,
+                "start_time": dtprocess._lstart(me),
+                "exe": dtprocess._comm(me),
+                "library": "/l",
+                "configdir": None,
+                "frame": None,
+            }
+        )
+    )
     assert dtprocess.owned_pid() == me
     other = 12345 if me != 12345 else 12346
     sent = []
@@ -139,9 +153,18 @@ def test_foreign_pid_is_refused_and_never_signalled(owner):
 
 
 def test_pid_reuse_is_not_ours(owner, monkeypatch):
-    (owner / "darktable.owner.json").write_text(json.dumps({
-        "pid": os.getpid(), "start_time": "Mon Jan  1 00:00:00 1990", "exe": "/x/python",
-        "library": "/l", "configdir": None, "frame": None}))
+    (owner / "darktable.owner.json").write_text(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "start_time": "Mon Jan  1 00:00:00 1990",
+                "exe": "/x/python",
+                "library": "/l",
+                "configdir": None,
+                "frame": None,
+            }
+        )
+    )
     assert dtprocess.owned_pid() is None
 
 
@@ -158,8 +181,13 @@ def test_ladder_escalates_to_sigkill_without_osascript(owner, monkeypatch):
 
 
 def test_wait_gui_ready_polls_diag_not_view():
-    answers = iter([RuntimeError("no bridge"), {"gui_ready": False}, {"gui_ready": True,
-                                                                      "gui_ready_source": "event"}])
+    answers = iter(
+        [
+            RuntimeError("no bridge"),
+            {"gui_ready": False},
+            {"gui_ready": True, "gui_ready_source": "event"},
+        ]
+    )
     calls = []
 
     def call(method, params, timeout):
@@ -170,16 +198,20 @@ def test_wait_gui_ready_polls_diag_not_view():
         return a
 
     t = [0.0]
-    res = dtprocess.wait_gui_ready(10, call=call, clock=lambda: t[0],
-                                   sleep=lambda s: t.__setitem__(0, t[0] + s))
+    res = dtprocess.wait_gui_ready(
+        10, call=call, clock=lambda: t[0], sleep=lambda s: t.__setitem__(0, t[0] + s)
+    )
     assert res["ready"] and set(calls) == {"darktable_mcp.diag"}
 
 
 def test_wait_gui_ready_times_out():
     t = [0.0]
-    res = dtprocess.wait_gui_ready(2, call=lambda *a, **k: {"gui_ready": False},
-                                   clock=lambda: t[0],
-                                   sleep=lambda s: t.__setitem__(0, t[0] + s))
+    res = dtprocess.wait_gui_ready(
+        2,
+        call=lambda *a, **k: {"gui_ready": False},
+        clock=lambda: t[0],
+        sleep=lambda s: t.__setitem__(0, t[0] + s),
+    )
     assert not res["ready"]
 
 
@@ -194,10 +226,13 @@ def test_wait_gui_ready_stop_if_ends_the_poll_early():
         polls[0] += 1
         return polls[0] >= 3  # true on the third poll
 
-    res = dtprocess.wait_gui_ready(30, call=lambda *a, **k: {"gui_ready": False},
-                                   clock=lambda: t[0],
-                                   sleep=lambda s: t.__setitem__(0, t[0] + s),
-                                   stop_if=stop_if)
+    res = dtprocess.wait_gui_ready(
+        30,
+        call=lambda *a, **k: {"gui_ready": False},
+        clock=lambda: t[0],
+        sleep=lambda s: t.__setitem__(0, t[0] + s),
+        stop_if=stop_if,
+    )
     assert res == {"ready": False, "gui_ready": False}
     assert t[0] < 5  # ended after ~2 poll_s (1 s default), nowhere near the 30 s timeout
 
@@ -205,18 +240,30 @@ def test_wait_gui_ready_stop_if_ends_the_poll_early():
 def test_wait_gui_ready_with_no_stop_if_behaves_exactly_as_before():
     """Control: omitting `stop_if` (every existing caller) never calls it."""
     t = [0.0]
-    res = dtprocess.wait_gui_ready(2, call=lambda *a, **k: {"gui_ready": False},
-                                   clock=lambda: t[0],
-                                   sleep=lambda s: t.__setitem__(0, t[0] + s))
+    res = dtprocess.wait_gui_ready(
+        2,
+        call=lambda *a, **k: {"gui_ready": False},
+        clock=lambda: t[0],
+        sleep=lambda s: t.__setitem__(0, t[0] + s),
+    )
     assert not res["ready"]
 
 
 def test_stale_lock_removed_only_for_dead_owner(owner, tmp_path):
     lib = tmp_path / "library.db"
     lock = tmp_path / "library.db.lock"
-    (owner / "darktable.owner.json").write_text(json.dumps({
-        "pid": 999999, "start_time": "x", "exe": "darktable", "library": str(lib),
-        "configdir": None, "frame": None}))
+    (owner / "darktable.owner.json").write_text(
+        json.dumps(
+            {
+                "pid": 999999,
+                "start_time": "x",
+                "exe": "darktable",
+                "library": str(lib),
+                "configdir": None,
+                "frame": None,
+            }
+        )
+    )
     lock.write_text("999999\n")
     assert dtprocess.clear_stale_locks(lib) == [str(lock)]
     lock.write_text("4242\n")
@@ -248,8 +295,12 @@ def test_no_signal_when_ownership_lost_before_sigkill(owner, monkeypatch):
     owned = iter([4242, 4242, None])  # entry, before SIGTERM, before SIGKILL
     monkeypatch.setattr(dtprocess, "owned_pid", lambda cache_root=None: next(owned))
     sent = []
-    res = dtprocess.terminate(responsive=False, kill=lambda p, s: sent.append((p, s)),
-                              alive=lambda p: True, sleep=lambda s: None)
+    res = dtprocess.terminate(
+        responsive=False,
+        kill=lambda p, s: sent.append((p, s)),
+        alive=lambda p: True,
+        sleep=lambda s: None,
+    )
     assert sent == [(4242, signal.SIGTERM)]
     assert res["how"] == "gone_or_reused" and not res["ok"]
 

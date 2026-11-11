@@ -56,16 +56,28 @@ def _bump(job: str) -> None:
 def telemetry(job: str, verb: str, outcome: str, ms: int, detail: dict) -> None:
     from scouter import PHASE, __version__
 
-    event = {"ts": metrics._utc_now_z(), "job": job, "verb": verb, "layer": "watchdog",
-             "args_digest": metrics.args_digest(detail), "images": [], "ms": int(ms),
-             "outcome": outcome, "bytes_in": 0, "bytes_out": 0, "est_tokens": 0,
-             "phase": PHASE, "version": __version__}
+    event = {
+        "ts": metrics._utc_now_z(),
+        "job": job,
+        "verb": verb,
+        "layer": "watchdog",
+        "args_digest": metrics.args_digest(detail),
+        "images": [],
+        "ms": int(ms),
+        "outcome": outcome,
+        "bytes_in": 0,
+        "bytes_out": 0,
+        "est_tokens": 0,
+        "phase": PHASE,
+        "version": __version__,
+    }
     metrics.emit(event)
     metrics.audit(job, {**event, "detail": detail})
 
 
-def heal_darktable(job: str, budget_s: float, *, clock: Callable[[], float] = time.monotonic
-                   ) -> dict:
+def heal_darktable(
+    job: str, budget_s: float, *, clock: Callable[[], float] = time.monotonic
+) -> dict:
     """Relaunch the owned darktable. Never touches a darktable Scouter did not launch.
 
     The whole heal is bounded by `budget_s` (fix round 1, I2): one deadline,
@@ -84,8 +96,14 @@ def heal_darktable(job: str, budget_s: float, *, clock: Callable[[], float] = ti
     def over_budget(**extra) -> dict | None:
         if clock() < deadline:
             return None
-        return {"outcome": "heal_failed", "ms": ms(), "pid_old": pid, "pid_new": None,
-                "budget_exceeded": True, **extra}
+        return {
+            "outcome": "heal_failed",
+            "ms": ms(),
+            "pid_old": pid,
+            "pid_new": None,
+            "budget_exceeded": True,
+            **extra,
+        }
 
     rec = dtprocess.read_owner()
     pid = dtprocess.owned_pid()
@@ -121,17 +139,27 @@ def heal_darktable(job: str, budget_s: float, *, clock: Callable[[], float] = ti
         if late:
             return late
         try:
-            dtbridge.call("darkroom.open", {"path": opened},
-                          timeout=min(30.0, max(0.0, deadline - clock())))
+            dtbridge.call(
+                "darkroom.open", {"path": opened}, timeout=min(30.0, max(0.0, deadline - clock()))
+            )
         except Exception as e:  # noqa: BLE001 - a retry on an unopened image is unsafe
-            return (over_budget(**out, error=f"re-open {opened}: {str(e)[:200]}")
-                    or {"outcome": "heal_failed", "ms": ms(), **out,
-                        "error": f"re-open {opened}: {str(e)[:200]}"})
+            return over_budget(**out, error=f"re-open {opened}: {str(e)[:200]}") or {
+                "outcome": "heal_failed",
+                "ms": ms(),
+                **out,
+                "error": f"re-open {opened}: {str(e)[:200]}",
+            }
     return {"outcome": "healed", "ms": ms(), **out}
 
 
-def run_with_heal(verb_id: str, fn: Callable[[], Any], job: str, *, cfg=None,
-                  heal: Callable[[str, float], dict] = heal_darktable) -> tuple[Any, bool]:
+def run_with_heal(
+    verb_id: str,
+    fn: Callable[[], Any],
+    job: str,
+    *,
+    cfg=None,
+    heal: Callable[[str, float], dict] = heal_darktable,
+) -> tuple[Any, bool]:
     """(result, healed). Raises DarktableUnresponsive when no heal applies."""
     try:
         return fn(), False
@@ -165,6 +193,5 @@ def run_with_heal(verb_id: str, fn: Callable[[], Any], job: str, *, cfg=None,
     try:
         return fn(), True
     except ScouterError as e2:
-        e2.detail.update(healed=True, heals_used=used + 1,
-                         heals_max=cfg.max_heals_per_job)
+        e2.detail.update(healed=True, heals_used=used + 1, heals_max=cfg.max_heals_per_job)
         raise

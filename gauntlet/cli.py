@@ -55,9 +55,15 @@ def _config(args: argparse.Namespace) -> dict:
 def _resolve_stamp(runs_root: Path, stamp: str | None) -> str:
     if stamp and stamp != "latest":
         return stamp
-    runs = sorted(p.name for p in Path(runs_root).expanduser().iterdir()
-                  if p.is_dir() and (p / "cases.jsonl").exists()) if \
-        Path(runs_root).expanduser().exists() else []
+    runs = (
+        sorted(
+            p.name
+            for p in Path(runs_root).expanduser().iterdir()
+            if p.is_dir() and (p / "cases.jsonl").exists()
+        )
+        if Path(runs_root).expanduser().exists()
+        else []
+    )
     if not runs:
         raise SystemExit("gauntlet: no runs yet; run `python -m gauntlet generate` first")
     return runs[-1]
@@ -75,8 +81,9 @@ def _where(pairs: list[str]) -> dict[str, set[str]] | None:
 
 def _commit() -> str:
     try:
-        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True,
-                              text=True, timeout=10).stdout.strip()
+        return subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=10
+        ).stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
         return ""
 
@@ -89,12 +96,12 @@ def _run_shard(args: argparse.Namespace, adapter, run: RunDir) -> int:
     d = workers_mod.shard_dir(run, k)
     run.progress_json, run.log_md = d / "progress.json", d / "log.md"
     ids = {x for x in workers_mod.shard_ids_path(run, k).read_text(encoding="utf-8").split()}
-    runner = Runner(adapter, run, commit=_commit(),
-                    should_stop=workers_mod.stop_path(run).exists)
-    summary = runner.run_layers(None, resume=False, case_ids=ids,
-                                wait_on_park=args.wait_on_park)
-    print(f"worker {k}/{n}: ran {summary.ran}, parked {len(summary.parked)}, "
-          f"status {summary.status}")
+    runner = Runner(adapter, run, commit=_commit(), should_stop=workers_mod.stop_path(run).exists)
+    summary = runner.run_layers(None, resume=False, case_ids=ids, wait_on_park=args.wait_on_park)
+    print(
+        f"worker {k}/{n}: ran {summary.ran}, parked {len(summary.parked)}, "
+        f"status {summary.status}"
+    )
     if summary.status.startswith("blocked"):
         return EXIT_REFUSED
     return EXIT_PARKED if summary.parked or summary.stopped_early else 0
@@ -103,10 +110,14 @@ def _run_shard(args: argparse.Namespace, adapter, run: RunDir) -> int:
 def _run_parallel(args: argparse.Namespace, cfg: dict, adapter, run: RunDir) -> int:
     runner = Runner(adapter, run, commit=_commit())
     todo = runner.selection(
-        args.layer, resume=not args.rerun and (args.resume or not args.case),
-        only_failed=args.only_failed, case_ids=set(args.case) if args.case else None,
-        tiers=set(args.tier) if args.tier else None, prefixes=tuple(args.prefix),
-        where=_where(args.where))
+        args.layer,
+        resume=not args.rerun and (args.resume or not args.case),
+        only_failed=args.only_failed,
+        case_ids=set(args.case) if args.case else None,
+        tiers=set(args.tier) if args.tier else None,
+        prefixes=tuple(args.prefix),
+        where=_where(args.where),
+    )
     if not todo:
         print(f"{run.root}: nothing to run")
         return 0
@@ -116,8 +127,9 @@ def _run_parallel(args: argparse.Namespace, cfg: dict, adapter, run: RunDir) -> 
         saved = {k: os.environ.get(k) for k in pre_env}
         os.environ.update(pre_env)
         try:
-            summary = runner.run_layers(None, resume=False, case_ids=set(first),
-                                        wait_on_park=args.wait_on_park)
+            summary = runner.run_layers(
+                None, resume=False, case_ids=set(first), wait_on_park=args.wait_on_park
+            )
         finally:
             for k, v in saved.items():
                 if v is None:
@@ -129,8 +141,11 @@ def _run_parallel(args: argparse.Namespace, cfg: dict, adapter, run: RunDir) -> 
         if not todo:
             return EXIT_PARKED if summary.parked else 0
     shards = workers_mod.partition(
-        todo, args.workers, max_cases=runner.session_max_cases,
-        atomic_layers=frozenset(getattr(adapter, "atomic_layers", ())))
+        todo,
+        args.workers,
+        max_cases=runner.session_max_cases,
+        atomic_layers=frozenset(getattr(adapter, "atomic_layers", ())),
+    )
     all_cases = run.read_cases()
     for spec in adapter.layers():  # layer totals, as run_layers records them
         mine = [c for c in all_cases if c.layer == spec.name]
@@ -142,15 +157,26 @@ def _run_parallel(args: argparse.Namespace, cfg: dict, adapter, run: RunDir) -> 
         if val:
             base += [flag, val]
     code = workers_mod.run_parallel(
-        run, shards,
-        lambda k, n: [*base, "run", "--stamp", run.stamp, "--shard", f"{k}/{n}",
-                      *(["--wait-on-park"] if args.wait_on_park else []),
-                      *(["--allow-stale-cases"] if args.allow_stale_cases else [])],
-        lambda k: workers_mod.worker_env(run, k, args.workers, adapter), runner.progress)
-    runner.progress.finish("parked" if code == EXIT_PARKED else "done" if code == 0
-                           else "blocked")
-    print(f"{run.root}: {len(todo)} cases on {args.workers} workers "
-          f"({', '.join(str(len(s)) for s in shards)}), exit {code}")
+        run,
+        shards,
+        lambda k, n: [
+            *base,
+            "run",
+            "--stamp",
+            run.stamp,
+            "--shard",
+            f"{k}/{n}",
+            *(["--wait-on-park"] if args.wait_on_park else []),
+            *(["--allow-stale-cases"] if args.allow_stale_cases else []),
+        ],
+        lambda k: workers_mod.worker_env(run, k, args.workers, adapter),
+        runner.progress,
+    )
+    runner.progress.finish("parked" if code == EXIT_PARKED else "done" if code == 0 else "blocked")
+    print(
+        f"{run.root}: {len(todo)} cases on {args.workers} workers "
+        f"({', '.join(str(len(s)) for s in shards)}), exit {code}"
+    )
     return code
 
 
@@ -168,12 +194,15 @@ def main(argv: list[str] | None = None) -> int:
     #: every generated case. --subset-layer/--subset-keys are required
     #: together with --subset; --seed defaults to 0 (still deterministic,
     #: just not caller-chosen).
-    g.add_argument("--subset", type=int,
-                   help="keep only this many cases of --subset-layer, stratified on "
-                        "--subset-keys")
+    g.add_argument(
+        "--subset",
+        type=int,
+        help="keep only this many cases of --subset-layer, stratified on " "--subset-keys",
+    )
     g.add_argument("--subset-layer", help="the one layer --subset applies to")
-    g.add_argument("--subset-keys",
-                   help="comma-separated case.meta keys to stratify on, e.g. class,genre")
+    g.add_argument(
+        "--subset-keys", help="comma-separated case.meta keys to stratify on, e.g. class,genre"
+    )
     g.add_argument("--seed", type=int, default=0, help="the --subset selection's own seed")
     r = sub.add_parser("run")
     r.add_argument("--stamp")
@@ -181,21 +210,43 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--case", action="append")
     r.add_argument("--resume", action="store_true")
     r.add_argument("--only-failed", action="store_true")
-    r.add_argument("--rerun", action="store_true",
-                   help="run the selected cases again even when they already have a result")
+    r.add_argument(
+        "--rerun",
+        action="store_true",
+        help="run the selected cases again even when they already have a result",
+    )
     r.add_argument("--wait-on-park", action="store_true")
-    r.add_argument("--tier", action="append", choices=("P0", "P1", "P2"),
-                   help="only cases of this tier (repeatable), e.g. the P0 slice")
-    r.add_argument("--prefix", action="append", default=[],
-                   help="only case ids starting with this (repeatable)")
-    r.add_argument("--where", action="append", default=[],
-                   help="only cases whose meta KEY equals VALUE, as KEY=VALUE (repeatable; "
-                   "several values for one key are OR-ed)")
-    r.add_argument("--workers", type=int, default=1,
-                   help="run on N darktable instances at once (default 1, unchanged)")
-    r.add_argument("--allow-stale-cases", action="store_true",
-                   help="run even though cases.jsonl was generated by different harness "
-                   "code (exit 4 otherwise)")
+    r.add_argument(
+        "--tier",
+        action="append",
+        choices=("P0", "P1", "P2"),
+        help="only cases of this tier (repeatable), e.g. the P0 slice",
+    )
+    r.add_argument(
+        "--prefix",
+        action="append",
+        default=[],
+        help="only case ids starting with this (repeatable)",
+    )
+    r.add_argument(
+        "--where",
+        action="append",
+        default=[],
+        help="only cases whose meta KEY equals VALUE, as KEY=VALUE (repeatable; "
+        "several values for one key are OR-ed)",
+    )
+    r.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="run on N darktable instances at once (default 1, unchanged)",
+    )
+    r.add_argument(
+        "--allow-stale-cases",
+        action="store_true",
+        help="run even though cases.jsonl was generated by different harness "
+        "code (exit 4 otherwise)",
+    )
     r.add_argument("--shard", help=argparse.SUPPRESS)  # K/N, set by the --workers parent
     rp = sub.add_parser("report")
     rp.add_argument("--stamp")
@@ -211,17 +262,23 @@ def main(argv: list[str] | None = None) -> int:
     adapter = load_adapter(cfg["adapter"])
 
     if args.cmd == "generate":
-        if bool(args.subset) != bool(args.subset_layer) or (args.subset and not
-                                                             args.subset_keys):
-            print("gauntlet: --subset needs --subset-layer and --subset-keys together",
-                 file=sys.stderr)
+        if bool(args.subset) != bool(args.subset_layer) or (args.subset and not args.subset_keys):
+            print(
+                "gauntlet: --subset needs --subset-layer and --subset-keys together",
+                file=sys.stderr,
+            )
             return 2
         run = RunDir(runs_root, args.stamp or new_stamp())
         try:
             counts = write_generation(
-                run, adapter, args.layer, subset=args.subset, subset_layer=args.subset_layer,
+                run,
+                adapter,
+                args.layer,
+                subset=args.subset,
+                subset_layer=args.subset_layer,
                 subset_keys=(args.subset_keys.split(",") if args.subset_keys else None),
-                seed=args.seed)
+                seed=args.seed,
+            )
         except GenerationError as e:
             print(f"generation failed: {e}", file=sys.stderr)
             return 2
@@ -236,11 +293,13 @@ def main(argv: list[str] | None = None) -> int:
         elif not args.allow_stale_cases:
             stale = stale_cases_reason(run)
             if stale:
-                print(f"gauntlet: refusing to run {run.root}: {stale}.\n"
-                      "  cases.jsonl was generated by older harness code; run "
-                      "`python -m gauntlet generate` for a fresh run dir, or pass "
-                      "--allow-stale-cases to run these case definitions anyway.",
-                      file=sys.stderr)
+                print(
+                    f"gauntlet: refusing to run {run.root}: {stale}.\n"
+                    "  cases.jsonl was generated by older harness code; run "
+                    "`python -m gauntlet generate` for a fresh run dir, or pass "
+                    "--allow-stale-cases to run these case definitions anyway.",
+                    file=sys.stderr,
+                )
                 return EXIT_STALE_CASES
         if args.workers < 1:
             raise SystemExit("gauntlet: --workers must be >= 1")
@@ -249,13 +308,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.workers > 1:
             return _run_parallel(args, cfg, adapter, run)
         summary = Runner(adapter, run, commit=_commit()).run_layers(
-            args.layer, resume=not args.rerun and (args.resume or not args.case),
+            args.layer,
+            resume=not args.rerun and (args.resume or not args.case),
             only_failed=args.only_failed,
-            case_ids=set(args.case) if args.case else None, wait_on_park=args.wait_on_park,
-            tiers=set(args.tier) if args.tier else None, prefixes=tuple(args.prefix),
-            where=_where(args.where))
-        print(f"{run.root}: ran {summary.ran}, parked {len(summary.parked)}, "
-              f"stopped layers {summary.stopped_layers or '-'}, status {summary.status}")
+            case_ids=set(args.case) if args.case else None,
+            wait_on_park=args.wait_on_park,
+            tiers=set(args.tier) if args.tier else None,
+            prefixes=tuple(args.prefix),
+            where=_where(args.where),
+        )
+        print(
+            f"{run.root}: ran {summary.ran}, parked {len(summary.parked)}, "
+            f"stopped layers {summary.stopped_layers or '-'}, status {summary.status}"
+        )
         if summary.status.startswith("blocked"):
             return EXIT_REFUSED
         return EXIT_PARKED if summary.parked or summary.stopped_early else 0
@@ -271,11 +336,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "progress-html":
         prog = json.loads(run.progress_json.read_text(encoding="utf-8"))
-        rep = json.loads(run.report_json.read_text(encoding="utf-8")) \
-            if run.report_json.exists() else None
+        rep = (
+            json.loads(run.report_json.read_text(encoding="utf-8"))
+            if run.report_json.exists()
+            else None
+        )
         out = Path(args.out) if args.out else run.root / "progress.html"
-        atomic_write_text(out, html_page.render(prog, rep, args.title or cfg.get("title",
-                                                                                "Gauntlet")))
+        atomic_write_text(
+            out, html_page.render(prog, rep, args.title or cfg.get("title", "Gauntlet"))
+        )
         print(out)
         return 0
     return 2

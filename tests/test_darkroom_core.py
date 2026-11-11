@@ -85,7 +85,9 @@ class _DarkroomFixture(unittest.TestCase):
         # Row 461 (review Important 2): what each commit was told to expect.
         self.commit_modules: list[str | None] = []
 
-        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
+        def fake_commit(
+            job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None
+        ):
             self.commit_calls.append((job, image, strategy, attempts, expect_change))
             self._land_sent()
             self.commit_modules.append(expect_module)
@@ -453,8 +455,9 @@ class DarkroomCoreTest(_DarkroomFixture):
         assert entry is not None
         # `status` is a slider position, never a value (t_176d9d85): the
         # key stays (pending commit=False detection) with the value unknown.
-        self.assertEqual(entry.after, {"steps": -3, "steps_landed": 3, "value": None,
-                                       "value_unknown": True})
+        self.assertEqual(
+            entry.after, {"steps": -3, "steps_landed": 3, "value": None, "value_unknown": True}
+        )
 
     def test_nudge_mid_loop_failure_leaves_after_null_and_records_the_error(self) -> None:
         calls = {"n": 0}
@@ -523,8 +526,10 @@ class DarkroomCoreTest(_DarkroomFixture):
                 self.commit_modules.clear()
                 result = darkroom.enable(module=module)
                 self.assertNotEqual(result.outcome, "error:usage")
-                self.assertTrue(set(self.commit_modules) <= {module},
-                                f"enable commits expect {module}: {self.commit_modules}")
+                self.assertTrue(
+                    set(self.commit_modules) <= {module},
+                    f"enable commits expect {module}: {self.commit_modules}",
+                )
 
     def test_enable_has_no_confirm_kwarg(self) -> None:
         """Ruling 9: `darkroom.enable` is not gated and takes no `confirm`."""
@@ -765,9 +770,7 @@ class DarkroomCoreTest(_DarkroomFixture):
 
         from scouter.mcp.server import ScouterServer
 
-        payload = json.loads(
-            ScouterServer().call("darkroom_undo_last", {"job": "job-test"})
-        )
+        payload = json.loads(ScouterServer().call("darkroom_undo_last", {"job": "job-test"}))
         self.assertEqual(payload["outcome"], "noop")
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["error"]["code"], "noop")
@@ -1165,7 +1168,8 @@ class CommitReadbackTest(unittest.TestCase):
                 darkroom.nudge(module="exposure", param="exposure", steps=1)
 
     def test_status_as_a_normalised_position_must_not_falsely_confirm_an_unlanded_nudge(
-            self) -> None:
+        self,
+    ) -> None:
         """Same failure, the other documented shape of `status` (design 7.3:
         "a normalised position in the slider's visible range"). The fixture's
         real on-disk value is rewritten to 0.5 (a value plausible as BOTH a
@@ -1175,7 +1179,10 @@ class CommitReadbackTest(unittest.TestCase):
         coincidence is the same bug as the request-echo case above."""
         self._rewrite_exposure_value(0.5)
         self.bridge.responses["darkroom.action"] = lambda p: {
-            "nan": False, "status": 0.5, "view": "darkroom", **p,
+            "nan": False,
+            "status": 0.5,
+            "view": "darkroom",
+            **p,
         }
         with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
             with self.assertRaises(CommitTimeout):
@@ -1202,8 +1209,7 @@ class CommitReadbackTest(unittest.TestCase):
             with self.assertRaises(CommitTimeout):
                 darkroom.reset(module="exposure", confirm=True)
 
-    def test_a_reset_timeout_on_a_module_with_no_declared_rows_at_all_also_propagates(
-            self) -> None:
+    def test_a_reset_timeout_on_a_module_with_no_declared_rows_at_all_also_propagates(self) -> None:
         """`sigmoid`: neither of its rows declares a neutral or a darktable
         default at all (the `rows == []` path, distinct from `exposure`'s
         mixed-declaration path above) -- `_module_at_defaults` always
@@ -1238,8 +1244,9 @@ class CommitReadbackTest(unittest.TestCase):
         close = text.index("</darktable:history>")
         seq_close = text.rindex("</rdf:Seq>", 0, close)
         text = text[:seq_close] + " " + item + "\n    " + text[seq_close:]
-        return re.sub(r'darktable:history_end="\d+"', f'darktable:history_end="{end + 1}"',
-                      text, count=1)
+        return re.sub(
+            r'darktable:history_end="\d+"', f'darktable:history_end="{end + 1}"', text, count=1
+        )
 
     def test_a_nudge_that_lands_after_the_timeout_is_reported_applied_not_noop(self) -> None:
         """A late `history.commit` answer lands the edit after `CommitTimeout`;
@@ -1255,7 +1262,10 @@ class CommitReadbackTest(unittest.TestCase):
             raise self._timeout()
 
         self.bridge.responses["darkroom.action"] = lambda p: {
-            "nan": False, "status": 9.0, "view": "darkroom", **p,
+            "nan": False,
+            "status": 9.0,
+            "view": "darkroom",
+            **p,
         }
         with mock.patch("scouter.core.darkroom._commit", side_effect=_late_flush):
             result = darkroom.nudge(module="exposure", param="exposure", steps=1)
@@ -1289,7 +1299,8 @@ class CommitReadbackTest(unittest.TestCase):
         )
 
     def test_a_predicted_noop_module_action_stays_a_noop_even_with_a_late_history_bump(
-            self) -> None:
+        self,
+    ) -> None:
         """A write whose pre-write state already matched the target must
         never be relabelled "landed" by `matched_before` even when history
         and the readback happen to agree -- `enable` on an already-enabled
@@ -1316,7 +1327,10 @@ class CommitReadbackTest(unittest.TestCase):
         landed. Formerly asserted the opposite (`committed=True`, "honest
         noop"); that was this card's false-success bug."""
         self.bridge.responses["darkroom.action"] = lambda p: {
-            "nan": False, "status": 1.5500002, "view": "darkroom", **p,
+            "nan": False,
+            "status": 1.5500002,
+            "view": "darkroom",
+            **p,
         }
         with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
             with self.assertRaises(CommitTimeout):
@@ -1339,14 +1353,18 @@ class CommitReadbackTest(unittest.TestCase):
             raise self._timeout()
 
         self.bridge.responses["darkroom.action"] = lambda p: {
-            "nan": False, "status": 9.0, "view": "darkroom", **p,
+            "nan": False,
+            "status": 9.0,
+            "view": "darkroom",
+            **p,
         }
         with mock.patch("scouter.core.darkroom._commit", side_effect=_concurrent_edit):
             with self.assertRaises(CommitTimeout):
                 darkroom.nudge(module="exposure", param="exposure", steps=1)
 
     def test_a_pending_uncommitted_nudges_status_must_not_leak_into_the_next_nudges_confirm(
-            self) -> None:
+        self,
+    ) -> None:
         """Fix round 1, C1 (review Critical): `_confirm_nudge` and the
         post-check must measure movement from what is actually ON DISK
         (`raw_state`), never from `before_state` -- after a `commit=False`
@@ -1362,7 +1380,10 @@ class CommitReadbackTest(unittest.TestCase):
         Using `raw_state` (1.5500002, genuinely unchanged) is not confirmed,
         so the timeout must propagate."""
         self.bridge.responses["darkroom.action"] = lambda p: {
-            "nan": False, "status": 0.6, "view": "darkroom", **p,
+            "nan": False,
+            "status": 0.6,
+            "view": "darkroom",
+            **p,
         }
         darkroom.nudge(module="exposure", param="exposure", steps=1, commit=False)
         with mock.patch("scouter.core.darkroom._commit", side_effect=self._timeout()):
@@ -1371,12 +1392,16 @@ class CommitReadbackTest(unittest.TestCase):
 
     def _pending_uncommitted_nudge_with_status(self, status: float) -> None:
         self.bridge.responses["darkroom.action"] = lambda p: {
-            "nan": False, "status": status, "view": "darkroom", **p,
+            "nan": False,
+            "status": status,
+            "view": "darkroom",
+            **p,
         }
         darkroom.nudge(module="exposure", param="exposure", steps=1, commit=False)
 
     def test_a_pending_uncommitted_nudge_then_a_real_late_flush_below_status_still_honest(
-            self) -> None:
+        self,
+    ) -> None:
         """Fix round 2, R2-I1 (review Important): the C1 test above passes
         even with `before_state` put back as the baseline, because it never
         exercises a second oracle -- with no history movement, I2's
@@ -1409,7 +1434,8 @@ class CommitReadbackTest(unittest.TestCase):
                 darkroom.nudge(module="exposure", param="exposure", steps=1)
 
     def test_a_pending_uncommitted_nudge_then_a_real_successful_commit_below_status_raises(
-            self) -> None:
+        self,
+    ) -> None:
         """Fix round 2, R2-I1 (review Important), the successful-commit
         twin of the test above. Reviewer probe `test_seven`: same pending
         `commit=False` nudge (status 0.6), but this time `_commit` itself
@@ -1719,8 +1745,10 @@ class CommitWiringTest(unittest.TestCase):
         missing = []
         seen = 0
         for node in ast.walk(ast.parse(src)):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in (
-                "_commit", "_commit_with_readback"
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in ("_commit", "_commit_with_readback")
             ):
                 seen += 1
                 if not any(k.arg == "expect_module" for k in node.keywords):
@@ -1742,7 +1770,8 @@ class DefaultConsumersOutsideModuleAtDefaultsTest(unittest.TestCase):
     consumers exist and behave as documented."""
 
     def test_effective_current_answers_exposure_black_default_when_module_has_no_history(
-            self) -> None:
+        self,
+    ) -> None:
         # Exactly the "sidecar exists, module has no active history entry"
         # shape _effective_current's own docstring describes: history_end
         # is set (the sidecar exists), enabled is None (no active entry for

@@ -21,7 +21,7 @@ class GeometryTest(unittest.TestCase):
         self.assertTrue(phrases.resolve("rotate right by 2°").explicit)
 
     def test_crop_margins_center_the_target_aspect(self) -> None:
-        m = moves.crop_margins(1.0, 6000, 4000)   # 3:2 landscape -> square
+        m = moves.crop_margins(1.0, 6000, 4000)  # 3:2 landscape -> square
         self.assertAlmostEqual(m["left"], 1 / 6, places=6)
         self.assertAlmostEqual(m["right"], 5 / 6, places=6)
         self.assertEqual((m["top"], m["bottom"]), (0.0, 1.0))

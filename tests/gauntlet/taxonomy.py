@@ -12,14 +12,26 @@ DATA = Path(__file__).resolve().parent / "data"
 
 #: Spec §0: the counts the loader asserts.
 EXPECTED = {
-    "modules": 69, "unique_phrases": 378, "workflows": 12, "bulk": 9,
-    "look_components": 16, "cannot_do": 14,
-    "looks": 234, "look_families": 16,
+    "modules": 69,
+    "unique_phrases": 378,
+    "workflows": 12,
+    "bulk": 9,
+    "look_components": 16,
+    "cannot_do": 14,
+    "looks": 234,
+    "look_families": 16,
     "look_confidence": {"documented": 127, "community-consensus": 38, "inferred": 69},
-    "requests": 601, "clusters": 141, "impossible": 60, "request_genres": 14,
+    "requests": 601,
+    "clusters": 141,
+    "impossible": 60,
+    "request_genres": 14,
     "followups": 24,
-    "metrics": 10, "properties": 7, "robustness": 24, "hang_causes": 4,
-    "install_steps": 8, "report_sections": 8,
+    "metrics": 10,
+    "properties": 7,
+    "robustness": 24,
+    "hang_causes": 4,
+    "install_steps": 8,
+    "report_sections": 8,
 }
 
 
@@ -88,10 +100,16 @@ def load(data_dir: Path = DATA) -> Taxonomy:
     meas = _read("measurement-and-robustness.json", data_dir)
     cmap = _read("check_map.json", data_dir)
     t = Taxonomy(
-        modules=tax["modules"], workflows=tax["workflows"], bulk=tax["bulk"],
-        look_components=tax["look_components"], cannot_do=tax["cannot_do"],
-        looks=looks["looks"], look_conventions=looks["conventions"],
-        requests=reqs, measurement=meas, check_map=cmap,
+        modules=tax["modules"],
+        workflows=tax["workflows"],
+        bulk=tax["bulk"],
+        look_components=tax["look_components"],
+        cannot_do=tax["cannot_do"],
+        looks=looks["looks"],
+        look_conventions=looks["conventions"],
+        requests=reqs,
+        measurement=meas,
+        check_map=cmap,
     )
     errors: list[str] = []
     e = EXPECTED
@@ -109,8 +127,9 @@ def load(data_dir: Path = DATA) -> Taxonomy:
     _check("look confidence", conf, e["look_confidence"], errors)
     _check("requests", len(t.requests), e["requests"], errors)
     _check("clusters", len({r["cluster_id"] for r in t.requests}), e["clusters"], errors)
-    _check("impossible", sum(r["intent"] == "impossible" for r in t.requests),
-           e["impossible"], errors)
+    _check(
+        "impossible", sum(r["intent"] == "impossible" for r in t.requests), e["impossible"], errors
+    )
     _check("request genres", len({r["genre"] for r in t.requests}), e["request_genres"], errors)
     _check("follow-ups", sum(len(r["followups"]) for r in t.requests), e["followups"], errors)
     _check("metrics", len(meas["metrics"]), e["metrics"], errors)

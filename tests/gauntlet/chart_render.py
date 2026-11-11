@@ -24,10 +24,15 @@ CALIBRATE = {
     "exposure.black": ("patch:ramp_-5", "L"),
 }
 #: probe amounts per param (internal units) used to measure the slope.
-PROBE = {"colorbalancergb.shadows_luminance": 0.1, "colorbalancergb.midtones_luminance": 0.1,
-         "colorbalancergb.highlights_luminance": 0.1, "sigmoid.contrast": 0.3,
-         "colorbalancergb.global_chroma": 0.2, "temperature.temperature": 600.0,
-         "exposure.black": -0.01}
+PROBE = {
+    "colorbalancergb.shadows_luminance": 0.1,
+    "colorbalancergb.midtones_luminance": 0.1,
+    "colorbalancergb.highlights_luminance": 0.1,
+    "sigmoid.contrast": 0.3,
+    "colorbalancergb.global_chroma": 0.2,
+    "temperature.temperature": 600.0,
+    "exposure.black": -0.01,
+}
 
 
 def write_chart(run_root: Path, fmt: str = "pfm") -> Path:
@@ -46,8 +51,11 @@ def render_stats(src: Path, out_ppm: Path) -> dict:
 
 
 def labs(stats: dict) -> dict[str, tuple[float, float, float]]:
-    return {k.removeprefix("patch:"): (v["L"], v["a"], v["b"])
-            for k, v in stats.items() if k.startswith("patch:")}
+    return {
+        k.removeprefix("patch:"): (v["L"], v["a"], v["b"])
+        for k, v in stats.items()
+        if k.startswith("patch:")
+    }
 
 
 def compare_golden(stats: dict, golden: Path = GOLDEN) -> dict:
@@ -55,16 +63,23 @@ def compare_golden(stats: dict, golden: Path = GOLDEN) -> dict:
         return {"golden": None, "verdict": "no_golden", "patch_de": []}
     ref = json.loads(golden.read_text(encoding="utf-8"))["labs"]
     de = metrics.patch_de({k: tuple(v) for k, v in ref.items()}, labs(stats))
-    return {"golden": str(golden), "verdict": metrics.de_verdict(list(de.values())),
-             "patch_de": sorted(de.values(), reverse=True), "worst": max(de, key=de.get)}
+    return {
+        "golden": str(golden),
+        "verdict": metrics.de_verdict(list(de.values())),
+        "patch_de": sorted(de.values(), reverse=True),
+        "worst": max(de, key=de.get),
+    }
 
 
 def write_golden_candidate(run_root: Path, stats: dict) -> Path:
     """Written every run; promoted to tests/gauntlet/golden/ only by an
     explicit, Fable-reviewed --rebaseline commit (spec 4.3)."""
     out = run_root / "chart" / "chart-v1.stats.candidate.json"
-    atomic_write_text(out, json.dumps({"version": chart.VERSION, "labs": labs(stats)},
-                                       indent=2, sort_keys=True) + "\n")
+    atomic_write_text(
+        out,
+        json.dumps({"version": chart.VERSION, "labs": labs(stats)}, indent=2, sort_keys=True)
+        + "\n",
+    )
     return out
 
 

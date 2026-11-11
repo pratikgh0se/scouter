@@ -48,42 +48,67 @@ class NestedCrossImageRerouteTest(_MovesFixture):
 
     def _point_bridge_at(self, image_id: int, path: Path) -> None:
         self.bridge.responses["darkroom.current"] = {
-            "image_id": image_id, "path": str(path), "view": "darkroom",
+            "image_id": image_id,
+            "path": str(path),
+            "view": "darkroom",
             "source": "action_images",
         }
         self.bridge.responses["image.lookup"] = {
-            "found": True, "image_id": image_id, "path": str(path),
+            "found": True,
+            "image_id": image_id,
+            "path": str(path),
         }
 
     def test_nested_call_for_another_image_is_refused_and_outer_is_unaffected(self) -> None:
         events: list = []
         real_adjust_core = moves._adjust_core
 
-        def nesting_adjust_core(module, param, delta, *, resolved, instance, commit,
-                                 level, job, ms_precommit=0, flushed=False):
+        def nesting_adjust_core(
+            module,
+            param,
+            delta,
+            *,
+            resolved,
+            instance,
+            commit,
+            level,
+            job,
+            ms_precommit=0,
+            flushed=False,
+        ):
             if job == "job-A" and not events:
                 # Still inside image A's `no_wb_reroute_scope` (moves.adjust
                 # hasn't reached its own `finally` yet): switch the darkroom
                 # to image B and try a second, nested reroute for it.
                 events.append("entered-nested-attempt")
-                self.assertTrue(darkroom.NO_WB_REROUTE.get(),
-                                "image A's reroute must still be active here")
+                self.assertTrue(
+                    darkroom.NO_WB_REROUTE.get(), "image A's reroute must still be active here"
+                )
                 self._point_bridge_at(13, self.raw_b)
                 try:
-                    moves.adjust.__wrapped__("exposure", "exposure", 0.1,
-                                              commit=False, job="job-B")
+                    moves.adjust.__wrapped__("exposure", "exposure", 0.1, commit=False, job="job-B")
                     events.append("nested-attempt-did-not-raise")
                 except RerouteNested as e:
                     events.append(("nested-refused", e.code))
                 finally:
                     self._point_bridge_at(12, self.raw)
-            return real_adjust_core(module, param, delta, resolved=resolved,
-                                     instance=instance, commit=commit, level=level,
-                                     job=job, ms_precommit=ms_precommit, flushed=flushed)
+            return real_adjust_core(
+                module,
+                param,
+                delta,
+                resolved=resolved,
+                instance=instance,
+                commit=commit,
+                level=level,
+                job=job,
+                ms_precommit=ms_precommit,
+                flushed=flushed,
+            )
 
         with mock.patch("scouter.core.moves._adjust_core", side_effect=nesting_adjust_core):
-            result = moves.adjust.__wrapped__("exposure", "exposure", 0.3,
-                                               commit=False, job="job-A")
+            result = moves.adjust.__wrapped__(
+                "exposure", "exposure", 0.3, commit=False, job="job-A"
+            )
 
         self.assertEqual(events, ["entered-nested-attempt", ("nested-refused", "reroute_nested")])
         # Oracle 1: nothing was sent to darktable for image B -- every
@@ -94,8 +119,9 @@ class NestedCrossImageRerouteTest(_MovesFixture):
         # `adjust` would -- the refused nested attempt left no trace.
         self.assertAlmostEqual(result.previous, 1.5500002, places=5)
         self.assertAlmostEqual(result.target, 1.8500002, places=5)
-        self.assertFalse(darkroom.NO_WB_REROUTE.get(),
-                          "image A's own scope must still have reset cleanly")
+        self.assertFalse(
+            darkroom.NO_WB_REROUTE.get(), "image A's own scope must still have reset cleanly"
+        )
 
     def test_a_reroute_already_active_on_this_context_refuses_immediately(self) -> None:
         """The guard itself, isolated from any call-stack nesting: entering

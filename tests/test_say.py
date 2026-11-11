@@ -40,8 +40,10 @@ class SayTest(_MovesFixture):
     def test_a_phrase_with_any_unreachable_move_is_refused_whole(self) -> None:
         # Task 10 pinned every teal-and-orange row; unpin them to keep the
         # P3-R4 all-or-nothing refusal covered.
-        teal = [("colorbalancergb", p) for p in
-                ("shadows_hue", "shadows_chroma", "highlights_hue", "highlights_chroma")]
+        teal = [
+            ("colorbalancergb", p)
+            for p in ("shadows_hue", "shadows_chroma", "highlights_hue", "highlights_chroma")
+        ]
         with mock.patch.dict(dtbridge.ACTION_PATHS):
             for key in teal:
                 del dtbridge.ACTION_PATHS[key]
@@ -60,8 +62,9 @@ class SayTest(_MovesFixture):
             del dtbridge.ACTION_PATHS[("colorbalancergb", "highlights_chroma")]
             with self.assertRaises(NotPinned) as cm:
                 moves.say.__wrapped__("teal and orange", job="job-test")
-        self.assertEqual([r["param"] for r in cm.exception.detail["refused"]],
-                         ["highlights_chroma"])
+        self.assertEqual(
+            [r["param"] for r in cm.exception.detail["refused"]], ["highlights_chroma"]
+        )
         self.assertEqual(self.sets(), [])
 
     def test_teal_and_orange_runs_whole_once_every_sub_move_is_pinned(self) -> None:
@@ -97,11 +100,23 @@ class SayTest(_MovesFixture):
         self.assertEqual(self.bridge.calls, [])
 
     def test_partial_when_a_later_move_fails(self) -> None:
-        with mock.patch.dict(dtbridge.ACTION_PATHS, {
-            ("colorbalancergb", "shadows_chroma"): "iop/colorbalancergb/shadows lift/chroma",
-            ("colorbalancergb", "midtones_chroma"): "iop/colorbalancergb/power/chroma",
-            ("colorbalancergb", "highlights_chroma"): "iop/colorbalancergb/highlights gain/chroma",
-        }), mock.patch("scouter.core.vocab.xmp_named", return_value=True):
+        with (
+            mock.patch.dict(
+                dtbridge.ACTION_PATHS,
+                {
+                    (
+                        "colorbalancergb",
+                        "shadows_chroma",
+                    ): "iop/colorbalancergb/shadows lift/chroma",
+                    ("colorbalancergb", "midtones_chroma"): "iop/colorbalancergb/power/chroma",
+                    (
+                        "colorbalancergb",
+                        "highlights_chroma",
+                    ): "iop/colorbalancergb/highlights gain/chroma",
+                },
+            ),
+            mock.patch("scouter.core.vocab.xmp_named", return_value=True),
+        ):
             calls = {"n": 0}
 
             def flaky(p):
@@ -153,10 +168,13 @@ class SetMoveBeforeTest(_MovesFixture):
     CHROMA = ("colorbalancergb", "highlights_chroma")
 
     def _pinned(self):
-        return mock.patch.dict(dtbridge.ACTION_PATHS, {
-            self.HUE: "iop/colorbalancergb/highlights gain/hue",
-            self.CHROMA: "iop/colorbalancergb/highlights gain/chroma",
-        })
+        return mock.patch.dict(
+            dtbridge.ACTION_PATHS,
+            {
+                self.HUE: "iop/colorbalancergb/highlights gain/hue",
+                self.CHROMA: "iop/colorbalancergb/highlights gain/chroma",
+            },
+        )
 
     def _with_default(self, default):
         import dataclasses
@@ -178,8 +196,11 @@ class SetMoveBeforeTest(_MovesFixture):
     def test_no_neutral_and_no_default_refuses_before_any_write(self) -> None:
         # Task 10: the real hue rows now declare a default; the refusal path
         # still exists for any row that declares neither, so force None.
-        with self._pinned(), self._with_default(None), \
-             mock.patch("scouter.core.vocab.xmp_named", return_value=True):
+        with (
+            self._pinned(),
+            self._with_default(None),
+            mock.patch("scouter.core.vocab.xmp_named", return_value=True),
+        ):
             with self.assertRaises(ValueUnknown) as cm:
                 moves.say.__wrapped__("warm the highlights", commit=False, job="job-test")
         refused = cm.exception.detail["refused"]
@@ -189,8 +210,11 @@ class SetMoveBeforeTest(_MovesFixture):
         self.assertEqual(journal.read_all("job-test"), [], "no un-undoable entry is created")
 
     def test_a_declared_default_is_journalled_and_undo_restores_it(self) -> None:
-        with self._pinned(), self._with_default(0.0), \
-             mock.patch("scouter.core.vocab.xmp_named", return_value=True):
+        with (
+            self._pinned(),
+            self._with_default(0.0),
+            mock.patch("scouter.core.vocab.xmp_named", return_value=True),
+        ):
             r = moves.say.__wrapped__("warm the highlights", commit=False, job="job-test")
             self.assertEqual(r.outcome, "ok")
             hue = [e for e in journal.read_all("job-test") if e.param == "highlights_hue"][0]
@@ -206,25 +230,37 @@ class SetMoveBeforeTest(_MovesFixture):
         from scouter.errors import CommitTimeout
         from scouter.types import CommitResult
 
-        def timeout_on_change(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
+        def timeout_on_change(
+            job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None
+        ):
             if expect_change:
                 raise CommitTimeout("sidecar never advanced")
             return CommitResult(committed=True, changed=False, warnings=[])
 
-        with self._pinned(), self._with_default(0.0), \
-             mock.patch("scouter.core.vocab.xmp_named", return_value=True), \
-             mock.patch("scouter.core.darkroom._commit", side_effect=timeout_on_change):
+        with (
+            self._pinned(),
+            self._with_default(0.0),
+            mock.patch("scouter.core.vocab.xmp_named", return_value=True),
+            mock.patch("scouter.core.darkroom._commit", side_effect=timeout_on_change),
+        ):
             with self.assertRaises(CommitTimeout):
                 moves.say.__wrapped__("warm the highlights", job="job-test")
         [entry] = journal.read_all("job-test")
         self.assertEqual((entry.before.get("value"), entry.before.get("source")), (0.0, "default"))
 
     def test_a_readable_before_is_left_to_set_param(self) -> None:
-        with self._pinned(), mock.patch("scouter.core.vocab.xmp_named", return_value=True), \
-             mock.patch("scouter.core.darkroom._raw_and_before_state",
-                        return_value=({"value": 120.0, "enabled": True, "history_end": 9},
-                                      {"value": 120.0, "enabled": True, "history_end": 9},
-                                      False)):
+        with (
+            self._pinned(),
+            mock.patch("scouter.core.vocab.xmp_named", return_value=True),
+            mock.patch(
+                "scouter.core.darkroom._raw_and_before_state",
+                return_value=(
+                    {"value": 120.0, "enabled": True, "history_end": 9},
+                    {"value": 120.0, "enabled": True, "history_end": 9},
+                    False,
+                ),
+            ),
+        ):
             r = moves.say.__wrapped__("warm the highlights", commit=False, job="job-test")
         # The mock hands BOTH sub-moves the same raw state, so the chroma
         # adjust (range 0-0.3) reads a nonsense previous of 120.0 and clamps
@@ -241,7 +277,9 @@ class GroupUndoTest(_MovesFixture):
         """Land two exposure writes in one group by hand (no multi-move live phrase exists yet)."""
         token = journal.GROUP.set("say-test")
         try:
-            darkroom.set_param.__wrapped__("exposure", "exposure", 1.8, commit=False, job="job-test")
+            darkroom.set_param.__wrapped__(
+                "exposure", "exposure", 1.8, commit=False, job="job-test"
+            )
             darkroom.set_param.__wrapped__("sigmoid", "contrast", 1.6, commit=False, job="job-test")
         finally:
             journal.GROUP.reset(token)
@@ -289,9 +327,16 @@ class GroupUndoTest(_MovesFixture):
             # loop this would spin on the same open entry forever.
             entry = journal.latest_open(job)
             return darkroom.UndoResult(
-                image_id=entry.image_id, path=entry.path, seq=entry.seq,
-                undone={"verb": entry.verb, "module": entry.module, "param": entry.param,
-                        "restored_to": None, "verified": False},
+                image_id=entry.image_id,
+                path=entry.path,
+                seq=entry.seq,
+                undone={
+                    "verb": entry.verb,
+                    "module": entry.module,
+                    "param": entry.param,
+                    "restored_to": None,
+                    "verified": False,
+                },
                 committed=False,
             )
 
@@ -307,11 +352,23 @@ class GroupUndoTest(_MovesFixture):
         # group undo must be able to restore all three, not raise "the
         # previous value ... was never readable from the XMP" the moment
         # `undo_last` reaches one.
-        with mock.patch.dict(dtbridge.ACTION_PATHS, {
-            ("colorbalancergb", "shadows_chroma"): "iop/colorbalancergb/shadows lift/chroma",
-            ("colorbalancergb", "midtones_chroma"): "iop/colorbalancergb/power/chroma",
-            ("colorbalancergb", "highlights_chroma"): "iop/colorbalancergb/highlights gain/chroma",
-        }), mock.patch("scouter.core.vocab.xmp_named", return_value=True):
+        with (
+            mock.patch.dict(
+                dtbridge.ACTION_PATHS,
+                {
+                    (
+                        "colorbalancergb",
+                        "shadows_chroma",
+                    ): "iop/colorbalancergb/shadows lift/chroma",
+                    ("colorbalancergb", "midtones_chroma"): "iop/colorbalancergb/power/chroma",
+                    (
+                        "colorbalancergb",
+                        "highlights_chroma",
+                    ): "iop/colorbalancergb/highlights gain/chroma",
+                },
+            ),
+            mock.patch("scouter.core.vocab.xmp_named", return_value=True),
+        ):
             r = moves.say.__wrapped__("stronger grade", commit=False, job="job-test")
             self.assertEqual(r.outcome, "ok")
             self.assertEqual(len(r.moves), 3)
@@ -323,6 +380,7 @@ class GroupUndoTest(_MovesFixture):
         self.assertEqual(len(result.undone_group), 3)
         self.assertTrue(all(e.undone for e in journal.read_all("job-test")))
 
+
 class LensToggleUndoTest(_MovesFixture):
     """Row 437 fix round 1, C1: `say("turn off lens correction")` dispatches
     to `darkroom.disable`, whose journal entry has no `before.value` -- the
@@ -332,10 +390,16 @@ class LensToggleUndoTest(_MovesFixture):
     def setUp(self) -> None:
         super().setUp()
         self.bridge.responses["module.enable"] = {
-            "module": "lens", "action": "enable", "nan": False, "view": "darkroom",
+            "module": "lens",
+            "action": "enable",
+            "nan": False,
+            "view": "darkroom",
         }
         self.bridge.responses["module.disable"] = {
-            "module": "lens", "action": "disable", "nan": False, "view": "darkroom",
+            "module": "lens",
+            "action": "disable",
+            "nan": False,
+            "view": "darkroom",
         }
 
     def test_lens_off_then_undo_last_does_not_wedge_the_journal(self) -> None:
@@ -367,8 +431,12 @@ class CropPresetDispatchTest(_MovesFixture):
 
     def _current(self, width: int, height: int) -> None:
         self.bridge.responses["darkroom.current"] = {
-            "image_id": 12, "path": str(self.raw), "view": "darkroom",
-            "source": "action_images", "width": width, "height": height,
+            "image_id": 12,
+            "path": str(self.raw),
+            "view": "darkroom",
+            "source": "action_images",
+            "width": width,
+            "height": height,
         }
 
     def _orientation(self, value: int | None):

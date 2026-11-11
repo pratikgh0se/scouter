@@ -25,8 +25,9 @@ class DiskGuardIntentTest(unittest.TestCase):
         adapter = ToyAdapter()
         run = RunDir(tmp_path, "s")
         write_generation(run, adapter)
-        summary = Runner(adapter, run,
-                         free_disk_gb=lambda root: inp["free_gb"]).run_layers(layers=["alpha"])
+        summary = Runner(adapter, run, free_disk_gb=lambda root: inp["free_gb"]).run_layers(
+            layers=["alpha"]
+        )
         # Oracle 1: the run's own status.
         self.assertEqual(summary.status, want["status"], ex["id"])
         # Oracle 2: the first case in the layer either got a result or didn't.
@@ -40,6 +41,7 @@ def _make(ex: dict):
 
         with tempfile.TemporaryDirectory() as d:
             self.run_example(ex, Path(d))
+
     return test
 
 

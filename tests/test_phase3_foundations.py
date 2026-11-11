@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from scouter import config, errors
 from scouter.core import journal
@@ -68,8 +66,14 @@ class JournalGroupTest(unittest.TestCase):
 
     def _begin(self):
         return journal.begin(
-            "job-test", verb="darkroom.set", image_id=1, path="/x.orf",
-            module="exposure", param="exposure", instance=0, before={"value": 1.0},
+            "job-test",
+            verb="darkroom.set",
+            image_id=1,
+            path="/x.orf",
+            module="exposure",
+            param="exposure",
+            instance=0,
+            before={"value": 1.0},
         )
 
     def test_group_defaults_to_none(self) -> None:
@@ -88,20 +92,46 @@ class JournalGroupTest(unittest.TestCase):
     def test_an_old_journal_line_without_group_still_loads(self) -> None:
         path = journal.paths.journal_path("job-test")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({
-            "seq": 1, "ts": "2026-09-14T00:00:00+00:00", "verb": "darkroom.set",
-            "image_id": 1, "path": "/x.orf", "module": "exposure", "param": "exposure",
-            "instance": 0, "before": {}, "after": {"value": 1.0}, "undone": False,
-            "outcome": None, "commit": True, "note": None,
-        }) + "\n")
+        path.write_text(
+            json.dumps(
+                {
+                    "seq": 1,
+                    "ts": "2026-09-14T00:00:00+00:00",
+                    "verb": "darkroom.set",
+                    "image_id": 1,
+                    "path": "/x.orf",
+                    "module": "exposure",
+                    "param": "exposure",
+                    "instance": 0,
+                    "before": {},
+                    "after": {"value": 1.0},
+                    "undone": False,
+                    "outcome": None,
+                    "commit": True,
+                    "note": None,
+                }
+            )
+            + "\n"
+        )
         self.assertIsNone(journal.read_all("job-test")[0].group)
 
 
 class ResultTypesTest(unittest.TestCase):
     def test_adjust_result_defaults_serialise(self) -> None:
         d = AdjustResult(module="exposure", param="exposure").to_dict()
-        for key in ("delta", "previous", "target", "applied", "clamped", "source",
-                    "committed", "noop", "summary", "explain", "unit"):
+        for key in (
+            "delta",
+            "previous",
+            "target",
+            "applied",
+            "clamped",
+            "source",
+            "committed",
+            "noop",
+            "summary",
+            "explain",
+            "unit",
+        ):
             self.assertIn(key, d)
 
     def test_undo_result_gains_undone_group(self) -> None:

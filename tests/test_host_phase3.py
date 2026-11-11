@@ -18,8 +18,9 @@ import statistics
 import struct
 import time
 import unittest
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import pytest
 
@@ -192,8 +193,9 @@ class PinningHelpersTest(unittest.TestCase):
         from scouter.core import xmp
 
         fixture = Path(__file__).resolve().parent / "fixtures" / "colorbalancergb.xmp"
-        entry = next(e for e in xmp.parse(fixture.read_text()).entries
-                     if e.operation == "colorbalancergb")
+        entry = next(
+            e for e in xmp.parse(fixture.read_text()).entries if e.operation == "colorbalancergb"
+        )
         floats = entry_floats(entry.params_hex)
         self.assertEqual(len(floats), 33)
         self.assertEqual(sentinel_slots(floats, 0.2), [31], "contrast's pinned slot")
@@ -219,9 +221,11 @@ class ProbeCandidatePathsHostTest(unittest.TestCase):
         _scratch()
         install = hs.PluginInstall()
         install.install()
-        _record("\n## Phase 3 candidate-path probe "
-                f"({time.strftime('%Y-%m-%d %H:%M')})\n\n"
-                "| module.param | path | verdict | ms |\n|---|---|---|---|")
+        _record(
+            "\n## Phase 3 candidate-path probe "
+            f"({time.strftime('%Y-%m-%d %H:%M')})\n\n"
+            "| module.param | path | verdict | ms |\n|---|---|---|---|"
+        )
         try:
             for s in vocab.PARAMS:
                 if vocab.status(s) != "candidate":
@@ -300,23 +304,29 @@ class ProbeExposureBlackDefaultHostTest(unittest.TestCase):
         proc = hs.launch(_BLACK_DEFAULT_SCRATCH)
         try:
             hs.wait_ready()
-            self.assertTrue(settle(dtbridge.call),
-                            f"control path {CONTROL_PATH} did not answer after settle")
+            self.assertTrue(
+                settle(dtbridge.call), f"control path {CONTROL_PATH} did not answer after settle"
+            )
             enabled = registry.call("darkroom.enable", "cli", module="exposure")
             self.assertTrue(enabled.ok, enabled.error)
             committed = registry.call("history.commit", "cli", image=str(_BLACK_DEFAULT_SCRATCH))
             self.assertTrue(committed.ok, committed.error)
 
-            entries = [e for e in history.read(str(_BLACK_DEFAULT_SCRATCH)).entries
-                       if e.operation == "exposure"]
+            entries = [
+                e
+                for e in history.read(str(_BLACK_DEFAULT_SCRATCH)).entries
+                if e.operation == "exposure"
+            ]
             self.assertTrue(entries, "enabling exposure wrote no history entry")
             entry = max(entries, key=lambda e: e.num)
             self.assertIsNotNone(entry.decoded, entry.reason)
             black = entry.decoded["black"]
-            _record("\n## Phase 3 exposure.black default probe "
-                    f"({time.strftime('%Y-%m-%d %H:%M')})\n\n"
-                    f"fresh exposure module (modversion {entry.modversion}, "
-                    f"num {entry.num}, enabled={entry.enabled}): black={black!r}\n")
+            _record(
+                "\n## Phase 3 exposure.black default probe "
+                f"({time.strftime('%Y-%m-%d %H:%M')})\n\n"
+                f"fresh exposure module (modversion {entry.modversion}, "
+                f"num {entry.num}, enabled={entry.enabled}): black={black!r}\n"
+            )
             from scouter.core import vocab
 
             self.assertAlmostEqual(black, 0.0, delta=vocab.default_tolerance("exposure", "black"))
@@ -408,8 +418,10 @@ class ProbeColorzonesStrengthDefaultHostTest(unittest.TestCase):
             proc = hs.launch(_COLORZONES_STRENGTH_SCRATCH_A)
             try:
                 hs.wait_ready()
-                self.assertTrue(settle(dtbridge.call),
-                                f"control path {CONTROL_PATH} did not answer after settle")
+                self.assertTrue(
+                    settle(dtbridge.call),
+                    f"control path {CONTROL_PATH} did not answer after settle",
+                )
                 enabled = registry.call("darkroom.enable", "cli", module="colorzones")
                 self.assertTrue(enabled.ok, enabled.error)
                 committed = registry.call("history.commit", "cli", image=image_a)
@@ -426,10 +438,13 @@ class ProbeColorzonesStrengthDefaultHostTest(unittest.TestCase):
             proc = hs.launch(_COLORZONES_STRENGTH_SCRATCH_B)
             try:
                 hs.wait_ready()
-                self.assertTrue(settle(dtbridge.call),
-                                f"control path {CONTROL_PATH} did not answer after settle")
-                sentinel = registry.call("darkroom.set", "cli", module="colorzones",
-                                          param="strength", value=0.16)
+                self.assertTrue(
+                    settle(dtbridge.call),
+                    f"control path {CONTROL_PATH} did not answer after settle",
+                )
+                sentinel = registry.call(
+                    "darkroom.set", "cli", module="colorzones", param="strength", value=0.16
+                )
                 self.assertTrue(sentinel.ok, sentinel.error)
                 committed = registry.call("history.commit", "cli", image=image_b)
                 self.assertTrue(committed.ok, committed.error)
@@ -448,12 +463,14 @@ class ProbeColorzonesStrengthDefaultHostTest(unittest.TestCase):
         # All three decoded values, printed BEFORE any value assertion
         # below can fail, so one host run always yields the measurement
         # even on a FAIL.
-        _record("\n## Phase 3 colorzones.strength default probe "
-                f"({time.strftime('%Y-%m-%d %H:%M')})\n\n"
-                f"oracle A (fresh enable) strength={strength_a!r}; "
-                f"sentinel (0.16 requested) strength={strength_sentinel!r}; "
-                f"oracle B (post-reset) strength={strength_reset!r} "
-                "(internal units 0..2, display_scale 100 i.e. GUI 100% == internal 1.0)\n")
+        _record(
+            "\n## Phase 3 colorzones.strength default probe "
+            f"({time.strftime('%Y-%m-%d %H:%M')})\n\n"
+            f"oracle A (fresh enable) strength={strength_a!r}; "
+            f"sentinel (0.16 requested) strength={strength_sentinel!r}; "
+            f"oracle B (post-reset) strength={strength_reset!r} "
+            "(internal units 0..2, display_scale 100 i.e. GUI 100% == internal 1.0)\n"
+        )
 
         # Contamination guard (fix round 2, host run 2026-09-29): oracle A
         # must never read a sidecar the sentinel already touched. With the
@@ -462,7 +479,8 @@ class ProbeColorzonesStrengthDefaultHostTest(unittest.TestCase):
         self.assertFalse(
             abs(strength_a - 0.16) <= 1e-5,
             f"oracle A read a post-sentinel sidecar (strength_a={strength_a!r} "
-            "matches the 0.16 sentinel) -- the two oracles are contaminated")
+            "matches the 0.16 sentinel) -- the two oracles are contaminated",
+        )
 
         # The sentinel only needs to prove slot 127 is LIVE (not dead, not
         # zero-filled, not a different slot) -- it passes through
@@ -474,21 +492,32 @@ class ProbeColorzonesStrengthDefaultHostTest(unittest.TestCase):
         # real slider step (colorzones.strength's own step is 0.1), so a
         # dead or moved slot (which decodes 0.0 or garbage) still fails
         # this check.
-        self.assertAlmostEqual(strength_sentinel, 0.16, delta=1e-5,
-                                msg="slot 127 did not decode the 0.16 sentinel -- "
-                                    "either the slot moved or it is dead")
+        self.assertAlmostEqual(
+            strength_sentinel,
+            0.16,
+            delta=1e-5,
+            msg="slot 127 did not decode the 0.16 sentinel -- "
+            "either the slot moved or it is dead",
+        )
 
         # The default comparison (oracle A vs the post-reset read) stays at
         # the tight 1e-6: both sides are darktable running the module's
         # REAL default (no live user value in play, no sentinel involved),
         # so there is no float32-floor reason to widen it here.
         tolerance = vocab.default_tolerance("colorzones", "strength", fallback=1e-6)
-        self.assertAlmostEqual(strength_a, strength_reset, delta=tolerance,
-                                msg="oracle A (fresh enable) and oracle B (post-reset) "
-                                    "disagree on colorzones.strength's default")
-        self.assertAlmostEqual(strength_a, vocab.spec("colorzones", "strength").default,
-                               delta=tolerance,
-                               msg="host default disagrees with vocab.py's declared default")
+        self.assertAlmostEqual(
+            strength_a,
+            strength_reset,
+            delta=tolerance,
+            msg="oracle A (fresh enable) and oracle B (post-reset) "
+            "disagree on colorzones.strength's default",
+        )
+        self.assertAlmostEqual(
+            strength_a,
+            vocab.spec("colorzones", "strength").default,
+            delta=tolerance,
+            msg="host default disagrees with vocab.py's declared default",
+        )
 
 
 _SIGMOID_CONTRAST_DIR = hs.SCRATCH_DIR / "phase3-sigmoid-contrast-default"
@@ -556,8 +585,9 @@ class ProbeSigmoidContrastDefaultHostTest(unittest.TestCase):
             try:
                 hs.wait_ready()
                 self.assertTrue(settle(dtbridge.call))
-                sentinel = registry.call("darkroom.set", "cli", module="sigmoid",
-                                         param="contrast", value=1.9)
+                sentinel = registry.call(
+                    "darkroom.set", "cli", module="sigmoid", param="contrast", value=1.9
+                )
                 self.assertTrue(sentinel.ok, sentinel.error)
                 committed = registry.call("history.commit", "cli", image=str(frame))
                 self.assertTrue(committed.ok, committed.error)
@@ -572,15 +602,21 @@ class ProbeSigmoidContrastDefaultHostTest(unittest.TestCase):
         finally:
             install.restore()
 
-        _record("\n## Phase 3 sigmoid.contrast default probe "
-                f"({time.strftime('%Y-%m-%d %H:%M')})\n\n"
-                f"oracle A (fresh enable) contrast={contrast_a!r}; "
-                f"sentinel (1.9 requested) contrast={contrast_sentinel!r}; "
-                f"oracle B (post-reset) contrast={contrast_reset!r}\n")
+        _record(
+            "\n## Phase 3 sigmoid.contrast default probe "
+            f"({time.strftime('%Y-%m-%d %H:%M')})\n\n"
+            f"oracle A (fresh enable) contrast={contrast_a!r}; "
+            f"sentinel (1.9 requested) contrast={contrast_sentinel!r}; "
+            f"oracle B (post-reset) contrast={contrast_reset!r}\n"
+        )
         self.assertFalse(abs(contrast_a - 1.9) <= 1e-5, "oracle A read a post-sentinel sidecar")
         self.assertAlmostEqual(contrast_sentinel, 1.9, delta=1e-5)
-        self.assertAlmostEqual(contrast_a, contrast_reset, delta=1e-6,
-                               msg="oracle A and oracle B disagree on sigmoid.contrast's default")
+        self.assertAlmostEqual(
+            contrast_a,
+            contrast_reset,
+            delta=1e-6,
+            msg="oracle A and oracle B disagree on sigmoid.contrast's default",
+        )
 
 
 #: The 10 colorbalancergb rows that carry only `neutral` today (no
@@ -592,10 +628,15 @@ class ProbeSigmoidContrastDefaultHostTest(unittest.TestCase):
 #: `highlights_hue`) already declare a host-verified `default`
 #: (`_CB_HUE_DEFAULT`, `scouter/core/vocab.py`) and are NOT probed here.
 _CB_NEUTRAL_ROWS = (
-    "shadows_luminance", "shadows_chroma",
-    "midtones_luminance", "midtones_chroma",
-    "highlights_luminance", "highlights_chroma",
-    "global_chroma", "global_saturation", "global_vibrance",
+    "shadows_luminance",
+    "shadows_chroma",
+    "midtones_luminance",
+    "midtones_chroma",
+    "highlights_luminance",
+    "highlights_chroma",
+    "global_chroma",
+    "global_saturation",
+    "global_vibrance",
     "contrast",
 )
 
@@ -693,8 +734,10 @@ class ProbeColorbalancergbNeutralDefaultsHostTest(unittest.TestCase):
             proc = hs.launch(scratch_a)
             try:
                 hs.wait_ready()
-                self.assertTrue(settle(dtbridge.call),
-                                f"control path {CONTROL_PATH} did not answer after settle")
+                self.assertTrue(
+                    settle(dtbridge.call),
+                    f"control path {CONTROL_PATH} did not answer after settle",
+                )
                 enabled = registry.call("darkroom.enable", "cli", module="colorbalancergb")
                 self.assertTrue(enabled.ok, enabled.error)
                 committed = registry.call("history.commit", "cli", image=image_a)
@@ -703,9 +746,12 @@ class ProbeColorbalancergbNeutralDefaultsHostTest(unittest.TestCase):
                 # entry (the enable) -- more would mean stale library.db
                 # history leaked in, which breaks oracle A's independence.
                 a_entries = colorbalancergb_entries(image_a)
-                self.assertEqual(len(a_entries), 1,
-                                 f"oracle A: expected exactly one colorbalancergb history "
-                                 f"entry (fresh enable), found {len(a_entries)}")
+                self.assertEqual(
+                    len(a_entries),
+                    1,
+                    f"oracle A: expected exactly one colorbalancergb history "
+                    f"entry (fresh enable), found {len(a_entries)}",
+                )
                 decoded_a = newest_decoded(image_a)
             finally:
                 hs.quit_darktable(proc)
@@ -720,8 +766,10 @@ class ProbeColorbalancergbNeutralDefaultsHostTest(unittest.TestCase):
             decoded_sentinel: dict[str, Any] = {}
             try:
                 hs.wait_ready()
-                self.assertTrue(settle(dtbridge.call),
-                                f"control path {CONTROL_PATH} did not answer after settle")
+                self.assertTrue(
+                    settle(dtbridge.call),
+                    f"control path {CONTROL_PATH} did not answer after settle",
+                )
                 enabled = registry.call("darkroom.enable", "cli", module="colorbalancergb")
                 self.assertTrue(enabled.ok, enabled.error)
                 committed = registry.call("history.commit", "cli", image=image_b)
@@ -731,9 +779,12 @@ class ProbeColorbalancergbNeutralDefaultsHostTest(unittest.TestCase):
                     spec = vocab.spec("colorbalancergb", param)
                     self.assertIsNotNone(spec, f"no vocab row for colorbalancergb.{param}")
                     sentinel = sentinel_for(spec, k)
-                    r = registry.call("darkroom.set", "cli", module="colorbalancergb",
-                                      param=param, value=sentinel)
-                    self.assertTrue(r.ok, f"colorbalancergb.{param}: sentinel set failed: {r.error}")
+                    r = registry.call(
+                        "darkroom.set", "cli", module="colorbalancergb", param=param, value=sentinel
+                    )
+                    self.assertTrue(
+                        r.ok, f"colorbalancergb.{param}: sentinel set failed: {r.error}"
+                    )
                     committed = registry.call("history.commit", "cli", image=image_b)
                     self.assertTrue(committed.ok, committed.error)
                     sentinels[param] = sentinel
@@ -748,22 +799,29 @@ class ProbeColorbalancergbNeutralDefaultsHostTest(unittest.TestCase):
                             continue
                         expected = sentinels.get(other, decoded_baseline_b.get(other))
                         self.assertAlmostEqual(
-                            current.get(other), expected, delta=1e-4,
+                            current.get(other),
+                            expected,
+                            delta=1e-4,
                             msg=f"setting colorbalancergb.{param}={sentinel!r} moved "
-                                f"colorbalancergb.{other} from {expected!r} to "
-                                f"{current.get(other)!r}")
+                            f"colorbalancergb.{other} from {expected!r} to "
+                            f"{current.get(other)!r}",
+                        )
 
-                reset = registry.call("darkroom.reset", "cli", module="colorbalancergb",
-                                       confirm=True)
+                reset = registry.call(
+                    "darkroom.reset", "cli", module="colorbalancergb", confirm=True
+                )
                 self.assertTrue(reset.ok, reset.error)
                 committed = registry.call("history.commit", "cli", image=image_b)
                 self.assertTrue(committed.ok, committed.error)
                 # I1: enable + 10 sentinel sets + reset == 12 entries.
                 b_entries = colorbalancergb_entries(image_b)
-                self.assertEqual(len(b_entries), 12,
-                                 f"oracle B: expected exactly 12 colorbalancergb history "
-                                 f"entries (1 enable + {len(_CB_NEUTRAL_ROWS)} sentinels + "
-                                 f"1 reset), found {len(b_entries)}")
+                self.assertEqual(
+                    len(b_entries),
+                    12,
+                    f"oracle B: expected exactly 12 colorbalancergb history "
+                    f"entries (1 enable + {len(_CB_NEUTRAL_ROWS)} sentinels + "
+                    f"1 reset), found {len(b_entries)}",
+                )
                 decoded_reset = newest_decoded(image_b)
             finally:
                 hs.quit_darktable(proc)
@@ -793,22 +851,29 @@ class ProbeColorbalancergbNeutralDefaultsHostTest(unittest.TestCase):
             # sentinel-slot match tolerance `sentinel_slots` uses elsewhere
             # in this file, well inside any of these rows' own step.
             sentinel_ok = isinstance(s_dec, (int, float)) and abs(s_dec - s_req) <= 1e-4
-            reset_ok = (isinstance(a, (int, float)) and isinstance(b, (int, float))
-                        and abs(a - b) <= tolerance)
+            reset_ok = (
+                isinstance(a, (int, float))
+                and isinstance(b, (int, float))
+                and abs(a - b) <= tolerance
+            )
             verified = sentinel_ok and reset_ok
-            lines.append(f"| colorbalancergb.{param} | {a!r} | {s_req!r}/{s_dec!r} | {b!r} | "
-                         f"{'yes' if verified else 'NO'} |")
+            lines.append(
+                f"| colorbalancergb.{param} | {a!r} | {s_req!r}/{s_dec!r} | {b!r} | "
+                f"{'yes' if verified else 'NO'} |"
+            )
             if not verified:
                 failures.append(
                     f"colorbalancergb.{param}: sentinel_ok={sentinel_ok} "
                     f"(requested {s_req!r} decoded {s_dec!r}), reset_ok={reset_ok} "
-                    f"(oracle A={a!r} oracle B={b!r}, tolerance={tolerance!r})")
+                    f"(oracle A={a!r} oracle B={b!r}, tolerance={tolerance!r})"
+                )
         _record("\n".join(lines) + "\n")
 
         self.assertFalse(
             failures,
             "colorbalancergb rows failed host verification (never verified by loosening "
-            "tolerance -- these stay neutral-only):\n" + "\n".join(failures))
+            "tolerance -- these stay neutral-only):\n" + "\n".join(failures),
+        )
 
 
 @unittest.skipUnless(RUN, REASON)
@@ -829,7 +894,9 @@ class Phase3LiveHostTest(unittest.TestCase):
         cls.library_root.mkdir(parents=True, exist_ok=True)
         config.write_text(
             '{"version": 1, "cameras": {"E-M10 Mark III": "em10iii"}, '
-            f'"library_root": "{cls.library_root}"}}', encoding="utf-8")
+            f'"library_root": "{cls.library_root}"}}',
+            encoding="utf-8",
+        )
         (config.parent / "wb").mkdir(exist_ok=True)
         shutil.copy(WB_TABLE, config.parent / "wb" / "em10iii.json")
         os.environ["SCOUTER_JOB"] = f"phase3-host-{os.getpid()}"
@@ -839,6 +906,7 @@ class Phase3LiveHostTest(unittest.TestCase):
         try:
             hs.wait_ready()
             from scouter.core import dtbridge
+
             if not settle(dtbridge.call):
                 raise RuntimeError(f"control path {CONTROL_PATH} did not answer after settle")
         except BaseException:
@@ -850,6 +918,7 @@ class Phase3LiveHostTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls) -> None:
         from scouter import registry
+
         try:
             registry.call("history.commit", "cli", image=str(SCRATCH))
         finally:
@@ -873,33 +942,41 @@ class Phase3LiveHostTest(unittest.TestCase):
             per_module[s.module] = k + 1
             sentinel = sentinel_for(s, k)
             en = registry.call("darkroom.enable", "cli", module=s.module)
-            r = registry.call("darkroom.set", "cli", module=s.module, param=s.param,
-                              value=sentinel)
+            r = registry.call("darkroom.set", "cli", module=s.module, param=s.param, value=sentinel)
             if not r.ok and (r.error or {}).get("code") == "commit_timeout":
                 # The slot already held this value (an earlier run's rounded
                 # sentinel): darktable writes no sidecar for a no-change set.
                 # One retry with a shifted sentinel.
                 sentinel = sentinel + 0.5 if s.wraps else round(sentinel - 0.01, 2)
-                r = registry.call("darkroom.set", "cli", module=s.module, param=s.param,
-                                  value=sentinel)
+                r = registry.call(
+                    "darkroom.set", "cli", module=s.module, param=s.param, value=sentinel
+                )
             if not r.ok:
-                _record(f"slot {s.module}.{s.param}: set {sentinel} FAILED enable_ok={en.ok} "
-                        f"error={r.error}")
+                _record(
+                    f"slot {s.module}.{s.param}: set {sentinel} FAILED enable_ok={en.ok} "
+                    f"error={r.error}"
+                )
                 continue
-            entry = max((e for e in history.read(str(SCRATCH)).entries
-                         if e.operation == s.module), key=lambda e: e.num)
+            entry = max(
+                (e for e in history.read(str(SCRATCH)).entries if e.operation == s.module),
+                key=lambda e: e.num,
+            )
             floats = entry_floats(entry.params_hex)
             slots = sentinel_slots(floats, sentinel)
-            _record(f"slot {s.module}.{s.param} v{entry.modversion}: sentinel {sentinel} "
-                    f"set ok={r.ok} slots={slots} of {len(floats)} "
-                    f"(size {len(entry.params_hex) // 2})")
+            _record(
+                f"slot {s.module}.{s.param} v{entry.modversion}: sentinel {sentinel} "
+                f"set ok={r.ok} slots={slots} of {len(floats)} "
+                f"(size {len(entry.params_hex) // 2})"
+            )
         # Every module this test touched, once, in full: what the pins came from.
         for module in per_module:
             entries = [e for e in history.read(str(SCRATCH)).entries if e.operation == module]
             if entries:
                 last = max(entries, key=lambda e: e.num)
-                _record(f"floats {module} v{last.modversion} num {last.num}: "
-                        f"{[round(v, 4) for v in entry_floats(last.params_hex)]}")
+                _record(
+                    f"floats {module} v{last.modversion} num {last.num}: "
+                    f"{[round(v, 4) for v in entry_floats(last.params_hex)]}"
+                )
         sidecar = Path(str(SCRATCH) + ".xmp")
         if sidecar.exists():
             shutil.copy(sidecar, hs.SCRATCH_DIR / f"phase3-slots-{os.getpid()}.xmp")
@@ -917,28 +994,37 @@ class Phase3LiveHostTest(unittest.TestCase):
         base = stats()
         registry.call("darkroom.adjust", "cli", module="exposure", param="black", delta=0.01)
         deeper = stats()
-        _record(f"sign exposure.black +0.01: luminance_mean {base['luminance_mean']} -> "
-                f"{deeper['luminance_mean']} (expect down)")
+        _record(
+            f"sign exposure.black +0.01: luminance_mean {base['luminance_mean']} -> "
+            f"{deeper['luminance_mean']} (expect down)"
+        )
         registry.call("darkroom.undo_last", "cli")
 
         base = stats()
         t = registry.call("darkroom.set", "cli", module="temperature", param="tint", value=0.9)
         tinted = stats()
-        _record(f"sign temperature.tint 0.9 (ok={t.ok}): r/b {rb(base):.4f} -> {rb(tinted):.4f} "
-                f"wb_ratio_rg {base['wb_ratio_rg']} -> {tinted['wb_ratio_rg']}, "
-                f"wb_ratio_bg {base['wb_ratio_bg']} -> {tinted['wb_ratio_bg']} "
-                "(spec expects r/b down)")
+        _record(
+            f"sign temperature.tint 0.9 (ok={t.ok}): r/b {rb(base):.4f} -> {rb(tinted):.4f} "
+            f"wb_ratio_rg {base['wb_ratio_rg']} -> {tinted['wb_ratio_rg']}, "
+            f"wb_ratio_bg {base['wb_ratio_bg']} -> {tinted['wb_ratio_bg']} "
+            "(spec expects r/b down)"
+        )
         registry.call("darkroom.set", "cli", module="temperature", param="tint", value=1.0)
 
         from scouter.core import vocab
-        if vocab.status(vocab.spec("colorbalancergb", "highlights_hue")) in ("live",
-                                                                            "absolute_only"):
+
+        if vocab.status(vocab.spec("colorbalancergb", "highlights_hue")) in (
+            "live",
+            "absolute_only",
+        ):
             base = stats()
             said = registry.call("darkroom.say", "cli", phrase="warm the highlights")
             warm = stats()
-            _record(f"sign warm the highlights (hue 60 + chroma, ok={said.ok} "
-                    f"outcome={said.outcome} error={said.error and said.error.get('code')}): "
-                    f"r/b {rb(base):.4f} -> {rb(warm):.4f} (expect up)")
+            _record(
+                f"sign warm the highlights (hue 60 + chroma, ok={said.ok} "
+                f"outcome={said.outcome} error={said.error and said.error.get('code')}): "
+                f"r/b {rb(base):.4f} -> {rb(warm):.4f} (expect up)"
+            )
             if said.ok:
                 registry.call("darkroom.undo_last", "cli")
 
@@ -956,20 +1042,26 @@ class Phase3LiveHostTest(unittest.TestCase):
             self.assertIn(name, [p["name"] for p in listed.data["presets"]])
             registry.call("darkroom.say", "cli", phrase="cooler")
             applied = registry.call("preset.apply", "cli", name=name)
-            _record(f"preset.apply open image: ok={applied.ok} "
-                    f"history_end {applied.data.get('history_end_before')} -> "
-                    f"{applied.data.get('history_end_after')} error={applied.error}")
+            _record(
+                f"preset.apply open image: ok={applied.ok} "
+                f"history_end {applied.data.get('history_end_before')} -> "
+                f"{applied.data.get('history_end_after')} error={applied.error}"
+            )
             self.assertTrue(applied.ok, applied.error)
-            self.assertGreater(applied.data["history_end_after"],
-                               applied.data["history_end_before"])
+            self.assertGreater(
+                applied.data["history_end_after"], applied.data["history_end_before"]
+            )
         finally:
-            deleted = dtbridge.call("style.delete",
-                                    {"name": name, "prefix": "scouter-", "confirm": True})
+            deleted = dtbridge.call(
+                "style.delete", {"name": name, "prefix": "scouter-", "confirm": True}
+            )
             memory = saved.data.get("memory_path")
             if memory:
                 Path(memory).unlink(missing_ok=True)
-            _record(f"preset cleanup: style.delete -> {deleted}; memory copy removed: "
-                    f"{memory and not Path(memory).exists()}")
+            _record(
+                f"preset cleanup: style.delete -> {deleted}; memory copy removed: "
+                f"{memory and not Path(memory).exists()}"
+            )
 
     def test_4_conversation_timing(self) -> None:
         """Row 427 item 4: the DEFAULT is now trust-the-sidecar with the
@@ -984,15 +1076,21 @@ class Phase3LiveHostTest(unittest.TestCase):
             r = registry.call("darkroom.say", "cli", phrase=phrase)
             times.append(time.monotonic() - t0)
             self.assertTrue(r.ok, (r.data, r.error))
-            _record(f"  say {phrase!r}: {times[-1]:.2f} s, verb ms {r.ms}, "
-                    f"plan {r.data.get('plan')}")
-        _record(f"darkroom.say default (staleness guard) wall times (s): "
-                f"{[round(t, 2) for t in times]}, median {statistics.median(times):.2f}")
+            _record(
+                f"  say {phrase!r}: {times[-1]:.2f} s, verb ms {r.ms}, "
+                f"plan {r.data.get('plan')}"
+            )
+        _record(
+            f"darkroom.say default (staleness guard) wall times (s): "
+            f"{[round(t, 2) for t in times]}, median {statistics.median(times):.2f}"
+        )
         forced = []
         for phrase in ("brighter", "darker", "brighter", "darker", "less contrast"):
             t0 = time.monotonic()
             r = registry.call("darkroom.say", "cli", phrase=phrase, bounce=True)
             forced.append(time.monotonic() - t0)
-        _record(f"darkroom.say bounce=True (forced pre-commit bounce) wall times (s): "
-                f"{[round(t, 2) for t in forced]}, median {statistics.median(forced):.2f}")
+        _record(
+            f"darkroom.say bounce=True (forced pre-commit bounce) wall times (s): "
+            f"{[round(t, 2) for t in forced]}, median {statistics.median(forced):.2f}"
+        )
         self.assertLess(statistics.median(times), 3.5)

@@ -20,9 +20,18 @@ def test_generation_passes_the_engine_gates(tmp_path):
     a = ScouterAdapter(tmp_path)
     cases, counts, _ = generate_all(a)
     got = {c.spec.name: c.got for c in counts}
-    assert got == {"offline": 3214, "coverage": 1638, "scenarios": 701, "scenarios_agent": 160,
-                   "bulk": 40, "looks": 469, "robustness": 32, "parity": 92, "install": 10,
-                   "guide": 35}
+    assert got == {
+        "offline": 3214,
+        "coverage": 1638,
+        "scenarios": 701,
+        "scenarios_agent": 160,
+        "bulk": 40,
+        "looks": 469,
+        "robustness": 32,
+        "parity": 92,
+        "install": 10,
+        "guide": 35,
+    }
     assert sum(got.values()) == 6391
 
 
@@ -39,8 +48,12 @@ def test_corpus_missing_is_a_clear_error(tmp_path):
 
 # -- carry-over requirements (t28-carry.md) ---------------------------------
 
-ENV_KEYS = ("SCOUTER_CONFIG", "SCOUTER_CACHE", "OBSIDIAN_VAULT_PATH",
-            "SCOUTER_DARKTABLE_LIBRARY_DB")
+ENV_KEYS = (
+    "SCOUTER_CONFIG",
+    "SCOUTER_CACHE",
+    "OBSIDIAN_VAULT_PATH",
+    "SCOUTER_DARKTABLE_LIBRARY_DB",
+)
 
 
 @pytest.fixture
@@ -57,8 +70,10 @@ def fake_corpus(tmp_path):
     trial = tmp_path / "trial"
     trial.mkdir()
     (trial / "H.ORF").write_bytes(b"raw")
-    doc = {"frames": [{"rel": "H.ORF", "body": "olympus"}, {"rel": "H.ORF", "body": "sony_a7"}],
-           "roles": {"olympus": {"hero": "H.ORF"}, "sony_a7": {"hero": "H.ORF"}}}
+    doc = {
+        "frames": [{"rel": "H.ORF", "body": "olympus"}, {"rel": "H.ORF", "body": "sony_a7"}],
+        "roles": {"olympus": {"hero": "H.ORF"}, "sony_a7": {"hero": "H.ORF"}},
+    }
     return Corpus(doc, trial)
 
 
@@ -71,14 +86,24 @@ def _routed(tmp_path, corpus, layer="coverage", dt=None):
     def factory(corpus, root, body, run_root):
         d = dt or FakeDt()
         dts.append(d)
-        return sess.ScouterSession(corpus, root, body, dt=d, run_root=run_root,
-                                   mcp_factory=lambda env, cwd: FakeMcp())
+        return sess.ScouterSession(
+            corpus, root, body, dt=d, run_root=run_root, mcp_factory=lambda env, cwd: FakeMcp()
+        )
+
     return a, run, adapter_mod.RoutedSession(a, layer, run, session_factory=factory), dts
 
 
 def _case(layer="coverage", body="olympus"):
-    return Case(id=f"{layer}-x-{body}", layer=layer, tier="P1", mode="tool", steps=[],
-                expect=Expect("edit", []), body=body, frame_role="hero")
+    return Case(
+        id=f"{layer}-x-{body}",
+        layer=layer,
+        tier="P1",
+        mode="tool",
+        steps=[],
+        expect=Expect("edit", []),
+        body=body,
+        frame_role="hero",
+    )
 
 
 def test_runner_and_mcp_child_resolve_one_owner_record(pinned_env, fake_corpus, monkeypatch):
@@ -93,7 +118,8 @@ def test_runner_and_mcp_child_resolve_one_owner_record(pinned_env, fake_corpus, 
 
 
 def test_owner_record_follows_the_process_but_never_from_the_real_cache(
-        pinned_env, fake_corpus, monkeypatch):
+    pinned_env, fake_corpus, monkeypatch
+):
     real = pinned_env / "real-cache"  # outside the runs root: stands for ~/.cache/scouter
     real.mkdir()
     (real / dtprocess.OWNER_FILE).write_text('{"pid": 1}')
@@ -105,8 +131,10 @@ def test_owner_record_follows_the_process_but_never_from_the_real_cache(
     second = routed._session("sony_a7")  # body switch: a record carried, not lost
     assert (second.root / "cache" / dtprocess.OWNER_FILE).read_text() == '{"pid": 2}'
     routed.close()  # back to the process cache, still carrying it
-    assert dtprocess.owner_path() == \
-        pinned_env / "runs" / adapter_mod.PROCESS_DIR / "cache" / dtprocess.OWNER_FILE
+    assert (
+        dtprocess.owner_path()
+        == pinned_env / "runs" / adapter_mod.PROCESS_DIR / "cache" / dtprocess.OWNER_FILE
+    )
     assert dtprocess.owner_path().read_text() == '{"pid": 2}'
 
 
@@ -115,15 +143,25 @@ def test_every_declared_looks_gate_has_tagged_checks(tmp_path):
     a = ScouterAdapter(tmp_path)
     cases = a.generate("looks")
     spec = next(s for s in a.layers() if s.name == "looks")
-    comps = {t["component"] for c in cases for t in c.meta.get("check_tags") or []
-             if t["confidence"] in ("documented", "community-consensus")}
+    comps = {
+        t["component"]
+        for c in cases
+        for t in c.meta.get("check_tags") or []
+        if t["confidence"] in ("documented", "community-consensus")
+    }
     assert {g[1][0] for g in spec.check_gates if g[0] == "sourced_component"} == comps
     assert all(g[2] == 0.90 for g in spec.check_gates if g[0] == "sourced_component")
     assert ("confidence", ("inferred",), 0.95) in spec.check_gates
-    results = [{"id": c.id, "layer": c.layer, "tier": c.tier, "meta": c.meta,
-                "verdict": {"score": "pass",
-                            "checks": [{"ok": True} for _ in c.expect.checks]}}
-               for c in cases]
+    results = [
+        {
+            "id": c.id,
+            "layer": c.layer,
+            "tier": c.tier,
+            "meta": c.meta,
+            "verdict": {"score": "pass", "checks": [{"ok": True} for _ in c.expect.checks]},
+        }
+        for c in cases
+    ]
     row = next(r for r in layer_table(results, a) if r["layer"] == "looks")
     assert row["check_gates"] and all(g["n"] > 0 and g["ok"] for g in row["check_gates"])
 
@@ -187,6 +225,7 @@ def test_preflight_refuses_when_it_cannot_tell(pinned_env):
 
     def unknown():
         raise OSError("pgrep failed")
+
     a.foreign_pids = unknown
     assert "cannot tell" in a.preflight(run, "coverage")
 
@@ -262,15 +301,20 @@ def test_crash_reports_are_darktable_or_python_only(tmp_path, monkeypatch):
         (tmp_path / name).write_text("x")
     a = ScouterAdapter(tmp_path)
     assert a.crash_count() == 2
-    assert a.crash_reports_since(0.0) == [str(tmp_path / "Python-1.crash"),
-                                          str(tmp_path / "darktable-2026.ips")]
+    assert a.crash_reports_since(0.0) == [
+        str(tmp_path / "Python-1.crash"),
+        str(tmp_path / "darktable-2026.ips"),
+    ]
     assert a.crash_reports_since(4102444800.0) == []  # year 2100
 
 
 def test_gauntlet_json_loads_the_scouter_adapter():
     cfg = json.loads((Path(__file__).resolve().parents[2] / "gauntlet.json").read_text())
-    assert cfg == {"adapter": "tests.gauntlet.adapter:make",
-                   "runs_root": "~/Pictures/ScouterScratch/gauntlet", "title": "Scouter Gauntlet"}
+    assert cfg == {
+        "adapter": "tests.gauntlet.adapter:make",
+        "runs_root": "~/Pictures/ScouterScratch/gauntlet",
+        "title": "Scouter Gauntlet",
+    }
     assert isinstance(load_adapter(cfg["adapter"]), ScouterAdapter)
 
 
@@ -291,8 +335,11 @@ def test_a_fresh_report_process_checks_the_originals(tmp_path, monkeypatch, chan
 
 
 def test_no_live_layer_means_not_checked_and_no_blocker(tmp_path, monkeypatch):
-    monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals",
-                        lambda: pytest.fail("must not hash without a before snapshot"))
+    monkeypatch.setattr(
+        adapter_mod.corpus_mod,
+        "sha256_originals",
+        lambda: pytest.fail("must not hash without a before snapshot"),
+    )
     run = RunDir(tmp_path, "stamp").ensure()
     a = ScouterAdapter(tmp_path)
     assert "not checked" in a.signoff_lines(run)[0] and a.signoff_blockers(run) == []
@@ -353,15 +400,18 @@ def test_isolate_process_pins_the_library_db(pinned_env):
 
 # -- final fix I1: resume after a killed run ---------------------------------
 
+
 def _fake_owned(pid_ok):
     """owned_pid stand-in: accepts the record at the CURRENT owner_path() only
     when its pid is `pid_ok` (never runs ps, never signals)."""
+
     def owned():
         try:
             pid = json.loads(dtprocess.owner_path().read_text())["pid"]
         except (OSError, ValueError, KeyError):
             return None
         return pid if pid == pid_ok else None
+
     return owned
 
 
@@ -390,16 +440,16 @@ def test_resume_without_a_live_leftover_changes_nothing(pinned_env):
     (stale / dtprocess.OWNER_FILE).write_text(json.dumps({"pid": 111}))
     process_cache = runs / adapter_mod.PROCESS_DIR / "cache"
     process_cache.mkdir(parents=True)
-    assert adapter_mod.adopt_leftover_owner(run, process_cache,
-                                            owned_pid=_fake_owned(777)) is None
+    assert adapter_mod.adopt_leftover_owner(run, process_cache, owned_pid=_fake_owned(777)) is None
     assert not (process_cache / dtprocess.OWNER_FILE).exists()
 
 
 def test_open_session_adopts_before_the_first_body(pinned_env, monkeypatch):
     seen = []
     monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals", lambda: {})
-    monkeypatch.setattr(adapter_mod, "adopt_leftover_owner",
-                        lambda run, cache, **kw: seen.append((run.root, cache)))
+    monkeypatch.setattr(
+        adapter_mod, "adopt_leftover_owner", lambda run, cache, **kw: seen.append((run.root, cache))
+    )
     a = ScouterAdapter(pinned_env / "runs")
     run = RunDir(pinned_env / "runs", "stamp").ensure()
     a.open_session("parity", run)
@@ -416,8 +466,9 @@ def test_resumed_session_dirs_number_after_the_highest(pinned_env, fake_corpus):
     assert s.root.name == "008-olympus"
 
 
-def test_mcp_death_reaches_the_observation_and_the_session_reopens(pinned_env, fake_corpus,
-                                                                    monkeypatch):
+def test_mcp_death_reaches_the_observation_and_the_session_reopens(
+    pinned_env, fake_corpus, monkeypatch
+):
     """(final fix I3): release bar 1 counts MCP-server deaths as crashes."""
     from gauntlet.adapter import Observation
     from gauntlet.evaluate import evaluate
@@ -459,8 +510,7 @@ def test_a_hang_outside_robustness_still_recovers(pinned_env, fake_corpus, monke
     assert calls == [routed.current]
 
 
-def test_an_inherited_wedge_outside_robustness_also_recovers(pinned_env, fake_corpus,
-                                                              monkeypatch):
+def test_an_inherited_wedge_outside_robustness_also_recovers(pinned_env, fake_corpus, monkeypatch):
     """(M1) inherited_wedge triggers the same recovery as a hang -- Fix B's
     whole point is that the case that reads it never caused it, so nothing
     else in that layer will ever clear it either."""
@@ -469,8 +519,9 @@ def test_an_inherited_wedge_outside_robustness_also_recovers(pinned_env, fake_co
 
     calls: list = []
     monkeypatch.setattr(faults, "fence_and_recover", lambda s: calls.append(s) or [])
-    monkeypatch.setattr(execute, "run_tool_case",
-                        lambda s, c: Observation(blocked="inherited_wedge"))
+    monkeypatch.setattr(
+        execute, "run_tool_case", lambda s, c: Observation(blocked="inherited_wedge")
+    )
     _, _, routed, _ = _routed(pinned_env, fake_corpus, layer="coverage")
     obs = routed.run_case(_case("coverage"))
     assert obs.blocked == "inherited_wedge"
@@ -523,8 +574,7 @@ def test_owner_drift_survives_a_late_close_race(pinned_env, fake_corpus, monkeyp
 
     monkeypatch.setattr(dtprocess.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(dtprocess, "_lstart", lambda pid: START if pid == PID else None)
-    monkeypatch.setattr(dtprocess, "_comm", lambda pid: dtprocess.DARKTABLE if pid == PID
-                        else None)
+    monkeypatch.setattr(dtprocess, "_comm", lambda pid: dtprocess.DARKTABLE if pid == PID else None)
     monkeypatch.setattr(dtprocess, "running_pids", lambda: [PID] if alive_state["value"] else [])
     monkeypatch.setattr(dtprocess, "_alive", fake_alive)
     monkeypatch.setattr(dtprocess.os, "kill", fake_kill)
@@ -539,8 +589,15 @@ def test_owner_drift_survives_a_late_close_race(pinned_env, fake_corpus, monkeyp
     real_terminate = dtprocess.terminate
 
     def terminate_with_fakes(pid=None, *, responsive=None, cache_root=None, **kw):
-        return real_terminate(pid, responsive=responsive, cache_root=cache_root,
-                              kill=fake_kill, alive=fake_alive, sleep=lambda s: None)
+        return real_terminate(
+            pid,
+            responsive=responsive,
+            cache_root=cache_root,
+            kill=fake_kill,
+            alive=fake_alive,
+            sleep=lambda s: None,
+        )
+
     monkeypatch.setattr(dtprocess, "terminate", terminate_with_fakes)
 
     a = ScouterAdapter(pinned_env / "runs")
@@ -548,8 +605,14 @@ def test_owner_drift_survives_a_late_close_race(pinned_env, fake_corpus, monkeyp
     run = RunDir(pinned_env / "runs", "stamp").ensure()
 
     def factory(corpus, root, body, run_root):
-        return sess.ScouterSession(corpus, root, body, dt=DtControl(), run_root=run_root,
-                                   mcp_factory=lambda env, cwd: FakeMcp())
+        return sess.ScouterSession(
+            corpus,
+            root,
+            body,
+            dt=DtControl(),
+            run_root=run_root,
+            mcp_factory=lambda env, cwd: FakeMcp(),
+        )
 
     routed = adapter_mod.RoutedSession(a, "coverage", run, session_factory=factory)
 
@@ -571,8 +634,9 @@ def test_owner_drift_survives_a_late_close_race(pinned_env, fake_corpus, monkeyp
     point_cache(b_root / "cache", *routed._roots())
     assert os.environ.get("SCOUTER_CACHE") == str(b_root / "cache")
     routed._back_to_process_cache_if_mine(a_cache)  # the late close, simulated
-    assert os.environ.get("SCOUTER_CACHE") == str(b_root / "cache"), \
-        "the guard must refuse to stomp on B's own cache pointer"
+    assert os.environ.get("SCOUTER_CACHE") == str(
+        b_root / "cache"
+    ), "the guard must refuse to stomp on B's own cache pointer"
 
     session_b = factory(a.corpus(), b_root, "sony_a7", run.root)
     routed.current = session_b
@@ -582,8 +646,10 @@ def test_owner_drift_survives_a_late_close_race(pinned_env, fake_corpus, monkeyp
     # 4. A relaunch must still quit P: session B's own DtControl is bound to
     # B's own cache (`ScouterSession.open` binds it), never the ambient one.
     session_b.relaunch()
-    assert (PID, signal.SIGTERM) in signalled or (PID, signal.SIGKILL) in signalled, \
-        f"relaunch's quit never signalled our own darktable: {signalled}"
+    assert (PID, signal.SIGTERM) in signalled or (
+        PID,
+        signal.SIGKILL,
+    ) in signalled, f"relaunch's quit never signalled our own darktable: {signalled}"
     alive_state["value"] = True  # the relaunch's own new darktable is up
 
     # 5. Rotate to session C -- opened directly (not through the normal
@@ -612,6 +678,7 @@ def test_owner_drift_survives_a_late_close_race(pinned_env, fake_corpus, monkeyp
     def foreign_under_drift(self_dt):
         monkeypatch.setenv("SCOUTER_CACHE", str(process_cache))
         return real_foreign(self_dt)
+
     monkeypatch.setattr(DtControl, "foreign", foreign_under_drift)
 
     session_c = factory(a.corpus(), c_root, "olympus", run.root)
@@ -626,12 +693,13 @@ def test_owner_drift_survives_a_late_close_race(pinned_env, fake_corpus, monkeyp
     signalled.clear()
     session_c = routed.current
     session_c.relaunch()
-    assert (PID, signal.SIGTERM) in signalled or (PID, signal.SIGKILL) in signalled, \
-        "relaunch under persisted drift never signalled our own darktable"
+    assert (PID, signal.SIGTERM) in signalled or (
+        PID,
+        signal.SIGKILL,
+    ) in signalled, "relaunch under persisted drift never signalled our own darktable"
 
 
-def test_recovery_is_never_doubled_up_in_the_robustness_layer(pinned_env, fake_corpus,
-                                                                monkeypatch):
+def test_recovery_is_never_doubled_up_in_the_robustness_layer(pinned_env, fake_corpus, monkeypatch):
     """(M1) faults.run_fault_case already fence_and_recover's its own hangs
     (Fix A/H2) -- run_case must never call it a second time for that layer."""
     from gauntlet.adapter import Observation
@@ -639,8 +707,7 @@ def test_recovery_is_never_doubled_up_in_the_robustness_layer(pinned_env, fake_c
 
     calls: list = []
     monkeypatch.setattr(faults, "fence_and_recover", lambda s: calls.append(s) or [])
-    monkeypatch.setattr(faults, "run_fault_case",
-                        lambda s, c: Observation(blocked="hang"))
+    monkeypatch.setattr(faults, "run_fault_case", lambda s, c: Observation(blocked="hang"))
     _, _, routed, _ = _routed(pinned_env, fake_corpus, layer="robustness")
     obs = routed.run_case(_case("robustness"))
     assert obs.blocked == "hang"
@@ -680,8 +747,14 @@ def test_a_successful_fence_keeps_the_same_session(pinned_env, fake_corpus, monk
     run = RunDir(pinned_env / "runs", "stamp").ensure()
 
     def factory(corpus, root, body, run_root):
-        return sess.ScouterSession(corpus, root, body, dt=FakeDt(), run_root=run_root,
-                                   mcp_factory=lambda env, cwd: _KillableMcp())
+        return sess.ScouterSession(
+            corpus,
+            root,
+            body,
+            dt=FakeDt(),
+            run_root=run_root,
+            mcp_factory=lambda env, cwd: _KillableMcp(),
+        )
 
     routed = adapter_mod.RoutedSession(a, "coverage", run, session_factory=factory)
     routed.run_case(_case("coverage"))
@@ -706,8 +779,14 @@ def test_a_fence_whose_quit_failed_still_gets_replaced(pinned_env, fake_corpus, 
     run = RunDir(pinned_env / "runs", "stamp").ensure()
 
     def factory(corpus, root, body, run_root):
-        return sess.ScouterSession(corpus, root, body, dt=FakeDt(terminate_ok=False),
-                                   run_root=run_root, mcp_factory=lambda env, cwd: _KillableMcp())
+        return sess.ScouterSession(
+            corpus,
+            root,
+            body,
+            dt=FakeDt(terminate_ok=False),
+            run_root=run_root,
+            mcp_factory=lambda env, cwd: _KillableMcp(),
+        )
 
     routed = adapter_mod.RoutedSession(a, "coverage", run, session_factory=factory)
     routed.run_case(_case("coverage"))
@@ -721,17 +800,27 @@ def test_a_fence_whose_quit_failed_still_gets_replaced(pinned_env, fake_corpus, 
 
 # -- final fix I7: eager open + harness allowance ------------------------------
 
+
 def test_harness_allowance_is_a_base_plus_a_share_per_render(tmp_path):
     from gauntlet.case import Check
 
     a = ScouterAdapter(tmp_path)
     plain = _case()
     assert a.harness_allowance_s(plain) == adapter_mod.HARNESS_BASE_S
-    stats = Case(id="c-s", layer="coverage", tier="P1", mode="tool", steps=[],
-                 expect=Expect("edit", [Check("M2", stat="L_mean", sign=1)]), body="olympus")
-    assert a.harness_allowance_s(stats) == \
-        adapter_mod.HARNESS_BASE_S + adapter_mod.RENDERS_PER_STATS_CASE * \
-        adapter_mod.HARNESS_PER_RENDER_S
+    stats = Case(
+        id="c-s",
+        layer="coverage",
+        tier="P1",
+        mode="tool",
+        steps=[],
+        expect=Expect("edit", [Check("M2", stat="L_mean", sign=1)]),
+        body="olympus",
+    )
+    assert (
+        a.harness_allowance_s(stats)
+        == adapter_mod.HARNESS_BASE_S
+        + adapter_mod.RENDERS_PER_STATS_CASE * adapter_mod.HARNESS_PER_RENDER_S
+    )
     assert a.harness_allowance_s(Case(**{**vars(plain), "layer": "offline"})) == 0.0
 
 
@@ -754,29 +843,38 @@ def test_open_session_opens_the_first_body_eagerly(pinned_env, fake_corpus, monk
     def factory(corpus, root, body, run_root):
         d = FakeDt()
         dts.append(d)
-        return sess.ScouterSession(corpus, root, body, dt=d, run_root=run_root,
-                                   mcp_factory=lambda env, cwd: FakeMcp())
+        return sess.ScouterSession(
+            corpus, root, body, dt=d, run_root=run_root, mcp_factory=lambda env, cwd: FakeMcp()
+        )
+
     a.session_factory = factory
     routed = a.open_session("coverage", run)
     assert routed.current is not None and routed.current.body == "olympus"
     assert dts[0].launches == 1
 
 
-def test_eager_open_failure_raises_to_the_runner_and_leaves_no_session(pinned_env, fake_corpus,
-                                                                       monkeypatch):
+def test_eager_open_failure_raises_to_the_runner_and_leaves_no_session(
+    pinned_env, fake_corpus, monkeypatch
+):
     monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals", lambda: {})
     a = ScouterAdapter(pinned_env / "runs")
     a._corpus = fake_corpus
     run = _write_run(pinned_env, [_case("coverage")])
     a.session_factory = lambda corpus, root, body, run_root: sess.ScouterSession(
-        corpus, root, body, dt=FakeDt(ready=(False, False)), run_root=run_root,
-        mcp_factory=lambda env, cwd: FakeMcp())
+        corpus,
+        root,
+        body,
+        dt=FakeDt(ready=(False, False)),
+        run_root=run_root,
+        mcp_factory=lambda env, cwd: FakeMcp(),
+    )
     with pytest.raises(sess.SessionBlocked):
         a.open_session("coverage", run)
     assert dtprocess.owner_path().parent == pinned_env / "runs" / adapter_mod.PROCESS_DIR / "cache"
 
 
 # -- pre-night-1 N1/N2/N3 ------------------------------------------------------
+
 
 class _Proc:
     def __init__(self, pid):
@@ -822,15 +920,19 @@ def test_abort_open_kills_only_its_own_in_flight_session(pinned_env, fake_corpus
         return FakeMcp()
 
     def factory(corpus, root, body, run_root):
-        box["s"] = sess.ScouterSession(corpus, root, body, dt=dt, run_root=run_root,
-                                       mcp_factory=mcp_factory)
+        box["s"] = sess.ScouterSession(
+            corpus, root, body, dt=dt, run_root=run_root, mcp_factory=mcp_factory
+        )
         return box["s"]
+
     a.session_factory = factory
+
     def opener():
         try:
             box["routed"] = a.open_session("coverage", run)
         except BaseException as e:  # noqa: BLE001
             box["err"] = e
+
     t = threading.Thread(target=opener)
     t.start()
     assert entered.wait(5)
@@ -846,8 +948,9 @@ def test_abort_open_kills_only_its_own_in_flight_session(pinned_env, fake_corpus
     assert __import__("os").environ["SCOUTER_CACHE"] == "/next/session/cache"
 
 
-def test_open_session_opens_the_body_of_the_case_the_runner_names(pinned_env, fake_corpus,
-                                                                 monkeypatch):
+def test_open_session_opens_the_body_of_the_case_the_runner_names(
+    pinned_env, fake_corpus, monkeypatch
+):
     """N2: under --case / --only-failed the first case without a result is not
     necessarily the one the runner runs next."""
     monkeypatch.setattr(adapter_mod.corpus_mod, "sha256_originals", lambda: {})
@@ -855,7 +958,8 @@ def test_open_session_opens_the_body_of_the_case_the_runner_names(pinned_env, fa
     a._corpus = fake_corpus
     run = _write_run(pinned_env, [_case("coverage", "olympus"), _case("coverage", "sony_a7")])
     a.session_factory = lambda corpus, root, body, run_root: sess.ScouterSession(
-        corpus, root, body, dt=FakeDt(), run_root=run_root, mcp_factory=lambda e, c: FakeMcp())
+        corpus, root, body, dt=FakeDt(), run_root=run_root, mcp_factory=lambda e, c: FakeMcp()
+    )
     routed = a.open_session("coverage", run, next_case=_case("coverage", "sony_a7"))
     assert routed.current.body == "sony_a7"
 
@@ -885,6 +989,7 @@ def test_an_abort_before_the_agent_exists_still_reaches_it(pinned_env, fake_corp
         routed.abort()  # the runner's hard cap lands here
         box["agent"] = Agent()
         return box["agent"]
+
     routed.agent_factory = agent_factory
     routed.run_case(_case("scenarios_agent"))
     assert box["aborted_at_run"] is True
@@ -903,8 +1008,11 @@ class _ImportingFakeMcp(FakeMcp):
         if tool == "library_import":
             self.calls.append((tool, args))
             files = sorted(Path(args["source"]).rglob("*.ORF"))
-            data = {"job_slug": args["job_slug"], "date": "2026-09-27",
-                    "files": [{"source_name": f.name, "dest": f.name} for f in files]}
+            data = {
+                "job_slug": args["job_slug"],
+                "date": "2026-09-27",
+                "files": [{"source_name": f.name, "dest": f.name} for f in files],
+            }
             return {"ok": True, "outcome": "ok", "data": data}
         return super().call_tool(tool, args, timeout)
 
@@ -923,8 +1031,9 @@ def test_guide_session_open_stages_the_job_with_a_real_import(pinned_env, fake_c
     def factory(corpus, root, body, run_root):
         mcp = _ImportingFakeMcp()
         holder["mcp"] = mcp
-        return sess.ScouterSession(corpus, root, body, dt=FakeDt(), run_root=run_root,
-                                   mcp_factory=lambda env, cwd: mcp)
+        return sess.ScouterSession(
+            corpus, root, body, dt=FakeDt(), run_root=run_root, mcp_factory=lambda env, cwd: mcp
+        )
 
     routed = adapter_mod.RoutedSession(a, "guide", run, session_factory=factory)
     s = routed._session("olympus")
@@ -945,10 +1054,19 @@ def test_guide_stage_is_a_noop_when_the_import_errors(pinned_env, fake_corpus):
     run = RunDir(pinned_env / "runs", "stamp").ensure()
 
     def factory(corpus, root, body, run_root):
-        mcp = FakeMcp({"library_import": {"ok": False, "outcome": "error",
-                                          "error": {"code": "usage"}, "data": {}}})
-        return sess.ScouterSession(corpus, root, body, dt=FakeDt(), run_root=run_root,
-                                   mcp_factory=lambda env, cwd: mcp)
+        mcp = FakeMcp(
+            {
+                "library_import": {
+                    "ok": False,
+                    "outcome": "error",
+                    "error": {"code": "usage"},
+                    "data": {},
+                }
+            }
+        )
+        return sess.ScouterSession(
+            corpus, root, body, dt=FakeDt(), run_root=run_root, mcp_factory=lambda env, cwd: mcp
+        )
 
     routed = adapter_mod.RoutedSession(a, "guide", run, session_factory=factory)
     s = routed._session("olympus")

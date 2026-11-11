@@ -702,8 +702,7 @@ def _plan(
     if camera is None and not tagged and skipped_no_body:
         names = ", ".join(e["source_name"] for e in skipped_no_body)
         raise UsageError(
-            f"no camera model in any file's EXIF on this card ({names}); "
-            "nothing to import",
+            f"no camera model in any file's EXIF on this card ({names}); " "nothing to import",
             fix="pass --camera X to import them all under one explicit body",
             detail={"skipped_no_body": skipped_no_body},
         )

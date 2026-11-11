@@ -300,11 +300,14 @@ class StyleSetTest(unittest.TestCase):
         bridge = _bridge(images, style_name="hero", apply=script)
         bridge.raises["darktable_mcp.diag"] = BridgeTimeoutError("no answer")
         dtbridge.set_bridge(bridge)
-        with mock.patch.object(dtprocess, "running_pids", return_value=[4242]), \
-                mock.patch.object(dtprocess, "owned_pid", return_value=None), \
-                mock.patch.object(dtbridge, "call", side_effect=spy):
-            result = style.apply_set(name="hero", images=list(images.values()), confirm=True,
-                                     batch=25)
+        with (
+            mock.patch.object(dtprocess, "running_pids", return_value=[4242]),
+            mock.patch.object(dtprocess, "owned_pid", return_value=None),
+            mock.patch.object(dtbridge, "call", side_effect=spy),
+        ):
+            result = style.apply_set(
+                name="hero", images=list(images.values()), confirm=True, batch=25
+            )
         self.assertTrue(any(isinstance(e, DarktableUnresponsive) for e in seen), seen)
         self.assertEqual(result.outcome, "partial")
         self.assertEqual(result.applied, 25)

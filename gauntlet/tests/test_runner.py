@@ -59,6 +59,7 @@ def test_hard_cap_blocks_and_aborts_the_session(tmp_path):
     a, run = _setup(tmp_path, behaviours={"alpha-0": "sleep"})
     # the real cap (budget + 30 s per step) is too slow for a unit test: shrink it.
     import gauntlet.case as case_mod
+
     orig = case_mod.Case.budget_cap_s
     case_mod.Case.budget_cap_s = lambda self: 0.2
     try:
@@ -128,8 +129,7 @@ def test_wait_on_park_restores_layer_status(tmp_path):
 
     ToySession.run_case = rc
     try:
-        s = Runner(a, run, sleep=lambda x: None).run_layers(layers=["alpha"],
-                                                             wait_on_park=True)
+        s = Runner(a, run, sleep=lambda x: None).run_layers(layers=["alpha"], wait_on_park=True)
     finally:
         ToySession.run_case = orig_run_case
     assert s.status == "done" and s.parked == []
@@ -168,6 +168,7 @@ def test_session_abort_and_close_failures_are_swallowed(tmp_path):
     log (close), and later cases in the layer still run."""
     a, run = _setup(tmp_path, behaviours={"alpha-0": "sleep"})
     import gauntlet.case as case_mod
+
     orig_cap = case_mod.Case.budget_cap_s
     case_mod.Case.budget_cap_s = lambda self: 0.1
     orig_abort, orig_close = ToySession.abort, ToySession.close
@@ -195,6 +196,7 @@ def test_session_abort_and_close_failures_are_swallowed(tmp_path):
 
 # -- final fix I2: a run-level refusal stops the run, writes no case result ----
 
+
 def test_preflight_refusal_stops_the_run_and_writes_nothing(tmp_path):
     from gauntlet.cli import EXIT_REFUSED  # noqa: F401 - the CLI names the status
 
@@ -215,6 +217,7 @@ def test_preflight_raising_refuse_run_stops_the_run(tmp_path):
     def pre(run, layer):
         if layer == "beta":
             raise RefuseRun("foreign darktable")
+
     a.preflight = pre
     s = Runner(a, run).run_layers()
     assert s.status == "blocked: foreign darktable"
@@ -240,6 +243,7 @@ def test_refuse_run_from_open_session_writes_no_result(tmp_path):
 
     def refuse(layer, run_root):
         raise RefuseRun("foreign darktable")
+
     a.open_session = refuse
     s = Runner(a, run).run_layers()
     assert s.status == "blocked: foreign darktable" and run.read_results() == []
@@ -265,6 +269,7 @@ def test_session_crash_reports_survive_a_crash_file(tmp_path):
 
 
 # -- final fix I6: the progress page counts hangs the way the report does ------
+
 
 def test_is_hang_is_one_helper():
     from gauntlet.evaluate import is_hang
@@ -304,8 +309,14 @@ def test_progress_counts_inherited_wedge_in_its_own_bucket(tmp_path):
     p = Progress(run, "adapter")
     p.layer("alpha", 4, 1, True)
     p.start_layer("alpha")
-    p.record("alpha", "alpha-0", "P1", {"score": "fail", "outcome": "blocked", "notes": []},
-             0.1, blocked="inherited_wedge")
+    p.record(
+        "alpha",
+        "alpha-0",
+        "P1",
+        {"score": "fail", "outcome": "blocked", "notes": []},
+        0.1,
+        blocked="inherited_wedge",
+    )
     lay = json.loads(run.progress_json.read_text())["layers"]["alpha"]
     assert lay["inherited_wedge"] == 1
     assert lay["blocked"] == 1
@@ -322,6 +333,7 @@ def test_progress_page_shows_hangs_and_blocked(tmp_path):
 
 # -- final fix I7: harness work gets its own allowance on top of the case cap --
 
+
 def test_adapter_harness_allowance_extends_the_case_cap(tmp_path):
     import gauntlet.case as case_mod
 
@@ -335,6 +347,7 @@ def test_adapter_harness_allowance_extends_the_case_cap(tmp_path):
     def allowance(case):
         seen.append(case.id)
         return 2.0
+
     a.harness_allowance_s = allowance
     orig = case_mod.Case.budget_cap_s
     case_mod.Case.budget_cap_s = lambda self: 0.2
@@ -347,6 +360,7 @@ def test_adapter_harness_allowance_extends_the_case_cap(tmp_path):
 
 
 # -- pre-night-1 N1/N2: adapter-tunable open cap, abort_open, next-case hint ---
+
 
 def test_open_cap_is_adapter_tunable(tmp_path):
     a, run = _setup(tmp_path)
@@ -387,6 +401,7 @@ def test_a_failing_abort_open_is_folded_into_the_evidence(tmp_path):
 
     def bad():
         raise OSError("kill failed")
+
     a.abort_open = bad
     Runner(a, run, max_consecutive_open_failures=1).run_layers(layers=["alpha"])
     ev = run.read_result("alpha-0")["observation"]["hang_evidence"]
@@ -408,6 +423,7 @@ def test_retention_deletes_case_workdir_except_the_layers_keep_globs(tmp_path):
         (d / "sidecar.xmp").write_bytes(b"s" * 128)
         (d / "import.raw").write_bytes(b"i" * (n_mb * 1024 * 1024))
         return obs
+
     ToySession.run_case = rc
     a.retain_keep = lambda layer: ("*.xmp",)
     try:
@@ -433,6 +449,7 @@ def test_retention_score_only_layer_deletes_the_whole_workdir(tmp_path):
         d.mkdir(parents=True, exist_ok=True)
         (d / "render.tif").write_bytes(b"r" * (1024 * 1024))
         return obs
+
     ToySession.run_case = rc
     a.retain_keep = lambda layer: ()
     try:
@@ -453,6 +470,7 @@ def test_retention_is_off_when_the_adapter_declares_no_policy(tmp_path):
         d.mkdir(parents=True, exist_ok=True)
         (d / "import.raw").write_bytes(b"i" * 1024)
         return obs
+
     ToySession.run_case = rc
     try:
         Runner(a, run).run_layers(layers=["alpha"])
@@ -473,6 +491,7 @@ def test_retention_never_touches_anything_outside_the_case_workdir(tmp_path):
         d.mkdir(parents=True, exist_ok=True)
         (d / "junk.bin").write_bytes(b"j" * 1024)
         return obs
+
     ToySession.run_case = rc
     a.retain_keep = lambda layer: ()
     try:
@@ -514,6 +533,7 @@ def test_disk_guard_receives_the_run_root(tmp_path):
     def reading(root):
         seen.append(root)
         return 100.0
+
     Runner(a, run, free_disk_gb=reading).run_layers(layers=["alpha"])
     assert seen and seen[0] == run.root
 
@@ -522,10 +542,12 @@ def test_free_disk_gb_default_matches_shutil_disk_usage(tmp_path):
     import shutil
 
     from gauntlet.runner import free_disk_gb
+
     assert free_disk_gb(tmp_path) == pytest.approx(shutil.disk_usage(tmp_path).free / 1e9)
 
 
 # -- fix round 1 (Opus review, t_90e75c20) ----------------------------------
+
 
 def test_free_disk_gb_resolves_at_call_time_not_bind_time(tmp_path, monkeypatch):
     """I3: the default must not be bound once when Runner.__init__ is
@@ -550,6 +572,7 @@ def test_retain_error_is_logged_not_fatal(tmp_path):
 
     def boom(case_id, keep=()):
         raise OSError("disk gone")
+
     run.retain = boom
 
     s = Runner(a, run).run_layers(layers=["alpha"])
@@ -581,6 +604,7 @@ def test_open_session_is_told_the_case_it_opens_for(tmp_path):
     def open_session(layer, run_root, next_case=None):
         seen.append(next_case.id if next_case else None)
         return ToySession(a)
+
     a.open_session = open_session
     Runner(a, run).run_layers(layers=["alpha"], case_ids={"alpha-2"})
     assert seen == ["alpha-2"]
@@ -605,9 +629,14 @@ def _prune_setup(tmp_path, bad=(), **runner_kw):
         def open_session(self, layer, run_root):
             self.sessions += 1
             root = run.sessions_dir / layer / f"{self.sessions:03d}-x"
-            for d, f, n in (("frames/r", "a.ORF", 4000), ("frames/r", "a.ORF.xmp", 10),
-                            ("card", "c.ORF", 3000), ("render", "r.png", 500),
-                            ("library", "library.db", 20), ("config", "c.json", 5)):
+            for d, f, n in (
+                ("frames/r", "a.ORF", 4000),
+                ("frames/r", "a.ORF.xmp", 10),
+                ("card", "c.ORF", 3000),
+                ("render", "r.png", 500),
+                ("library", "library.db", 20),
+                ("config", "c.json", 5),
+            ):
                 (root / d).mkdir(parents=True, exist_ok=True)
                 (root / d / f).write_bytes(b"x" * n)
             (root / "darktable.log").write_text("log")
@@ -663,8 +692,7 @@ def test_prune_off_leaves_everything(tmp_path):
 
 
 def test_nonpass_sessions_beyond_the_cap_are_pruned_oldest_first(tmp_path):
-    a, run, r = _prune_setup(tmp_path, bad=["alpha-0", "alpha-2"],
-                             session_keep_nonpass_max=1)
+    a, run, r = _prune_setup(tmp_path, bad=["alpha-0", "alpha-2"], session_keep_nonpass_max=1)
     r.run_layers(layers=["alpha"])
     k = _kept(run)
     assert k["001-x"] == _KEPT and "card/c.ORF" in k["002-x"]
@@ -678,6 +706,7 @@ def test_low_disk_prunes_nonpass_oldest_first_before_parking(tmp_path):
     def prune_one(root):
         order.append(root.name)
         orig(root)
+
     r._prune_one = prune_one
     # 27 GB free: above the 25 floor but inside the 5 GB margin; pruning one
     # session frees enough (the reading rises once a folder was pruned).
@@ -725,8 +754,9 @@ def test_resume_works_when_closed_session_frames_are_gone(tmp_path):
 
 
 def test_two_runners_over_one_run_dir_never_prune_each_others_folders(tmp_path):
-    a, run, ra = _prune_setup(tmp_path, bad=["alpha-0", "alpha-2"], session_prune="all",
-                              session_keep_nonpass_max=0)
+    a, run, ra = _prune_setup(
+        tmp_path, bad=["alpha-0", "alpha-2"], session_prune="all", session_keep_nonpass_max=0
+    )
     rb = Runner(a, run, session_max_cases=2, session_prune="all", session_keep_nonpass_max=0)
     mine = run.sessions_dir / "alpha" / "090-b-open"
     kept_fail = run.sessions_dir / "alpha" / "091-b-closed-nonpass"

@@ -5,6 +5,7 @@ never the real gauntlet corpus. The script itself is run for real via
 subprocess (no mock of the subject); a stub `.venv/bin/python` stands in
 for the real interpreter so the run stops right after logging its stamp,
 before anything gauntlet- or darktable-shaped would happen."""
+
 from __future__ import annotations
 
 import os
@@ -76,26 +77,30 @@ class _FakeReposCase(unittest.TestCase):
 
     def env(self, **extra) -> dict:
         e = dict(os.environ)
-        e.update({
-            "HTC_REPO": str(self.repo),
-            "HTC_RUNS_ROOT": str(self.runs_root),
-            "HTC_TRIAL": str(self.trial),
-            "PATH": f"{self.fake_bin}:{e['PATH']}",
-        })
+        e.update(
+            {
+                "HTC_REPO": str(self.repo),
+                "HTC_RUNS_ROOT": str(self.runs_root),
+                "HTC_TRIAL": str(self.trial),
+                "PATH": f"{self.fake_bin}:{e['PATH']}",
+            }
+        )
         e.update(extra)
         return e
 
     def run_script(self, **extra_env) -> subprocess.CompletedProcess:
-        return subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True,
-                              env=self.env(**extra_env))
+        return subprocess.run(
+            ["bash", str(SCRIPT)], capture_output=True, text=True, env=self.env(**extra_env)
+        )
 
 
 class ArgumentHandlingTest(_FakeReposCase):
     def test_custom_stamp_env_is_honored(self) -> None:
         p = self.run_script(STAMP="night2-19991231")
         self.assertIn("stamp night2-19991231", p.stdout)
-        self.assertEqual((self.runs_root / "night2" / "CURRENT_STAMP").read_text().strip(),
-                          "night2-19991231")
+        self.assertEqual(
+            (self.runs_root / "night2" / "CURRENT_STAMP").read_text().strip(), "night2-19991231"
+        )
         # dies at the (stubbed) generate step, never touching darktable
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
 
@@ -164,11 +169,12 @@ class GauntletRunnerRefusalTest(_FakeReposCase):
         fake_pgrep = self.fake_bin / "pgrep"
         fake_pgrep.write_text(
             "#!/usr/bin/env bash\n"
-            "case \"$*\" in\n"
+            'case "$*" in\n'
             "  *darktable*) exit 1 ;;\n"  # isolate from any real, unrelated darktable
-            "  *) exec /usr/bin/pgrep \"$@\" ;;\n"  # everything else: the real binary
+            '  *) exec /usr/bin/pgrep "$@" ;;\n'  # everything else: the real binary
             "esac\n",
-            encoding="utf-8")
+            encoding="utf-8",
+        )
         fake_pgrep.chmod(0o755)
 
     def _spawn_dummy_launcher(self, stamp: str) -> subprocess.Popen:
@@ -177,15 +183,23 @@ class GauntletRunnerRefusalTest(_FakeReposCase):
         <stamp>" present, but NOT adjacent -- exactly the shape the old,
         broken pattern could not match."""
         proc = subprocess.Popen(
-            ["python3", "-c",
-             f"import time  # stand-in for '...from gauntlet.cli import main...' "
-             f"run --stamp {stamp} --resume --wait-on-park\n"
-             "time.sleep(20)"])
+            [
+                "python3",
+                "-c",
+                f"import time  # stand-in for '...from gauntlet.cli import main...' "
+                f"run --stamp {stamp} --resume --wait-on-park\n"
+                "time.sleep(20)",
+            ]
+        )
         self.addCleanup(proc.kill)
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
-            found = subprocess.run(["pgrep", "-f", f"run --stamp {stamp}"],
-                                  capture_output=True).returncode == 0
+            found = (
+                subprocess.run(
+                    ["pgrep", "-f", f"run --stamp {stamp}"], capture_output=True
+                ).returncode
+                == 0
+            )
             if found:
                 break
             time.sleep(0.05)
@@ -209,8 +223,10 @@ class GauntletRunnerRefusalTest(_FakeReposCase):
         self._spawn_dummy_launcher("night2-refusal-test-stamp-2")
         p = self.run_script()
         self.assertEqual(p.returncode, 5, p.stdout + p.stderr)
-        self.assertFalse((self.runs_root / "night2" / "CURRENT_STAMP").exists(),
-                         "a refused attempt must not pin today's stamp")
+        self.assertFalse(
+            (self.runs_root / "night2" / "CURRENT_STAMP").exists(),
+            "a refused attempt must not pin today's stamp",
+        )
 
     def test_the_old_narrower_pattern_would_have_missed_the_real_launcher_argv(self) -> None:
         """Regression guard for review R2 itself: proves the OLD pattern
@@ -221,8 +237,7 @@ class GauntletRunnerRefusalTest(_FakeReposCase):
         self._install_pgrep_forwarding_to_real_binary_except_darktable()
         stamp = "night2-pattern-regression-stamp"
         self._spawn_dummy_launcher(stamp)
-        old = subprocess.run(["pgrep", "-f", r"gauntlet(\.cli)? run --stamp"],
-                             capture_output=True)
+        old = subprocess.run(["pgrep", "-f", r"gauntlet(\.cli)? run --stamp"], capture_output=True)
         new = subprocess.run(["pgrep", "-fl", "gauntlet.*run --stamp"], capture_output=True)
         self.assertEqual(old.returncode, 1, "the old pattern should NOT match")
         self.assertEqual(new.returncode, 0, "the fixed pattern SHOULD match")
@@ -266,17 +281,24 @@ class SubsetSeedDeterminismTest(_FakeReposCase):
         capture = self.runs_root / "seed_capture.txt"  # outside the repo -- never dirties it
         stub = self.repo / ".venv" / "bin" / "python"
         stub.write_text(
-            "#!/usr/bin/env bash\n"
-            f'echo "$@" >> "{capture}"\n'
-            "exit 1\n", encoding="utf-8")
+            "#!/usr/bin/env bash\n" f'echo "$@" >> "{capture}"\n' "exit 1\n", encoding="utf-8"
+        )
         stub.chmod(0o755)
         git(self.repo, "add", "-A")
-        subprocess.run(["git", "commit", "-q", "-m", "stub: capture argv"], cwd=str(self.repo),
-                       capture_output=True, text=True)  # a no-op stub rewrite has nothing to
-                                                         # commit the second time -- fine either
-                                                         # way, only a real failure asserts below
-        self.assertEqual(subprocess.run(["git", "status", "--porcelain"], cwd=str(self.repo),
-                                        capture_output=True, text=True).stdout, "")
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "stub: capture argv"],
+            cwd=str(self.repo),
+            capture_output=True,
+            text=True,
+        )  # a no-op stub rewrite has nothing to
+        # commit the second time -- fine either
+        # way, only a real failure asserts below
+        self.assertEqual(
+            subprocess.run(
+                ["git", "status", "--porcelain"], cwd=str(self.repo), capture_output=True, text=True
+            ).stdout,
+            "",
+        )
         p = self.run_script(STAMP=stamp)
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         lines = [ln for ln in capture.read_text(encoding="utf-8").splitlines() if ln.strip()]
