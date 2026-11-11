@@ -1,6 +1,6 @@
 # Scouter row 433: why benchmark run 3 still stalled
 
-Fix: branch `fix/bench-stall`, commit `1d62110`, worktree `/Users/pratik/CodeBase/scouter/.worktrees/benchstall`, based on main `e8887c6`. Not merged, not pushed. The bench/editor runner is unchanged.
+Fix: branch `fix/bench-stall`, commit `1d62110`, worktree `~/CodeBase/scouter/.worktrees/benchstall`, based on main `e8887c6`. Not merged, not pushed. The bench/editor runner is unchanged.
 
 ## Verdict
 

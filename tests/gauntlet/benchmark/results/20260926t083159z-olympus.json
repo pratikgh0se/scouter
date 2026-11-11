@@ -65,34 +65,34 @@
     "paths": {
       "body": "olympus",
       "run_id": "20260926t083159z",
-      "frame:dark": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240151.ORF",
+      "frame:dark": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240151.ORF",
       "framename:dark": "P5240151.ORF",
       "framebase:dark": "P5240151.ORF",
-      "frame:bright": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281368.ORF",
+      "frame:bright": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281368.ORF",
       "framename:bright": "P6281368.ORF",
       "framebase:bright": "P6281368.ORF",
-      "frame:blown": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
+      "frame:blown": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
       "framename:blown": "P5240140.ORF",
       "framebase:blown": "P5240140.ORF",
-      "frame:hero": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281348.ORF",
+      "frame:hero": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281348.ORF",
       "framename:hero": "P6281348.ORF",
       "framebase:hero": "P6281348.ORF",
-      "frame:calib": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/calib/P6281348.ORF",
+      "frame:calib": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/calib/P6281348.ORF",
       "framename:calib": "P6281348.ORF",
       "framebase:calib": "P6281348.ORF",
-      "card": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/card",
+      "card": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/card",
       "job_slug": "bench-olympus-0926083159",
       "preset": "scouter-bench-olympus-0926083159",
-      "out_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/exports",
+      "out_dir": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/exports",
       "_wb_table_present": "1",
-      "job:1": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159/raw/2026-05-24_bench-olympus-0926083159_em10markiii_0005.orf",
-      "job:2": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159/raw/2026-05-24_bench-olympus-0926083159_em10markiii_0006.orf",
-      "job:3": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159/raw/2026-05-24_bench-olympus-0926083159_em10markiii_0001.orf",
-      "job:4": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159/raw/2026-05-24_bench-olympus-0926083159_em10markiii_0002.orf",
-      "job:5": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159/raw/2026-05-24_bench-olympus-0926083159_em10markiii_0003.orf",
-      "job:6": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159/raw/2026-05-24_bench-olympus-0926083159_em10markiii_0004.orf"
+      "job:1": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159/raw/2026-05-24_bench-olympus-0926083159_em10markiii_0005.orf",
+      "job:2": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159/raw/2026-05-24_bench-olympus-0926083159_em10markiii_0006.orf",
+      "job:3": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159/raw/2026-05-24_bench-olympus-0926083159_em10markiii_0001.orf",
+      "job:4": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159/raw/2026-05-24_bench-olympus-0926083159_em10markiii_0002.orf",
+      "job:5": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159/raw/2026-05-24_bench-olympus-0926083159_em10markiii_0003.orf",
+      "job:6": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159/raw/2026-05-24_bench-olympus-0926083159_em10markiii_0004.orf"
     },
-    "run_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus"
+    "run_dir": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus"
   },
   "sessions": [
     {
@@ -109,7 +109,7 @@
         "ready_s": 2.7,
         "loaded": {
           "image_id": 52,
-          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240151.ORF",
+          "path": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240151.ORF",
           "source": "action_images",
           "view": "darkroom"
         },
@@ -119,7 +119,7 @@
         {
           "tool": "history_commit",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240151.ORF",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240151.ORF",
             "timeout_s": 10
           },
           "envelope": null,
@@ -137,7 +137,7 @@
           {
             "tool": "history_commit",
             "args": {
-              "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240151.ORF",
+              "image": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240151.ORF",
               "timeout_s": 10
             },
             "envelope": null,
@@ -156,7 +156,7 @@
           "ready_s": 2.59,
           "loaded": {
             "image_id": 52,
-            "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240151.ORF",
+            "path": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240151.ORF",
             "source": "action_images",
             "view": "darkroom"
           },
@@ -179,7 +179,7 @@
         "ready_s": 2.65,
         "loaded": {
           "image_id": 53,
-          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281368.ORF",
+          "path": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281368.ORF",
           "source": "action_images",
           "view": "darkroom"
         },
@@ -189,7 +189,7 @@
         {
           "tool": "history_commit",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281368.ORF",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281368.ORF",
             "timeout_s": 10
           },
           "envelope": null,
@@ -203,7 +203,7 @@
           {
             "tool": "history_commit",
             "args": {
-              "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281368.ORF",
+              "image": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281368.ORF",
               "timeout_s": 10
             },
             "envelope": null,
@@ -222,7 +222,7 @@
           "ready_s": 2.75,
           "loaded": {
             "image_id": 53,
-            "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281368.ORF",
+            "path": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281368.ORF",
             "source": "action_images",
             "view": "darkroom"
           },
@@ -245,7 +245,7 @@
         "ready_s": 2.44,
         "loaded": {
           "image_id": 54,
-          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
+          "path": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
           "source": "action_images",
           "view": "darkroom"
         },
@@ -255,7 +255,7 @@
         {
           "tool": "history_commit",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
             "timeout_s": 10
           },
           "envelope": {
@@ -263,17 +263,17 @@
             "error": {
               "code": "commit_timeout",
               "detail": {
-                "bridge_detail": "the view bounce completed 2 time(s) but /Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF.xmp did not change within 3000ms of waiting -- darktable writes a sidecar only when the history actually changes, so this is expected when the requested value is the one the image already had",
+                "bridge_detail": "the view bounce completed 2 time(s) but ~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF.xmp did not change within 3000ms of waiting -- darktable writes a sidecar only when the history actually changes, so this is expected when the requested value is the one the image already had",
                 "image_id": 54,
                 "ms": 10023,
                 "ok": false,
                 "sidecar_rewritten_history_unchanged": null,
                 "strategy_used": "view_bounce_action",
                 "view_after": "darkroom",
-                "xmp": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF.xmp"
+                "xmp": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF.xmp"
               },
               "fix": "darktable did not write the XMP in time; leave and re-enter the darkroom, or raise the commit timeout",
-              "message": "darktable did not write /Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF.xmp within 10s using the view_bounce_action strategy",
+              "message": "darktable did not write ~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF.xmp within 10s using the view_bounce_action strategy",
               "outcome": "error"
             },
             "job": "mcp-20260926-083159-71993",
@@ -294,7 +294,7 @@
           {
             "tool": "history_commit",
             "args": {
-              "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
+              "image": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
               "timeout_s": 10
             },
             "envelope": null,
@@ -313,7 +313,7 @@
           "ready_s": 3.24,
           "loaded": {
             "image_id": 54,
-            "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
+            "path": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
             "source": "action_images",
             "view": "darkroom"
           },
@@ -335,7 +335,7 @@
         "ready_s": 2.62,
         "loaded": {
           "image_id": 55,
-          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281348.ORF",
+          "path": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281348.ORF",
           "source": "action_images",
           "view": "darkroom"
         },
@@ -345,7 +345,7 @@
         {
           "tool": "library_import",
           "args": {
-            "source": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/card",
+            "source": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/card",
             "job_slug": "bench-olympus-0926083159",
             "confirm": true
           },
@@ -466,16 +466,16 @@
               "imported": 0,
               "job_slug": "bench-olympus-0926083159",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159",
+              "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159",
               "plan": [],
               "reason": null,
               "recursive_honoured": null,
               "scan_incomplete": null,
               "skipped_no_body": [],
               "skipped_other_camera": [],
-              "source_root": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/card",
+              "source_root": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/card",
               "source_roots": [
-                "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/card"
+                "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/card"
               ],
               "totals": {
                 "bytes": 100744648,
@@ -504,7 +504,7 @@
         {
           "tool": "history_commit",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281348.ORF",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281348.ORF",
             "timeout_s": 10
           },
           "envelope": null,
@@ -542,7 +542,7 @@
           {
             "tool": "history_commit",
             "args": {
-              "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281348.ORF",
+              "image": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281348.ORF",
               "timeout_s": 10
             },
             "envelope": null,
@@ -552,7 +552,7 @@
           {
             "tool": "library_import",
             "args": {
-              "source": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/card",
+              "source": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/card",
               "job_slug": "bench-olympus-0926083159",
               "confirm": true
             },
@@ -673,16 +673,16 @@
                 "imported": 0,
                 "job_slug": "bench-olympus-0926083159",
                 "outcome": "ok",
-                "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159",
+                "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926083159",
                 "plan": [],
                 "reason": null,
                 "recursive_honoured": null,
                 "scan_incomplete": null,
                 "skipped_no_body": [],
                 "skipped_other_camera": [],
-                "source_root": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/card",
+                "source_root": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/card",
                 "source_roots": [
-                  "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/card"
+                  "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/card"
                 ],
                 "totals": {
                   "bytes": 100744648,
@@ -720,7 +720,7 @@
           "ready_s": 2.49,
           "loaded": {
             "image_id": 55,
-            "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281348.ORF",
+            "path": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P6281348.ORF",
             "source": "action_images",
             "view": "darkroom"
           },
@@ -858,7 +858,7 @@
         {
           "tool": "scout_stats",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
             "px": 512
           },
           "envelope": {
@@ -1642,7 +1642,7 @@
               },
               "image_id": 54,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
               "plan": [],
               "px_requested": 512,
               "px_used": 512,
@@ -1722,7 +1722,7 @@
                   "noop": false,
                   "outcome": "ok",
                   "param": "exposure",
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
+                  "path": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
                   "plan": [
                     {
                       "action": "darkroom.adjust",
@@ -1741,7 +1741,7 @@
                 }
               ],
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
               "phrase": "darker by 0.7 ev",
               "plan": [
                 {
@@ -1768,7 +1768,7 @@
         {
           "tool": "scout_stats",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
             "px": 512
           },
           "envelope": {
@@ -2552,7 +2552,7 @@
               },
               "image_id": 54,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t083159z/olympus/frames/P5240140.ORF",
               "plan": [],
               "px_requested": 512,
               "px_used": 512,

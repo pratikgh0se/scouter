@@ -27,7 +27,7 @@
          "module": "lens",
          "noop": true,
          "outcome": "ok",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/011-olympus/frames/hero-fresh1/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/011-olympus/frames/hero-fresh1/P6281348.ORF",
          "plan": [],
          "reason": null,
          "summary": "lens correction \u203a on/off: on",
@@ -38,7 +38,7 @@
        ],
        "noop": true,
        "outcome": "ok",
-       "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/011-olympus/frames/hero-fresh1/P6281348.ORF",
+       "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/011-olympus/frames/hero-fresh1/P6281348.ORF",
        "phrase": "correct the lens",
        "plan": [
         {
@@ -557,7 +557,7 @@
        "noop": false,
        "outcome": "ok",
        "param": "global_saturation",
-       "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/003-olympus/frames/f0911ae/P6281348.ORF",
+       "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/003-olympus/frames/f0911ae/P6281348.ORF",
        "plan": [],
        "previous": 0.0,
        "reason": null,
@@ -602,7 +602,7 @@
        "noop": false,
        "outcome": "ok",
        "param": "global_saturation",
-       "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/003-olympus/frames/f0911ae/P6281348.ORF",
+       "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/003-olympus/frames/f0911ae/P6281348.ORF",
        "plan": [
         {
          "action": "darkroom.adjust",
@@ -1152,7 +1152,7 @@
          "noop": false,
          "outcome": "moved_to_limit",
          "param": "black",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/010-olympus/frames/hero-fresh1/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/010-olympus/frames/hero-fresh1/P6281348.ORF",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -1173,7 +1173,7 @@
        ],
        "noop": false,
        "outcome": "moved_to_limit",
-       "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/010-olympus/frames/hero-fresh1/P6281348.ORF",
+       "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/010-olympus/frames/hero-fresh1/P6281348.ORF",
        "phrase": "deeper blacks by 0.2",
        "plan": [
         {
@@ -1697,7 +1697,7 @@
          "module": "lens",
          "noop": true,
          "outcome": "ok",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/011-olympus/frames/hero-fresh1/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/011-olympus/frames/hero-fresh1/P6281348.ORF",
          "plan": [],
          "reason": null,
          "summary": "lens correction \u203a on/off: on",
@@ -1708,7 +1708,7 @@
        ],
        "noop": true,
        "outcome": "ok",
-       "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/011-olympus/frames/hero-fresh1/P6281348.ORF",
+       "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/011-olympus/frames/hero-fresh1/P6281348.ORF",
        "phrase": "correct the lens a touch",
        "plan": [
         {
@@ -2227,7 +2227,7 @@
        "noop": true,
        "outcome": "ok",
        "param": "midtones_chroma",
-       "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/005-olympus/frames/hero-fresh1/P6281348.ORF",
+       "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/005-olympus/frames/hero-fresh1/P6281348.ORF",
        "plan": [],
        "previous": 0.0,
        "reason": null,
@@ -2740,7 +2740,7 @@
        "noop": false,
        "outcome": "ok",
        "param": "global_vibrance",
-       "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/003-olympus/frames/hero-fresh1/P6281348.ORF",
+       "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/003-olympus/frames/hero-fresh1/P6281348.ORF",
        "plan": [],
        "previous": 0.0,
        "reason": null,
@@ -2785,7 +2785,7 @@
        "noop": false,
        "outcome": "ok",
        "param": "global_vibrance",
-       "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/003-olympus/frames/hero-fresh1/P6281348.ORF",
+       "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/003-olympus/frames/hero-fresh1/P6281348.ORF",
        "plan": [
         {
          "action": "darkroom.adjust",
@@ -3369,7 +3369,7 @@
        "noop": false,
        "outcome": "ok",
        "param": "global_saturation",
-       "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/020-sony_a7/frames/hero-fresh1/DSC01426.ARW",
+       "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/020-sony_a7/frames/hero-fresh1/DSC01426.ARW",
        "plan": [],
        "previous": 0.0,
        "reason": null,
@@ -3414,7 +3414,7 @@
        "noop": false,
        "outcome": "ok",
        "param": "global_saturation",
-       "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/020-sony_a7/frames/hero-fresh1/DSC01426.ARW",
+       "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/020-sony_a7/frames/hero-fresh1/DSC01426.ARW",
        "plan": [
         {
          "action": "darkroom.adjust",
@@ -3993,7 +3993,7 @@
        "noop": false,
        "outcome": "ok",
        "param": "contrast",
-       "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/008-olympus/frames/hero-fresh2/P6281348.ORF",
+       "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/008-olympus/frames/hero-fresh2/P6281348.ORF",
        "plan": [],
        "previous": 0.0,
        "reason": null,
@@ -4031,7 +4031,7 @@
        "module": "colorbalancergb",
        "noop": false,
        "outcome": "ok",
-       "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/008-olympus/frames/hero-fresh2/P6281348.ORF",
+       "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/008-olympus/frames/hero-fresh2/P6281348.ORF",
        "plan": [],
        "reason": null,
        "warnings": []
@@ -4617,7 +4617,7 @@
          "noop": false,
          "outcome": "moved_to_limit",
          "param": "black",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/028-sony_a7/frames/f0911ae/DSC01426.ARW",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/028-sony_a7/frames/f0911ae/DSC01426.ARW",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -4638,7 +4638,7 @@
        ],
        "noop": false,
        "outcome": "moved_to_limit",
-       "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/028-sony_a7/frames/f0911ae/DSC01426.ARW",
+       "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/028-sony_a7/frames/f0911ae/DSC01426.ARW",
        "phrase": "deeper blacks by 0.2",
        "plan": [
         {
@@ -5056,7 +5056,7 @@
          "module": "lens",
          "noop": true,
          "outcome": "ok",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/015-olympus/frames/hero-fresh1/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/015-olympus/frames/hero-fresh1/P6281348.ORF",
          "plan": [],
          "reason": null,
          "summary": "lens correction \u203a on/off: on",
@@ -5067,7 +5067,7 @@
        ],
        "noop": true,
        "outcome": "ok",
-       "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/015-olympus/frames/hero-fresh1/P6281348.ORF",
+       "path": "~/Pictures/ScouterScratch/gauntlet/night2-20260927/sessions/coverage/015-olympus/frames/hero-fresh1/P6281348.ORF",
        "phrase": "turn on lens correction",
        "plan": [
         {

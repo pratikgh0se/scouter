@@ -392,7 +392,7 @@ section, README as fallback" instruction that seeded this script.)
 
 The host-only suite (`tests/test_host_integration.py`,
 `tests/test_commit_trigger_host.py`) launches the **real** darktable against
-`/Users/pratik/Pictures/EditingTrial/P6281348.ORF` and always quits it when
+`~/Pictures/EditingTrial/P6281348.ORF` and always quits it when
 done — it is gated on `SCOUTER_HOST_TESTS=1` so it never runs by accident in
 CI or a plain `pytest tests`.
 
@@ -982,7 +982,7 @@ works on the whole image (global edits). It does not paint masks.
    paths; from this checkout it is:
 
 ```
-claude mcp add scouter --transport stdio --scope user --env PYTHONPATH=/Users/pratik/CodeBase/scouter -- /Users/pratik/CodeBase/scouter/.venv/bin/python -m scouter.mcp.server
+claude mcp add scouter --transport stdio --scope user --env PYTHONPATH=~/CodeBase/scouter -- ~/CodeBase/scouter/.venv/bin/python -m scouter.mcp.server
 ```
 
 A stdio server, user scope (every project sees it), the repo's own venv
@@ -995,9 +995,9 @@ project `.mcp.json` or Claude Desktop:
   "mcpServers": {
     "scouter": {
       "type": "stdio",
-      "command": "/Users/pratik/CodeBase/scouter/.venv/bin/python",
+      "command": "~/CodeBase/scouter/.venv/bin/python",
       "args": ["-m", "scouter.mcp.server"],
-      "env": {"PYTHONPATH": "/Users/pratik/CodeBase/scouter"}
+      "env": {"PYTHONPATH": "~/CodeBase/scouter"}
     }
   }
 }

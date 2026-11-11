@@ -240,7 +240,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "highlights_luminance",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/017-olympus/frames/hero-fresh2/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/017-olympus/frames/hero-fresh2/P6281348.ORF",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -302,7 +302,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "highlights_luminance",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/017-olympus/frames/hero-fresh2/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/017-olympus/frames/hero-fresh2/P6281348.ORF",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -364,7 +364,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "highlights_luminance",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/017-olympus/frames/hero-fresh2/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/017-olympus/frames/hero-fresh2/P6281348.ORF",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -724,7 +724,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "global_chroma",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -1058,7 +1058,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "shadows_hue",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW",
          "plan": [],
          "previous": 0.0,
          "reason": null,
@@ -1081,7 +1081,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "shadows_chroma",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -1109,7 +1109,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "highlights_hue",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW",
          "plan": [],
          "previous": 0.0,
          "reason": null,
@@ -1132,9 +1132,9 @@
           "stale_rewrite_healed": false,
           "stale_rewrite_restored": true,
           "strategy_used": "view_bounce_action",
-          "xmp": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW.xmp"
+          "xmp": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW.xmp"
          },
-         "message": "stale_rewrite: darktable rewrote /Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW.xmp with an older history, not this edit (stale_rewrite: history_end went back from 175 to 137: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored); the pre-commit sidecar was restored",
+         "message": "stale_rewrite: darktable rewrote ~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/030-sony_a7/frames/hero-fresh1/DSC01426.ARW.xmp with an older history, not this edit (stale_rewrite: history_end went back from 175 to 137: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored); the pre-commit sidecar was restored",
          "module": "colorbalancergb",
          "param": "highlights_chroma"
         }
@@ -1438,7 +1438,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "highlights_hue",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/011-olympus/frames/hero-fresh2/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/011-olympus/frames/hero-fresh2/P6281348.ORF",
          "plan": [],
          "previous": 0.0,
          "reason": null,
@@ -1461,9 +1461,9 @@
           "stale_rewrite_healed": false,
           "stale_rewrite_restored": true,
           "strategy_used": "view_bounce_action",
-          "xmp": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/011-olympus/frames/hero-fresh2/P6281348.ORF.xmp"
+          "xmp": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/011-olympus/frames/hero-fresh2/P6281348.ORF.xmp"
          },
-         "message": "stale_rewrite: darktable rewrote /Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/011-olympus/frames/hero-fresh2/P6281348.ORF.xmp with an older history, not this edit (stale_rewrite: history_end went back from 144 to 92: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored); the pre-commit sidecar was restored",
+         "message": "stale_rewrite: darktable rewrote ~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/011-olympus/frames/hero-fresh2/P6281348.ORF.xmp with an older history, not this edit (stale_rewrite: history_end went back from 144 to 92: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored); the pre-commit sidecar was restored",
          "module": "colorbalancergb",
          "param": "highlights_chroma"
         }
@@ -1782,7 +1782,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "shadows_chroma",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -1813,7 +1813,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "midtones_chroma",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -1844,7 +1844,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "highlights_chroma",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -1894,7 +1894,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "shadows_chroma",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -1925,7 +1925,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "midtones_chroma",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -1956,9 +1956,9 @@
           "stale_rewrite_healed": false,
           "stale_rewrite_restored": true,
           "strategy_used": "view_bounce_action",
-          "xmp": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF.xmp"
+          "xmp": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF.xmp"
          },
-         "message": "stale_rewrite: darktable rewrote /Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF.xmp with an older history, not this edit (stale_rewrite: history_end went back from 162 to 107: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored); the pre-commit sidecar was restored",
+         "message": "stale_rewrite: darktable rewrote ~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/012-olympus/frames/hero-fresh1/P6281348.ORF.xmp with an older history, not this edit (stale_rewrite: history_end went back from 162 to 107: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored); the pre-commit sidecar was restored",
          "module": "colorbalancergb",
          "param": "highlights_chroma"
         }
@@ -2297,7 +2297,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "shadows_chroma",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -2328,7 +2328,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "midtones_chroma",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -2359,7 +2359,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "highlights_chroma",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -2409,7 +2409,7 @@
          "noop": false,
          "outcome": "ok",
          "param": "shadows_chroma",
-         "path": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF",
+         "path": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF",
          "plan": [
           {
            "action": "darkroom.adjust",
@@ -2440,9 +2440,9 @@
           "stale_rewrite_healed": false,
           "stale_rewrite_restored": true,
           "strategy_used": "view_bounce_action",
-          "xmp": "/Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF.xmp"
+          "xmp": "~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF.xmp"
          },
-         "message": "stale_rewrite: darktable rewrote /Users/pratik/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF.xmp with an older history, not this edit (stale_rewrite: history_end went back from 155 to 40: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored); the pre-commit sidecar was restored",
+         "message": "stale_rewrite: darktable rewrote ~/Pictures/ScouterScratch/gauntlet/night3-20261108/sessions/coverage/015-olympus/frames/hero-fresh2/P6281348.ORF.xmp with an older history, not this edit (stale_rewrite: history_end went back from 155 to 40: the sidecar was rewritten from an older library.db state, not from this edit; pre-commit sidecar: restored); the pre-commit sidecar was restored",
          "module": "colorbalancergb",
          "param": "midtones_chroma"
         }

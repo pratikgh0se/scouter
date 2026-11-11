@@ -601,7 +601,7 @@ history fingerprint (history_end, history_current_hash, the
 falls back to `view_bounce_action`.
 
 Live check after the fix (run dir
-`/Users/pratik/Pictures/ScouterScratch/adjust-check/runs/20260926t080536z`), PASS:
+`~/Pictures/ScouterScratch/adjust-check/runs/20260926t080536z`), PASS:
 
 | operation | wall time (s) | history (before -> after) | on-disk value |
 |---|---|---|---|

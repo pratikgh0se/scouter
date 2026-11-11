@@ -25,7 +25,7 @@ These are binding on every task. They are reproduced verbatim from the system sp
 - Bridge verbs to add in Lua (phase 1): `darkroom.open(image_id or path)`, `darkroom.action(path, instance, element, effect, value) -> status string`, `darkroom.status(path)`, `module.enable/disable/reset`, `history.commit` (the commit trigger: the plan must specify the approach to test first — switching view to lighttable and back, or an action on lib/history — and the fallback), `snapshot.take`, `style.create_from_current(name, modules)`, `style.apply(ids, name, mode)`. Keep w1ne's dispatcher pattern, tests in `tests/lua` and `tests/test_lua_dispatcher.py`.
 - Core/CLI/MCP verbs for phase 1: darkroom open/set/nudge/enable/reset/undo_last/status/describe_history; scouter stats/preview/compare; history read/commit; style extract/apply (single image only in phase 1, set apply is phase 2); export run (preset client-final and preview only); metrics summary. "undo_last" = revert the last agent-made history step (specify how: history_end decrement via action or re-apply the previous XMP; pick one and justify).
 - Tests: unittest (stdlib) preferred; pytest is present in the repo so either is acceptable, but new tests must run with `python3 -m pytest tests -q` AND not require darktable to be installed (host-only integration tests are marked and skipped when `/Applications/darktable.app` is absent, with a printed reason). Golden-snapshot test for the MCP tool schemas stays.
-- Live integration is real: `/Applications/darktable.app/Contents/MacOS/darktable` exists on this Mac; sample raws in `/Users/pratik/Pictures/EditingTrial/*.ORF`. Integration tests must launch darktable with the file argument, wait for the bridge, run the darkroom verbs, and quit darktable gracefully (osascript quit, then SIGTERM), never leaving it running. They may write XMP sidecars next to the EditingTrial files only.
+- Live integration is real: `/Applications/darktable.app/Contents/MacOS/darktable` exists on this Mac; sample raws in `~/Pictures/EditingTrial/*.ORF`. Integration tests must launch darktable with the file argument, wait for the bridge, run the darkroom verbs, and quit darktable gracefully (osascript quit, then SIGTERM), never leaving it running. They may write XMP sidecars next to the EditingTrial files only.
 
 ---
 
@@ -63,7 +63,7 @@ These are binding on every task. They are reproduced verbatim from the system sp
 - Create: `docs/measurements.md`
 
 **Interfaces:**
-- Consumes: `/Applications/darktable.app/Contents/MacOS/darktable{,-cli}`, `/Users/pratik/Pictures/EditingTrial/P6281348.ORF`, the existing `darktable_mcp.bridge.client.Bridge`.
+- Consumes: `/Applications/darktable.app/Contents/MacOS/darktable{,-cli}`, `~/Pictures/EditingTrial/P6281348.ORF`, the existing `darktable_mcp.bridge.client.Bridge`.
 - Produces: `docs/measurements.md` with the accepted commit strategy and the measured loop time; no importable interface.
 
 - [ ] **Step 1: Write the probe plugin**
@@ -174,7 +174,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 DARKTABLE = Path("/Applications/darktable.app/Contents/MacOS/darktable")
 DARKTABLE_CLI = Path("/Applications/darktable.app/Contents/MacOS/darktable-cli")
-HERO = Path("/Users/pratik/Pictures/EditingTrial/P6281348.ORF")
+HERO = Path("~/Pictures/EditingTrial/P6281348.ORF")
 MEASUREMENTS = REPO / "docs" / "measurements.md"
 LOOP_BUDGET_S = 3.0
 
@@ -2149,7 +2149,7 @@ lua tests/lua/test_dispatcher.lua && python3 -m pytest tests/test_lua_dispatcher
 
 ```
 mkdir -p tests/fixtures
-cp /Users/pratik/Pictures/EditingTrial/P6281348.ORF.xmp tests/fixtures/P6281348.ORF.xmp
+cp ~/Pictures/EditingTrial/P6281348.ORF.xmp tests/fixtures/P6281348.ORF.xmp
 head -c 900 tests/fixtures/P6281348.ORF.xmp > tests/fixtures/truncated.xmp
 ```
 
@@ -5676,7 +5676,7 @@ ruff check . && black --check .
 - Modify: `README.md`, `tests/scouter_smoke_args.py` (final sweep)
 
 **Interfaces:**
-- Consumes: every layer built above, the real darktable, `/Users/pratik/Pictures/EditingTrial/P6281348.ORF`.
+- Consumes: every layer built above, the real darktable, `~/Pictures/EditingTrial/P6281348.ORF`.
 - Produces: exit criteria E1, E2, E3 as executable assertions; the README's Scouter section.
 
 - [ ] **Step 1: `tests/test_host_integration.py`**
@@ -5701,7 +5701,7 @@ import unittest
 from pathlib import Path
 
 DARKTABLE = Path("/Applications/darktable.app/Contents/MacOS/darktable")
-HERO = Path("/Users/pratik/Pictures/EditingTrial/P6281348.ORF")
+HERO = Path("~/Pictures/EditingTrial/P6281348.ORF")
 PLUGIN_SRC = Path(__file__).resolve().parent.parent / "darktable_mcp" / "lua" / "darktable_mcp.lua"
 INSTALLED_PLUGIN = Path.home() / ".config" / "darktable" / "lua" / "darktable_mcp.lua"
 

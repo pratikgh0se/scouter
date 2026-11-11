@@ -56,7 +56,7 @@
 | L1 | lens | The corners are dark. Fix the lens vignetting. | darkroom_enable | verified | **pass** | 1.132 |  |
 | L2 | lens | And correct the barrel distortion. | darkroom_enable | verified | **pass** | 5.522 |  |
 | S1 | finishing | Sharpen it a little for the web. | darkroom_enable | verified | **pass** | 1.632 |  |
-| F7 | workflow | Open P6281368.ORF. I want to work on that one next. | darkroom_open, darkroom_describe_history | failed | **fail** | 20.155 | darkroom_open: bridge_timeout - bridge method darkroom.open failed: handler raised: /Users/pratik/.config/darktable/lua/da |
+| F7 | workflow | Open P6281368.ORF. I want to work on that one next. | darkroom_open, darkroom_describe_history | failed | **fail** | 20.155 | darkroom_open: bridge_timeout - bridge method darkroom.open failed: handler raised: ~/.config/darktable/lua/da |
 
 ## Cleanup
 

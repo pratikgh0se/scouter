@@ -1,5 +1,5 @@
 {
-  "about": "Zenkai Rules Z1 intent examples for the night-1 fix (triage class LK-refresh-no-open, scratchpad/night1-triage.md rank 1: 115 looks cases + 31 scenario wrong_refusal, 7 P0). Each example is a real observed shape from run night1-20260926 (runner on 5501801, recorded under /Users/pratik/Pictures/ScouterScratch/gauntlet/night1-20260926/, read-only), reduced to the harness's own session/execute seam so it runs with no darktable and no MCP server. Run by tests/intent/test_session_reopen_intent.py. Enforced by review until mechanised by t_450535e2.",
+  "about": "Zenkai Rules Z1 intent examples for the night-1 fix (triage class LK-refresh-no-open, scratchpad/night1-triage.md rank 1: 115 looks cases + 31 scenario wrong_refusal, 7 P0). Each example is a real observed shape from run night1-20260926 (runner on 5501801, recorded under ~/Pictures/ScouterScratch/gauntlet/night1-20260926/, read-only), reduced to the harness's own session/execute seam so it runs with no darktable and no MCP server. Run by tests/intent/test_session_reopen_intent.py. Enforced by review until mechanised by t_450535e2.",
   "subject": "tests/gauntlet/session.py ScouterSession.refresh_frame/ensure_frame + tests/gauntlet/execute.py isolate()",
   "examples": [
     {

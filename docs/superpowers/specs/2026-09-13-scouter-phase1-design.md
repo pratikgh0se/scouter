@@ -230,7 +230,7 @@ Read per `darktable:history/rdf:Seq/rdf:li`: `num`, `operation`, `enabled`, `mod
 
 `params` is either plain lowercase hex, or `gz<level><base64>` where the base64 payload is zlib-compressed (observed on `blendop_params` in the real sidecar). `decode_params(raw) -> bytes` handles both.
 
-Decoded with `struct` for the phase-1 modules. Layouts **verified against the real sidecar** written by the phase 0 spike (`/Users/pratik/Pictures/EditingTrial/P6281348.ORF.xmp`, `history_end=14`):
+Decoded with `struct` for the phase-1 modules. Layouts **verified against the real sidecar** written by the phase 0 spike (`~/Pictures/EditingTrial/P6281348.ORF.xmp`, `history_end=14`):
 
 | module | modversion | bytes | layout | verified values |
 |---|---|---|---|---|
@@ -538,7 +538,7 @@ DARKTABLE = Path("/Applications/darktable.app/Contents/MacOS/darktable")
 SKIP_REASON = f"host-only: {DARKTABLE} not present (darktable not installed on this machine)"
 ```
 
-and skipped with that printed reason when the binary is absent. They may write XMP sidecars **only** next to `/Users/pratik/Pictures/EditingTrial/*.ORF`, and must:
+and skipped with that printed reason when the binary is absent. They may write XMP sidecars **only** next to `~/Pictures/EditingTrial/*.ORF`, and must:
 
 1. launch `/Applications/darktable.app/Contents/MacOS/darktable <ORF>` (the `open -a` form does not work on this Mac — phase 0 finding 5);
 2. wait for the bridge by polling `view.current` until it answers `darkroom`, with a 90 s budget;

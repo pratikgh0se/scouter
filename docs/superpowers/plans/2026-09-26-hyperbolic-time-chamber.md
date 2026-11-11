@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-26-scouter-release-gauntlet-design.md` (binding), amended by decision rows 433, 436 and 437 in `~/second-brain/Decisions/Capsule Corp - System design decisions 2026-09-06.md`. Executors read both. Where this plan and the spec differ, the difference is listed in "Spec amendments" below and comes from a decision row.
 
-**Repo:** `/Users/pratik/CodeBase/scouter`, base `main` 46c0a15. Every command below runs from the repo root.
+**Repo:** `~/CodeBase/scouter`, base `main` 46c0a15. Every command below runs from the repo root.
 
 ## Global Constraints
 
@@ -26,7 +26,7 @@ Copied from spec §1 (goal and release bar) and rows 433/436/437, plus the contr
 - Vocabulary (row 437): grain + vignette sliders; lens correction on/off + rotate/straighten + simple crop presets; denoise strength + sharpen amount (direction + no-halo checks). Each lands module by module under the phase 3 pin rule (a module is `live` only after a host probe pins its `dt.gui.action` path and XMP slot) and is gated by reruns. Masks/local edits and LUT 3D stay deferred. Each family is its own task, AFTER the engine and the first night-1 run.
 - Authority (row 437): Fable has full authority through plan, build, night-1 and the fix loop; stop only for a destructive action or a new design-level choice.
 - Engine code: stdlib only. `gauntlet/tests/test_case_store.py::test_engine_is_stdlib_only_and_imports_no_product` enforces it.
-- Tests never touch `/Users/pratik/Pictures/EditingTrial` originals, the real `~/.config/scouter`, or the user's darktable config. `tests/conftest.py` already pins the Scouter paths for everything under `tests/`; engine tests under `gauntlet/tests/` use only `tmp_path`.
+- Tests never touch `~/Pictures/EditingTrial` originals, the real `~/.config/scouter`, or the user's darktable config. `tests/conftest.py` already pins the Scouter paths for everything under `tests/`; engine tests under `gauntlet/tests/` use only `tmp_path`.
 - LIVE tasks and LIVE steps (anything that launches darktable, darktable-cli on the corpus, or `claude -p`) are run only by the controller's runner, never inside an implementer's tests. They are marked **LIVE**.
 - The runner never signals a darktable it did not launch (`scouter.core.dtprocess.owned_pid()`), and refuses to start while a foreign darktable runs.
 - Every commit message ends with the line `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
@@ -4299,7 +4299,7 @@ and in `step5_bench()` replace the two path literals `"tests/benchmark/run_edito
 In `tests/gauntlet/drivers/run_acceptance.sh` replace line 19 and lines 27-28:
 
 ```bash
-SP=/Users/pratik/CodeBase/scouter/tests/gauntlet/drivers
+SP=~/CodeBase/scouter/tests/gauntlet/drivers
 ```
 
 ```bash
@@ -4874,7 +4874,7 @@ import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-TRIAL = Path(os.environ.get("HTC_TRIAL", "/Users/pratik/Pictures/EditingTrial"))
+TRIAL = Path(os.environ.get("HTC_TRIAL", "~/Pictures/EditingTrial"))
 SCRATCH = Path.home() / "Pictures" / "ScouterScratch" / "gauntlet"
 RAW_EXT = {".orf", ".arw"}
 MODEL_BODY = {"E-M10 Mark III": "olympus", "E-M10MarkIII": "olympus", "ILCE-7": "sony_a7",
@@ -11477,7 +11477,7 @@ Pass condition (spec §7): every new coverage case passes or carries a triage; e
 
 ```bash
 pgrep -fl "MacOS/darktable" || echo "no darktable running"      # must print "no darktable running"
-git -C /Users/pratik/CodeBase/scouter status --porcelain           # must be empty
+git -C ~/CodeBase/scouter status --porcelain           # must be empty
 df -h ~/Pictures | tail -1                                         # at least 15 GB free (spec 4.4: ~12 GB/run, 3 GB peak)
 test -f ~/Pictures/ScouterScratch/gauntlet/corpus.json && echo corpus ok
 ```
@@ -11487,7 +11487,7 @@ Tell Pratik (one line in the session summary) not to open darktable during the r
 - [ ] **Step 2: Generate and start**
 
 ```bash
-cd /Users/pratik/CodeBase/scouter
+cd ~/CodeBase/scouter
 STAMP=night1-$(date +%Y%m%d)
 .venv/bin/python -m gauntlet generate --stamp $STAMP
 .venv/bin/python -m gauntlet run --stamp $STAMP --resume --wait-on-park \
@@ -11544,7 +11544,7 @@ A change that touches the bridge, the plugin or commit also reruns the coverage 
 
 **LIVE**, controller only. Depends on: Tasks 36 and 34 merged.
 
-- [ ] **Step 1:** Tag the candidate: `git tag htc-rc1 && git -C /Users/pratik/CodeBase/scouter rev-parse --short HEAD`.
+- [ ] **Step 1:** Tag the candidate: `git tag htc-rc1 && git -C ~/CodeBase/scouter rev-parse --short HEAD`.
 - [ ] **Step 2:** Task 35 Steps 1-3 and 5 with `STAMP=night2-$(date +%Y%m%d)` on that commit (a fresh stamp: every case runs; the golden now exists, so `lk-golden-chart` checks P7 for real).
 - [ ] **Step 3:** The release bar holds when `report.md` S8 shows: crashes 0, silent failures 0, P0 100%, every P1 gate met, cases missing 0, originals unchanged. Otherwise back to Task 36.
 

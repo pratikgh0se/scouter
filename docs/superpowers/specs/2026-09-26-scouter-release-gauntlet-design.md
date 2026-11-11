@@ -428,7 +428,7 @@ This is not a true fresh macOS account. See §9 out of scope.
 ### 4.1 Rules
 
 - **EditingTrial originals are never opened, imported, edited or exported.**
-  - The runner refuses any path argument whose realpath is under `/Users/pratik/Pictures/EditingTrial`, and the generator validates the same rule.
+  - The runner refuses any path argument whose realpath is under `~/Pictures/EditingTrial`, and the generator validates the same rule.
   - Before and after the run, `sha256` of all 55 originals is compared, and the result is printed in the S8 block.
 - Copies are made with `_copy_readonly_source` (bench), which reads the original and writes a `0644` copy under the scratch root.
 - Bench frames that already exist under `ScouterScratch` (bench-runs, acceptance) are reused only by copying them again. Scratch roots are never shared between runs.

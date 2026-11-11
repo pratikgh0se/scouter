@@ -617,7 +617,7 @@ def config_fixture(tmp: Path, *, backup: bool = True, encryption: str = "openssl
 - [ ] **Step 1: Commit the fixture**
 
 ```bash
-head -c 65536 /Users/pratik/Pictures/EditingTrial/P6281348.ORF > tests/fixtures/exif-orf-header.bin
+head -c 65536 ~/Pictures/EditingTrial/P6281348.ORF > tests/fixtures/exif-orf-header.bin
 ```
 
 64 KiB carries IFD0 (at offset 8) and the Exif IFD, verified 2026-09-14. Note in the test module's docstring that this is a byte slice of Pratik's real ORF, kept so the reader is tested against a real camera's header and not a synthetic one.
@@ -1979,7 +1979,7 @@ SOURCES = ("P6281348.ORF", "P6281361.ORF", "P6281368.ORF", "P6281373.ORF")
 BURSTS, PER_BURST, GAP_S, BURST_GAP_S = 6, 5, 1, 45
 
 
-def build(out: Path, *, source_dir: Path = Path("/Users/pratik/Pictures/EditingTrial")) -> dict:
+def build(out: Path, *, source_dir: Path = Path("~/Pictures/EditingTrial")) -> dict:
     """Write <out>/card/DCIM/100OLYMP/*.ORF and return a manifest of the plan."""
 ```
 

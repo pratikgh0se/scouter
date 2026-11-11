@@ -53,27 +53,27 @@
     "paths": {
       "body": "sony",
       "run_id": "20260924t112233z",
-      "frame:dark": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01425.ARW",
+      "frame:dark": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01425.ARW",
       "framename:dark": "DSC01425.ARW",
       "framebase:dark": "DSC01425.ARW",
-      "frame:bright": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
+      "frame:bright": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
       "framename:bright": "DSC07452.ARW",
       "framebase:bright": "DSC07452.ARW",
-      "frame:hero": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+      "frame:hero": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
       "framename:hero": "DSC01426.ARW",
       "framebase:hero": "DSC01426.ARW",
-      "card": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/card",
+      "card": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/card",
       "job_slug": "bench-sony-0924112233",
       "preset": "scouter-bench-sony-0924112233",
-      "out_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/exports",
-      "job:1": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0001.arw",
-      "job:2": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0002.arw",
-      "job:3": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0003.arw",
-      "job:4": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0004.arw",
-      "job:5": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0005.arw",
-      "job:6": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0006.arw"
+      "out_dir": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/exports",
+      "job:1": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0001.arw",
+      "job:2": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0002.arw",
+      "job:3": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0003.arw",
+      "job:4": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0004.arw",
+      "job:5": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0005.arw",
+      "job:6": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0006.arw"
     },
-    "run_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony"
+    "run_dir": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony"
   },
   "sessions": [
     {
@@ -89,7 +89,7 @@
         "ready_s": 2.29,
         "loaded": {
           "image_id": 29,
-          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01425.ARW",
+          "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01425.ARW",
           "source": "action_images",
           "view": "darkroom"
         },
@@ -99,7 +99,7 @@
         {
           "tool": "history_commit",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01425.ARW",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01425.ARW",
             "timeout_s": 10
           },
           "envelope": null,
@@ -127,7 +127,7 @@
         "ready_s": 2.04,
         "loaded": {
           "image_id": 30,
-          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
+          "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
           "source": "action_images",
           "view": "darkroom"
         },
@@ -137,7 +137,7 @@
         {
           "tool": "history_commit",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
             "timeout_s": 10
           },
           "envelope": {
@@ -145,16 +145,16 @@
             "error": {
               "code": "commit_timeout",
               "detail": {
-                "bridge_detail": "the view bounce completed 2 time(s) but /Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW.xmp did not change within 3000ms of waiting -- darktable writes a sidecar only when the history actually changes, so this is expected when the requested value is the one the image already had",
+                "bridge_detail": "the view bounce completed 2 time(s) but ~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW.xmp did not change within 3000ms of waiting -- darktable writes a sidecar only when the history actually changes, so this is expected when the requested value is the one the image already had",
                 "image_id": 30,
                 "ms": 10038,
                 "ok": false,
                 "strategy_used": "view_bounce",
                 "view_after": "darkroom",
-                "xmp": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW.xmp"
+                "xmp": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW.xmp"
               },
               "fix": "darktable did not write the XMP in time; leave and re-enter the darkroom, or raise the commit timeout",
-              "message": "darktable did not write /Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW.xmp within 10s using the view_bounce strategy",
+              "message": "darktable did not write ~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW.xmp within 10s using the view_bounce strategy",
               "outcome": "error"
             },
             "job": "job-20260924-112740-26287",
@@ -184,7 +184,7 @@
         "ready_s": 2.05,
         "loaded": {
           "image_id": 31,
-          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+          "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
           "source": "action_images",
           "view": "darkroom"
         },
@@ -194,7 +194,7 @@
         {
           "tool": "history_commit",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
             "timeout_s": 10
           },
           "envelope": {
@@ -202,16 +202,16 @@
             "error": {
               "code": "commit_timeout",
               "detail": {
-                "bridge_detail": "the view bounce completed 2 time(s) but /Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW.xmp did not change within 3000ms of waiting -- darktable writes a sidecar only when the history actually changes, so this is expected when the requested value is the one the image already had",
+                "bridge_detail": "the view bounce completed 2 time(s) but ~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW.xmp did not change within 3000ms of waiting -- darktable writes a sidecar only when the history actually changes, so this is expected when the requested value is the one the image already had",
                 "image_id": 31,
                 "ms": 10041,
                 "ok": false,
                 "strategy_used": "view_bounce",
                 "view_after": "darkroom",
-                "xmp": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW.xmp"
+                "xmp": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW.xmp"
               },
               "fix": "darktable did not write the XMP in time; leave and re-enter the darkroom, or raise the commit timeout",
-              "message": "darktable did not write /Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW.xmp within 10s using the view_bounce strategy",
+              "message": "darktable did not write ~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW.xmp within 10s using the view_bounce strategy",
               "outcome": "error"
             },
             "job": "job-20260924-112759-26287",
@@ -226,7 +226,7 @@
         {
           "tool": "library_import",
           "args": {
-            "source": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/card",
+            "source": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/card",
             "job_slug": "bench-sony-0924112233",
             "confirm": true
           },
@@ -322,12 +322,12 @@
               "imported": 6,
               "job_slug": "bench-sony-0924112233",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233",
+              "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233",
               "plan": [],
               "reason": null,
               "recursive_honoured": false,
               "scan_incomplete": false,
-              "source_root": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/card",
+              "source_root": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/card",
               "totals": {
                 "bytes": 148570112,
                 "copied": 6,
@@ -338,7 +338,7 @@
                 "skipped_identical": 0
               },
               "warnings": [
-                "recursive=false could not be enforced: darktable's Lua API has no per-call recursion flag, and this plugin does not modify your recurse_directories preference. Only /Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw was passed to darktable, but darktable may still have recursed into it if that preference is enabled."
+                "recursive=false could not be enforced: darktable's Lua API has no per-call recursion flag, and this plugin does not modify your recurse_directories preference. Only ~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw was passed to darktable, but darktable may still have recursed into it if that preference is enabled."
               ]
             },
             "job": "job-20260924-112809-26287",
@@ -390,7 +390,7 @@
         "ready_s": 2.06,
         "loaded": {
           "image_id": 11,
-          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW",
+          "path": "~/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW",
           "source": "action_images",
           "view": "darkroom"
         },
@@ -400,7 +400,7 @@
         {
           "tool": "history_commit",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW",
             "timeout_s": 10
           },
           "envelope": {
@@ -408,16 +408,16 @@
             "error": {
               "code": "commit_timeout",
               "detail": {
-                "bridge_detail": "the view bounce completed 2 time(s) but /Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW.xmp did not change within 3000ms of waiting -- darktable writes a sidecar only when the history actually changes, so this is expected when the requested value is the one the image already had",
+                "bridge_detail": "the view bounce completed 2 time(s) but ~/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW.xmp did not change within 3000ms of waiting -- darktable writes a sidecar only when the history actually changes, so this is expected when the requested value is the one the image already had",
                 "image_id": 11,
                 "ms": 10021,
                 "ok": false,
                 "strategy_used": "view_bounce",
                 "view_after": "darkroom",
-                "xmp": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW.xmp"
+                "xmp": "~/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW.xmp"
               },
               "fix": "darktable did not write the XMP in time; leave and re-enter the darkroom, or raise the commit timeout",
-              "message": "darktable did not write /Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW.xmp within 10s using the view_bounce strategy",
+              "message": "darktable did not write ~/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW.xmp within 10s using the view_bounce strategy",
               "outcome": "error"
             },
             "job": "job-20260924-111653-9930",
@@ -492,7 +492,7 @@
         {
           "tool": "history_read",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW"
           },
           "envelope": {
             "data": {
@@ -677,7 +677,7 @@
               "image_id": 11,
               "iop_order_version": 4,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW",
               "plan": [],
               "reason": null,
               "source": "xmp",
@@ -713,7 +713,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "exposure",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW",
               "plan": [],
               "previous": 0.699999988079071,
               "reason": null,
@@ -927,7 +927,7 @@
         {
           "tool": "history_read",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW"
           },
           "envelope": {
             "data": {
@@ -1133,7 +1133,7 @@
               "image_id": 11,
               "iop_order_version": 4,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW",
               "plan": [],
               "reason": null,
               "source": "xmp",
@@ -1169,7 +1169,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "black",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW",
               "plan": [],
               "previous": -0.000244140625,
               "reason": null,
@@ -1378,7 +1378,7 @@
               "instance": 0,
               "module": "denoiseprofile",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t111143z/sony/frames/DSC01425.ARW",
               "plan": [],
               "reason": null,
               "warnings": []
@@ -1599,7 +1599,7 @@
         {
           "tool": "scout_stats",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
             "px": 512
           },
           "envelope": {
@@ -2383,7 +2383,7 @@
               },
               "image_id": 30,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
               "plan": [],
               "px_requested": 512,
               "px_used": 512,
@@ -2439,7 +2439,7 @@
         {
           "tool": "history_read",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW"
           },
           "envelope": {
             "data": {
@@ -2624,7 +2624,7 @@
               "image_id": 30,
               "iop_order_version": 4,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
               "plan": [],
               "reason": null,
               "source": "xmp",
@@ -2660,7 +2660,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "exposure",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
               "plan": [],
               "previous": 0.699999988079071,
               "reason": null,
@@ -2686,7 +2686,7 @@
         {
           "tool": "scout_stats",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
             "px": 512
           },
           "envelope": {
@@ -3470,7 +3470,7 @@
               },
               "image_id": 30,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW",
               "plan": [],
               "px_requested": 512,
               "px_used": 512,
@@ -3722,7 +3722,7 @@
         {
           "tool": "wb_kelvin",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
           },
           "envelope": {
             "data": {
@@ -3766,7 +3766,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "temperature",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "previous": null,
               "reason": null,
@@ -3794,7 +3794,7 @@
         {
           "tool": "wb_kelvin",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
           },
           "envelope": {
             "data": {
@@ -4018,7 +4018,7 @@
         {
           "tool": "wb_kelvin",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
           },
           "envelope": {
             "data": {
@@ -4062,7 +4062,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "temperature",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "previous": null,
               "reason": null,
@@ -4090,7 +4090,7 @@
         {
           "tool": "wb_kelvin",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
           },
           "envelope": {
             "data": {
@@ -4309,7 +4309,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "tint",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "previous": null,
               "reason": null,
@@ -4525,7 +4525,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "temperature",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "previous": null,
               "reason": null,
@@ -4547,7 +4547,7 @@
         {
           "tool": "wb_kelvin",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
           },
           "envelope": {
             "data": {
@@ -4766,7 +4766,7 @@
         {
           "tool": "history_read",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
           },
           "envelope": {
             "data": {
@@ -4970,7 +4970,7 @@
               "image_id": 31,
               "iop_order_version": 4,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "reason": null,
               "source": "xmp",
@@ -5006,7 +5006,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "contrast",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "previous": 1.5,
               "reason": null,
@@ -5238,7 +5238,7 @@
               "instance": 0,
               "module": "colorbalancergb",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "reason": null,
               "warnings": []
@@ -5255,7 +5255,7 @@
         {
           "tool": "history_read",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
           },
           "envelope": {
             "data": {
@@ -5536,7 +5536,7 @@
               "image_id": 31,
               "iop_order_version": 4,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "reason": null,
               "source": "xmp",
@@ -5572,7 +5572,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "contrast",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "previous": 0.0,
               "reason": null,
@@ -5826,7 +5826,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "skew",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "previous": null,
               "reason": null,
@@ -6120,7 +6120,7 @@
               "instance": 0,
               "module": "colorbalancergb",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "reason": null,
               "warnings": [
@@ -6153,7 +6153,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "global_saturation",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "previous": null,
               "reason": null,
@@ -7329,7 +7329,7 @@
         {
           "tool": "history_read",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
           },
           "envelope": {
             "data": {
@@ -7687,7 +7687,7 @@
               "image_id": 31,
               "iop_order_version": 4,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "reason": null,
               "source": "xmp",
@@ -7723,7 +7723,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "contrast",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "previous": 1.7999999523162842,
               "reason": null,
@@ -8144,7 +8144,7 @@
         {
           "tool": "history_read",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
           },
           "envelope": {
             "data": {
@@ -8531,7 +8531,7 @@
               "image_id": 31,
               "iop_order_version": 4,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "reason": null,
               "source": "xmp",
@@ -8567,7 +8567,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "exposure",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "previous": 0.699999988079071,
               "reason": null,
@@ -8607,7 +8607,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "contrast",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "previous": 1.9999998807907104,
               "reason": null,
@@ -8987,7 +8987,7 @@
         {
           "tool": "style_extract",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
             "name": "scouter-bench-sony-0924112233",
             "modules": [
               "exposure",
@@ -9001,7 +9001,7 @@
             "data": {
               "applied": 0,
               "created": true,
-              "dtstyle_path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/cache/styles/scouter-bench-sony-0924112233.dtstyle",
+              "dtstyle_path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/cache/styles/scouter-bench-sony-0924112233.dtstyle",
               "image_id": 31,
               "missed": [],
               "mode": null,
@@ -9023,7 +9023,7 @@
                 "colorbalancergb"
               ],
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "per_image": [],
               "plan": [],
               "reason": null,
@@ -9058,7 +9058,7 @@
         "file": {
           "ok": true,
           "measured": {
-            "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/cache/styles/scouter-bench-sony-0924112233.dtstyle",
+            "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/cache/styles/scouter-bench-sony-0924112233.dtstyle",
             "bytes": 1939
           },
           "type": "file_from_step"
@@ -9296,9 +9296,9 @@
           "args": {
             "name": "scouter-bench-sony-0924112233",
             "images": [
-              "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0001.arw",
-              "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0002.arw",
-              "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0003.arw"
+              "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0001.arw",
+              "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0002.arw",
+              "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0003.arw"
             ],
             "confirm": true
           },
@@ -9317,19 +9317,19 @@
                 {
                   "error": null,
                   "image_id": 32,
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0001.arw",
+                  "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0001.arw",
                   "status": "applied"
                 },
                 {
                   "error": null,
                   "image_id": 33,
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0002.arw",
+                  "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0002.arw",
                   "status": "applied"
                 },
                 {
                   "error": null,
                   "image_id": 34,
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0003.arw",
+                  "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0003.arw",
                   "status": "applied"
                 }
               ],
@@ -9782,9 +9782,9 @@
             "name": "scouter-bench-sony-0924112233",
             "job_slug": "bench-sony-0924112233",
             "exclude": [
-              "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0001.arw",
-              "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0002.arw",
-              "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0003.arw"
+              "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0001.arw",
+              "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0002.arw",
+              "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0003.arw"
             ],
             "confirm": true
           },
@@ -9803,19 +9803,19 @@
                 {
                   "error": null,
                   "image_id": 35,
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0004.arw",
+                  "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0004.arw",
                   "status": "applied"
                 },
                 {
                   "error": null,
                   "image_id": 36,
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0005.arw",
+                  "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0005.arw",
                   "status": "applied"
                 },
                 {
                   "error": null,
                   "image_id": 37,
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0006.arw",
+                  "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-09-14 bench-sony-0924112233/raw/2026-09-14_bench-sony-0924112233_ilce7_0006.arw",
                   "status": "applied"
                 }
               ],
@@ -11090,10 +11090,10 @@
           "tool": "export_run",
           "args": {
             "images": [
-              "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
+              "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW"
             ],
             "preset": "client-proof",
-            "out_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/exports"
+            "out_dir": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/exports"
           },
           "envelope": {
             "data": {
@@ -11103,15 +11103,15 @@
                 {
                   "bytes": 2019481,
                   "error": null,
-                  "input": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+                  "input": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
                   "ok": true,
-                  "output": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/exports/DSC01426.jpg"
+                  "output": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/exports/DSC01426.jpg"
                 }
               ],
               "image_id": 31,
-              "out_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/exports",
+              "out_dir": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/exports",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "preset": "client-proof",
               "reason": null,
@@ -11140,7 +11140,7 @@
           "ok": true,
           "measured": [
             {
-              "output": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/exports/DSC01426.jpg",
+              "output": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/exports/DSC01426.jpg",
               "bytes": 2019481,
               "long_edge": 2048
             }
@@ -11151,7 +11151,7 @@
           "ok": true,
           "measured": [
             {
-              "output": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/exports/DSC01426.jpg",
+              "output": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/exports/DSC01426.jpg",
               "bytes": 2019481,
               "long_edge": null
             }
@@ -11842,7 +11842,7 @@
               "instance": 0,
               "module": "lens",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "reason": null,
               "warnings": []
@@ -12123,7 +12123,7 @@
               "instance": 0,
               "module": "lens",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "reason": null,
               "warnings": [
@@ -12411,7 +12411,7 @@
               "instance": 0,
               "module": "sharpen",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01426.ARW",
               "plan": [],
               "reason": null,
               "warnings": []
@@ -12696,7 +12696,7 @@
         {
           "tool": "darkroom_open",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC07452.ARW"
           },
           "envelope": {
             "data": {},
@@ -12706,7 +12706,7 @@
                 "method": "darkroom.open"
               },
               "fix": "start darktable and run `scouter doctor`; the Lua plugin must be installed (`darktable-mcp install-plugin`) and darktable restarted",
-              "message": "bridge method darkroom.open failed: handler raised: /Users/pratik/.config/darktable/lua/darktable_mcp.lua:1218: wrong image loaded: asked for 30, darkroom shows 31 after 15000ms",
+              "message": "bridge method darkroom.open failed: handler raised: ~/.config/darktable/lua/darktable_mcp.lua:1218: wrong image loaded: asked for 30, darkroom shows 31 after 15000ms",
               "outcome": "error"
             },
             "job": "job-20260924-112853-26287",
@@ -13191,7 +13191,7 @@
         {
           "tool": "history_read",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01425.ARW"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112233z/sony/frames/DSC01425.ARW"
           },
           "envelope": null,
           "wall_s": 60.001,

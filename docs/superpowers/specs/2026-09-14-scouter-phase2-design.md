@@ -119,7 +119,7 @@ Resolution order: `$SCOUTER_CONFIG`, else `$XDG_CONFIG_HOME/scouter/config.json`
 ```json
 {
   "version": 1,
-  "library_root": "/Users/pratik/Pictures/EditingTrial-library",
+  "library_root": "~/Pictures/EditingTrial-library",
   "import": {
     "extensions": ["ORF", "ARW", "DNG", "JPG", "JPEG"],
     "read_only_originals": true,
@@ -139,7 +139,7 @@ Resolution order: `$SCOUTER_CONFIG`, else `$XDG_CONFIG_HOME/scouter/config.json`
     "rsync_raws": true,
     "encryption": "openssl",
     "age_recipient": null,
-    "openssl_passfile": "/Users/pratik/.config/scouter/backup.pass",
+    "openssl_passfile": "~/.config/scouter/backup.pass",
     "keep_archives": 14,
     "allow_unencrypted": false,
     "include_darktable_db": true
@@ -239,7 +239,7 @@ Justification:
 - **ORF, ARW and DNG are all TIFF containers**, so one IFD0 walk covers every format phase 2 accepts. Verified on the real file 2026-09-14:
 
 ```
-/Users/pratik/Pictures/EditingTrial/P6281348.ORF
+~/Pictures/EditingTrial/P6281348.ORF
   byte order II (little endian), magic 20306 (0x4F52), IFD0 at offset 8, 23 entries
   0x010F Make  = "OLYMPUS CORPORATION    \0"
   0x0110 Model = "E-M10 Mark III  \0"

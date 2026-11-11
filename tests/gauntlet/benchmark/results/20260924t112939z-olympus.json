@@ -53,25 +53,25 @@
     "paths": {
       "body": "olympus",
       "run_id": "20260924t112939z",
-      "frame:dark": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+      "frame:dark": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
       "framename:dark": "P5240151.ORF",
       "framebase:dark": "P5240151.ORF",
-      "frame:bright": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P6281368.ORF",
+      "frame:bright": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P6281368.ORF",
       "framename:bright": "P6281368.ORF",
       "framebase:bright": "P6281368.ORF",
-      "frame:hero": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P6281348.ORF",
+      "frame:hero": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P6281348.ORF",
       "framename:hero": "P6281348.ORF",
       "framebase:hero": "P6281348.ORF",
-      "frame:calib": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/calib/P6281348.ORF",
+      "frame:calib": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/calib/P6281348.ORF",
       "framename:calib": "P6281348.ORF",
       "framebase:calib": "P6281348.ORF",
-      "card": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/card",
+      "card": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/card",
       "job_slug": "bench-olympus-0924112939",
       "preset": "scouter-bench-olympus-0924112939",
-      "out_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/exports",
+      "out_dir": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/exports",
       "_wb_table_present": "1"
     },
-    "run_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus"
+    "run_dir": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus"
   },
   "sessions": [
     {
@@ -83,7 +83,7 @@
         "ready_s": 2.12,
         "loaded": {
           "image_id": 38,
-          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+          "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
           "source": "action_images",
           "view": "darkroom"
         },
@@ -93,7 +93,7 @@
         {
           "tool": "history_commit",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
             "timeout_s": 10
           },
           "envelope": {
@@ -101,16 +101,16 @@
             "error": {
               "code": "commit_timeout",
               "detail": {
-                "bridge_detail": "the view bounce completed 2 time(s) but /Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF.xmp did not change within 3000ms of waiting -- darktable writes a sidecar only when the history actually changes, so this is expected when the requested value is the one the image already had",
+                "bridge_detail": "the view bounce completed 2 time(s) but ~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF.xmp did not change within 3000ms of waiting -- darktable writes a sidecar only when the history actually changes, so this is expected when the requested value is the one the image already had",
                 "image_id": 38,
                 "ms": 10025,
                 "ok": false,
                 "strategy_used": "view_bounce",
                 "view_after": "darkroom",
-                "xmp": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF.xmp"
+                "xmp": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF.xmp"
               },
               "fix": "darktable did not write the XMP in time; leave and re-enter the darkroom, or raise the commit timeout",
-              "message": "darktable did not write /Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF.xmp within 10s using the view_bounce strategy",
+              "message": "darktable did not write ~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF.xmp within 10s using the view_bounce strategy",
               "outcome": "error"
             },
             "job": "job-20260924-112942-30078",
@@ -174,7 +174,7 @@
         {
           "tool": "history_read",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF"
           },
           "envelope": {
             "data": {
@@ -359,7 +359,7 @@
               "image_id": 38,
               "iop_order_version": 4,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
               "plan": [],
               "reason": null,
               "source": "xmp",
@@ -395,7 +395,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "exposure",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
               "plan": [],
               "previous": 0.699999988079071,
               "reason": null,
@@ -609,7 +609,7 @@
         {
           "tool": "history_read",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF"
           },
           "envelope": {
             "data": {
@@ -815,7 +815,7 @@
               "image_id": 38,
               "iop_order_version": 4,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
               "plan": [],
               "reason": null,
               "source": "xmp",
@@ -851,7 +851,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "black",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
               "plan": [],
               "previous": -0.000244140625,
               "reason": null,
@@ -1060,7 +1060,7 @@
               "instance": 0,
               "module": "denoiseprofile",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260924t112939z/olympus/frames/P5240151.ORF",
               "plan": [],
               "reason": null,
               "warnings": []

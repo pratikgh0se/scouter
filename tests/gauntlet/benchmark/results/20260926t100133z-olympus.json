@@ -65,34 +65,34 @@
     "paths": {
       "body": "olympus",
       "run_id": "20260926t100133z",
-      "frame:dark": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
+      "frame:dark": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
       "framename:dark": "P5240151.ORF",
       "framebase:dark": "P5240151.ORF",
-      "frame:bright": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281368.ORF",
+      "frame:bright": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281368.ORF",
       "framename:bright": "P6281368.ORF",
       "framebase:bright": "P6281368.ORF",
-      "frame:blown": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
+      "frame:blown": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
       "framename:blown": "P5240140.ORF",
       "framebase:blown": "P5240140.ORF",
-      "frame:hero": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+      "frame:hero": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
       "framename:hero": "P6281348.ORF",
       "framebase:hero": "P6281348.ORF",
-      "frame:calib": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/calib/P6281348.ORF",
+      "frame:calib": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/calib/P6281348.ORF",
       "framename:calib": "P6281348.ORF",
       "framebase:calib": "P6281348.ORF",
-      "card": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/card",
+      "card": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/card",
       "job_slug": "bench-olympus-0926100133",
       "preset": "scouter-bench-olympus-0926100133",
-      "out_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/exports",
+      "out_dir": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/exports",
       "_wb_table_present": "1",
-      "job:1": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0005.orf",
-      "job:2": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0006.orf",
-      "job:3": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0001.orf",
-      "job:4": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0002.orf",
-      "job:5": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0003.orf",
-      "job:6": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0004.orf"
+      "job:1": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0005.orf",
+      "job:2": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0006.orf",
+      "job:3": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0001.orf",
+      "job:4": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0002.orf",
+      "job:5": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0003.orf",
+      "job:6": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0004.orf"
     },
-    "run_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus"
+    "run_dir": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus"
   },
   "sessions": [
     {
@@ -109,7 +109,7 @@
         "ready_s": 2.84,
         "loaded": {
           "image_id": 67,
-          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
+          "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
           "source": "action_images",
           "view": "darkroom"
         },
@@ -119,7 +119,7 @@
         {
           "tool": "history_commit",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
             "timeout_s": 10
           },
           "envelope": {
@@ -131,13 +131,13 @@
               "ms": 2709,
               "noop": true,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
               "plan": [],
               "reason": null,
               "strategy_used": "no_bounce",
               "view_after": "darkroom",
               "warnings": [
-                "nothing to commit for /Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF.xmp: Scouter has no uncommitted write for this image, and darktable's flush left the sidecar's history unchanged. An edit made by hand in darktable that it has not yet saved to its library is not seen by this check; pass expect_change=true to force a view bounce."
+                "nothing to commit for ~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF.xmp: Scouter has no uncommitted write for this image, and darktable's flush left the sidecar's history unchanged. An edit made by hand in darktable that it has not yet saved to its library is not seen by this check; pass expect_change=true to force a view bounce."
               ],
               "xmp_mtime": 1790416896.9128075
             },
@@ -171,7 +171,7 @@
         "ready_s": 2.57,
         "loaded": {
           "image_id": 68,
-          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281368.ORF",
+          "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281368.ORF",
           "source": "action_images",
           "view": "darkroom"
         },
@@ -181,7 +181,7 @@
         {
           "tool": "history_commit",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281368.ORF",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281368.ORF",
             "timeout_s": 10
           },
           "envelope": {
@@ -193,13 +193,13 @@
               "ms": 2453,
               "noop": true,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281368.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281368.ORF",
               "plan": [],
               "reason": null,
               "strategy_used": "no_bounce",
               "view_after": "darkroom",
               "warnings": [
-                "nothing to commit for /Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281368.ORF.xmp: Scouter has no uncommitted write for this image, and darktable's flush left the sidecar's history unchanged. An edit made by hand in darktable that it has not yet saved to its library is not seen by this check; pass expect_change=true to force a view bounce."
+                "nothing to commit for ~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281368.ORF.xmp: Scouter has no uncommitted write for this image, and darktable's flush left the sidecar's history unchanged. An edit made by hand in darktable that it has not yet saved to its library is not seen by this check; pass expect_change=true to force a view bounce."
               ],
               "xmp_mtime": 1790416910.0550585
             },
@@ -229,7 +229,7 @@
         "ready_s": 2.53,
         "loaded": {
           "image_id": 69,
-          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
+          "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
           "source": "action_images",
           "view": "darkroom"
         },
@@ -239,7 +239,7 @@
         {
           "tool": "history_commit",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
             "timeout_s": 10
           },
           "envelope": {
@@ -251,13 +251,13 @@
               "ms": 2671,
               "noop": true,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
               "plan": [],
               "reason": null,
               "strategy_used": "no_bounce",
               "view_after": "darkroom",
               "warnings": [
-                "nothing to commit for /Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF.xmp: Scouter has no uncommitted write for this image, and darktable's flush left the sidecar's history unchanged. An edit made by hand in darktable that it has not yet saved to its library is not seen by this check; pass expect_change=true to force a view bounce."
+                "nothing to commit for ~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF.xmp: Scouter has no uncommitted write for this image, and darktable's flush left the sidecar's history unchanged. An edit made by hand in darktable that it has not yet saved to its library is not seen by this check; pass expect_change=true to force a view bounce."
               ],
               "xmp_mtime": 1790416917.0101318
             },
@@ -289,7 +289,7 @@
         "ready_s": 2.56,
         "loaded": {
           "image_id": 70,
-          "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+          "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
           "source": "action_images",
           "view": "darkroom"
         },
@@ -299,7 +299,7 @@
         {
           "tool": "history_commit",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
             "timeout_s": 10
           },
           "envelope": {
@@ -311,13 +311,13 @@
               "ms": 2456,
               "noop": true,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "reason": null,
               "strategy_used": "no_bounce",
               "view_after": "darkroom",
               "warnings": [
-                "nothing to commit for /Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF.xmp: Scouter has no uncommitted write for this image, and darktable's flush left the sidecar's history unchanged. An edit made by hand in darktable that it has not yet saved to its library is not seen by this check; pass expect_change=true to force a view bounce."
+                "nothing to commit for ~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF.xmp: Scouter has no uncommitted write for this image, and darktable's flush left the sidecar's history unchanged. An edit made by hand in darktable that it has not yet saved to its library is not seen by this check; pass expect_change=true to force a view bounce."
               ],
               "xmp_mtime": 1790416932.1595902
             },
@@ -333,7 +333,7 @@
         {
           "tool": "library_import",
           "args": {
-            "source": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/card",
+            "source": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/card",
             "job_slug": "bench-olympus-0926100133",
             "confirm": true
           },
@@ -454,16 +454,16 @@
               "imported": 6,
               "job_slug": "bench-olympus-0926100133",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133",
+              "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133",
               "plan": [],
               "reason": null,
               "recursive_honoured": false,
               "scan_incomplete": false,
               "skipped_no_body": [],
               "skipped_other_camera": [],
-              "source_root": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/card",
+              "source_root": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/card",
               "source_roots": [
-                "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/card"
+                "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/card"
               ],
               "totals": {
                 "bytes": 100744648,
@@ -477,7 +477,7 @@
                 "skipped_identical": 0
               },
               "warnings": [
-                "recursive=false could not be enforced: darktable's Lua API has no per-call recursion flag, and this plugin does not modify your recurse_directories preference. Only /Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw was passed to darktable, but darktable may still have recursed into it if that preference is enabled."
+                "recursive=false could not be enforced: darktable's Lua API has no per-call recursion flag, and this plugin does not modify your recurse_directories preference. Only ~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw was passed to darktable, but darktable may still have recursed into it if that preference is enabled."
               ]
             },
             "job": "mcp-20260926-100134-42846",
@@ -581,7 +581,7 @@
                   "noop": false,
                   "outcome": "ok",
                   "param": "exposure",
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
+                  "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
                   "plan": [
                     {
                       "action": "darkroom.adjust",
@@ -600,7 +600,7 @@
                 }
               ],
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
               "phrase": "brighter by 1 ev",
               "plan": [
                 {
@@ -825,7 +825,7 @@
                   "noop": false,
                   "outcome": "ok",
                   "param": "black",
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
+                  "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
                   "plan": [
                     {
                       "action": "darkroom.adjust",
@@ -844,7 +844,7 @@
                 }
               ],
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
               "phrase": "deeper blacks by 0.01",
               "plan": [
                 {
@@ -1056,7 +1056,7 @@
               "instance": 0,
               "module": "denoiseprofile",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240151.ORF",
               "plan": [],
               "reason": null,
               "warnings": []
@@ -1263,7 +1263,7 @@
         {
           "tool": "scout_stats",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
             "px": 512
           },
           "envelope": {
@@ -2047,7 +2047,7 @@
               },
               "image_id": 69,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
               "plan": [],
               "px_requested": 512,
               "px_used": 512,
@@ -2127,7 +2127,7 @@
                   "noop": false,
                   "outcome": "ok",
                   "param": "exposure",
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
+                  "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
                   "plan": [
                     {
                       "action": "darkroom.adjust",
@@ -2146,7 +2146,7 @@
                 }
               ],
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
               "phrase": "darker by 0.7 ev",
               "plan": [
                 {
@@ -2173,7 +2173,7 @@
         {
           "tool": "scout_stats",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
             "px": 512
           },
           "envelope": {
@@ -2957,7 +2957,7 @@
               },
               "image_id": 69,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P5240140.ORF",
               "plan": [],
               "px_requested": 512,
               "px_used": 512,
@@ -3219,7 +3219,7 @@
                   "noop": false,
                   "outcome": "ok",
                   "param": "temperature",
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+                  "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
                   "plan": [
                     {
                       "action": "darkroom.adjust",
@@ -3241,7 +3241,7 @@
                 }
               ],
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "phrase": "warmer by 600k",
               "plan": [
                 {
@@ -3268,7 +3268,7 @@
         {
           "tool": "wb_kelvin",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF"
           },
           "envelope": {
             "data": {
@@ -3284,7 +3284,7 @@
               "reason": null,
               "residual_ratio": 0.009586920069196259,
               "table": {
-                "path": "/Users/pratik/Pictures/ScouterScratch/bench-config/wb/em10markiii.json",
+                "path": "~/Pictures/ScouterScratch/bench-config/wb/em10markiii.json",
                 "synthetic": false
               },
               "warnings": []
@@ -3505,7 +3505,7 @@
                   "noop": false,
                   "outcome": "ok",
                   "param": "temperature",
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+                  "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
                   "plan": [
                     {
                       "action": "darkroom.adjust",
@@ -3527,7 +3527,7 @@
                 }
               ],
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "phrase": "cooler by 900k",
               "plan": [
                 {
@@ -3554,7 +3554,7 @@
         {
           "tool": "wb_kelvin",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF"
           },
           "envelope": {
             "data": {
@@ -3573,7 +3573,7 @@
               "reason": null,
               "residual_ratio": 0.01721504126751494,
               "table": {
-                "path": "/Users/pratik/Pictures/ScouterScratch/bench-config/wb/em10markiii.json",
+                "path": "~/Pictures/ScouterScratch/bench-config/wb/em10markiii.json",
                 "synthetic": false
               },
               "warnings": []
@@ -3780,7 +3780,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "tint",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "previous": null,
               "reason": null,
@@ -3997,7 +3997,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "temperature",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "previous": null,
               "reason": null,
@@ -4019,7 +4019,7 @@
         {
           "tool": "wb_kelvin",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF"
           },
           "envelope": {
             "data": {
@@ -4038,7 +4038,7 @@
               "reason": null,
               "residual_ratio": 0.1075603434396104,
               "table": {
-                "path": "/Users/pratik/Pictures/ScouterScratch/bench-config/wb/em10markiii.json",
+                "path": "~/Pictures/ScouterScratch/bench-config/wb/em10markiii.json",
                 "synthetic": false
               },
               "warnings": []
@@ -4253,7 +4253,7 @@
                   "noop": false,
                   "outcome": "ok",
                   "param": "contrast",
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+                  "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
                   "plan": [
                     {
                       "action": "darkroom.adjust",
@@ -4272,7 +4272,7 @@
                 }
               ],
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "phrase": "more contrast by 0.3",
               "plan": [
                 {
@@ -4492,7 +4492,7 @@
               "instance": 0,
               "module": "colorbalancergb",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "reason": null,
               "warnings": []
@@ -4528,7 +4528,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "contrast",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [
                 {
                   "action": "darkroom.adjust",
@@ -4790,7 +4790,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "skew",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "previous": 0.0,
               "reason": null,
@@ -5088,7 +5088,7 @@
                   "noop": false,
                   "outcome": "ok",
                   "param": "global_saturation",
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+                  "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
                   "plan": [
                     {
                       "action": "darkroom.adjust",
@@ -5107,7 +5107,7 @@
                 }
               ],
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "phrase": "more saturation by 20%",
               "plan": [
                 {
@@ -5412,7 +5412,7 @@
                   "noop": false,
                   "outcome": "ok",
                   "param": "global_vibrance",
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+                  "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
                   "plan": [
                     {
                       "action": "darkroom.adjust",
@@ -5431,7 +5431,7 @@
                 }
               ],
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "phrase": "more vibrance by 15%",
               "plan": [
                 {
@@ -6029,7 +6029,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "shadows_hue",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "previous": 0.0,
               "reason": null,
@@ -6063,7 +6063,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "shadows_chroma",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "previous": 0.0,
               "reason": null,
@@ -6097,7 +6097,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "highlights_hue",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "previous": 0.0,
               "reason": null,
@@ -6131,7 +6131,7 @@
               "noop": false,
               "outcome": "ok",
               "param": "highlights_chroma",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "previous": 0.0,
               "reason": null,
@@ -6409,7 +6409,7 @@
               "committed": true,
               "image_id": 70,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "reason": null,
               "seq": 19,
@@ -6425,7 +6425,7 @@
                   "committed": true,
                   "image_id": 70,
                   "outcome": "ok",
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+                  "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
                   "plan": [],
                   "reason": null,
                   "seq": 19,
@@ -6480,7 +6480,7 @@
                   "noop": false,
                   "outcome": "ok",
                   "param": "contrast",
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+                  "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
                   "plan": [
                     {
                       "action": "darkroom.adjust",
@@ -6499,7 +6499,7 @@
                 }
               ],
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "phrase": "more contrast by 0.2",
               "plan": [
                 {
@@ -6883,7 +6883,7 @@
               "committed": true,
               "image_id": 70,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "reason": null,
               "seq": 21,
@@ -6899,7 +6899,7 @@
                   "committed": true,
                   "image_id": 70,
                   "outcome": "ok",
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+                  "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
                   "plan": [],
                   "reason": null,
                   "seq": 21,
@@ -6933,7 +6933,7 @@
               "committed": true,
               "image_id": 70,
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "reason": null,
               "seq": 20,
@@ -6949,7 +6949,7 @@
                   "committed": true,
                   "image_id": 70,
                   "outcome": "ok",
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+                  "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
                   "plan": [],
                   "reason": null,
                   "seq": 20,
@@ -7004,7 +7004,7 @@
                   "noop": false,
                   "outcome": "ok",
                   "param": "exposure",
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+                  "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
                   "plan": [
                     {
                       "action": "darkroom.adjust",
@@ -7023,7 +7023,7 @@
                 }
               ],
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "phrase": "brighter by 0.3 ev",
               "plan": [
                 {
@@ -7074,7 +7074,7 @@
                   "noop": false,
                   "outcome": "ok",
                   "param": "contrast",
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+                  "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
                   "plan": [
                     {
                       "action": "darkroom.adjust",
@@ -7093,7 +7093,7 @@
                 }
               ],
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "phrase": "more contrast by 0.1",
               "plan": [
                 {
@@ -7487,14 +7487,14 @@
             "data": {
               "action": "save",
               "applied_to": null,
-              "dtstyle_path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/cache/styles/scouter-bench-olympus-0926100133.dtstyle",
+              "dtstyle_path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/cache/styles/scouter-bench-olympus-0926100133.dtstyle",
               "explain": [
                 "saved 4 module(s) (exposure, sigmoid, temperature, colorbalancergb) as style 'scouter-bench-olympus-0926100133': apply it from darktable's styles panel or with preset apply."
               ],
               "history_end_after": null,
               "history_end_before": null,
               "image_id": 70,
-              "memory_path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/scouter/memory/presets/scouter-bench-olympus-0926100133.dtstyle",
+              "memory_path": "~/Pictures/ScouterScratch/bench-jobs/scouter/memory/presets/scouter-bench-olympus-0926100133.dtstyle",
               "modules": [
                 "exposure",
                 "sigmoid",
@@ -7503,7 +7503,7 @@
               ],
               "name": "scouter-bench-olympus-0926100133",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "reason": null,
               "replaced": false,
@@ -7547,7 +7547,7 @@
         "file": {
           "ok": true,
           "measured": {
-            "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/cache/styles/scouter-bench-olympus-0926100133.dtstyle",
+            "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/cache/styles/scouter-bench-olympus-0926100133.dtstyle",
             "bytes": 2016
           },
           "type": "file_from_step"
@@ -7788,9 +7788,9 @@
             "name": "scouter-bench-olympus-0926100133",
             "job_slug": "bench-olympus-0926100133",
             "exclude": [
-              "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0002.orf",
-              "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0003.orf",
-              "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0004.orf"
+              "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0002.orf",
+              "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0003.orf",
+              "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0004.orf"
             ],
             "confirm": true
           },
@@ -7809,19 +7809,19 @@
                 {
                   "error": null,
                   "image_id": 71,
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0001.orf",
+                  "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0001.orf",
                   "status": "applied"
                 },
                 {
                   "error": null,
                   "image_id": 75,
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0005.orf",
+                  "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0005.orf",
                   "status": "applied"
                 },
                 {
                   "error": null,
                   "image_id": 76,
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0006.orf",
+                  "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0006.orf",
                   "status": "applied"
                 }
               ],
@@ -8273,9 +8273,9 @@
             "name": "scouter-bench-olympus-0926100133",
             "job_slug": "bench-olympus-0926100133",
             "exclude": [
-              "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0005.orf",
-              "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0006.orf",
-              "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0001.orf"
+              "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0005.orf",
+              "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0006.orf",
+              "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0001.orf"
             ],
             "confirm": true
           },
@@ -8294,19 +8294,19 @@
                 {
                   "error": null,
                   "image_id": 72,
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0002.orf",
+                  "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0002.orf",
                   "status": "applied"
                 },
                 {
                   "error": null,
                   "image_id": 73,
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0003.orf",
+                  "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0003.orf",
                   "status": "applied"
                 },
                 {
                   "error": null,
                   "image_id": 74,
-                  "path": "/Users/pratik/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0004.orf",
+                  "path": "~/Pictures/ScouterScratch/bench-jobs/2026/2026-05-24 bench-olympus-0926100133/raw/2026-05-24_bench-olympus-0926100133_em10markiii_0004.orf",
                   "status": "applied"
                 }
               ],
@@ -9582,10 +9582,10 @@
           "tool": "export_run",
           "args": {
             "images": [
-              "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF"
+              "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF"
             ],
             "preset": "client-proof",
-            "out_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/exports"
+            "out_dir": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/exports"
           },
           "envelope": {
             "data": {
@@ -9595,15 +9595,15 @@
                 {
                   "bytes": 1176936,
                   "error": null,
-                  "input": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+                  "input": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
                   "ok": true,
-                  "output": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/exports/P6281348.jpg"
+                  "output": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/exports/P6281348.jpg"
                 }
               ],
               "image_id": 70,
-              "out_dir": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/exports",
+              "out_dir": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/exports",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "preset": "client-proof",
               "reason": null,
@@ -9632,7 +9632,7 @@
           "ok": true,
           "measured": [
             {
-              "output": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/exports/P6281348.jpg",
+              "output": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/exports/P6281348.jpg",
               "bytes": 1176936,
               "long_edge": 2048
             }
@@ -9643,7 +9643,7 @@
           "ok": true,
           "measured": [
             {
-              "output": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/exports/P6281348.jpg",
+              "output": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/exports/P6281348.jpg",
               "bytes": 1176936,
               "long_edge": null
             }
@@ -10337,7 +10337,7 @@
               "instance": 0,
               "module": "lens",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "reason": null,
               "warnings": []
@@ -10619,7 +10619,7 @@
               "instance": 0,
               "module": "lens",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "reason": null,
               "warnings": [
@@ -10908,7 +10908,7 @@
               "instance": 0,
               "module": "sharpen",
               "outcome": "ok",
-              "path": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
+              "path": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281348.ORF",
               "plan": [],
               "reason": null,
               "warnings": []
@@ -11194,7 +11194,7 @@
         {
           "tool": "darkroom_open",
           "args": {
-            "image": "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281368.ORF"
+            "image": "~/Pictures/ScouterScratch/bench-runs/20260926t100133z/olympus/frames/P6281368.ORF"
           },
           "envelope": {
             "data": {},
@@ -11204,7 +11204,7 @@
                 "method": "darkroom.open"
               },
               "fix": "darktable did not load the frame you asked for -- open it in darktable yourself (double-click it in the lighttable) or relaunch darktable on it, then retry",
-              "message": "handler raised: /Users/pratik/.config/darktable/lua/darktable_mcp.lua:1586: wrong image loaded: asked for 68, darkroom shows 70 after 15000ms",
+              "message": "handler raised: ~/.config/darktable/lua/darktable_mcp.lua:1586: wrong image loaded: asked for 68, darkroom shows 70 after 15000ms",
               "outcome": "error"
             },
             "job": "mcp-20260926-100134-42846",
