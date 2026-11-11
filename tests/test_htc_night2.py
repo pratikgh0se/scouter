@@ -83,6 +83,7 @@ class _FakeReposCase(unittest.TestCase):
                 "HTC_REPO": str(self.repo),
                 "HTC_RUNS_ROOT": str(self.runs_root),
                 "HTC_TRIAL": str(self.trial),
+                "HTC_MIN_FREE_GB": "0",  # disk headroom is not under test; CI runners have < 15 GB free
                 "PATH": f"{self.fake_bin}:{e['PATH']}",
             }
         )

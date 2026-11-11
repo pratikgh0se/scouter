@@ -50,7 +50,8 @@ fi
 df_target="$HOME/Pictures"
 while [[ ! -e "$df_target" && "$df_target" != / ]]; do df_target=$(dirname "$df_target"); done
 free_gb=$(df -Pk "$df_target" | awk 'NR==2 {print int($4 / 1048576)}')
-(( free_gb >= 15 )) || die "only ${free_gb} GB free under ~/Pictures (need >= 15)"
+min_free_gb="${HTC_MIN_FREE_GB:-15}"  # default unchanged; tests on small CI disks lower it
+(( free_gb >= min_free_gb )) || die "only ${free_gb} GB free under ~/Pictures (need >= ${min_free_gb})"
 [[ -f "$RUNS_ROOT/corpus.json" ]] || die "corpus.json missing (run the corpus survey)"
 if [[ -e "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   die "a night-2 runner is already running (pid $(cat "$PIDFILE"))"

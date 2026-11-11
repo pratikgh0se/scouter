@@ -61,6 +61,7 @@ class HtcNight2IntentTest(unittest.TestCase):
                     "HTC_REPO": str(repo),
                     "HTC_RUNS_ROOT": str(runs_root),
                     "HTC_TRIAL": str(trial),
+                    "HTC_MIN_FREE_GB": "0",  # disk headroom is not under test; CI has < 15 GB free
                     "PATH": f"{fake_bin}:{env['PATH']}",
                 }
             )
