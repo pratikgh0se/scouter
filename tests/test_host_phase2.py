@@ -88,7 +88,7 @@ from tests.host_support import (  # noqa: F401
 from tests.host_support import PluginInstall as _PluginInstall
 from tests.host_support import quit_darktable as _quit
 
-EDITING_TRIAL = Path("/Users/pratik/Pictures/EditingTrial")
+EDITING_TRIAL = Path.home() / "Pictures/EditingTrial"
 CAPTURED_FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 
 _MISSING = []

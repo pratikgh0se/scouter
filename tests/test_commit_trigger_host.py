@@ -23,7 +23,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 DARKTABLE = Path("/Applications/darktable.app/Contents/MacOS/darktable")
 DARKTABLE_CLI = Path("/Applications/darktable.app/Contents/MacOS/darktable-cli")
-HERO = Path("/Users/pratik/Pictures/EditingTrial/P6281348.ORF")
+HERO = Path.home() / "Pictures/EditingTrial/P6281348.ORF"
 #: Generated, git-ignored-by-convention sibling of the committed
 #: docs/measurements.md. A test run must not rewrite a reviewed document.
 MEASUREMENTS = REPO / "docs" / "measurements-generated.md"

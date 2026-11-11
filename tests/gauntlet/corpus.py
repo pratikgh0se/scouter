@@ -13,7 +13,7 @@ import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-TRIAL = Path(os.environ.get("HTC_TRIAL", "/Users/pratik/Pictures/EditingTrial"))
+TRIAL = Path(os.environ.get("HTC_TRIAL", str(Path.home() / "Pictures/EditingTrial")))
 SCRATCH = Path.home() / "Pictures" / "ScouterScratch" / "gauntlet"
 RAW_EXT = {".orf", ".arw"}
 MODEL_BODY = {"E-M10 Mark III": "olympus", "E-M10MarkIII": "olympus", "ILCE-7": "sony_a7",

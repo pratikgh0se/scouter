@@ -52,7 +52,7 @@ REPO = Path(__file__).resolve().parents[3]
 TASKS_PATH = Path(__file__).with_name("editor_tasks.json")
 RESULTS_DIR = Path(__file__).with_name("results")
 DARKTABLE = Path("/Applications/darktable.app/Contents/MacOS/darktable")
-EDITING_TRIAL = Path("/Users/pratik/Pictures/EditingTrial")
+EDITING_TRIAL = Path.home() / "Pictures/EditingTrial"
 SCRATCH = Path.home() / "Pictures" / "ScouterScratch"
 
 TASKS_SCHEMA = "scouter-editor-tasks/1"

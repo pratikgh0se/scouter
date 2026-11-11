@@ -3,7 +3,7 @@
 
 Gated: SCOUTER_HOST_TESTS=1 + darktable installed. Run the whole probe with:
 
-    SCOUTER_HOST_TESTS=1 /Users/pratik/CodeBase/scouter/.venv/bin/python -m pytest -q -s \
+    SCOUTER_HOST_TESTS=1 ~/CodeBase/scouter/.venv/bin/python -m pytest -q -s \
         tests/test_host_colorcal.py
 
 ISOLATION (standing rule): every launch gets its OWN `--library` under

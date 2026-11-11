@@ -103,7 +103,7 @@ def _patch_capture_time(path: Path, when: datetime) -> list[int]:
     return patched
 
 
-def build(out: Path, *, source_dir: Path = Path("/Users/pratik/Pictures/EditingTrial")) -> dict:
+def build(out: Path, *, source_dir: Path = Path.home() / "Pictures/EditingTrial") -> dict:
     """Write `<out>/card/DCIM/100OLYMP/*.ORF` and return a manifest of the plan.
 
     `out` is created if absent. An EXISTING `card/` directory is removed
@@ -172,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True, help="directory to build <out>/card/ under")
     parser.add_argument(
         "--source-dir",
-        default="/Users/pratik/Pictures/EditingTrial",
+        default=str(Path.home() / "Pictures/EditingTrial"),
         help="where the four real ORFs live",
     )
     args = parser.parse_args(argv)

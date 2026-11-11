@@ -32,7 +32,7 @@ from pathlib import Path
 from scouter.core import exif
 from tests import make_synthetic_job
 
-SOURCE_DIR = Path("/Users/pratik/Pictures/EditingTrial")
+SOURCE_DIR = Path.home() / "Pictures/EditingTrial"
 _MISSING = [name for name in make_synthetic_job.SOURCES if not (SOURCE_DIR / name).is_file()]
 SKIP_REASON = f"the four source ORFs are not present ({', '.join(_MISSING)})" if _MISSING else ""
 

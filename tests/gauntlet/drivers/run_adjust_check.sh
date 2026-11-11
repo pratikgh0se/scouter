@@ -9,5 +9,5 @@
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 if pgrep -x darktable >/dev/null; then echo "darktable is running -- quit it first"; exit 1; fi
-cd /Users/pratik/CodeBase/scouter
-exec /Users/pratik/CodeBase/scouter/.venv/bin/python "$HERE/adjust_check.py" "$@"
+cd "$HOME/CodeBase/scouter"
+exec "$HOME/CodeBase/scouter/.venv/bin/python" "$HERE/adjust_check.py" "$@"

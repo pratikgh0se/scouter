@@ -16,8 +16,8 @@
 # (appended as it goes); per-step JSON under the run dir's steps/.
 # Expect roughly 25-40 minutes, most of it the two benchmark runs.
 set -u
-SP=/Users/pratik/CodeBase/scouter/tests/gauntlet/drivers
-REPO=/Users/pratik/CodeBase/scouter
+SP="$HOME/CodeBase/scouter/tests/gauntlet/drivers"
+REPO="$HOME/CodeBase/scouter"
 PY=$REPO/.venv/bin/python
 export PYTHONPATH=$REPO
 unset SCOUTER_CONFIG SCOUTER_CACHE SCOUTER_JOB

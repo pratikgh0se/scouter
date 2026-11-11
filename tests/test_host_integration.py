@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 
 DARKTABLE = Path("/Applications/darktable.app/Contents/MacOS/darktable")
-HERO = Path("/Users/pratik/Pictures/EditingTrial/P6281348.ORF")
+HERO = Path.home() / "Pictures/EditingTrial/P6281348.ORF"
 PLUGIN_SRC = Path(__file__).resolve().parent.parent / "darktable_mcp" / "lua" / "darktable_mcp.lua"
 INSTALLED_PLUGIN = Path.home() / ".config" / "darktable" / "lua" / "darktable_mcp.lua"
 

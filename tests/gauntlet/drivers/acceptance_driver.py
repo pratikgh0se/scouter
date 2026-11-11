@@ -26,11 +26,11 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO = Path("/Users/pratik/CodeBase/scouter")
+REPO = Path.home() / "CodeBase/scouter"
 PY = str(REPO / ".venv" / "bin" / "python")
 BENCH = REPO  # row 433 task 1: the harness now lives in tests/gauntlet/benchmark on main
 DT = "/Applications/darktable.app/Contents/MacOS/darktable"
-TRIAL = Path("/Users/pratik/Pictures/EditingTrial")
+TRIAL = Path.home() / "Pictures/EditingTrial"
 SONY = TRIAL / "sony"
 ROOT = Path.home() / "Pictures" / "ScouterScratch" / "acceptance"
 LOG = ROOT / "log.md"

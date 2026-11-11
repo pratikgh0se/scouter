@@ -29,9 +29,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import acceptance_driver as drv  # noqa: E402
 
-FIX = Path("/Users/pratik/CodeBase/scouter")
-SOURCE_FRAME = Path(
-    "/Users/pratik/Pictures/ScouterScratch/bench-runs/20260926t073459z/olympus/frames/P5240151.ORF"
+FIX = Path.home() / "CodeBase/scouter"
+SOURCE_FRAME = (
+    Path.home() / "Pictures/ScouterScratch/bench-runs/20260926t073459z/olympus/frames/P5240151.ORF"
 )
 CHECK_ROOT = Path.home() / "Pictures" / "ScouterScratch" / "adjust-check"
 

@@ -12,10 +12,10 @@
 #         4 originals changed | 5 precondition failed | other = run-level crash
 set -uo pipefail
 
-REPO="${HTC_REPO:-/Users/pratik/CodeBase/scouter}"
+REPO="${HTC_REPO:-$HOME/CodeBase/scouter}"
 PY="$REPO/.venv/bin/python"
 RUNS_ROOT="${HTC_RUNS_ROOT:-$HOME/Pictures/ScouterScratch/gauntlet}"
-TRIAL="${HTC_TRIAL:-/Users/pratik/Pictures/EditingTrial}"
+TRIAL="${HTC_TRIAL:-$HOME/Pictures/EditingTrial}"
 NIGHT="$RUNS_ROOT/night2"
 mkdir -p "$NIGHT"
 

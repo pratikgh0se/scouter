@@ -6,7 +6,7 @@ under ~/Pictures/ScouterScratch/, frame.ORF copy beside library.db). It never la
 quits darktable. Run:
 
     SCOUTER_HOST_TESTS=1 SCOUTER_ATTACH_SCRATCH=<dir> SCOUTER_STALE_N=80 \
-        /Users/pratik/CodeBase/scouter/.venv/bin/python -m pytest -q -s tests/test_host_stale_rewrite_retry.py
+        ~/CodeBase/scouter/.venv/bin/python -m pytest -q -s tests/test_host_stale_rewrite_retry.py
 
 Baseline (no retry) refused ~6.5% of writes on a long history (13/200); with the retry 0/200.
 Two oracles per write (Z2): the product envelope (ok) and, independently, the sidecar

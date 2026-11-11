@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Callable
 
 DARKTABLE = Path("/Applications/darktable.app/Contents/MacOS/darktable")
-EDITING_TRIAL = Path("/Users/pratik/Pictures/EditingTrial")
+EDITING_TRIAL = Path.home() / "Pictures/EditingTrial"
 HERO = EDITING_TRIAL / "P6281348.ORF"
 PLUGIN_SRC = Path(__file__).resolve().parent.parent / "darktable_mcp" / "lua" / "darktable_mcp.lua"
 INSTALLED_PLUGIN = Path.home() / ".config" / "darktable" / "lua" / "darktable_mcp.lua"
