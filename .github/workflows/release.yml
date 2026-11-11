@@ -1,65 +1,29 @@
 name: Release
 
-# Two entry points, deliberately asymmetric:
+# Two entry points:
 #
 #   * push of a `v*` tag  -> the real release. Tests, build, artifact
-#                            verification, then publish to PyPI.
-#   * workflow_dispatch   -> a rehearsal. Same tests, same build, same
-#                            verification, and optionally an upload to
-#                            TestPyPI so the OIDC path can be exercised
-#                            without burning a version number on the real
-#                            index. It can never publish to PyPI.
+#                            verification, then the sdist and wheel are
+#                            attached to the GitHub release for that tag.
+#   * workflow_dispatch   -> a build-only rehearsal. Same tests, same build,
+#                            same verification; nothing is uploaded anywhere.
 #
-# A plain branch push does not trigger this workflow at all, and both publish
-# jobs additionally guard on the event, so no branch push can reach an upload.
-# Branch/PR coverage lives in ci.yml.
+# PyPI publishing is OFF in this fork. The package name `darktable-mcp` (and
+# its PyPI trusted publisher) belong to upstream w1ne/darktable-mcp, so this
+# repository must not publish to PyPI or TestPyPI. Releases here are GitHub
+# releases only; install from the attached wheel or from source.
 #
-# ---------------------------------------------------------------------------
-# ONE-TIME MANUAL SETUP ON PYPI (must be done before the first release)
-# ---------------------------------------------------------------------------
-# This workflow uses PyPI Trusted Publishing (OIDC). There is no API token in
-# repo secrets, so there is no long-lived credential to leak or rotate. In
-# exchange, the publisher has to be registered once on PyPI's side.
-#
-# `darktable-mcp` does not exist on PyPI yet, so use the *pending* publisher
-# form (it creates the project on the first successful upload):
-#
-#   https://pypi.org/manage/account/publishing/
-#
-#     PyPI Project Name:  darktable-mcp
-#     Owner:              w1ne
-#     Repository name:    darktable-mcp
-#     Workflow name:      release.yml
-#     Environment name:   pypi
-#
-# Then repeat the same form on TestPyPI if you want the rehearsal path:
-#
-#   https://test.pypi.org/manage/account/publishing/
-#
-#     PyPI Project Name:  darktable-mcp
-#     Owner:              w1ne
-#     Repository name:    darktable-mcp
-#     Workflow name:      release.yml
-#     Environment name:   testpypi
-#
-# Finally create the two GitHub environments (Settings -> Environments):
-# `pypi` and `testpypi`. The environment name must match the value registered
-# above exactly, or PyPI rejects the OIDC token. Adding required reviewers to
-# the `pypi` environment is optional but recommended: it turns the upload into
-# a deliberate button press.
+# A plain branch push does not trigger this workflow at all, and the release
+# job additionally guards on the event, so no branch push or dispatch can
+# reach an upload. Branch/PR coverage lives in ci.yml.
 
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      publish-testpypi:
-        description: 'Also upload the built artifacts to TestPyPI (rehearsal)'
-        type: boolean
-        default: false
 
-# Least privilege by default. `id-token: write` is granted per job, only to the
-# two publish jobs that actually need to mint an OIDC token.
+# Least privilege by default. `contents: write` is granted only to the
+# github-release-assets job, which has to attach files to a release.
 permissions:
   contents: read
 
@@ -346,48 +310,17 @@ jobs:
           retention-days: 30
 
   # ---------------------------------------------------------------------------
-  # Rehearsal upload. Manual dispatch only, opt-in via the input, and it can
-  # never run on a tag push -- so it can never be mistaken for the real thing.
+  # The release. Tag pushes only: attaches the verified sdist and wheel to the
+  # GitHub release for the tag (creating the release if it does not exist yet).
+  # No PyPI upload -- see the header.
   # ---------------------------------------------------------------------------
-  publish-testpypi:
-    name: publish to TestPyPI (rehearsal)
-    if: github.event_name == 'workflow_dispatch' && inputs.publish-testpypi
-    needs: [build]
-    runs-on: ubuntu-latest
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/p/darktable-mcp
-    permissions:
-      id-token: write   # OIDC token for Trusted Publishing; no API token needed
-    steps:
-      - name: Download distribution artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist
-
-      - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          # A second rehearsal of the same version is normal and should not go
-          # red just because TestPyPI already holds that file. This flag is
-          # deliberately NOT set on the real publish below.
-          skip-existing: true
-
-  # ---------------------------------------------------------------------------
-  # The real release. Tag pushes only.
-  # ---------------------------------------------------------------------------
-  publish-pypi:
-    name: publish to PyPI
+  github-release-assets:
+    name: attach dist to GitHub release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [build]
     runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/p/darktable-mcp
     permissions:
-      id-token: write   # OIDC token for Trusted Publishing; no API token needed
+      contents: write
     steps:
       - name: Download distribution artifacts
         uses: actions/download-artifact@v4
@@ -395,7 +328,13 @@ jobs:
           name: dist
           path: dist
 
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        # No skip-existing: re-tagging a version already on PyPI is a mistake,
-        # and it must go red rather than report a silent success.
+      - name: Upload dist/* to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY"

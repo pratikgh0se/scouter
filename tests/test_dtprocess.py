@@ -31,7 +31,13 @@ def test_launch_writes_owner_file_and_owned_pid_matches(owner, monkeypatch, tmp_
     fake = tmp_path / "darktable"
     # `exec -a "$0"` keeps argv[0] (what macOS `ps -o comm=` reports) as the
     # fake's path, so comm's basename stays `darktable` after the exec.
-    fake.write_text('#!/bin/bash\nexec -a "$0" sleep 30\n')
+    if sys.platform == "darwin":
+        fake.write_text('#!/bin/bash\nexec -a "$0" sleep 30\n')
+    else:
+        # Linux `ps -o comm=` is the kernel comm: the basename of the file that
+        # was exec'd (here the script itself), and `exec -a` does not change it.
+        # So the script must stay the running process rather than exec sleep.
+        fake.write_text("#!/bin/bash\nsleep 30 &\nwait\n")
     fake.chmod(0o755)
     rec = dtprocess.launch(None, tmp_path / "lib" / "library.db", exe=str(fake))
     child = dtprocess._children[rec.pid]

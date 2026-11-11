@@ -66,6 +66,18 @@ def test_survey_roles_and_bench_override(trial, tmp_path):
     assert roles["sony_a7"]["hero"] == "sony/DSC1.ARW"
 
 
+@pytest.mark.skipif(
+    not all(
+        os.path.exists(path)
+        for roles in corpus.EXTRA_ROLES.values()
+        for path in roles.values()
+    ),
+    reason=(
+        "needs the local photo corpus copies under ~/Pictures/ScouterScratch/gauntlet "
+        "(corpus.EXTRA_ROLES, e.g. frames-bright/P5240141.ORF); absent on CI runners and "
+        "fresh clones, where verify_extra_roles() can only report 'missing'"
+    ),
+)
 def test_hero_bright_extra_role_is_injected_and_copy_sha_matches():
     """Cluster D / row 458: hero_bright is an olympus-only role pointing at a
     COPY outside EditingTrial (corpus.EXTRA_ROLES), and its sha256 must match

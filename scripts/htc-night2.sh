@@ -45,7 +45,8 @@ if pgrep -x darktable >/dev/null || pgrep -f "MacOS/darktable" >/dev/null; then
 fi
 [[ -z "$(git -C "$REPO" status --porcelain)" ]] || die "repo working tree is not clean"
 [[ "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" == main ]] || die "repo is not on main"
-free_gb=$(df -g "$HOME/Pictures" | awk 'NR==2 {print $4}')
+# POSIX `df -Pk` (BSD-only `df -g` is rejected by GNU df): column 4 is available KiB.
+free_gb=$(df -Pk "$HOME/Pictures" | awk 'NR==2 {print int($4 / 1048576)}')
 (( free_gb >= 15 )) || die "only ${free_gb} GB free under ~/Pictures (need >= 15)"
 [[ -f "$RUNS_ROOT/corpus.json" ]] || die "corpus.json missing (run the corpus survey)"
 if [[ -e "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then

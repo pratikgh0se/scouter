@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -238,7 +239,11 @@ class GauntletRunnerRefusalTest(_FakeReposCase):
         stamp = "night2-pattern-regression-stamp"
         self._spawn_dummy_launcher(stamp)
         old = subprocess.run(["pgrep", "-f", r"gauntlet(\.cli)? run --stamp"], capture_output=True)
-        new = subprocess.run(["pgrep", "-fl", "gauntlet.*run --stamp"], capture_output=True)
+        # BSD/macOS `pgrep -l` lists the full command line; procps (Linux) `-l`
+        # lists only the process name and `-a` is the full-command-line flag
+        # (while on macOS `-a` means something else entirely).
+        list_flag = "-fl" if sys.platform == "darwin" else "-fa"
+        new = subprocess.run(["pgrep", list_flag, "gauntlet.*run --stamp"], capture_output=True)
         self.assertEqual(old.returncode, 1, "the old pattern should NOT match")
         self.assertEqual(new.returncode, 0, "the fixed pattern SHOULD match")
         # R2 nit: prove it matched THIS dummy process specifically, not
