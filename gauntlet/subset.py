@@ -9,8 +9,7 @@ nothing about scouter, problem classes or genres."""
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Sequence
-from typing import TypeVar
+from typing import Callable, Sequence, TypeVar
 
 T = TypeVar("T")
 
@@ -26,9 +25,8 @@ def _marker(item: T) -> str:
     return str(getattr(item, "id", None) or repr(item))
 
 
-def stratified_subset(
-    items: Sequence[T], size: int, seed: int, key_fns: Sequence[Callable[[T], object]]
-) -> list[T]:
+def stratified_subset(items: Sequence[T], size: int, seed: int,
+                      key_fns: Sequence[Callable[[T], object]]) -> list[T]:
     """`size` items from `items`, deterministic on `seed`: a GREEDY,
     multi-axis cover -- every distinct value of EVERY `key_fns[i](item)`
     that exists in `items` appears at least once in the result (whenever
@@ -66,11 +64,8 @@ def stratified_subset(
     #: Greedy set cover: while some axis value is still missing and slots
     #: remain, pick the (seeded-order-first) candidate that covers the most
     #: currently-uncovered axis values.
-    while (
-        remaining
-        and len(picked) < size
-        and any(needed[i] - covered[i] for i in range(len(key_fns)))
-    ):
+    while remaining and len(picked) < size and any(needed[i] - covered[i] for i in
+                                                    range(len(key_fns))):
         best_idx, best_score = 0, -1
         for idx, it in enumerate(remaining):
             score = sum(1 for i, kf in enumerate(key_fns) if kf(it) not in covered[i])

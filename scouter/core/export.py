@@ -353,7 +353,9 @@ def run(
         raise ExportAllFailed(
             f"export failed for all {len(files)} file(s): "
             + "; ".join(sorted({f.error or "unknown error" for f in files}))[:400],
-            detail={"files": [{"input": f.input, "error": f.error} for f in files if not f.ok]},
+            detail={
+                "files": [{"input": f.input, "error": f.error} for f in files if not f.ok]
+            },
         )
     return ExportResult(
         preset=preset,

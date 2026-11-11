@@ -12,12 +12,10 @@ def _bar(done: int, total: int, passed: int, partial: int, failed: int) -> str:
     if not total:
         return '<div class="bar"></div>'
     w = lambda n: f"{100.0 * n / total:.2f}%"  # noqa: E731
-    return (
-        f'<div class="bar" role="img" aria-label="{done} of {total} done">'
-        f'<span class="p" style="width:{w(passed)}"></span>'
-        f'<span class="h" style="width:{w(partial)}"></span>'
-        f'<span class="f" style="width:{w(failed)}"></span></div>'
-    )
+    return (f'<div class="bar" role="img" aria-label="{done} of {total} done">'
+            f'<span class="p" style="width:{w(passed)}"></span>'
+            f'<span class="h" style="width:{w(partial)}"></span>'
+            f'<span class="f" style="width:{w(failed)}"></span></div>')
 
 
 def _fmt_eta(s: float | None) -> str:
@@ -38,8 +36,7 @@ def render(progress: dict, report: dict | None = None, title: str = "Gauntlet") 
             f"<td>{_bar(lay.get('done', 0), lay.get('total', 0), lay.get('pass', 0), lay.get('partial', 0), lay.get('fail', 0))}</td>"
             f"<td>{lay.get('rate_pct', '-')}</td><td>{lay.get('p0_pass', 0)}/{lay.get('p0_total', 0)}</td>"
             f"<td>{lay.get('silent', 0)}</td><td>{lay.get('crash', 0)}</td><td>{lay.get('hang', 0)}</td><td>{lay.get('blocked', 0)}</td>"
-            f"<td>{_fmt_eta(lay.get('eta_s'))}</td></tr>"
-        )
+            f"<td>{_fmt_eta(lay.get('eta_s'))}</td></tr>")
     silent = sum(v.get("silent", 0) for v in layers.values())
     crash = sum(v.get("crash", 0) for v in layers.values())
     hangs = sum(v.get("hang", 0) for v in layers.values())
@@ -50,18 +47,15 @@ def render(progress: dict, report: dict | None = None, title: str = "Gauntlet") 
     fails = ""
     if report:
         s8 = report["S8_signoff"]
-        signoff = (
-            f"<p class='verdict {'ok' if s8['release_bar_met'] else 'no'}'>Release bar: "
-            f"{'MET' if s8['release_bar_met'] else 'NOT MET'}</p>"
-        )
-        items = "".join(
-            f"<li><code>{e(f['id'])}</code> {e(f['outcome'])} "
-            f"<code class='repro'>{e(f['repro'])}</code></li>"
-            for f in report["S3_non_pass"][:200]
-        )
+        signoff = (f"<p class='verdict {'ok' if s8['release_bar_met'] else 'no'}'>Release bar: "
+                   f"{'MET' if s8['release_bar_met'] else 'NOT MET'}</p>")
+        items = "".join(f"<li><code>{e(f['id'])}</code> {e(f['outcome'])} "
+                        f"<code class='repro'>{e(f['repro'])}</code></li>"
+                        for f in report["S3_non_pass"][:200])
         fails = f"<h2>Non-pass ({len(report['S3_non_pass'])})</h2><ol>{items}</ol>"
     parked = progress.get("parked") or []
-    parked_html = f"<p>Parked (waiting on a usage limit): {len(parked)} cases</p>" if parked else ""
+    parked_html = (f"<p>Parked (waiting on a usage limit): {len(parked)} cases</p>"
+                   if parked else "")
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">

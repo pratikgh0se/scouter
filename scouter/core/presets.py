@@ -93,42 +93,25 @@ def _write_index(directory: Path, data: dict) -> None:
 def _source_path(cfg: config.Config, path: str) -> str:
     if cfg.library_root:
         try:
-            return str(
-                Path(path).resolve().relative_to(Path(cfg.library_root).expanduser().resolve())
-            )
+            return str(Path(path).resolve().relative_to(Path(cfg.library_root).expanduser().resolve()))
         except ValueError:
             pass
     return path
 
 
 @metrics.instrumented("preset.save")
-def save(
-    name: str,
-    *,
-    modules: list[str] | None = None,
-    description: str = "",
-    educative: str | None = None,
-    confirm: bool = False,
-    dry_run: bool = False,
-    job: str | None = None,
-) -> PresetResult:
+def save(name: str, *, modules: list[str] | None = None, description: str = "",
+         educative: str | None = None, confirm: bool = False, dry_run: bool = False,
+         job: str | None = None) -> PresetResult:
     """Save the darkroom image's session edits as a named darktable style."""
     job = job or current_job()
     paths.validate_style_name(name)
     level = explain.resolve_level(educative)
     if dry_run:
         return PresetResult(
-            outcome="dry_run",
-            name=name,
-            action="save",
-            modules=list(modules or []),
-            plan=[
-                {
-                    "action": "preset.save",
-                    "name": name,
-                    "modules": list(modules) if modules else "this session's edits",
-                }
-            ],
+            outcome="dry_run", name=name, action="save", modules=list(modules or []),
+            plan=[{"action": "preset.save", "name": name,
+                   "modules": list(modules) if modules else "this session's edits"}],
             reason="dry run: no darktable calls; the darkroom image was not resolved",
         )
     # Gate check first (controller ruling): resolve nothing, flush nothing,
@@ -136,10 +119,7 @@ def save(
     replaces = name in style._existing_styles()
     if replaces and not confirm:
         return PresetResult(
-            outcome="dry_run",
-            name=name,
-            action="save",
-            modules=list(modules or []),
+            outcome="dry_run", name=name, action="save", modules=list(modules or []),
             plan=[{"action": "preset.save", "name": name, "replaces_existing": True}],
             reason=f"a preset named {name!r} already exists; re-run with confirm=true / "
             "--yes to replace it",
@@ -154,10 +134,8 @@ def save(
     try:
         darkroom._commit(job, resolved.image_id, strategy="auto", attempts=1, expect_change=False)
     except CommitTimeout as e:
-        warnings.append(
-            f"flush before saving did not confirm ({e.code}): the style reflects the "
-            "last committed sidecar"
-        )
+        warnings.append(f"flush before saving did not confirm ({e.code}): the style reflects the "
+                        "last committed sidecar")
     chosen = list(modules) if modules else session_modules(job, resolved.image_id)
     if not chosen:
         raise UsageError(
@@ -165,34 +143,21 @@ def save(
             detail={"image_id": resolved.image_id, "job": job},
         )
     extract = getattr(style.extract, "__wrapped__", style.extract)
-    sr = extract(
-        resolved.image_id,
-        name,
-        chosen,
-        description=description or f"Scouter preset from {Path(resolved.path).name}",
-        confirm=confirm,
-        job=job,
-    )
+    sr = extract(resolved.image_id, name, chosen,
+                 description=description or f"Scouter preset from {Path(resolved.path).name}",
+                 confirm=confirm, job=job)
     if sr.outcome == "dry_run":
-        return PresetResult(
-            outcome="dry_run",
-            name=name,
-            action="save",
-            modules=chosen,
-            plan=sr.plan,
-            reason=sr.reason
-            or "a style of that name exists; " "re-run with confirm=true / --yes to replace it",
-        )
+        return PresetResult(outcome="dry_run", name=name, action="save", modules=chosen,
+                            plan=sr.plan, reason=sr.reason or "a style of that name exists; "
+                            "re-run with confirm=true / --yes to replace it")
     warnings.extend(sr.warnings)
     cfg = config.load()
     mem = memory_dir(cfg)
     memory_path: str | None = None
     replaced = False
     if mem is None:
-        warnings.append(
-            "saved in darktable and in the styles cache only; set library_root to "
-            "keep presets in the backed-up library memory"
-        )
+        warnings.append("saved in darktable and in the styles cache only; set library_root to "
+                        "keep presets in the backed-up library memory")
     elif sr.dtstyle_path:
         mem.mkdir(parents=True, exist_ok=True)
         dest = mem / f"{name}.dtstyle"
@@ -203,31 +168,19 @@ def save(
         memory_path = str(dest)
         index = _read_index(mem)
         index["presets"] = [p for p in index["presets"] if p.get("name") != name]
-        index["presets"].append(
-            {
-                "name": name,
-                "created_at": _now_z(),
-                "source_path": _source_path(cfg, resolved.path),
-                "image_id": resolved.image_id,
-                "modules": list(sr.operations_included or chosen),
-                "dtstyle": dest.name,
-                "sha256": hashlib.sha256(dest.read_bytes()).hexdigest(),
-                "description": description,
-                "scouter_version": __version__,
-            }
-        )
+        index["presets"].append({
+            "name": name, "created_at": _now_z(),
+            "source_path": _source_path(cfg, resolved.path), "image_id": resolved.image_id,
+            "modules": list(sr.operations_included or chosen), "dtstyle": dest.name,
+            "sha256": hashlib.sha256(dest.read_bytes()).hexdigest(),
+            "description": description, "scouter_version": __version__,
+        })
         _write_index(mem, index)
     included = list(sr.operations_included or chosen)
     return PresetResult(
-        image_id=resolved.image_id,
-        path=resolved.path,
-        name=name,
-        action="save",
-        modules=included,
-        dtstyle_path=sr.dtstyle_path,
-        memory_path=memory_path,
-        replaced=replaced or sr.created is False,
-        warnings=warnings,
+        image_id=resolved.image_id, path=resolved.path, name=name, action="save",
+        modules=included, dtstyle_path=sr.dtstyle_path, memory_path=memory_path,
+        replaced=replaced or sr.created is False, warnings=warnings,
         explain=explain.preset_lines("save", name, included, len(included), level=level, job=job),
     )
 
@@ -243,31 +196,14 @@ def list_presets(*, job: str | None = None) -> PresetListResult:
     rows = []
     for name in sorted(set(ours) | in_dt):
         p = ours.get(name, {})
-        rows.append(
-            {
-                "name": name,
-                "scouter": name in ours,
-                "in_darktable": name in in_dt,
-                "modules": p.get("modules", []),
-                "created_at": p.get("created_at"),
-            }
-        )
+        rows.append({"name": name, "scouter": name in ours, "in_darktable": name in in_dt,
+                     "modules": p.get("modules", []), "created_at": p.get("created_at")})
     missing = sorted(n for n in ours if n not in in_dt)
-    warnings = (
-        [
-            f"{n} is in Scouter's index but not in darktable: re-import "
-            f"{mem / (n + '.dtstyle')} in darktable's styles module, or save it again"
-            for n in missing
-        ]
-        if mem
-        else []
-    )
-    return PresetListResult(
-        presets=rows,
-        darktable_only=sorted(in_dt - set(ours)),
-        missing_in_darktable=missing,
-        warnings=warnings,
-    )
+    warnings = [f"{n} is in Scouter's index but not in darktable: re-import "
+                f"{mem / (n + '.dtstyle')} in darktable's styles module, or save it again"
+                for n in missing] if mem else []
+    return PresetListResult(presets=rows, darktable_only=sorted(in_dt - set(ours)),
+                            missing_in_darktable=missing, warnings=warnings)
 
 
 def _history_end(path: str) -> int | None:
@@ -279,11 +215,9 @@ def _require_style(name: str) -> None:
     existing = style._existing_styles()
     if name not in existing:
         suggestions = difflib.get_close_matches(name, existing, n=3, cutoff=0.6)
-        raise UsageError(
-            f"no darktable style named {name!r}",
-            fix="`scouter preset list` shows every preset",
-            detail={"name": name, "suggestions": suggestions},
-        )
+        raise UsageError(f"no darktable style named {name!r}",
+                         fix="`scouter preset list` shows every preset",
+                         detail={"name": name, "suggestions": suggestions})
 
 
 def _same_image(image: str | int, current: dtbridge.ResolvedImage) -> bool:
@@ -324,14 +258,8 @@ def _current_image_or_none() -> dtbridge.ResolvedImage | None:
 
 
 @metrics.instrumented("preset.apply")
-def apply(
-    name: str,
-    image: str | int | None = None,
-    *,
-    educative: str | None = None,
-    dry_run: bool = False,
-    job: str | None = None,
-) -> PresetResult:
+def apply(name: str, image: str | int | None = None, *, educative: str | None = None,
+          dry_run: bool = False, job: str | None = None) -> PresetResult:
     """Apply a preset to the open image (through a bounce, §8.3) or to another
     image (the library path, phase 2's `style.apply`)."""
     job = job or current_job()
@@ -344,13 +272,9 @@ def apply(
         raise UsageError("a preset name is required", detail={"name": name})
     level = explain.resolve_level(educative)
     if dry_run:
-        return PresetResult(
-            outcome="dry_run",
-            name=name,
-            action="apply",
-            plan=[{"action": "preset.apply", "name": name, "image": image}],
-            reason="dry run: no darktable calls were made",
-        )
+        return PresetResult(outcome="dry_run", name=name, action="apply",
+                            plan=[{"action": "preset.apply", "name": name, "image": image}],
+                            reason="dry run: no darktable calls were made")
     _require_style(name)
     # Fix round 1: the library path (image given, and not the open one) must
     # never require a darkroom image at all -- look it up tolerantly, and
@@ -360,15 +284,10 @@ def apply(
     target_is_open = image is None or (current is not None and _same_image(image, current))
     if not target_is_open:
         applied = getattr(style.apply, "__wrapped__", style.apply)(image, name, job=job)
-        return PresetResult(
-            image_id=applied.image_id,
-            path=applied.path,
-            name=name,
-            action="apply",
-            applied_to="library",
-            warnings=applied.warnings,
-            explain=explain.preset_lines("apply", name, [], applied.applied, level=level, job=job),
-        )
+        return PresetResult(image_id=applied.image_id, path=applied.path, name=name,
+                            action="apply", applied_to="library", warnings=applied.warnings,
+                            explain=explain.preset_lines("apply", name, [], applied.applied,
+                                                         level=level, job=job))
     assert current is not None  # target_is_open guarantees this
     darkroom._require_job_image(job, current.image_id)
     dtbridge.require_darkroom()
@@ -384,16 +303,8 @@ def apply(
             "(no committed sidecar to verify the advance against)",
             detail={"path": current.path, "name": name},
         )
-    entry = journal.begin(
-        job,
-        verb="preset.apply",
-        image_id=current.image_id,
-        path=current.path,
-        module="",
-        param="",
-        instance=0,
-        before={"history_end": before},
-    )
+    entry = journal.begin(job, verb="preset.apply", image_id=current.image_id, path=current.path,
+                          module="", param="", instance=0, before={"history_end": before})
     # Final review #2: only a failure of the bridge call ITSELF means the
     # style did not land -- `journal.fail` is for that alone. Once darktable
     # answers `applied: true`, the style IS in the history (and
@@ -426,53 +337,31 @@ def apply(
         warnings.append(
             f"style {name!r} was applied, but the sidecar's history_end did not advance "
             f"({before} -> {after}): the advance could not be verified; darktable holds the "
-            "style, and undo still refuses it (history items cannot be removed)"
-        )
+            "style, and undo still refuses it (history items cannot be removed)")
         after = None
     journal.complete(job, entry.seq, after={"history_end": after, "style": name})
     return PresetResult(
-        image_id=current.image_id,
-        path=current.path,
-        name=name,
-        action="apply",
-        applied_to="darkroom",
-        history_end_before=before,
-        history_end_after=after,
+        image_id=current.image_id, path=current.path, name=name, action="apply",
+        applied_to="darkroom", history_end_before=before, history_end_after=after,
         warnings=warnings,
-        explain=explain.preset_lines(
-            "apply", name, [], None if after is None else after - before, level=level, job=job
-        ),
+        explain=explain.preset_lines("apply", name, [], None if after is None else after - before,
+                                     level=level, job=job),
     )
 
 
 @metrics.instrumented("preset.apply_job")
-def apply_job(
-    name: str,
-    *,
-    job_slug: str,
-    exclude: list[str] | None = None,
-    force: bool = False,
-    confirm: bool = False,
-    dry_run: bool = False,
-    job: str | None = None,
-) -> StyleSetResult:
+def apply_job(name: str, *, job_slug: str, exclude: list[str] | None = None, force: bool = False,
+              confirm: bool = False, dry_run: bool = False,
+              job: str | None = None) -> StyleSetResult:
     """A thin, always-gated delegate to `style.apply_set` (design §8.5)."""
     job = job or current_job()
     fn = getattr(style.apply_set, "__wrapped__", style.apply_set)
-    return fn(
-        name,
-        job_slug=job_slug,
-        exclude=exclude,
-        force=force,
-        confirm=confirm,
-        dry_run=dry_run,
-        job=job,
-    )
+    return fn(name, job_slug=job_slug, exclude=exclude, force=force, confirm=confirm,
+              dry_run=dry_run, job=job)
 
 
-PRESET_NAME_ARG = ArgSpec(
-    "name", "str", required=True, positional=True, help="preset (darktable style) name"
-)
+PRESET_NAME_ARG = ArgSpec("name", "str", required=True, positional=True,
+                          help="preset (darktable style) name")
 
 for verb in (
     Verb(
@@ -481,20 +370,12 @@ for verb in (
         fn=save,
         args=(
             PRESET_NAME_ARG,
-            ArgSpec(
-                "modules",
-                "list[str]",
-                default=None,
-                help="modules to keep (default: those changed in this session)",
-            ),
+            ArgSpec("modules", "list[str]", default=None,
+                    help="modules to keep (default: those changed in this session)"),
             ArgSpec("description", "str", default="", help="style description"),
             EDUCATIVE_ARG,
-            ArgSpec(
-                "confirm",
-                "bool",
-                default=False,
-                help="required only to replace an existing preset of this name",
-            ),
+            ArgSpec("confirm", "bool", default=False,
+                    help="required only to replace an existing preset of this name"),
             ArgSpec("dry_run", "bool", default=False, help="plan only, send nothing"),
         ),
         writes=True,
@@ -514,17 +395,11 @@ for verb in (
         id="preset.apply",
         group="preset",
         fn=apply,
-        args=(
-            PRESET_NAME_ARG,
-            ArgSpec(
-                "image",
-                "image",
-                positional=True,
-                help="path or image id; default: the image open in the darkroom",
-            ),
-            EDUCATIVE_ARG,
-            ArgSpec("dry_run", "bool", default=False, help="plan only, send nothing"),
-        ),
+        args=(PRESET_NAME_ARG,
+              ArgSpec("image", "image", positional=True,
+                      help="path or image id; default: the image open in the darkroom"),
+              EDUCATIVE_ARG,
+              ArgSpec("dry_run", "bool", default=False, help="plan only, send nothing")),
         writes=True,
         gated=False,
         summary="Apply a preset to the open image (live, via a bounce) or to another image.",
@@ -533,19 +408,13 @@ for verb in (
         id="preset.apply_job",
         group="preset",
         fn=apply_job,
-        args=(
-            PRESET_NAME_ARG,
-            ArgSpec("job_slug", "str", required=True, help="job whose frames get the preset"),
-            ArgSpec("exclude", "list[str]", default=None, help="paths or ids to leave out"),
-            ArgSpec(
-                "force",
-                "bool",
-                default=False,
-                help="apply even where Scouter's ledger says it is already applied",
-            ),
-            ArgSpec("confirm", "bool", default=False, help="required: a set write is gated"),
-            ArgSpec("dry_run", "bool", default=False, help="plan only"),
-        ),
+        args=(PRESET_NAME_ARG,
+              ArgSpec("job_slug", "str", required=True, help="job whose frames get the preset"),
+              ArgSpec("exclude", "list[str]", default=None, help="paths or ids to leave out"),
+              ArgSpec("force", "bool", default=False,
+                      help="apply even where Scouter's ledger says it is already applied"),
+              ArgSpec("confirm", "bool", default=False, help="required: a set write is gated"),
+              ArgSpec("dry_run", "bool", default=False, help="plan only")),
         writes=True,
         gated=True,
         summary="Apply a preset to every frame of a job (batched, gated).",

@@ -16,12 +16,9 @@ import pytest
 
 from scouter.cli.main import main
 
-EXAMPLES = {
-    e["id"]: e
-    for e in json.loads((Path(__file__).parent / "cli_argparse_json_envelope.json").read_text())[
-        "examples"
-    ]
-}
+EXAMPLES = {e["id"]: e for e in
+            json.loads((Path(__file__).parent / "cli_argparse_json_envelope.json").read_text())[
+                "examples"]}
 
 
 def _run(argv: list[str]) -> tuple[dict, int]:

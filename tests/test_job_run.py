@@ -35,58 +35,40 @@ class _Fakes:
         self.calls.append(("cull.propose", kw))
         if self.propose_error:
             raise self.propose_error
-        return CullResult(
-            proposal_path="/j/.scouter/cull-1.json",
-            job_slug=kw["job_slug"],
-            counts={"pick": 3, "keep": 20, "unchanged": 7},
-            stats={"sharpness_threshold": 0.012, "failed": 0},
-            warnings=["spread is small"],
-        )
+        return CullResult(proposal_path="/j/.scouter/cull-1.json", job_slug=kw["job_slug"],
+                          counts={"pick": 3, "keep": 20, "unchanged": 7},
+                          stats={"sharpness_threshold": 0.012, "failed": 0},
+                          warnings=["spread is small"])
 
     def apply(self, **kw):
         self.calls.append(("cull.apply", kw))
         if kw.get("dry_run") or not kw.get("confirm"):
             return CullApplyResult(outcome="dry_run", would_change=23, reason="dry")
-        return CullApplyResult(
-            applied=23, unchanged=7, verified=22, unverified=1, stale=["/j/raw/x.ORF"]
-        )
+        return CullApplyResult(applied=23, unchanged=7, verified=22, unverified=1,
+                               stale=["/j/raw/x.ORF"])
 
     def apply_job(self, name, **kw):
         self.calls.append(("preset.apply_job", {"name": name, **kw}))
         if kw.get("dry_run") or not kw.get("confirm"):
             return StyleSetResult(outcome="dry_run", name=name, requested=29, reason="dry")
-        return StyleSetResult(
-            outcome=self.set_outcome,
-            name=name,
-            requested=29,
-            applied=29 if self.set_outcome == "ok" else 20,
-            failed=0 if self.set_outcome == "ok" else 9,
-        )
+        return StyleSetResult(outcome=self.set_outcome, name=name, requested=29,
+                              applied=29 if self.set_outcome == "ok" else 20,
+                              failed=0 if self.set_outcome == "ok" else 9)
 
     def outliers(self, reference, **kw):
         self.calls.append(("outliers.list", {"reference": reference, **kw}))
-        return OutliersResult(
-            checked=29,
-            within_tolerance=25,
-            wb_test="ratio",
-            outliers=[{"path": f"/j/raw/{i}.ORF"} for i in range(4)],
-        )
+        return OutliersResult(checked=29, within_tolerance=25, wb_test="ratio",
+                              outliers=[{"path": f"/j/raw/{i}.ORF"} for i in range(4)])
 
     def release(self, job_slug, preset, **kw):
         self.calls.append(("export.release", {"job_slug": job_slug, "preset": preset, **kw}))
         if self.release_error:
             raise self.release_error
         if kw.get("dry_run") or not kw.get("confirm"):
-            return ReleaseResult(
-                outcome="dry_run", job_slug=job_slug, preset=preset, selected=3, of=30, reason="dry"
-            )
-        return ReleaseResult(
-            job_slug=job_slug,
-            preset=preset,
-            selected=3,
-            of=30,
-            manifest_path="/j/.scouter/manifest.json",
-        )
+            return ReleaseResult(outcome="dry_run", job_slug=job_slug, preset=preset,
+                                 selected=3, of=30, reason="dry")
+        return ReleaseResult(job_slug=job_slug, preset=preset, selected=3, of=30,
+                             manifest_path="/j/.scouter/manifest.json")
 
     def names(self) -> list[str]:
         return [c[0] for c in self.calls]
@@ -126,14 +108,11 @@ class JobRunTest(unittest.TestCase):
         self.assertEqual(by["export"]["counts"]["selected"], 3)
 
     def test_full_chain_in_order_with_counts(self) -> None:
-        r = self.run_job(
-            preset="hero-harbour", hero="/j/raw/h.ORF", exclude=["/j/raw/b.ORF"], confirm=True
-        )
+        r = self.run_job(preset="hero-harbour", hero="/j/raw/h.ORF", exclude=["/j/raw/b.ORF"],
+                         confirm=True)
         self.assertEqual(r.outcome, "ok")
-        self.assertEqual(
-            self.f.names(),
-            ["cull.propose", "cull.apply", "preset.apply_job", "outliers.list", "export.release"],
-        )
+        self.assertEqual(self.f.names(), ["cull.propose", "cull.apply", "preset.apply_job",
+                                          "outliers.list", "export.release"])
         calls = dict(self.f.calls)
         self.assertEqual(calls["cull.apply"]["proposal"], "/j/.scouter/cull-1.json")
         self.assertEqual(calls["preset.apply_job"]["exclude"], ["/j/raw/b.ORF", "/j/raw/h.ORF"])
@@ -143,9 +122,8 @@ class JobRunTest(unittest.TestCase):
         self.assertEqual(rows["cull.propose"]["counts"]["pick"], 3)
         self.assertEqual(rows["cull.propose"]["counts"]["sharpness_threshold"], 0.012)
         self.assertEqual(rows["cull.apply"]["counts"]["stale"], 1)
-        self.assertEqual(
-            rows["preset"]["counts"], {"requested": 29, "applied": 29, "failed": 0, "missed": 0}
-        )
+        self.assertEqual(rows["preset"]["counts"], {"requested": 29, "applied": 29, "failed": 0,
+                                                    "missed": 0})
         self.assertEqual(rows["outliers"]["counts"]["outliers"], 4)
         self.assertEqual(rows["export"]["counts"]["selected"], 3)
         self.assertEqual(r.completed, 5)
@@ -206,22 +184,8 @@ class JobRunRegistryTest(unittest.TestCase):
         self.assertTrue(verb.gated)
         self.assertTrue(verb.writes)
         ns = build_parser().parse_args(
-            [
-                "job",
-                "run",
-                "--job-slug",
-                "harbour",
-                "--preset",
-                "hero",
-                "--hero",
-                "/h.ORF",
-                "--exclude",
-                "/a.ORF,/b.ORF",
-                "--steps",
-                "cull,export",
-                "--dry-run",
-            ]
-        )
+            ["job", "run", "--job-slug", "harbour", "--preset", "hero", "--hero", "/h.ORF",
+             "--exclude", "/a.ORF,/b.ORF", "--steps", "cull,export", "--dry-run"])
         self.assertEqual(ns._verb, "job.run")
         self.assertEqual(ns.exclude, ["/a.ORF", "/b.ORF"])
         self.assertEqual(ns.steps, ["cull", "export"])

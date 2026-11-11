@@ -48,9 +48,8 @@ def _golden_pending(session) -> bool:
     if (root / "cases" / f"{GOLDEN_ID}.json").exists():
         return False
     try:
-        return any(
-            GOLDEN_ID in p.read_text().split() for p in (root / "workers").glob("w*/cases.txt")
-        )
+        return any(GOLDEN_ID in p.read_text().split()
+                   for p in (root / "workers").glob("w*/cases.txt"))
     except OSError:
         return False
 
@@ -76,8 +75,7 @@ def load_calibration(session, *, sleep=time.sleep, clock=time.monotonic) -> dict
             return cal
     raise CalibrationMissing(
         f"chart calibration missing or unreadable ({_cal_path(session)}); run the "
-        f"{GOLDEN_ID} case first (it measures it)"
-    )
+        f"{GOLDEN_ID} case first (it measures it)")
 
 
 def _probe_base(module: str, param: str) -> tuple[float | None, str | None]:
@@ -146,17 +144,12 @@ def chart_golden(session, case, step, obs) -> CallRecord:
             base, source = _probe_base(module, param)
             if base is None:
                 cal[key] = None
-                cal_errors[key] = (
-                    f"{key} has no declared neutral, darktable default, or "
-                    "default candidate in the vocabulary to probe from"
-                )
+                cal_errors[key] = (f"{key} has no declared neutral, darktable default, or "
+                                    "default candidate in the vocabulary to probe from")
                 continue
-            rec = session.call(
-                "darkroom_set",
-                {"module": module, "param": param, "value": base + amount},
-                8.0,
-                write=True,
-            )
+            rec = session.call("darkroom_set",
+                               {"module": module, "param": param, "value": base + amount},
+                               8.0, write=True)
             if rec.error or not (rec.envelope or {}).get("ok"):
                 cal[key] = None
                 cal_errors[key] = rec.error or "darkroom_set did not report ok"
@@ -188,14 +181,12 @@ def chart_golden(session, case, step, obs) -> CallRecord:
         #: gap (W3/C3), not a calibration failure: it stays in calibration_errors
         #: but does not make calibration_ok false. Every other error still does.
         gap_keys = {k for k, e in cal_errors.items() if "has no declared neutral" in e}
-        obs.extra["calibration_ok"] = all(k in gap_keys for k in cal_errors) and all(
-            v not in (None, 0.0)
-            for k, v in cal.items()
-            if not k.startswith("_") and k not in gap_keys
-        )
-        return CallRecord(
-            "chart_golden", {}, {"ok": True, "outcome": "ok", "data": {"golden": golden["verdict"]}}
-        )
+        obs.extra["calibration_ok"] = (
+            all(k in gap_keys for k in cal_errors)
+            and all(v not in (None, 0.0) for k, v in cal.items()
+                    if not k.startswith("_") and k not in gap_keys))
+        return CallRecord("chart_golden", {}, {"ok": True, "outcome": "ok",
+                                               "data": {"golden": golden["verdict"]}})
     except SessionBlocked as e:
         obs.blocked = f"session: {e}"
         return CallRecord("chart_golden", {}, error=f"blocked: {e}")
@@ -208,9 +199,8 @@ def _tmp_golden(session, stats) -> Path:
     return p
 
 
-def plan_moves(
-    look: dict, cal: dict, current: dict
-) -> tuple[list[tuple[str, str, float]], list[str]]:
+def plan_moves(look: dict, cal: dict, current: dict) -> tuple[list[tuple[str, str, float]],
+                                                               list[str]]:
     """[(module, param, absolute value)], notes. Linear per-param solve."""
     from scouter.core import vocab
 
@@ -227,9 +217,8 @@ def plan_moves(
             # is planned exactly like a key with no calibration at all --
             # never a move built from a measurement no host probe has
             # confirmed.
-            notes.append(
-                f"no calibration for {key}" if not s else f"{key} calibration unverified: {error}"
-            )
+            notes.append(f"no calibration for {key}" if not s else
+                         f"{key} calibration unverified: {error}")
             return
         module, param = key.split(".")
         row = vocab.spec(module, param)
@@ -242,11 +231,9 @@ def plan_moves(
         moves.append((module, param, round(target, 4)))
 
     tone = t.get("tone") or {}
-    for k, key in (
-        ("shadows_ev", "colorbalancergb.shadows_luminance"),
-        ("mids_ev", "colorbalancergb.midtones_luminance"),
-        ("highlights_ev", "colorbalancergb.highlights_luminance"),
-    ):
+    for k, key in (("shadows_ev", "colorbalancergb.shadows_luminance"),
+                   ("mids_ev", "colorbalancergb.midtones_luminance"),
+                   ("highlights_ev", "colorbalancergb.highlights_luminance")):
         if tone.get(k):
             add(key, tone[k])
     if tone.get("contrast"):
@@ -287,28 +274,16 @@ def look_plan(session, case, step, obs) -> CallRecord:
         moves, notes = plan_moves(look, cal, obs.before.get("params", {}))
         sub = []
         for module, param, value in moves:
-            r = session.call(
-                "darkroom_set", {"module": module, "param": param, "value": value}, 8.0, write=True
-            )
-            sub.append(
-                {
-                    "tool": "darkroom_set",
-                    "module": module,
-                    "param": param,
-                    "value": value,
-                    "ok": bool((r.envelope or {}).get("ok")),
-                    "error": r.error,
-                }
-            )
+            r = session.call("darkroom_set", {"module": module, "param": param, "value": value},
+                             8.0, write=True)
+            sub.append({"tool": "darkroom_set", "module": module, "param": param, "value": value,
+                        "ok": bool((r.envelope or {}).get("ok")), "error": r.error})
         obs.extra["look_moves"] = sub
         obs.extra["look_notes"] = notes
         ok = all(m["ok"] for m in sub)
-        return CallRecord(
-            "look_plan",
-            step.args,
-            {"ok": ok, "outcome": "ok" if ok else "error:partial", "data": {"moves": sub}},
-            write=True,
-        )
+        return CallRecord("look_plan", step.args, {"ok": ok, "outcome": "ok" if ok else
+                                                   "error:partial", "data": {"moves": sub}},
+                          write=True)
     except CalibrationMissing as e:
         obs.blocked = f"harness_error: look_plan: {e}"
         return CallRecord("look_plan", step.args, error=f"blocked: {e}")

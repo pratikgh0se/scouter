@@ -3,9 +3,8 @@ from gauntlet.evaluate import Policy, evaluate
 from tests.gauntlet import taxonomy
 from tests.gauntlet.layers import install
 
-POLICY = Policy(
-    refusal_codes=frozenset(), transient_codes=frozenset(), refusal_markers=(), claim_markers=()
-)
+POLICY = Policy(refusal_codes=frozenset(), transient_codes=frozenset(),
+                refusal_markers=(), claim_markers=())
 
 
 def test_install_is_10_ordered_cli_cases():
@@ -25,9 +24,8 @@ def test_config_version_actions_get_a_second_honest_check():
         assert len(checks) == 2
         paths = {chk.target["path"] for chk in checks}
         assert paths == {"action_ok", "detail.config_has_version"}
-        version_check = next(
-            chk for chk in checks if chk.target["path"] == "detail.config_has_version"
-        )
+        version_check = next(chk for chk in checks
+                             if chk.target["path"] == "detail.config_has_version")
         # GR-1: the tag key is `disputed`, never `needs_review` (that key
         # already means something else on checkmap's own Route-A move check).
         assert "disputed" in version_check.tags
@@ -45,7 +43,8 @@ def test_rerun_existing_checks_config_unchanged_not_has_version():
     assert len(checks) == 2
     paths = {chk.target["path"] for chk in checks}
     assert paths == {"action_ok", "detail.config_unchanged"}
-    unchanged_check = next(chk for chk in checks if chk.target["path"] == "detail.config_unchanged")
+    unchanged_check = next(chk for chk in checks
+                           if chk.target["path"] == "detail.config_unchanged")
     assert unchanged_check.tags == {}
 
 
@@ -76,11 +75,9 @@ def test_setup_again_has_no_config_version_check():
 
 
 def test_only_setup_keeps_the_disputed_version_check():
-    carriers = sorted(
-        a
-        for a, c in _by_action().items()
-        if any(chk.target["path"] == "detail.config_has_version" for chk in c.expect.checks)
-    )
+    carriers = sorted(a for a, c in _by_action().items()
+                      if any(chk.target["path"] == "detail.config_has_version"
+                             for chk in c.expect.checks))
     assert carriers == ["setup"]
 
 
@@ -89,16 +86,10 @@ def test_every_install_case_needs_all_checks_for_partial():
 
 
 def _rerun_obs(*, action_ok, config_unchanged):
-    return Observation(
-        calls=[
-            CallRecord(
-                "rehearsal",
-                {"action": "rerun_existing"},
-                {"ok": action_ok, "outcome": "ok", "data": {}},
-            )
-        ],
-        extra={"action_ok": action_ok, "detail": {"config_unchanged": config_unchanged}},
-    )
+    return Observation(calls=[CallRecord("rehearsal", {"action": "rerun_existing"},
+                                         {"ok": action_ok, "outcome": "ok", "data": {}})],
+                       extra={"action_ok": action_ok,
+                              "detail": {"config_unchanged": config_unchanged}})
 
 
 def test_a_caught_config_clobber_scores_failed_not_partial():

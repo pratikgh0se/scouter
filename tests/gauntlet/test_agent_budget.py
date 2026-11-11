@@ -40,12 +40,8 @@ def test_scouter_stratified_subset_covers_every_class_and_genre():
     sub = agent_budget.scouter_stratified_subset(pool, 40, seed=345)
     assert len(sub) == 40
     assert {i.meta["class"] for i in sub} == {"in", "partial", "out", "impossible", "workflow"}
-    assert {i.meta["genre"] for i in sub} == {
-        "portrait",
-        "landscape",
-        "wedding and events",
-        "product",
-    }
+    assert {i.meta["genre"] for i in sub} == {"portrait", "landscape", "wedding and events",
+                                              "product"}
 
 
 def test_scouter_stratified_subset_covers_the_real_generator_over_200_seeds():
@@ -85,9 +81,8 @@ def test_usage_fraction_reads_the_real_ledger_path(tmp_path, monkeypatch):
     monkeypatch.delenv(agent_budget.USAGE_ENV, raising=False)
     path = tmp_path / "usage-window.json"
     now = 1_000_000.0
-    path.write_text(
-        json.dumps({"utilization": 0.71, "reset_at": now + 1800, "written_at": now - 60})
-    )
+    path.write_text(json.dumps({"utilization": 0.71, "reset_at": now + 1800,
+                                "written_at": now - 60}))
     monkeypatch.setattr(agent_budget, "USAGE_WINDOW_PATH", path)
     util, reset_at = agent_budget.usage_fraction(now=now)
     assert util == pytest.approx(0.71) and reset_at == pytest.approx(now + 1800)
@@ -100,9 +95,8 @@ def test_usage_fraction_is_none_when_the_reading_is_stale(tmp_path, monkeypatch)
     path = tmp_path / "usage-window.json"
     now = 1_000_000.0
     stale_written_at = now - agent_budget.STALE_S - 1
-    path.write_text(
-        json.dumps({"utilization": 0.95, "reset_at": now + 1800, "written_at": stale_written_at})
-    )
+    path.write_text(json.dumps({"utilization": 0.95, "reset_at": now + 1800,
+                                "written_at": stale_written_at}))
     monkeypatch.setattr(agent_budget, "USAGE_WINDOW_PATH", path)
     assert agent_budget.usage_fraction(now=now) is None
 
@@ -130,8 +124,7 @@ def test_check_usage_budget_parks_at_the_threshold_with_until_the_reset():
 
 
 def test_check_usage_budget_runs_at_59_percent_and_parks_at_60_from_the_real_window(
-    tmp_path, monkeypatch
-):
+        tmp_path, monkeypatch):
     """(card t_e82c2951): the boundary, read through the real file (not a
     stub `usage_fn`) -- 59% is below the 60% ruling and must run; 60% is
     at the threshold and must park."""
@@ -139,14 +132,12 @@ def test_check_usage_budget_runs_at_59_percent_and_parks_at_60_from_the_real_win
     path = tmp_path / "usage-window.json"
     monkeypatch.setattr(agent_budget, "USAGE_WINDOW_PATH", path)
     now = 1_000_000.0
-    path.write_text(
-        json.dumps({"utilization": 0.59, "reset_at": now + 1800, "written_at": now - 60})
-    )
+    path.write_text(json.dumps({"utilization": 0.59, "reset_at": now + 1800,
+                                "written_at": now - 60}))
     result = agent_budget.check_usage_budget(usage_fn=lambda: agent_budget.usage_fraction(now=now))
     assert result is None  # ran: no Park at 59%
-    path.write_text(
-        json.dumps({"utilization": 0.60, "reset_at": now + 1800, "written_at": now - 60})
-    )
+    path.write_text(json.dumps({"utilization": 0.60, "reset_at": now + 1800,
+                                "written_at": now - 60}))
     with pytest.raises(Park, match="usage_meter"):
         agent_budget.check_usage_budget(usage_fn=lambda: agent_budget.usage_fraction(now=now))
 

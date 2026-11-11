@@ -18,7 +18,8 @@ COUNT_TOLERANCE = 0.02
 
 #: Files (relative to the working directory) whose content decides what
 #: generation produces: the layer generators, their data tables, the config.
-FINGERPRINT_GLOBS = ("tests/gauntlet/layers/*.py", "tests/gauntlet/data/*.json", "gauntlet.json")
+FINGERPRINT_GLOBS = ("tests/gauntlet/layers/*.py", "tests/gauntlet/data/*.json",
+                     "gauntlet.json")
 FINGERPRINT_NAME = "generator-fingerprint.txt"
 
 
@@ -42,10 +43,8 @@ def stale_cases_reason(run: RunDir, root: Path | None = None) -> str | None:
         return "no generator fingerprint recorded (cases.jsonl predates the stale-cases guard)"
     recorded, current = f.read_text(encoding="utf-8").strip(), generator_fingerprint(root)
     if recorded != current:
-        return (
-            f"generator inputs changed since generate "
-            f"(recorded {recorded[:12]}, now {current[:12]})"
-        )
+        return (f"generator inputs changed since generate "
+                f"(recorded {recorded[:12]}, now {current[:12]})")
     return None
 
 
@@ -67,31 +66,25 @@ def check_layer(spec: LayerSpec, cases: list[Case]) -> LayerCount:
         if c.layer != spec.name:
             errors.append(f"{c.id}: layer {c.layer!r} generated under {spec.name!r}")
         if c.meta.get("unmapped") and c.tier in ("P0", "P1"):
-            errors.append(
-                f"{c.id}: {c.tier} case falls through to unmapped " f"({c.meta['unmapped']})"
-            )
+            errors.append(f"{c.id}: {c.tier} case falls through to unmapped "
+                          f"({c.meta['unmapped']})")
     want = spec.expected_count
     if want and abs(len(cases) - want) > COUNT_TOLERANCE * want:
         errors.append(f"layer {spec.name}: {len(cases)} cases, formula says {want} (> 2% off)")
     if errors:
-        raise GenerationError(
-            "; ".join(errors[:20]) + (f" (+{len(errors) - 20} more)" if len(errors) > 20 else "")
-        )
+        raise GenerationError("; ".join(errors[:20]) + (f" (+{len(errors) - 20} more)"
+                                                        if len(errors) > 20 else ""))
     tiers: dict[str, int] = {}
     for c in cases:
         tiers[c.tier] = tiers.get(c.tier, 0) + 1
-    return LayerCount(spec, len(cases), tiers, [c.id for c in cases if c.meta.get("unmapped")])
+    return LayerCount(spec, len(cases), tiers,
+                      [c.id for c in cases if c.meta.get("unmapped")])
 
 
-def generate_all(
-    adapter: Adapter,
-    layers: list[str] | None = None,
-    *,
-    subset: int | None = None,
-    subset_layer: str | None = None,
-    subset_keys: list[str] | None = None,
-    seed: int = 0,
-) -> tuple[list[Case], list[LayerCount], dict | None]:
+def generate_all(adapter: Adapter, layers: list[str] | None = None, *,
+                 subset: int | None = None, subset_layer: str | None = None,
+                 subset_keys: list[str] | None = None, seed: int = 0
+                 ) -> tuple[list[Case], list[LayerCount], dict | None]:
     """(row 501 item H, fix round 1): when `subset` is given, `subset_layer`
     is generated and VALIDATED in full first (check_layer runs against the
     complete, unsubsetted list -- the count gate that catches a real
@@ -129,47 +122,30 @@ def generate_all(
             keys = subset_keys or []
             key_fns = [(lambda c, k=k: c.meta.get(k)) for k in keys]
             cases = stratified_subset(cases, subset, seed, key_fns)
-            subset_record = {
-                "layer": subset_layer,
-                "size": len(cases),
-                "of": full_n,
-                "seed": seed,
-                "keys": keys,
-            }
+            subset_record = {"layer": subset_layer, "size": len(cases), "of": full_n,
+                             "seed": seed, "keys": keys}
         all_cases.extend(cases)
     return all_cases, counts, subset_record
 
 
-def generation_md(
-    adapter: Adapter, counts: list[LayerCount], cases: list[Case], subset_record: dict | None = None
-) -> str:
-    lines = [
-        f"# Generation: {adapter.name}",
-        "",
-        "| # | Layer | Formula | Generated | P0 | P1 | P2 | Live |",
-        "|---|---|---|---|---|---|---|---|",
-    ]
+def generation_md(adapter: Adapter, counts: list[LayerCount], cases: list[Case],
+                  subset_record: dict | None = None) -> str:
+    lines = [f"# Generation: {adapter.name}", "",
+             "| # | Layer | Formula | Generated | P0 | P1 | P2 | Live |",
+             "|---|---|---|---|---|---|---|---|"]
     for c in counts:
         s = c.spec
-        lines.append(
-            f"| {s.order} | {s.name} | {s.expected_count} | {c.got} | "
-            f"{c.tiers.get('P0', 0)} | {c.tiers.get('P1', 0)} | "
-            f"{c.tiers.get('P2', 0)} | {'yes' if s.live else 'no'} |"
-        )
+        lines.append(f"| {s.order} | {s.name} | {s.expected_count} | {c.got} | "
+                     f"{c.tiers.get('P0', 0)} | {c.tiers.get('P1', 0)} | "
+                     f"{c.tiers.get('P2', 0)} | {'yes' if s.live else 'no'} |")
     total = sum(c.got for c in counts)
-    lines += [
-        "",
-        f"**Total:** {total} cases " f"({sum(c.got for c in counts if c.spec.live)} live).",
-        "",
-    ]
+    lines += ["", f"**Total:** {total} cases "
+              f"({sum(c.got for c in counts if c.spec.live)} live).", ""]
     if subset_record:
-        lines += [
-            f"**Subset:** layer `{subset_record['layer']}` generated "
-            f"{subset_record['of']}, kept {subset_record['size']} "
-            f"(stratified on {subset_record['keys']}, seed {subset_record['seed']}) "
-            "-- the layer table above and this run's cases.jsonl differ by design.",
-            "",
-        ]
+        lines += [f"**Subset:** layer `{subset_record['layer']}` generated "
+                  f"{subset_record['of']}, kept {subset_record['size']} "
+                  f"(stratified on {subset_record['keys']}, seed {subset_record['seed']}) "
+                  "-- the layer table above and this run's cases.jsonl differ by design.", ""]
     unmapped = [i for c in counts for i in c.unmapped_p2]
     if unmapped:
         lines += ["## P2 cases with no mapping", ""] + [f"- `{i}`" for i in unmapped] + [""]
@@ -179,24 +155,12 @@ def generation_md(
     return "\n".join(lines)
 
 
-def write_generation(
-    run: RunDir,
-    adapter: Adapter,
-    layers: list[str] | None = None,
-    *,
-    subset: int | None = None,
-    subset_layer: str | None = None,
-    subset_keys: list[str] | None = None,
-    seed: int = 0,
-) -> list[LayerCount]:
-    cases, counts, subset_record = generate_all(
-        adapter,
-        layers,
-        subset=subset,
-        subset_layer=subset_layer,
-        subset_keys=subset_keys,
-        seed=seed,
-    )
+def write_generation(run: RunDir, adapter: Adapter, layers: list[str] | None = None, *,
+                     subset: int | None = None, subset_layer: str | None = None,
+                     subset_keys: list[str] | None = None, seed: int = 0) -> list[LayerCount]:
+    cases, counts, subset_record = generate_all(adapter, layers, subset=subset,
+                                                subset_layer=subset_layer,
+                                                subset_keys=subset_keys, seed=seed)
     run.ensure()
     run.write_cases(cases)
     atomic_write_text(run.root / FINGERPRINT_NAME, generator_fingerprint() + "\n")

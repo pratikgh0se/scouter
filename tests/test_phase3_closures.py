@@ -28,7 +28,6 @@ class SessionJobTest(unittest.TestCase):
 
     def test_an_invalid_explicit_job_is_refused(self) -> None:
         from scouter.errors import UsageError
-
         with self.assertRaises(UsageError):
             server._pin_session_job({"SCOUTER_JOB": "../escape"})
 
@@ -74,11 +73,9 @@ class HostSupportScopeTest(unittest.TestCase):
             return {k for k in set(a) | set(b) if a.get(k) != b.get(k)}
 
         for pre_existing in (True, False):
-            with (
-                self.subTest(pre_existing=pre_existing),
-                tempfile.TemporaryDirectory(prefix="scouter-p3r18-") as tmp,
-                allowed_tree(tmp),
-            ):
+            with self.subTest(pre_existing=pre_existing), \
+                 tempfile.TemporaryDirectory(prefix="scouter-p3r18-") as tmp, \
+                 allowed_tree(tmp):
                 home = Path(tmp) / "home"
                 dtconf = home / ".config" / "darktable"
                 plugin = dtconf / "lua" / "darktable_mcp.lua"
@@ -93,17 +90,13 @@ class HostSupportScopeTest(unittest.TestCase):
                     plugin.parent.mkdir(parents=True)
                     plugin.write_text("-- the user's own plugin\n")
                     (dtconf / "luarc").write_text('require "tools/script_manager"\n')
-                with (
-                    mock.patch.object(host_support, "INSTALLED_PLUGIN", plugin),
-                    mock.patch.object(host_support, "SCRATCH_DIR", scratch),
-                    mock.patch.dict(os.environ, {"HOME": str(home)}),
-                ):
+                with mock.patch.object(host_support, "INSTALLED_PLUGIN", plugin), \
+                     mock.patch.object(host_support, "SCRATCH_DIR", scratch), \
+                     mock.patch.dict(os.environ, {"HOME": str(home)}):
                     # Guard: the patched targets are inside the temp tree.
                     for target in (host_support.INSTALLED_PLUGIN, host_support.SCRATCH_DIR):
-                        self.assertTrue(
-                            str(target.resolve()).startswith(str(Path(tmp).resolve()) + os.sep),
-                            target,
-                        )
+                        self.assertTrue(str(target.resolve()).startswith(
+                            str(Path(tmp).resolve()) + os.sep), target)
                     inst = host_support.PluginInstall()
                     touched = {os.path.relpath(p, tmp) for p in inst.touched_paths()}
                     before = snapshot(Path(tmp))
@@ -113,42 +106,27 @@ class HostSupportScopeTest(unittest.TestCase):
                     restored = snapshot(Path(tmp))
 
                 scratch_rel = os.path.relpath(scratch, tmp)
-                ancestors = {
-                    str(Path(t).parents[i])
-                    for t in (*touched, scratch_rel)
-                    for i in range(len(Path(t).parents) - 1)
-                }
+                ancestors = {str(Path(t).parents[i]) for t in (*touched, scratch_rel)
+                             for i in range(len(Path(t).parents) - 1)}
                 ever = changed(before, installed) | changed(installed, restored)
-                stray = {
-                    p
-                    for p in ever
-                    if p not in touched
-                    and p not in ancestors
-                    and p != scratch_rel
-                    and not p.startswith(scratch_rel + os.sep)
-                }
+                stray = {p for p in ever if p not in touched and p not in ancestors
+                         and p != scratch_rel and not p.startswith(scratch_rel + os.sep)}
                 self.assertEqual(stray, set(), "install/restore touched a path outside P3-R18")
                 self.assertTrue(touched & changed(before, installed), "install really ran")
-                self.assertEqual(
-                    touched, {os.path.relpath(plugin, tmp), os.path.relpath(dtconf / "luarc", tmp)}
-                )
+                self.assertEqual(touched, {os.path.relpath(plugin, tmp),
+                                           os.path.relpath(dtconf / "luarc", tmp)})
                 # After restore, everything outside the scratch area and the
                 # created ancestor directories is exactly as it was.
-                left = {
-                    p
-                    for p in changed(before, restored)
-                    if p != scratch_rel and not p.startswith(scratch_rel + os.sep)
-                }
+                left = {p for p in changed(before, restored)
+                        if p != scratch_rel and not p.startswith(scratch_rel + os.sep)}
                 self.assertEqual(left - ancestors, set(), "restore left a change behind")
 
     def test_no_host_file_snapshots_the_whole_darktable_config(self) -> None:
         for path in Path(__file__).parent.glob("test_host*.py"):
             text = path.read_text()
             with self.subTest(file=path.name):
-                self.assertIsNone(
-                    re.search(r"copytree\([^)]*darktable", text),
-                    "ruling R22 / P3-R18: never snapshot ~/.config/darktable wholesale",
-                )
+                self.assertIsNone(re.search(r"copytree\([^)]*darktable", text),
+                                  "ruling R22 / P3-R18: never snapshot ~/.config/darktable wholesale")
 
 
 class VersionTest(unittest.TestCase):

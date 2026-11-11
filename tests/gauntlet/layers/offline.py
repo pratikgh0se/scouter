@@ -14,46 +14,19 @@ LAYER = "offline"
 PREFIX = "off"
 #: The spec's independent copy of the intensity table (phrases.INTENSITY is
 #: the thing under test, so the oracle must not read it).
-INTENSITY_WORDS = {
-    "a little bit": 0.5,
-    "a tiny bit": 0.5,
-    "a touch": 0.5,
-    "a little": 0.5,
-    "a bit": 0.5,
-    "slightly": 0.5,
-    "a lot": 2.0,
-    "strongly": 2.0,
-    "much": 2.0,
-    "lots": 2.0,
-    "way": 2.0,
-}
-EXPLICIT = {
-    "EV": ("0.5 ev", "1 ev", "2 ev"),
-    "K": ("200k", "500k", "1000k"),
-    "%": ("2%", "5%", "10%"),
-    "°": ("10°", "20°", "45°"),
-    "ratio": ("0.1", "0.2", "0.5"),
-}
+INTENSITY_WORDS = {"a little bit": 0.5, "a tiny bit": 0.5, "a touch": 0.5, "a little": 0.5,
+                   "a bit": 0.5, "slightly": 0.5, "a lot": 2.0, "strongly": 2.0, "much": 2.0,
+                   "lots": 2.0, "way": 2.0}
+EXPLICIT = {"EV": ("0.5 ev", "1 ev", "2 ev"), "K": ("200k", "500k", "1000k"),
+            "%": ("2%", "5%", "10%"), "°": ("10°", "20°", "45°"), "ratio": ("0.1", "0.2", "0.5")}
 #: The capability ids that resolve to a phrase key in check_map (phrase -> key).
 #: Row 437 families (t32/t33/t34) added grain/vignette, lens/ashift/crop and
 #: denoiseprofile/sharpen as real phrase-move modules; kept current by
 #: `test_served_modules_cover_every_taxonomy_named_phrase_module` below, which
 #: fails the moment this list falls behind phrases.PHRASES again.
-SERVED_MODULES = {
-    "exposure",
-    "sigmoid",
-    "temperature",
-    "colorbalancergb",
-    "filmicrgb",
-    "colorzones",
-    "grain",
-    "vignette",
-    "lens",
-    "ashift",
-    "crop",
-    "denoiseprofile",
-    "sharpen",
-}
+SERVED_MODULES = {"exposure", "sigmoid", "temperature", "colorbalancergb", "filmicrgb",
+                  "colorzones", "grain", "vignette", "lens", "ashift", "crop",
+                  "denoiseprofile", "sharpen"}
 
 
 def _key_for_phrase(phrase: str) -> str | None:
@@ -74,16 +47,11 @@ def _capability_keys(cmap: dict) -> dict[str, str]:
 
 def _resolve_case(cid: str, text: str, allowed: list[str], src: dict) -> Case:
     return Case(
-        id=cid,
-        layer=LAYER,
-        tier="P2",
-        mode="offline",
+        id=cid, layer=LAYER, tier="P2", mode="offline",
         steps=[Step("vocab_resolve", {"phrase": text}, 1.0)],
-        expect=Expect(
-            "workflow", checks=[Check("extra", target={"path": "offline_ok", "op": "truthy"})]
-        ),
-        source=src,
-        meta={"text": text, "allowed_keys": sorted(allowed)},
+        expect=Expect("workflow", checks=[Check("extra", target={
+            "path": "offline_ok", "op": "truthy"})]),
+        source=src, meta={"text": text, "allowed_keys": sorted(allowed)},
     )
 
 
@@ -115,26 +83,14 @@ def generate(tax: Taxonomy) -> list[Case]:
         own_key = _key_for_phrase(text)
         if own_key:
             allowed.add(own_key)
-        cases.append(
-            _resolve_case(
-                case_id(PREFIX, "tax", f"{i:03d}"),
-                text,
-                sorted(allowed),
-                {"file": "taxonomy-modules.json", "module": mod},
-            )
-        )
+        cases.append(_resolve_case(case_id(PREFIX, "tax", f"{i:03d}"), text, sorted(allowed),
+                                   {"file": "taxonomy-modules.json", "module": mod}))
     cap_keys = _capability_keys(tax.check_map)
     for r in tax.requests:
         plan = plan_request(r, tax.check_map)
         allowed = sorted({cap_keys[c] for c in plan.capabilities if cap_keys.get(c)})
-        cases.append(
-            _resolve_case(
-                case_id(PREFIX, "req", r["id"]),
-                r["sentence"],
-                allowed,
-                {"file": "requests.json", "id": r["id"]},
-            )
-        )
+        cases.append(_resolve_case(case_id(PREFIX, "req", r["id"]), r["sentence"], allowed,
+                                   {"file": "requests.json", "id": r["id"]}))
     for p in phrases.PHRASES:
         # Fix round 1, M6: `phrases.row_for` is the single place that maps a
         # `@tone`/`crop` move to its representative vocabulary row.
@@ -147,38 +103,25 @@ def generate(tax: Taxonomy) -> list[Case]:
         for syn in p.synonyms:
             forms = [("bare", syn, 1.0)]
             forms += [(w.replace(" ", "_"), f"{syn} {w}", f) for w, f in INTENSITY_WORDS.items()]
-            forms += [
-                (f"by_{a}", f"{syn} by {a}", None)
-                for a in EXPLICIT[row.unit if row.unit in EXPLICIT else "ratio"]
-            ]  # noqa: E501
+            forms += [(f"by_{a}", f"{syn} by {a}", None) for a in EXPLICIT[row.unit if row.unit in EXPLICIT else "ratio"]]  # noqa: E501
             for label, text, factor in forms:
                 cid = case_id(PREFIX, "gram", p.key, syn, label)
                 if factor is None:
                     expect = {"explicit": True} if one_move else {"refused": "usage"}
                 else:
                     eff = factor if has_adjust else 1.0
-                    expect = {
-                        "intensity": eff,
-                        "notches": [
-                            (mv.notches or 0) * eff if mv.kind == "adjust" else None
-                            for mv in p.moves
-                        ],
-                    }
-                cases.append(
-                    Case(
-                        id=cid,
-                        layer=LAYER,
-                        tier="P2",
-                        mode="offline",
-                        steps=[Step("vocab_resolve", {"phrase": text}, 1.0)],
-                        expect=Expect(
-                            "workflow",
-                            checks=[Check("extra", target={"path": "offline_ok", "op": "truthy"})],
-                        ),
-                        source={"phrase_key": p.key, "synonym": syn},
-                        meta={"text": text, "grammar": expect, "key": p.key},
-                    )
-                )
+                    expect = {"intensity": eff,
+                              "notches": [(mv.notches or 0) * eff if mv.kind == "adjust"
+                                          else None for mv in p.moves]}
+                cases.append(Case(
+                    id=cid, layer=LAYER, tier="P2", mode="offline",
+                    steps=[Step("vocab_resolve", {"phrase": text}, 1.0)],
+                    expect=Expect("workflow", checks=[Check("extra", target={
+                        "path": "offline_ok", "op": "truthy"})]),
+                    source={"phrase_key": p.key, "synonym": syn}, meta={"text": text,
+                                                                        "grammar": expect,
+                                                                        "key": p.key},
+                ))
     return cases
 
 

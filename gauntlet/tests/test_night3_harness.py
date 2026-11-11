@@ -17,21 +17,10 @@ from gauntlet.evaluate import Policy, evaluate
 
 FX = json.loads((Path(__file__).parent / "fixtures" / "night3_cases.json").read_text())
 POLICY = Policy(  # the real check_map policy's transient and refusal codes
-    refusal_codes=frozenset(
-        {
-            "usage",
-            "value_unknown",
-            "not_pinned",
-            "module_unavailable",
-            "not_found",
-            "not_in_darkroom",
-            "unsupported_format",
-        }
-    ),
+    refusal_codes=frozenset({"usage", "value_unknown", "not_pinned", "module_unavailable",
+                             "not_found", "not_in_darkroom", "unsupported_format"}),
     transient_codes=frozenset({"gui_not_ready", "bridge_timeout", "commit_timeout"}),
-    refusal_markers=("can't", "cannot"),
-    claim_markers=(r"\bdone\b",),
-)
+    refusal_markers=("can't", "cannot"), claim_markers=(r"\bdone\b",))
 
 S1A = "cov-phrase-more_chroma-sony_a7-explicit"
 S2A = "cov-phrase-weaker_grade-olympus-lot"
@@ -47,12 +36,8 @@ def load(cid: str, mutate=None) -> tuple[Case, Observation]:
     if mutate:
         mutate(fx)
     o = fx["observation"]
-    obs = Observation(
-        calls=[CallRecord(**c) for c in o["calls"]],
-        before=o["before"],
-        after=o["after"],
-        extra=o["extra"],
-    )
+    obs = Observation(calls=[CallRecord(**c) for c in o["calls"]], before=o["before"],
+                      after=o["after"], extra=o["extra"])
     return Case.from_dict(fx["case"]), obs
 
 
@@ -100,7 +85,6 @@ def test_g1a_no_declared_default_still_fails_closed():
     def m(fx):
         for s in ("before", "after"):
             fx["observation"][s]["verified_defaults"].pop(GC, None)
-
     assert score(S1A, m).outcome == "silent_failure"
 
 
@@ -108,7 +92,6 @@ def test_g1a_module_present_but_key_missing_still_fails_closed():
     def m(fx):
         fx["observation"]["before"]["params"]["colorbalancergb.__enabled"] = 1
         fx["observation"]["extra"]["snapshots"][0]["colorbalancergb.__enabled"] = 1
-
     assert score(S1A, m).outcome == "silent_failure"
 
 
@@ -116,7 +99,6 @@ def test_g1a_envelope_disagreeing_with_default_fails_closed():
     # the product's own "previous" contradicts the declared default: no fallback
     def m(fx):
         fx["observation"]["calls"][0]["envelope"]["data"]["moves"][0]["previous"] = 0.3
-
     assert score(S1A, m).outcome == "silent_failure"
 
 
@@ -132,7 +114,6 @@ def test_g1a_p4_monotonic_absent_before_passes_and_guard():
         snaps[3][k] = snaps[1][k]
         snaps[4][k] = snaps[1][k]
         snaps[5][k] = snaps[1][k]
-
     assert score(P4, flat).score != "pass"
 
 
@@ -153,13 +134,9 @@ def test_g1b_guard_final_step_ok_but_unchanged_is_silent():
     def m(fx):
         c = fx["observation"]["calls"][1]
         moves = fx["observation"]["calls"][0]["envelope"]["data"]["moves"]
-        c["envelope"] = {
-            "ok": True,
-            "outcome": "ok",
-            "data": {"moves": [{**mv, "previous": 0.15, "applied": 0.0} for mv in moves]},
-        }
+        c["envelope"] = {"ok": True, "outcome": "ok", "data": {"moves": [
+            {**mv, "previous": 0.15, "applied": 0.0} for mv in moves]}}
         c["error"] = None
-
     assert score(S2A, m).outcome == "silent_failure"
 
 
@@ -170,7 +147,6 @@ def test_g1b_guard_earlier_ok_step_not_landed_is_still_silent():
         for k in list(s1):
             if k.endswith("_chroma"):
                 s1[k] = 0.0
-
     assert score(S2A, m).outcome == "silent_failure"
 
 
@@ -178,7 +154,6 @@ def test_g1b_guard_partial_claims_a_move_the_sidecar_does_not_show():
     # the partial says shadows landed at 0.0; the sidecar still holds 0.15
     def m(fx):
         set_after(fx, "colorbalancergb.shadows_chroma", 0.15)
-
     assert score(S2A, m).outcome == "silent_failure"
 
 
@@ -196,9 +171,8 @@ def test_g1c_nested_commit_timeout_is_blocked_not_failed():
 def test_g1c_nested_non_transient_code_is_not_blocked():
     def m(fx):
         for c in fx["observation"]["calls"]:
-            for r in c["envelope"]["data"].get("refused") or []:
+            for r in (c["envelope"]["data"].get("refused") or []):
                 r["code"] = "value_unknown"
-
     v = score(WARM, m)
     assert v.outcome != "blocked"
 
@@ -213,5 +187,4 @@ def test_g1c_guard_nested_transient_does_not_hide_a_real_silent():
         c["error"] = None
         set_after(fx, "colorbalancergb.highlights_hue", 0.0)
         fx["observation"]["after"]["fingerprint"] = fx["observation"]["before"]["fingerprint"]
-
     assert score(WARM, m).outcome == "silent_failure"

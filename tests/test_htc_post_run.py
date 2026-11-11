@@ -4,7 +4,6 @@ round 1, review I6) a fake two-commit git repo (HTC_REPO override) stands in
 for the real scouter checkout, so these never touch darktable, the real
 repo's git history, or the network -- the script itself is invoked for real
 via subprocess (no mock of the subject)."""
-
 from __future__ import annotations
 
 import json
@@ -20,18 +19,8 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "htc_post_run.sh"
 
-DEFAULT_LAYERS = (
-    "offline",
-    "coverage",
-    "scenarios",
-    "bulk",
-    "looks",
-    "robustness",
-    "parity",
-    "install",
-    "guide",
-    "scenarios_agent",
-)
+DEFAULT_LAYERS = ("offline", "coverage", "scenarios", "bulk", "looks", "robustness",
+                  "parity", "install", "guide", "scenarios_agent")
 
 
 def git(cwd, *args):
@@ -45,9 +34,7 @@ def run_script(env_extra: dict, args: list[str] | None = None) -> subprocess.Com
     env.update(env_extra)
     return subprocess.run(
         ["bash", str(SCRIPT), *(args or [])],
-        capture_output=True,
-        text=True,
-        env=env,
+        capture_output=True, text=True, env=env,
     )
 
 
@@ -103,11 +90,8 @@ class _FakeRepoCase(unittest.TestCase):
     def write_progress(self, status: str, layers: dict[str, str] | None = None) -> None:
         if layers is None:
             layers = {name: "done" for name in DEFAULT_LAYERS}
-        doc = {
-            "schema": "gauntlet-progress/1",
-            "status": status,
-            "layers": {name: {"status": st} for name, st in layers.items()},
-        }
+        doc = {"schema": "gauntlet-progress/1", "status": status,
+              "layers": {name: {"status": st} for name, st in layers.items()}}
         (self.run_dir / "progress.json").write_text(json.dumps(doc), encoding="utf-8")
 
     def write_pidfile(self, pid: int) -> Path:
@@ -134,7 +118,8 @@ class UsageErrorsTest(unittest.TestCase):
         self.assertEqual(p.returncode, 2, p.stderr)
 
     def test_unknown_flag_exits_2(self) -> None:
-        p = run_script({"BATCH": "abc123", "RUN_DIR": "/tmp/does-not-matter"}, ["--bogus"])
+        p = run_script({"BATCH": "abc123", "RUN_DIR": "/tmp/does-not-matter"},
+                        ["--bogus"])
         self.assertEqual(p.returncode, 2, p.stderr)
 
     def test_missing_run_dir_directory_exits_2(self) -> None:
@@ -185,14 +170,10 @@ class PreconditionGateTest(_FakeRepoCase):
         returning, and the process is killed AND reaped in cleanup (finding
         9: `proc.wait()` after `kill`, so it never lingers as a zombie)."""
         proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                f"import time  # stand-in for the gauntlet launcher's own argv\n"
-                f"# {argv_text}\n"
-                "time.sleep(20)",
-            ]
-        )
+            [sys.executable, "-c",
+             f"import time  # stand-in for the gauntlet launcher's own argv\n"
+             f"# {argv_text}\n"
+             "time.sleep(20)"])
 
         def _cleanup() -> None:
             proc.kill()
@@ -211,8 +192,7 @@ class PreconditionGateTest(_FakeRepoCase):
         return proc
 
     def test_a_foreign_process_whose_argv_contains_another_runs_stamp_text_is_not_matched(
-        self,
-    ) -> None:
+            self) -> None:
         """Row 495/496: `pgrep -f` does a plain substring/regex search, so
         an UNANCHORED `run --stamp $STAMP_NAME` would false-positive when
         this run's own stamp is a textual PREFIX of a different, unrelated
@@ -315,64 +295,48 @@ class PreconditionGateTest(_FakeRepoCase):
         def collected_under_host(node_id: str) -> tuple[set[str], int]:
             p = subprocess.run(
                 [sys.executable, "-m", "pytest", "--collect-only", "-q", "-m", "host", node_id],
-                cwd=str(real_repo),
-                capture_output=True,
-                text=True,
+                cwd=str(real_repo), capture_output=True, text=True,
             )
             return {line for line in p.stdout.splitlines() if "::" in line}, p.returncode
 
         candidate_paths_host, candidate_paths_rc = collected_under_host(
-            f"{phase3}::ProbeCandidatePathsHostTest"
-        )
+            f"{phase3}::ProbeCandidatePathsHostTest")
         exposure_black_host, exposure_black_rc = collected_under_host(
-            f"{phase3}::ProbeExposureBlackDefaultHostTest"
-        )
+            f"{phase3}::ProbeExposureBlackDefaultHostTest")
         colorcal_host, colorcal_rc = collected_under_host(str(colorcal))
 
         # Oracle 1: the real markers, as pytest itself resolves them.
         self.assertTrue(candidate_paths_host, "ProbeCandidatePathsHostTest lost @pytest.mark.host")
         self.assertEqual(candidate_paths_rc, 0)
-        self.assertTrue(
-            exposure_black_host, "ProbeExposureBlackDefaultHostTest lost @pytest.mark.host"
-        )
+        self.assertTrue(exposure_black_host,
+                        "ProbeExposureBlackDefaultHostTest lost @pytest.mark.host")
         self.assertEqual(exposure_black_rc, 0)
-        self.assertFalse(
-            colorcal_host, "test_host_colorcal.py unexpectedly gained @pytest.mark.host"
-        )
+        self.assertFalse(colorcal_host,
+                         "test_host_colorcal.py unexpectedly gained @pytest.mark.host")
         # Finding 8: an empty result must be a clean "collected zero" (5),
         # not a broken collection (any other code) passing vacuously.
-        self.assertIn(
-            colorcal_rc,
-            (0, 5),
-            (colorcal_rc, "collection under -m host must be clean, not silently broken"),
-        )
+        self.assertIn(colorcal_rc, (0, 5),
+                      (colorcal_rc, "collection under -m host must be clean, not silently broken"))
         # Positive control: colorcal WITHOUT -m host really does collect
         # real tests (rules out collection being broken some other way).
         p = subprocess.run(
             [sys.executable, "-m", "pytest", "--collect-only", "-q", str(colorcal)],
-            cwd=str(real_repo),
-            capture_output=True,
-            text=True,
+            cwd=str(real_repo), capture_output=True, text=True,
         )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertTrue(
-            any("::" in line for line in p.stdout.splitlines()),
-            "test_host_colorcal.py collected no tests at all without -m host",
-        )
+        self.assertTrue(any("::" in line for line in p.stdout.splitlines()),
+                        "test_host_colorcal.py collected no tests at all without -m host")
 
         self.write_progress("done")
         out = self.invoke().stdout
 
         # Oracle 2: the printed command text matches what oracle 1 found.
         candidate_paths_line = next(
-            l for l in out.splitlines() if "ProbeCandidatePathsHostTest" in l
-        )  # noqa: E741
+            l for l in out.splitlines() if "ProbeCandidatePathsHostTest" in l)  # noqa: E741
         exposure_black_line = next(
-            l for l in out.splitlines() if "ProbeExposureBlackDefaultHostTest" in l
-        )  # noqa: E741
+            l for l in out.splitlines() if "ProbeExposureBlackDefaultHostTest" in l)  # noqa: E741
         colorcal_line = next(
-            l for l in out.splitlines() if "test_host_colorcal.py" in l
-        )  # noqa: E741
+            l for l in out.splitlines() if "test_host_colorcal.py" in l)  # noqa: E741
         self.assertIn("-m host", candidate_paths_line, candidate_paths_line)
         self.assertIn("-m host", exposure_black_line, exposure_black_line)
         self.assertNotIn("-m host", colorcal_line, colorcal_line)
@@ -385,9 +349,7 @@ class PreconditionGateTest(_FakeRepoCase):
         # T1: strip say()'s second-granularity timestamps before comparing
         # -- a rerun that straddles a wall-clock second boundary otherwise
         # fails this on timestamp text alone, not on any real disagreement.
-        strip = lambda s: re.sub(
-            r"(?m)^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] ", "", s
-        )  # noqa: E731,E501
+        strip = lambda s: re.sub(r"(?m)^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] ", "", s)  # noqa: E731,E501
         self.assertEqual(strip(first.stdout), strip(second.stdout))
 
 
@@ -398,9 +360,8 @@ class RunOverWhenBlockedTest(_FakeRepoCase):
     pid is gone and no live process matches the stamp (preconditions 2 and
     3, unchanged). A live runner still refuses, exactly as for 'done'."""
 
-    BLOCKED_STATUS = (
-        "blocked: darktable pids [69648] were not launched by " "the gauntlet; quit them first"
-    )
+    BLOCKED_STATUS = ("blocked: darktable pids [69648] were not launched by "
+                       "the gauntlet; quit them first")
 
     def test_blocked_with_runner_gone_is_accepted_and_prints_run_over(self) -> None:
         self.write_progress(self.BLOCKED_STATUS)
@@ -519,24 +480,17 @@ class LiveRunnerRefusalTest(_FakeRepoCase):
         fake_pgrep = fake_bin / "pgrep"
         fake_pgrep.write_text(
             "#!/usr/bin/env bash\n"
-            'case "$*" in\n'
+            "case \"$*\" in\n"
             "  *'run --stamp'*) exit 0 ;;\n"
             "  *) exit 1 ;;\n"
             "esac\n",
-            encoding="utf-8",
-        )
+            encoding="utf-8")
         fake_pgrep.chmod(0o755)
         env = dict(os.environ)
         p = subprocess.run(
-            ["bash", str(SCRIPT)],
-            capture_output=True,
-            text=True,
-            env={
-                **env,
-                **self.env(BATCH=self.batch_sha, RUN_DIR=str(self.run_dir)),
-                "PATH": f"{fake_bin}:{env['PATH']}",
-            },
-        )
+            ["bash", str(SCRIPT)], capture_output=True, text=True,
+            env={**env, **self.env(BATCH=self.batch_sha, RUN_DIR=str(self.run_dir)),
+                "PATH": f"{fake_bin}:{env['PATH']}"})
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("BLOCKED", p.stdout)
         self.assertIn("still running", p.stdout)
@@ -567,9 +521,8 @@ class PythonResolutionTest(unittest.TestCase):
             stub.write_text(
                 f"#!/usr/bin/env bash\n"
                 f"echo used >> {marker}\n"
-                f'exec /usr/bin/env python3 "$@"\n',
-                encoding="utf-8",
-            )
+                f"exec /usr/bin/env python3 \"$@\"\n",
+                encoding="utf-8")
             stub.chmod(0o755)
 
             worktree = root / "wt"
@@ -583,17 +536,15 @@ class PythonResolutionTest(unittest.TestCase):
             run_dir.mkdir()
             layers = {name: {"status": "done"} for name in DEFAULT_LAYERS}
             (run_dir / "progress.json").write_text(
-                json.dumps({"status": "done", "layers": layers}), encoding="utf-8"
-            )
+                json.dumps({"status": "done", "layers": layers}), encoding="utf-8")
 
             env = dict(os.environ)
             env.pop("SCOUTER_PYTHON", None)
             env.update({"HTC_REPO": str(worktree), "BATCH": batch_sha, "RUN_DIR": str(run_dir)})
             p = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=env)
 
-            self.assertTrue(
-                marker.exists(), "PY did not resolve to the main checkout's venv:\n" + p.stdout
-            )
+            self.assertTrue(marker.exists(),
+                            "PY did not resolve to the main checkout's venv:\n" + p.stdout)
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
     def test_scouter_python_env_var_wins_over_everything(self) -> None:
@@ -618,28 +569,19 @@ class PythonResolutionTest(unittest.TestCase):
             explicit_py.write_text(
                 f"#!/usr/bin/env bash\n"
                 f"echo used >> {marker}\n"
-                f'exec /usr/bin/env python3 "$@"\n',
-                encoding="utf-8",
-            )
+                f"exec /usr/bin/env python3 \"$@\"\n",
+                encoding="utf-8")
             explicit_py.chmod(0o755)
 
             run_dir = root / "rundir"
             run_dir.mkdir()
             layers = {name: {"status": "done"} for name in DEFAULT_LAYERS}
             (run_dir / "progress.json").write_text(
-                json.dumps({"status": "done", "layers": layers}), encoding="utf-8"
-            )
+                json.dumps({"status": "done", "layers": layers}), encoding="utf-8")
 
             env = dict(os.environ)
-            env.update(
-                {
-                    "HTC_REPO": str(repo),
-                    "BATCH": batch_sha,
-                    "RUN_DIR": str(run_dir),
-                    "SOUTER_PYTHON_UNUSED": "",
-                    "SCOUTER_PYTHON": str(explicit_py),
-                }
-            )
+            env.update({"HTC_REPO": str(repo), "BATCH": batch_sha, "RUN_DIR": str(run_dir),
+                       "SOUTER_PYTHON_UNUSED": "", "SCOUTER_PYTHON": str(explicit_py)})
             p = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=env)
 
             self.assertTrue(marker.exists(), "SCOUTER_PYTHON override was not used:\n" + p.stdout)
@@ -674,18 +616,18 @@ class DefaultGateCommandTest(unittest.TestCase):
             venv_bin.mkdir(parents=True)
             stub = venv_bin / "python3"
             stub.write_text(
-                f"#!/usr/bin/env bash\n" f'echo "$@" >> {argv_log}\n'
+                f"#!/usr/bin/env bash\n"
+                f"echo \"$@\" >> {argv_log}\n"
                 # The status-parsing call (`"$PY" -c '...'`) needs to run for
                 # real (this script's own preconditions read its output);
                 # a script/module invocation (mutation_check.py, -m pytest)
                 # only needs to be PROVEN CALLED with the right args -- there
                 # is no real scouter repo here for either to run against.
-                f'case "$1" in\n'
-                f'  -c) exec /usr/bin/env python3 "$@" ;;\n'
+                f"case \"$1\" in\n"
+                f"  -c) exec /usr/bin/env python3 \"$@\" ;;\n"
                 f"  *) exit 0 ;;\n"
                 f"esac\n",
-                encoding="utf-8",
-            )
+                encoding="utf-8")
             stub.chmod(0o755)
 
             worktree = root / "wt"
@@ -699,16 +641,14 @@ class DefaultGateCommandTest(unittest.TestCase):
             run_dir.mkdir()
             layers = {name: {"status": "done"} for name in DEFAULT_LAYERS}
             (run_dir / "progress.json").write_text(
-                json.dumps({"status": "done", "layers": layers}), encoding="utf-8"
-            )
+                json.dumps({"status": "done", "layers": layers}), encoding="utf-8")
 
             env = dict(os.environ)
             for k in ("SCOUTER_PYTHON", "GATE_CMD", "PYTEST_CMD"):
                 env.pop(k, None)
             env.update({"HTC_REPO": str(worktree), "BATCH": batch_sha, "RUN_DIR": str(run_dir)})
-            p = subprocess.run(
-                ["bash", str(SCRIPT), "--execute"], capture_output=True, text=True, env=env
-            )
+            p = subprocess.run(["bash", str(SCRIPT), "--execute"], capture_output=True, text=True,
+                              env=env)
 
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertTrue(argv_log.exists(), "the stub python3 was never invoked:\n" + p.stdout)
@@ -719,9 +659,8 @@ class DefaultGateCommandTest(unittest.TestCase):
             self.assertIn(f"--base {base_sha}", gate_line)
             self.assertIn(f"--head {batch_sha}", gate_line)
             self.assertIn(f"--repo {worktree}", gate_line)
-            self.assertFalse(
-                any(ln.split()[:1] == ["gate"] for ln in lines), "must never call `make gate`"
-            )
+            self.assertFalse(any(ln.split()[:1] == ["gate"] for ln in lines),
+                             "must never call `make gate`")
 
 
 class ExecuteModeTest(_FakeRepoCase):
@@ -749,9 +688,8 @@ class ExecuteModeTest(_FakeRepoCase):
     def test_execute_propagates_a_failing_gate_and_skips_pytest(self) -> None:
         self.write_progress("done")
         pytest_marker = Path(self.tmp.name) / "pytest-ran.marker"
-        p = self.invoke(
-            ["--execute"], GATE_CMD="exit 1", PYTEST_CMD=f"echo should-not-run > {pytest_marker}"
-        )
+        p = self.invoke(["--execute"], GATE_CMD="exit 1",
+                     PYTEST_CMD=f"echo should-not-run > {pytest_marker}")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertFalse(pytest_marker.exists(), "pytest ran despite a failing gate")
 

@@ -17,9 +17,8 @@ EXAMPLES = json.loads((Path(__file__).parent / "clamped_move.json").read_text())
 class ClampedMoveIntentTest(_MovesFixture):
     def run_example(self, ex: dict) -> None:
         inp, want = ex["input"], ex["expect"]
-        r = moves.adjust.__wrapped__(
-            inp["module"], inp["param"], inp["delta"], commit=False, job="job-test"
-        )
+        r = moves.adjust.__wrapped__(inp["module"], inp["param"], inp["delta"],
+                                     commit=False, job="job-test")
         self.assertEqual(r.outcome, want["outcome"], ex["id"])
         self.assertEqual(r.cap, want["cap"], ex["id"])
         if want["summary_contains"]:
@@ -31,7 +30,6 @@ class ClampedMoveIntentTest(_MovesFixture):
 def _make(ex: dict):
     def test(self: ClampedMoveIntentTest) -> None:
         self.run_example(ex)
-
     return test
 
 

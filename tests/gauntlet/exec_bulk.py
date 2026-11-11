@@ -39,7 +39,8 @@ def reported_n(envelopes: list[dict]) -> int | None:
 
 
 def count_changed(frames: list[Path], before: dict[str, str]) -> int:
-    return sum(1 for f in frames if observe.snapshot(f).get("fingerprint") != before.get(str(f)))
+    return sum(1 for f in frames
+               if observe.snapshot(f).get("fingerprint") != before.get(str(f)))
 
 
 def run_bulk_case(session, case: Case) -> Observation:
@@ -78,12 +79,8 @@ def run_bulk_case(session, case: Case) -> Observation:
         kill_at = case.meta.get("kill_after_frame")
         killer = None
         if kill_at:
-            killer = threading.Thread(
-                target=_kill_after,
-                args=(session, kill_at),
-                kwargs={"stop": stop_killer},
-                daemon=True,
-            )
+            killer = threading.Thread(target=_kill_after, args=(session, kill_at),
+                                      kwargs={"stop": stop_killer}, daemon=True)
             killer.start()
         try:
             bridge_relaunched = False
@@ -104,30 +101,24 @@ def run_bulk_case(session, case: Case) -> Observation:
                     # One relaunch per case; a write step's commit_timeout is
                     # never blind-retried since its edit may have landed.
                     if bridge_relaunched:
-                        obs.blocked = (
-                            f"bridge_relaunch_failed: {st.tool} {rec.error} again "
-                            "after the one relaunch this case already used"
-                        )
+                        obs.blocked = (f"bridge_relaunch_failed: {st.tool} {rec.error} again "
+                                      "after the one relaunch this case already used")
                         obs.hang_evidence.append(obs.blocked)
                         break
                     bridge_relaunched = True
                     session.relaunch(Path(last_image) if last_image else None)
                     session.current_frame = None  # relaunch is launched, not current
                     if st.write and rec.error == "commit_timeout":
-                        obs.blocked = (
-                            f"bridge_relaunch_failed: {st.tool} commit_timeout on a "
-                            "write step is not retried after a relaunch (it may have "
-                            "already landed)"
-                        )
+                        obs.blocked = (f"bridge_relaunch_failed: {st.tool} commit_timeout on a "
+                                      "write step is not retried after a relaunch (it may have "
+                                      "already landed)")
                         obs.hang_evidence.append(obs.blocked)
                         break
                     rec = session.call(st.tool, args, st.budget_s, write=st.write)
                     obs.calls.append(rec)
                     if rec.error in ("bridge_timeout", "commit_timeout", "not_in_darkroom"):
-                        obs.blocked = (
-                            f"bridge_relaunch_failed: {st.tool} still {rec.error} "
-                            "after a relaunch"
-                        )
+                        obs.blocked = (f"bridge_relaunch_failed: {st.tool} still {rec.error} "
+                                      "after a relaunch")
                         obs.hang_evidence.append(obs.blocked)
                         break
                 resolved = resolve_import_job_frames(obs, session, rec, frames)
@@ -148,16 +139,13 @@ def run_bulk_case(session, case: Case) -> Observation:
         # when every real bulk verb after it errored, scoring a genuine
         # failure as `silent_failure` instead. `imported_n` below already
         # tracks the import's own count on its own terms.
-        obs.extra["reported_n"] = reported_n(
-            [c.envelope for c in obs.calls if c.write and c.tool != "library_import"]
-        )
+        obs.extra["reported_n"] = reported_n([c.envelope for c in obs.calls
+                                              if c.write and c.tool != "library_import"])
         out_dir = Path(session.staged.vars["out_dir"])
-        obs.extra["export_files"] = (
-            sum(1 for _ in out_dir.rglob("*") if _.is_file()) if out_dir.exists() else 0
-        )
-        obs.extra["imported_n"] = (
-            reported_n([c.envelope for c in obs.calls if c.tool == "library_import"]) or 0
-        )
+        obs.extra["export_files"] = sum(1 for _ in out_dir.rglob("*") if _.is_file()) \
+            if out_dir.exists() else 0
+        obs.extra["imported_n"] = reported_n([c.envelope for c in obs.calls
+                                              if c.tool == "library_import"]) or 0
         obs.extra["frames_verified"] = max(obs.extra["changed_n"], obs.extra["export_files"])
         obs.extra["exactly_once"] = _exactly_once(job_files)
         obs.extra["stats_ok_n"] = min(STATS_SAMPLE, obs.extra["changed_n"])
@@ -183,13 +171,8 @@ def _exactly_once(frames: list[Path]) -> bool:
     return True
 
 
-def _kill_after(
-    session,
-    frame_n: int,
-    poll_s: float = 1.0,
-    cap_s: float = 1800,
-    stop: threading.Event | None = None,
-) -> None:
+def _kill_after(session, frame_n: int, poll_s: float = 1.0, cap_s: float = 1800,
+                stop: threading.Event | None = None) -> None:
     """SIGKILL the OWNED darktable once the job journal reports frame `frame_n`;
     returns without signalling once `stop` is set (final fix M1)."""
     import os

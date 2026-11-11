@@ -113,57 +113,46 @@ class JournalTest(unittest.TestCase):
 
     def test_set_before_neutral_patches_value_and_source(self) -> None:
         entry = self._record(0.05, None)
-        journal.set_before_neutral(
-            "job-test", entry.seq, module="exposure", param="exposure", value=0.0
-        )
+        journal.set_before_neutral("job-test", entry.seq, module="exposure", param="exposure",
+                                   value=0.0)
         saved = journal.read_all("job-test")[0]
         self.assertEqual(saved.before.get("value"), 0.0)
         self.assertEqual(saved.before.get("source"), "neutral")
 
     def test_set_before_neutral_records_a_default_source(self) -> None:
         entry = self._record(0.05, None)
-        journal.set_before_neutral(
-            "job-test", entry.seq, module="exposure", param="exposure", value=0.25, source="default"
-        )
+        journal.set_before_neutral("job-test", entry.seq, module="exposure", param="exposure",
+                                   value=0.25, source="default")
         saved = journal.read_all("job-test")[0]
         self.assertEqual((saved.before.get("value"), saved.before.get("source")), (0.25, "default"))
 
     def test_set_before_neutral_on_an_unknown_seq_raises_journal_corrupt(self) -> None:
         with self.assertRaises(journal.JournalCorrupt):
-            journal.set_before_neutral(
-                "job-test", 99, module="exposure", param="exposure", value=0.0
-            )
+            journal.set_before_neutral("job-test", 99, module="exposure", param="exposure",
+                                       value=0.0)
 
     def test_set_before_neutral_refuses_a_mismatched_entry(self) -> None:
         """Final review #1b: the guard refuses an entry for another
         module/param and writes nothing."""
         entry = self._record(0.05, None)
         with self.assertRaises(journal.BeforePatchRefused):
-            journal.set_before_neutral(
-                "job-test", entry.seq, module="colorbalancergb", param="contrast", value=0.0
-            )
+            journal.set_before_neutral("job-test", entry.seq, module="colorbalancergb",
+                                       param="contrast", value=0.0)
         self.assertIsNone(journal.read_all("job-test")[0].before.get("value"))
 
     def test_set_before_neutral_never_overwrites_a_real_value(self) -> None:
         entry = self._record(1.5, 0.7)
         with self.assertRaises(journal.BeforePatchRefused):
-            journal.set_before_neutral(
-                "job-test", entry.seq, module="exposure", param="exposure", value=0.0
-            )
+            journal.set_before_neutral("job-test", entry.seq, module="exposure",
+                                       param="exposure", value=0.0)
         saved = journal.read_all("job-test")[0]
         self.assertEqual((saved.before.get("value"), saved.before.get("source")), (0.7, "xmp"))
 
     def test_set_before_neutral_refuses_an_unknown_source(self) -> None:
         entry = self._record(0.05, None)
         with self.assertRaises(journal.BeforePatchRefused):
-            journal.set_before_neutral(
-                "job-test",
-                entry.seq,
-                module="exposure",
-                param="exposure",
-                value=0.0,
-                source="guess",
-            )
+            journal.set_before_neutral("job-test", entry.seq, module="exposure",
+                                       param="exposure", value=0.0, source="guess")
 
     def test_append_creates_the_journal_file_and_its_parent_directory(self) -> None:
         """Fix round 3, nit 4a: `append` fsyncs the parent directory too, the

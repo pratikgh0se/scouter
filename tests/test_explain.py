@@ -14,12 +14,12 @@ from tests.scouter_fakes import TempCache
 
 GOLDEN = Path(__file__).resolve().parent / "fixtures" / "explain_golden.json"
 REGEN = (
-    'uv run --extra dev python -c "from scouter.core import explain, vocab; import json; '
+    "uv run --extra dev python -c \"from scouter.core import explain, vocab; import json; "
     "data = {'brief': {f'{s.module}.{s.param}': explain.brief_line("
     "explain.MoveNote(s, s.lo + s.step, s.lo + 2 * s.step)) for s in vocab.PARAMS "
     "if vocab.status(s) != 'unreachable'}, "
     "'concepts': {cid: explain.concept_line(cid) for cid in vocab.CONCEPT_IDS}}; "
-    'print(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False))" '
+    "print(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False))\" "
     "> tests/fixtures/explain_golden.json"
 )
 
@@ -35,10 +35,8 @@ class ExplainGoldenTest(unittest.TestCase):
         data = {
             "brief": {
                 f"{s.module}.{s.param}": explain.brief_line(
-                    explain.MoveNote(s, s.lo + s.step, s.lo + 2 * s.step)
-                )
-                for s in vocab.PARAMS
-                if vocab.status(s) != "unreachable"
+                    explain.MoveNote(s, s.lo + s.step, s.lo + 2 * s.step))
+                for s in vocab.PARAMS if vocab.status(s) != "unreachable"
             },
             "concepts": {cid: explain.concept_line(cid) for cid in vocab.CONCEPT_IDS},
         }
@@ -48,11 +46,8 @@ class ExplainGoldenTest(unittest.TestCase):
             self.fail(f"golden created at {GOLDEN}; review and commit it")
         expected = GOLDEN.read_text(encoding="utf-8")
         if expected != actual:
-            diff = "\n".join(
-                difflib.unified_diff(
-                    expected.splitlines(), actual.splitlines(), "golden", "actual", lineterm=""
-                )
-            )
+            diff = "\n".join(difflib.unified_diff(expected.splitlines(), actual.splitlines(),
+                                                  "golden", "actual", lineterm=""))
             self.fail(f"explanation text changed; regenerate deliberately with:\n{REGEN}\n{diff}")
 
 
@@ -83,9 +78,8 @@ class ExplainLevelsTest(unittest.TestCase):
         self.assertIn("(350° → 10°)", line)
 
     def test_off_is_empty(self) -> None:
-        self.assertEqual(
-            explain.lines([_note("exposure", "exposure", 1, 1.3)], level="off", job="job-test"), []
-        )
+        self.assertEqual(explain.lines([_note("exposure", "exposure", 1, 1.3)],
+                                       level="off", job="job-test"), [])
 
     def test_full_explains_a_concept_once_per_session(self) -> None:
         notes = [_note("exposure", "exposure", 1, 1.3)]
@@ -103,10 +97,8 @@ class ExplainLevelsTest(unittest.TestCase):
         self.assertNotIn("explained_concepts", paths.job_state_read("job-test"))
 
     def test_two_moves_sharing_a_concept_explain_it_once(self) -> None:
-        notes = [
-            _note("colorbalancergb", "shadows_hue", 0, 220, "set"),
-            _note("colorbalancergb", "shadows_chroma", 0, 0.02),
-        ]
+        notes = [_note("colorbalancergb", "shadows_hue", 0, 220, "set"),
+                 _note("colorbalancergb", "shadows_chroma", 0, 0.02)]
         out = explain.lines(notes, level="full", job="job-test")
         self.assertEqual(sum(1 for line in out if line.startswith("[")), 1)
         self.assertEqual(len(out), 3)
@@ -118,16 +110,10 @@ class ExplainLevelsTest(unittest.TestCase):
             explain.resolve_level("loud")
 
     def test_preset_lines(self) -> None:
-        out = explain.preset_lines(
-            "save", "harbour-warm", ["temperature", "sigmoid"], 2, level="brief", job="job-test"
-        )
-        self.assertEqual(
-            out,
-            [
-                "saved 2 module(s) (temperature, sigmoid) as style 'harbour-warm': "
-                "apply it from darktable's styles panel or with preset apply."
-            ],
-        )
+        out = explain.preset_lines("save", "harbour-warm", ["temperature", "sigmoid"], 2,
+                                   level="brief", job="job-test")
+        self.assertEqual(out, ["saved 2 module(s) (temperature, sigmoid) as style 'harbour-warm': "
+                               "apply it from darktable's styles panel or with preset apply."])
 
     def test_every_row_concept_has_text(self) -> None:
         self.assertEqual(set(explain.CONCEPTS), set(vocab.CONCEPT_IDS))

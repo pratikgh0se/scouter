@@ -45,13 +45,9 @@ def _session(tmp_path):
     hero.parent.mkdir(parents=True)
     hero.write_bytes(b"raw")
     Path(str(hero) + ".xmp").write_text("<x:xmpmeta>" + "a" * 100 + "</x:xmpmeta>")
-    staged = SimpleNamespace(
-        frames={"hero": hero},
-        library=tmp_path / "library.db",
-        env={"SCOUTER_CONFIG": str(tmp_path / "config" / "config.json")},
-        vars={},
-        job_frames=[],
-    )
+    staged = SimpleNamespace(frames={"hero": hero}, library=tmp_path / "library.db",
+                             env={"SCOUTER_CONFIG": str(tmp_path / "config" / "config.json")},
+                             vars={}, job_frames=[])
     return SimpleNamespace(staged=staged, root=tmp_path, body="olympus")
 
 
@@ -90,9 +86,8 @@ def test_owned_kill_finds_the_pid_under_the_given_cache_root_not_ambient(tmp_pat
     wrong = tmp_path / "ambient-drifted-cache"
     right.mkdir()
     wrong.mkdir()
-    monkeypatch.setattr(
-        dtprocess, "owned_pid", lambda cache_root=None: 4242424 if cache_root == right else None
-    )
+    monkeypatch.setattr(dtprocess, "owned_pid",
+                        lambda cache_root=None: 4242424 if cache_root == right else None)
     monkeypatch.setenv("SCOUTER_CACHE", str(wrong))  # ambient has drifted elsewhere
     signalled: list = []
     monkeypatch.setattr(faults.os, "kill", lambda pid, sig: signalled.append((pid, sig)))
@@ -192,13 +187,9 @@ class FakeSession:
 def _hdiutil_fake(mount, log):
     def fake(*args, timeout=60):
         log.append(args)
-        out = (
-            f"/dev/disk99\tGUID_partition_scheme\t\n/dev/disk99s1\tApple_HFS\t{mount}\n"
-            if args[0] == "attach"
-            else ""
-        )
+        out = f"/dev/disk99\tGUID_partition_scheme\t\n/dev/disk99s1\tApple_HFS\t{mount}\n" \
+            if args[0] == "attach" else ""
         return SimpleNamespace(stdout=out, returncode=0)
-
     return fake
 
 
@@ -208,9 +199,8 @@ def test_r18_filler_sized_from_statvfs_and_detached(tmp_path, monkeypatch):
     log: list = []
     monkeypatch.setattr(faults, "_hdiutil", _hdiutil_fake(mount, log))
     free = 3 * 1024 * 1024
-    monkeypatch.setattr(
-        faults, "_statvfs", lambda p: SimpleNamespace(f_bavail=free // 4096, f_frsize=4096)
-    )
+    monkeypatch.setattr(faults, "_statvfs",
+                        lambda p: SimpleNamespace(f_bavail=free // 4096, f_frsize=4096))
     s = FakeSession(tmp_path)
     v = faults.arm(s, "disk_nearly_full")
     size = (mount / "filler.bin").stat().st_size
@@ -228,7 +218,6 @@ def test_r18_mount_detached_when_a_later_arm_step_fails(tmp_path, monkeypatch):
 
     def broken_statvfs(p):
         raise OSError(5, "statvfs failed")
-
     monkeypatch.setattr(faults, "_statvfs", broken_statvfs)
     obs = faults.run_fault_case(FakeSession(tmp_path), _cases()["R18"])
     assert obs.blocked.startswith("harness_bug: OSError")
@@ -240,7 +229,6 @@ def test_arm_raising_is_typed_blocked_and_partial_disarm_ran(tmp_path, monkeypat
         kills.append(sig)
         if sig == signal.SIGSTOP:
             raise ProcessLookupError("gone")
-
     monkeypatch.setattr(faults, "_owned_kill", stuck)
     s = FakeSession(tmp_path)
     obs = faults.run_fault_case(s, _cases()["R3"])  # wedge_worker
@@ -275,9 +263,7 @@ def test_hang_triggers_relaunch_and_mcp_reopen(tmp_path, monkeypatch):
     must relaunch darktable and reopen the MCP client before returning, so
     the NEXT case starts clean instead of inheriting the wedge (rob-r11's one
     true hang scored as six, r12-r15/r17 all queued behind it)."""
-    monkeypatch.setattr(
-        execute, "run_tool_case", lambda session, case, **kw: Observation(blocked="hang")
-    )
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case, **kw: Observation(blocked="hang"))
     s = FakeSession(tmp_path)
     obs = faults.run_fault_case(s, _cases()["R12"])
     assert obs.blocked == "hang"
@@ -290,11 +276,9 @@ def test_a_typed_hang_reason_also_triggers_recovery(tmp_path, monkeypatch):
     (`execute.run_tool_case` writes "hang" exactly, but a virtual tool's own
     subprocess timeout writes "hang: <tool> exceeded budget") -- recovery
     must fire on the whole `hang*` family, matching `evaluate.is_hang`."""
-    monkeypatch.setattr(
-        execute,
-        "run_tool_case",
-        lambda session, case, **kw: Observation(blocked="hang: scouter cli exceeded " "budget"),
-    )
+    monkeypatch.setattr(execute, "run_tool_case",
+                        lambda session, case, **kw: Observation(blocked="hang: scouter cli exceeded "
+                                                                "budget"))
     s = FakeSession(tmp_path)
     obs = faults.run_fault_case(s, _cases()["R12"])
     assert obs.blocked.startswith("hang")
@@ -310,9 +294,7 @@ def test_non_hang_case_never_triggers_recovery(tmp_path, monkeypatch):
 
 
 def test_hang_recovery_failure_is_reported_not_raised(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        execute, "run_tool_case", lambda session, case, **kw: Observation(blocked="hang")
-    )
+    monkeypatch.setattr(execute, "run_tool_case", lambda session, case, **kw: Observation(blocked="hang"))
     s = FakeSession(tmp_path, relaunch_error=SessionBlocked("relaunch: did not quit"))
     obs = faults.run_fault_case(s, _cases()["R12"])
     assert obs.blocked == "hang"
@@ -323,11 +305,9 @@ def test_hang_recovery_failure_is_reported_not_raised(tmp_path, monkeypatch):
 
 def test_r21_fake_version_returns_without_raising(tmp_path):
     s = FakeSession(tmp_path)
-    s.staged.env = {
-        "SCOUTER_CONFIG": str(tmp_path / "config" / "config.json"),
-        "SCOUTER_CACHE": str(tmp_path / "cache"),
-        "SCOUTER_DARKTABLE_LIBRARY_DB": str(tmp_path / "library" / "library.db"),
-    }
+    s.staged.env = {"SCOUTER_CONFIG": str(tmp_path / "config" / "config.json"),
+                    "SCOUTER_CACHE": str(tmp_path / "cache"),
+                    "SCOUTER_DARKTABLE_LIBRARY_DB": str(tmp_path / "library" / "library.db")}
     real_config = os.environ.get("SCOUTER_CONFIG")
     obs = faults.run_fault_case(s, _cases()["R21"])
     assert obs.blocked is None and len(obs.calls) == 1
@@ -358,7 +338,8 @@ def test_broken_luarc_never_launches_when_quit_fails(tmp_path, kills):
     assert obs.extra["disarm_errors"][0].startswith("quit darktable: SessionBlocked")
 
 
-def test_kill_timer_starts_at_the_step_and_is_cancelled_in_disarm(tmp_path, monkeypatch, kills):
+def test_kill_timer_starts_at_the_step_and_is_cancelled_in_disarm(tmp_path, monkeypatch,
+                                                                   kills):
     monkeypatch.setattr(faults, "KILL_DELAY_S", 0.2)
     s = FakeSession(tmp_path)
     v = faults.arm(s, "kill_during_call", step_tool="darkroom_say")
@@ -394,7 +375,6 @@ def test_watchdog_probe_restores_config_exactly_even_when_kill_raises(tmp_path, 
 
     def boom(sig=signal.SIGKILL, cache_root=None):
         raise ProcessLookupError("no owned darktable")
-
     monkeypatch.setattr(faults, "_owned_kill", boom)
     with pytest.raises(ProcessLookupError):
         faults.watchdog_probe(s, None, step, Observation())
@@ -410,7 +390,6 @@ def test_watchdog_probe_heal_path_restores_config_and_resumes(tmp_path, kills):
     def spy(tool, args, budget_s, *, write=False):
         seen.append(json.loads(cfg.read_text())["watchdog"]["auto_heal"])
         return orig_call(tool, args, budget_s, write=write)
-
     s.call = spy
     faults.watchdog_probe(s, None, step, Observation())
     assert seen == [True] and cfg.read_text() == original
@@ -435,13 +414,9 @@ def test_file_mutating_faults_restored_byte_for_byte(tmp_path):
         st = p.stat()
         return p.read_bytes(), st.st_mode & 0o7777, st.st_mtime_ns
 
-    for fault, path in (
-        ("wrong_wb_table", a7),
-        ("delete_sidecar", side),
-        ("future_mtime", side),
-        ("stale_sidecar", side),
-        ("chmod_sidecar_readonly", side),
-    ):
+    for fault, path in (("wrong_wb_table", a7),
+                        ("delete_sidecar", side), ("future_mtime", side),
+                        ("stale_sidecar", side), ("chmod_sidecar_readonly", side)):
         before = state(path)
         v = faults.arm(s, fault)
         assert not path.exists() or state(path) != before, fault
@@ -568,9 +543,8 @@ def test_r3_real_run_tool_case_runs_its_step_after_the_freeze(tmp_path, monkeypa
         def call(self, tool, args, budget_s, *, write=False):
             self.tools.append(tool)
             if state["stopped"]:
-                rec = CallRecord(
-                    tool, args, {"ok": False, "error": {"code": "darktable_unresponsive"}}
-                )
+                rec = CallRecord(tool, args, {"ok": False,
+                                              "error": {"code": "darktable_unresponsive"}})
                 rec.error = "darktable_unresponsive"
                 return rec
             return CallRecord(tool, args, {"ok": True})
@@ -641,20 +615,11 @@ def test_r2_kill_during_call_is_unaffected_by_the_pre_arm_ping(tmp_path, monkeyp
 
     monkeypatch.setattr(observe, "snapshot", lambda *a, **kw: {"params": {}, "units": {}})
     monkeypatch.setattr(faults, "_owned_kill", lambda sig=signal.SIGKILL, cache_root=None: None)
-    monkeypatch.setattr(
-        faults.threading,
-        "Timer",
-        lambda delay, fn, kwargs=None: type(
-            "T",
-            (),
-            {
-                "start": lambda self: None,
-                "cancel": lambda self: None,
-                "join": lambda self, t=None: None,
-                "is_alive": lambda self: False,
-            },
-        )(),
-    )
+    monkeypatch.setattr(faults.threading, "Timer",
+                        lambda delay, fn, kwargs=None: type("T", (), {"start": lambda self: None,
+                                                         "cancel": lambda self: None,
+                                                         "join": lambda self, t=None: None,
+                                                         "is_alive": lambda self: False})())
     s = S(tmp_path)
     obs = faults.run_fault_case(s, _cases()["R2"])  # kill_during_call
     assert obs.blocked != "inherited_wedge"
@@ -747,9 +712,8 @@ def test_fence_and_recover_purges_a_stale_request_before_launch(tmp_path):
     class S:
         mcp = None
         current_frame = None
-        staged = SimpleNamespace(
-            env={"XDG_CACHE_HOME": str(cache)}, frames={"hero": Path("/hero.ORF")}
-        )
+        staged = SimpleNamespace(env={"XDG_CACHE_HOME": str(cache)},
+                                 frames={"hero": Path("/hero.ORF")})
 
         def _quit(self, why):
             order.append("dt_quit")
@@ -866,9 +830,7 @@ def test_fence_and_recover_sigconts_as_a_last_resort_when_the_quit_fails(tmp_pat
     ok, nothing else in the fence will ever un-stick a SIGSTOPped darktable
     -- one last-resort SIGCONT, never launching a second darktable."""
     sent: list = []
-    monkeypatch.setattr(
-        faults, "_owned_kill", lambda sig=signal.SIGKILL, cache_root=None: sent.append(sig)
-    )
+    monkeypatch.setattr(faults, "_owned_kill", lambda sig=signal.SIGKILL, cache_root=None: sent.append(sig))
 
     class S:
         mcp = None
@@ -890,9 +852,7 @@ def test_fence_and_recover_never_sigconts_without_resume_on_quit_failure(tmp_pat
     """(N6, control) every non-freeze relaunch fault (e.g. plain
     `_relaunch`) must never SIGCONT -- there was nothing frozen to resume."""
     sent: list = []
-    monkeypatch.setattr(
-        faults, "_owned_kill", lambda sig=signal.SIGKILL, cache_root=None: sent.append(sig)
-    )
+    monkeypatch.setattr(faults, "_owned_kill", lambda sig=signal.SIGKILL, cache_root=None: sent.append(sig))
 
     class S:
         mcp = None
@@ -939,30 +899,18 @@ def test_r18_attach_timeout_detaches_the_image(tmp_path, monkeypatch):
 
     img = tmp_path / "full.dmg"
     log: list = []
-    info = plistlib.dumps(
-        {
-            "images": [
-                {
-                    "image-path": "/elsewhere/other.dmg",
-                    "system-entities": [{"dev-entry": "/dev/disk5"}],
-                },
-                {
-                    "image-path": str(img),
-                    "system-entities": [
-                        {"dev-entry": "/dev/disk99s1", "mount-point": "/Volumes/HTCFULL"},
-                        {"dev-entry": "/dev/disk99"},
-                    ],
-                },
-            ]
-        }
-    ).decode()
+    info = plistlib.dumps({"images": [
+        {"image-path": "/elsewhere/other.dmg",
+         "system-entities": [{"dev-entry": "/dev/disk5"}]},
+        {"image-path": str(img), "system-entities": [
+            {"dev-entry": "/dev/disk99s1", "mount-point": "/Volumes/HTCFULL"},
+            {"dev-entry": "/dev/disk99"}]}]}).decode()
 
     def fake(*args, timeout=60):
         log.append(args)
         if args[0] == "attach":
             raise subprocess.TimeoutExpired(["hdiutil", *args], timeout)
         return SimpleNamespace(stdout=info if args[0] == "info" else "", returncode=0)
-
     monkeypatch.setattr(faults, "_hdiutil", fake)
     obs = faults.run_fault_case(FakeSession(tmp_path), _cases()["R18"])
     assert obs.blocked.startswith("harness_bug: TimeoutExpired")
@@ -979,17 +927,12 @@ def test_relaunch_faults_retry_relaunch_in_disarm(tmp_path, rid):
     assert obs.extra["disarm_errors"] == ["relaunch: SessionBlocked: relaunch: did not quit"]
 
 
-@pytest.mark.parametrize(
-    "env,ok",
-    [
-        ({"ok": True, "outcome": "ok", "data": {"healed": True}}, True),  # registry shape
-        ({"ok": True, "outcome": "ok", "data": {}}, False),  # no heal
-        (
-            {"ok": False, "error": {"code": "darktable_unresponsive", "detail": {"healed": True}}},
-            False,
-        ),  # healed, no retry
-    ],
-)
+@pytest.mark.parametrize("env,ok", [
+    ({"ok": True, "outcome": "ok", "data": {"healed": True}}, True),   # registry shape
+    ({"ok": True, "outcome": "ok", "data": {}}, False),                # no heal
+    ({"ok": False, "error": {"code": "darktable_unresponsive",
+                             "detail": {"healed": True}}}, False),     # healed, no retry
+])
 def test_watchdog_auto_heal_reads_healed_where_the_registry_puts_it(tmp_path, env, ok):
     """(final fix I4): the registry reports a heal in data.healed (Envelope is
     frozen; there is no top-level `healed`)."""
@@ -1056,20 +999,15 @@ def test_huge_job_fixture_imports_the_card_before_the_step(tmp_path, monkeypatch
         return out
 
     monkeypatch.setattr(corpus_mod, "build_card", build_card)
-    monkeypatch.setattr(
-        exec_parity,
-        "_imported_path",
-        lambda session, env, name: (
-            tmp_path / "jobs" / f"imp_{name}" if (env or {}).get("ok") else None
-        ),
-    )
+    monkeypatch.setattr(exec_parity, "_imported_path",
+                        lambda session, env, name: tmp_path / "jobs" / f"imp_{name}"
+                        if (env or {}).get("ok") else None)
     s = _session(tmp_path)
     s.corpus = None
     s.staged.vars["job_slug"] = "slug"
     calls = []
-    s.call = lambda tool, args, budget, write=False: calls.append((tool, args)) or CallRecord(
-        tool, args, {"ok": True, "data": {}}
-    )
+    s.call = lambda tool, args, budget, write=False: calls.append((tool, args)) or \
+        CallRecord(tool, args, {"ok": True, "data": {}})
     v = faults.arm(s, "huge_job_one_timeout")
     assert calls[0][0] == "library_import" and calls[0][1]["confirm"] is True
     assert calls[0][1]["job_slug"] == "slug"
@@ -1080,24 +1018,14 @@ def test_huge_job_fixture_imports_the_card_before_the_step(tmp_path, monkeypatch
 def test_huge_job_fixture_failure_is_a_harness_block(tmp_path, monkeypatch):
     from tests.gauntlet import corpus as corpus_mod
 
-    monkeypatch.setattr(
-        corpus_mod,
-        "build_card",
-        lambda c, b, n, d: [
-            (
-                d.mkdir(parents=True, exist_ok=True),
-                (d / f"F{i}.ORF").write_bytes(b"x" * 8192),
-                d / f"F{i}.ORF",
-            )[2]
-            for i in range(n)
-        ],
-    )
+    monkeypatch.setattr(corpus_mod, "build_card", lambda c, b, n, d: [
+        (d.mkdir(parents=True, exist_ok=True), (d / f"F{i}.ORF").write_bytes(b"x" * 8192),
+         d / f"F{i}.ORF")[2] for i in range(n)])
     s = _session(tmp_path)
     s.corpus = None
     s.staged.vars["job_slug"] = "slug"
     s.call = lambda tool, args, budget, write=False: CallRecord(
-        tool, args, {"ok": False, "error": {"code": "usage"}}
-    )
+        tool, args, {"ok": False, "error": {"code": "usage"}})
     with pytest.raises(RuntimeError, match="huge-job fixture") as ei:
         faults.arm(s, "huge_job_one_timeout")
     assert "usage" in str(ei.value)

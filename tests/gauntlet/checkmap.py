@@ -111,7 +111,8 @@ def plan_request(req: dict, cmap: dict) -> RequestPlan:
                     break
         d = direction_of(check["direction"], cmap)
         klass = "out" if verb == "out" else "workflow"
-        return RequestPlan(rid, klass, (), (), workflow_verb=verb, step_back=int(d.get("steps", 0)))
+        return RequestPlan(rid, klass, (), (), workflow_verb=verb,
+                           step_back=int(d.get("steps", 0)))
     overrides = cmap["request_overrides"].get(rid)
     if overrides:
         raw = [(o["concept"], o["concept"], o["sign"], "delta", None) for o in overrides]
@@ -142,18 +143,9 @@ def plan_request(req: dict, cmap: dict) -> RequestPlan:
         if "fixed_sign" in c:
             sign = c["fixed_sign"]
         cap = _capability(concept, sign, cmap) if concept != "none" else None
-        out.append(
-            PartCheck(
-                text=text,
-                concept=concept,
-                sign=sign,
-                kind=kind_,
-                metric=c["metric"],
-                stat=c.get("stat"),
-                region=region or c.get("region", "frame"),
-                capability=cap,
-            )
-        )
+        out.append(PartCheck(text=text, concept=concept, sign=sign, kind=kind_,
+                             metric=c["metric"], stat=c.get("stat"),
+                             region=region or c.get("region", "frame"), capability=cap))
     caps = tuple(dict.fromkeys(p.capability for p in out if p.capability))
     served = [p for p in out if p.capability]
     if unmapped:
@@ -167,9 +159,8 @@ def plan_request(req: dict, cmap: dict) -> RequestPlan:
     return RequestPlan(rid, klass, tuple(out), caps, unmapped=tuple(unmapped))
 
 
-def wb_route_a_expect(
-    cmap: dict, case_key: str, preset: int | None, *, pinned: bool
-) -> dict | None:
+def wb_route_a_expect(cmap: dict, case_key: str, preset: int | None, *,
+                      pinned: bool) -> dict | None:
     """What a warmth case must verify on a frame in camera reference (late)
     mode, from check_map.json's `wb_route_a` block (Scouter decision rows
     458/461). `case_key` is a phrase key ("warmer") or a module.param key
@@ -185,20 +176,14 @@ def wb_route_a_expect(
     if not pinned:
         u = r["until_pinned"]
         return {"expect": u["expect"], "codes": list(u["accept_codes"])}
-    return {
-        "expect": "edit",
-        "m1_key": r["m1_key"]["to"],
-        "replaces": r["m1_key"]["from"],
-        "unit": r["m1_key"]["unit"],
-        "allowed": list(r["derived_keys"]),
-        "unchanged": list(r["unchanged_keys"]),
-        "direction_verified": bool(r["direction_verified"]),
-    }
+    return {"expect": "edit", "m1_key": r["m1_key"]["to"], "replaces": r["m1_key"]["from"],
+            "unit": r["m1_key"]["unit"], "allowed": list(r["derived_keys"]),
+            "unchanged": list(r["unchanged_keys"]),
+            "direction_verified": bool(r["direction_verified"])}
 
 
-def wb_route_a_pinned_edit(
-    route: dict, *, sign: int | None = None, value: float | None = None, start: int = 0
-) -> Expect:
+def wb_route_a_pinned_edit(route: dict, *, sign: int | None = None,
+                           value: float | None = None, start: int = 0) -> Expect:
     """Review round 2, finding 10 (GC-1): shared with `coverage.py` (its own
     `_wb_route_a_pinned_edit`, fix round 1 review I4) so every generator
     that wires `wb_route_a_expect`/`_expect_for_hero` scores the SAME way
@@ -239,26 +224,17 @@ def wb_route_a_pinned_edit(
     if value is not None:
         move = Check("M1", kind="equals", target={"key": to_key, "value": value, "unit": unit})
     else:
-        tags = (
-            {}
-            if route["direction_verified"]
-            else {
-                "sign_unverified": "route A pinned but direction_verified is False in "
-                "check_map.json -- sign unverified until the host probe"
-            }
-        )
+        tags = {} if route["direction_verified"] else {
+            "sign_unverified": "route A pinned but direction_verified is False in "
+                               "check_map.json -- sign unverified until the host probe"}
         s = sign if route["direction_verified"] else 0
         target = {"key": to_key, "unit": unit}
         if start:
             target["from"] = start
         move = Check("M1", kind="changed", sign=s or 0, target=target, tags=tags)
     unchanged = Check("M1", kind="unchanged", target={"keys": list(route["unchanged"])})
-    side = {
-        "changed": True,
-        "key": to_key,
-        "units": {to_key: unit},
-        "allowed": list(route["allowed"]),
-    }
+    side = {"changed": True, "key": to_key, "units": {to_key: unit},
+           "allowed": list(route["allowed"])}
     return Expect("edit", [move, unchanged], side)
 
 

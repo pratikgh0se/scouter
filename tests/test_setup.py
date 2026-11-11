@@ -133,23 +133,17 @@ class SetupTest(unittest.TestCase):
         snippet = setup.mcp_json(repo_root=Path("/r/scouter"), python="/r/scouter/.venv/bin/python")
         self.assertEqual(
             snippet,
-            {
-                "mcpServers": {
-                    "scouter": {
-                        "type": "stdio",
-                        "command": "/r/scouter/.venv/bin/python",
-                        "args": ["-m", "scouter.mcp.server"],
-                        "env": {"PYTHONPATH": "/r/scouter"},
-                    }
-                }
-            },
+            {"mcpServers": {"scouter": {
+                "type": "stdio",
+                "command": "/r/scouter/.venv/bin/python",
+                "args": ["-m", "scouter.mcp.server"],
+                "env": {"PYTHONPATH": "/r/scouter"},
+            }}},
         )
 
     def test_report_carries_the_command_and_the_snippet(self) -> None:
         report = setup.run(check=True)
-        self.assertTrue(
-            report["claude_mcp_add"].startswith("claude mcp add scouter --transport stdio")
-        )
+        self.assertTrue(report["claude_mcp_add"].startswith("claude mcp add scouter --transport stdio"))
         self.assertIn("mcpServers", report["mcp_json"])
         self.assertTrue(Path(report["mcp_json"]["mcpServers"]["scouter"]["command"]).is_absolute())
 

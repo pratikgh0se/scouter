@@ -226,11 +226,7 @@ def _commit_with_readback(
     if predicted_noop:
         try:
             first = _commit(
-                job,
-                image_id,
-                strategy=strategy,
-                attempts=1,
-                expect_change=False,
+                job, image_id, strategy=strategy, attempts=1, expect_change=False,
                 expect_module=expect_module,
             )
         except CommitTimeout:
@@ -316,11 +312,8 @@ def _commit(
         try:
             result = commit_fn(image_id, **kwargs)
         except CommitTimeout as second:
-            second.detail = {
-                **(second.detail or {}),
-                "stale_rewrite_retried": True,
-                "first_stale_rewrite": d.get("stale_rewrite"),
-            }
+            second.detail = {**(second.detail or {}), "stale_rewrite_retried": True,
+                             "first_stale_rewrite": d.get("stale_rewrite")}
             raise
         note = (
             "darktable rewrote the sidecar with a stale history after the first bounce "
@@ -438,8 +431,7 @@ WB_PRESET_D65_LATE = 4
 #: pinned by the layer-parity test): `wb.calibrate`'s sweep measures the
 #: Kelvin->coefficient mapping, which the late correction does not enter.
 WB_LATE_EXEMPT: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "scouter_wb_late_exempt", default=False
-)
+    "scouter_wb_late_exempt", default=False)
 
 #: Set by the relative verbs (`moves.adjust`/`moves.say`) around their
 #: writes: they have already chosen the Kelvin route and read the value on
@@ -452,8 +444,7 @@ WB_LATE_EXEMPT: contextvars.ContextVar[bool] = contextvars.ContextVar(
 #: `.set`/`.reset` -- see that function's docstring for the nested
 #: cross-image case (htc-colorcal-rereview follow-up) this guards against.
 NO_WB_REROUTE: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "scouter_no_wb_reroute", default=False
-)
+    "scouter_no_wb_reroute", default=False)
 
 
 @contextlib.contextmanager
@@ -524,19 +515,10 @@ COLORCAL_WB: tuple[str, str] = ("channelmixerrgb", "temperature")
 #: illuminants whose colour is set by a temperature slider. Every other one
 #: (as shot in camera 10, custom 7, fluorescent 4, ...) ignores `temperature`.
 ILLUMINANT_KELVIN = {2: "daylight", 6: "planckian"}
-ILLUMINANT_NAMES = {
-    0: "same as pipeline (D50)",
-    1: "A (incandescent)",
-    2: "daylight",
-    3: "E (equi-energy)",
-    4: "fluorescent",
-    5: "LED",
-    6: "planckian",
-    7: "custom",
-    8: "detect from surfaces",
-    9: "detect from edges",
-    10: "as shot in camera",
-}
+ILLUMINANT_NAMES = {0: "same as pipeline (D50)", 1: "A (incandescent)", 2: "daylight",
+                    3: "E (equi-energy)", 4: "fluorescent", 5: "LED", 6: "planckian",
+                    7: "custom", 8: "detect from surfaces", 9: "detect from edges",
+                    10: "as shot in camera"}
 #: darktable 5.4 `dt_adaptation_t`: DT_ADAPTATION_RGB is "none (bypass)" --
 #: no chromatic adaptation, so the illuminant does nothing.
 ADAPTATION_BYPASS = 4
@@ -556,85 +538,55 @@ def wb_route(path: str, instance: int = 0) -> dict:
     """
     preset = wb_preset(path, instance)
     if preset != WB_PRESET_D65_LATE:
-        return {
-            "route": "white_balance",
-            "module": "temperature",
-            "param": "temperature",
-            "temperature_preset": preset,
-            "reason": None,
-        }
+        return {"route": "white_balance", "module": "temperature", "param": "temperature",
+                "temperature_preset": preset, "reason": None}
     row = vocab.spec(*COLORCAL_WB)
     status = vocab.status(row) if row is not None else "missing"
-    out = {
-        "route": "unavailable",
-        "module": COLORCAL_WB[0],
-        "param": COLORCAL_WB[1],
-        "temperature_preset": preset,
-        "colorcal_status": status,
-    }
+    out = {"route": "unavailable", "module": COLORCAL_WB[0], "param": COLORCAL_WB[1],
+           "temperature_preset": preset, "colorcal_status": status}
     if status != "live":
-        return {
-            **out,
-            "reason": (
-                f"Scouter's color calibration route for warmth is built but its darktable "
-                f"action path is not confirmed yet (status {status}, pending a host probe)"
-            ),
-        }
+        return {**out, "reason": (
+            f"Scouter's color calibration route for warmth is built but its darktable "
+            f"action path is not confirmed yet (status {status}, pending a host probe)")}
     parsed = _read_sidecar_parsed(path)
     params = xmp.latest_params(parsed, COLORCAL_WB[0], 0) if parsed is not None else None
     if not params or _module_enabled(path, COLORCAL_WB[0], 0) is not True:
-        return {
-            **out,
-            "reason": "color calibration is not enabled on this image (no active, "
-            "decodable entry in the sidecar)",
-        }
+        return {**out, "reason": "color calibration is not enabled on this image (no active, "
+                                 "decodable entry in the sidecar)"}
     illuminant = params.get("illuminant")
     if illuminant not in ILLUMINANT_KELVIN:
         name = ILLUMINANT_NAMES.get(illuminant, f"#{illuminant}")
-        return {
-            **out,
-            "illuminant": name,
-            "reason": (
-                f"color calibration's illuminant is {name!r}; its temperature slider only works "
-                "for a daylight or planckian illuminant -- set the illuminant to daylight in "
-                "darktable's color calibration (CAT tab) first"
-            ),
-        }
+        return {**out, "illuminant": name, "reason": (
+            f"color calibration's illuminant is {name!r}; its temperature slider only works "
+            "for a daylight or planckian illuminant -- set the illuminant to daylight in "
+            "darktable's color calibration (CAT tab) first")}
     if params.get("adaptation") == ADAPTATION_BYPASS:
-        return {
-            **out,
-            "reason": "color calibration's adaptation is 'none (bypass)', so its "
-            "illuminant has no effect",
-        }
-    return {
-        **out,
-        "route": "color_calibration",
-        "reason": None,
-        "illuminant": ILLUMINANT_KELVIN[illuminant],
-        "illuminant_kelvin": params.get("temperature"),
-    }
+        return {**out, "reason": "color calibration's adaptation is 'none (bypass)', so its "
+                                 "illuminant has no effect"}
+    return {**out, "route": "color_calibration", "reason": None,
+            "illuminant": ILLUMINANT_KELVIN[illuminant],
+            "illuminant_kelvin": params.get("temperature")}
 
 
 def wb_routed_note(route: dict) -> str:
-    return (
-        "white balance is in camera reference (late) mode (temperature preset 4), so "
-        f"warmth moved through color calibration's {route.get('illuminant')} illuminant "
-        "temperature instead; the white balance module was not touched"
-    )
+    return ("white balance is in camera reference (late) mode (temperature preset 4), so "
+            f"warmth moved through color calibration's {route.get('illuminant')} illuminant "
+            "temperature instead; the white balance module was not touched")
 
 
-def wb_late_fix(params: set[str] | list[str] | tuple[str, ...], route: dict | None = None) -> str:
+def wb_late_fix(params: set[str] | list[str] | tuple[str, ...],
+                route: dict | None = None) -> str:
     """The honest `fix` for a white-balance write refused in late mode. It names
     only what exists: colour calibration is darktable's place for warmth in
     this mode; Scouter's route there (route A) is named with the reason it
     cannot run on this image right now; the one other live substitute (a
     color balance rgb grade, for temperature only) is labelled as a grade."""
     fix = (
-        'darktable\'s white balance on this image is in "camera reference (late)" mode '
+        "darktable's white balance on this image is in \"camera reference (late)\" mode "
         "(temperature preset 4, darktable 5.4's scene-referred default): it keeps the as-shot "
         "coefficients and color calibration applies the D65 correction late. Changing "
         "temperature, tint or the coefficients through darktable's sliders switches the module "
-        'to "user modified" and switches that late correction off, so the colours shift the '
+        "to \"user modified\" and switches that late correction off, so the colours shift the "
         "wrong way (cooler, whichever way you asked). Nothing was changed in darktable. In this "
         "mode darktable adjusts warmth in the color calibration module (its CAT illuminant)"
     )
@@ -642,37 +594,23 @@ def wb_late_fix(params: set[str] | list[str] | tuple[str, ...], route: dict | No
     if "temperature" in params:
         why = (route or {}).get("reason")
         if (route or {}).get("route") == "color_calibration":
-            fix += (
-                "; Scouter drives it for warmer/cooler, 'darkroom adjust' and "
-                "'darkroom set' -- say 'warmer' or 'cooler' instead of nudging."
-            )
+            fix += ("; Scouter drives it for warmer/cooler, 'darkroom adjust' and "
+                    "'darkroom set' -- say 'warmer' or 'cooler' instead of nudging.")
         else:
-            fix += (
-                ", which Scouter does not drive on this image yet"
-                + (f": {why}" if why else "")
-                + ". Change it there by hand."
-            )
+            fix += (", which Scouter does not drive on this image yet"
+                    + (f": {why}" if why else "") + ". Change it there by hand.")
         fix += (
             " Nearest thing Scouter can do: a colour grade, not a white-balance correction -- "
             "say 'warm the highlights' or 'cool the shadows' (color balance rgb)."
         )
     else:
-        fix += (
-            ", which Scouter does not drive for tint (it has no tint slider). "
-            "Change it there by hand. Scouter has no substitute for a tint change."
-        )
+        fix += (", which Scouter does not drive for tint (it has no tint slider). "
+                "Change it there by hand. Scouter has no substitute for a tint change.")
     return fix
 
 
-def refuse_wb_late(
-    path: str,
-    module: str,
-    params: list[str],
-    instance: int = 0,
-    *,
-    what: str,
-    extra: dict | None = None,
-) -> None:
+def refuse_wb_late(path: str, module: str, params: list[str], instance: int = 0, *,
+                   what: str, extra: dict | None = None) -> None:
     """Raise `ModuleUnavailable` when a `temperature` write would land on a
     preset-4 (camera reference, late) white balance. A no-op for every other
     module and every other preset (0/1/2/3), and when the preset is unknown.
@@ -692,17 +630,10 @@ def refuse_wb_late(
         "(late) mode, and changing it through darktable's sliders would switch off the late "
         "correction and shift the colours the wrong way",
         fix=wb_late_fix(params, route),
-        detail={
-            "module": module,
-            "params": list(params),
-            "instance": instance,
-            "temperature_preset": preset,
-            "mode": "camera reference (late)",
-            "darktable_enum": "DT_IOP_TEMP_D65_LATE",
-            "path": path,
-            "colorcal_route": route,
-            **(extra or {}),
-        },
+        detail={"module": module, "params": list(params), "instance": instance,
+                "temperature_preset": preset, "mode": "camera reference (late)",
+                "darktable_enum": "DT_IOP_TEMP_D65_LATE", "path": path,
+                "colorcal_route": route, **(extra or {})},
     )
 
 
@@ -726,7 +657,11 @@ def _module_absent_before(entry) -> bool:
     """True when the journal says the module had NO active history entry
     before this write (`before.enabled` is None, not an unknown-value nudge)."""
     b = entry.before
-    return b.get("value") is None and not b.get("value_unknown") and b.get("enabled") is None
+    return (
+        b.get("value") is None
+        and not b.get("value_unknown")
+        and b.get("enabled") is None
+    )
 
 
 def _declared_default(module: str, param: str) -> float | None:
@@ -811,11 +746,8 @@ def _module_at_defaults(path: str, module: str, instance: int) -> bool:
         # `vocab.EXPOSURE_BLACK_SCENE_RAW_DEFAULT`) applies here, not just
         # the generic float epsilon -- this is the one place a live XMP
         # value is checked for equality against a declared neutral/default.
-        if not _close(
-            float(value),
-            _declared_default(module, s.param),
-            tol=vocab.default_tolerance(module, s.param),
-        ):
+        if not _close(float(value), _declared_default(module, s.param),
+                      tol=vocab.default_tolerance(module, s.param)):
             return False
     return True
 
@@ -1071,21 +1003,9 @@ def _current_image() -> dtbridge.ResolvedImage:
 #: MORE cautiously than darktable would (never refuse a real image format,
 #: since the deny set is short and explicit), where a whitelist can refuse
 #: too aggressively (any format not yet added to it).
-_NON_IMAGE_EXTENSIONS = frozenset(
-    {
-        ".txt",
-        ".md",
-        ".json",
-        ".py",
-        ".sh",
-        ".zip",
-        ".tar",
-        ".gz",
-        ".pdf",
-        ".log",
-        ".db",
-    }
-)
+_NON_IMAGE_EXTENSIONS = frozenset({
+    ".txt", ".md", ".json", ".py", ".sh", ".zip", ".tar", ".gz", ".pdf", ".log", ".db",
+})
 
 
 def _require_openable_path(path: str) -> None:
@@ -1128,7 +1048,7 @@ def _require_openable_path(path: str) -> None:
         raise UsageError(
             f"{path} is not a recognised image format ({resolved.suffix})",
             fix="open a raw or image file darktable reads; darktable was never asked to "
-            "open this one",
+                "open this one",
             detail={"path": path, "reason": "unsupported_format", "extension": resolved.suffix},
         )
 
@@ -1212,14 +1132,12 @@ def set_param(
                 # extra `darkroom.current` lookup in the inner call, and the
                 # inner write is not a metrics event of its own: `plan` and
                 # metrics show the outer `darkroom.set` only.
-                result = set_param.__wrapped__(
-                    *COLORCAL_WB, value, instance=0, commit=commit, job=job
-                )
+                result = set_param.__wrapped__(*COLORCAL_WB, value, instance=0,
+                                               commit=commit, job=job)
                 result.warnings.append(wb_routed_note(route))
                 return result
-        refuse_wb_late(
-            resolved.path, module, [param], instance, what=f"darkroom set {module}.{param}"
-        )
+        refuse_wb_late(resolved.path, module, [param], instance,
+                       what=f"darkroom set {module}.{param}")
     dtbridge.require_darkroom()
     raw_state, before_state, pending_uncommitted = _raw_and_before_state(
         job, resolved.image_id, resolved.path, module, param, instance
@@ -1460,39 +1378,22 @@ def _nudge_timeout(
     lo, hi = vocab.DT_HARD_BOUNDS.get((module, param), (None, None))
     limit = hi if effect == "up" else lo
     now = _read_value(resolved.path, module, param, instance)
-    if (
-        limit is not None
-        and not pending_uncommitted
-        and _close(now, limit)
-        and _close(raw_state.get("value"), limit)
-        and not _history_advanced_for(resolved.xmp_path, before_fp, module)
-    ):
+    if (limit is not None and not pending_uncommitted and _close(now, limit)
+            and _close(raw_state.get("value"), limit)
+            and not _history_advanced_for(resolved.xmp_path, before_fp, module)):
         return SetResult(
-            image_id=resolved.image_id,
-            path=resolved.path,
-            module=module,
-            param=param,
-            instance=instance,
-            requested=None,
-            applied=now,
-            previous=now,
-            committed=True,
-            noop=True,
-            clamped=True,
-            source=raw_state.get("source", "xmp"),
-            warnings=[
-                f"no-op: {module}.{param} is already at darktable's hard limit "
-                f"{limit:g} in the sidecar; a nudge {effect} cannot move it"
-            ],
+            image_id=resolved.image_id, path=resolved.path, module=module, param=param,
+            instance=instance, requested=None, applied=now, previous=now, committed=True,
+            noop=True, clamped=True, source=raw_state.get("source", "xmp"),
+            warnings=[f"no-op: {module}.{param} is already at darktable's hard limit "
+                      f"{limit:g} in the sidecar; a nudge {effect} cannot move it"],
         )
     raise CommitTimeout(
         error.message,
-        fix=(
-            "the nudge was not confirmed in the sidecar: read the value (`history read`) "
-            f"of {module}.{param} to see whether it moved. If it is at its limit, do not "
-            "retry the nudge; otherwise leave and re-enter the darkroom, then read "
-            "the value again before deciding"
-        ),
+        fix=("the nudge was not confirmed in the sidecar: read the value (`history read`) "
+             f"of {module}.{param} to see whether it moved. If it is at its limit, do not "
+             "retry the nudge; otherwise leave and re-enter the darkroom, then read "
+             "the value again before deciding"),
         detail={**error.detail, "module": module, "param": param, "instance": instance},
     )
 
@@ -1527,8 +1428,7 @@ def _soft_limit_noop(
     status = dtbridge.action(path_, instance=instance, element="value", effect="", value=0.0)
     position = status.get("status")
     at_end = isinstance(position, (int, float)) and (
-        position >= 1.0 if effect == "up" else position <= 0.0
-    )
+        position >= 1.0 if effect == "up" else position <= 0.0)
     if not at_end:
         return None
     end = "top" if effect == "up" else "bottom"
@@ -1536,27 +1436,17 @@ def _soft_limit_noop(
     unit = f" {row.unit}" if row is not None and row.unit else ""
     beyond = ""
     if row is not None:
-        beyond = f" (up to {row.hi:g}{unit})" if effect == "up" else f" (down to {row.lo:g}{unit})"
+        beyond = (f" (up to {row.hi:g}{unit})" if effect == "up"
+                  else f" (down to {row.lo:g}{unit})")
     return SetResult(
-        image_id=resolved.image_id,
-        path=resolved.path,
-        module=module,
-        param=param,
-        instance=instance,
-        requested=None,
-        applied=value,
-        previous=value,
-        committed=True,
-        noop=True,
-        clamped=True,
-        source=raw_state.get("source", "xmp"),
+        image_id=resolved.image_id, path=resolved.path, module=module, param=param,
+        instance=instance, requested=None, applied=value, previous=value, committed=True,
+        noop=True, clamped=True, source=raw_state.get("source", "xmp"),
         reason="soft_limit",
-        warnings=[
-            f"no-op: {module}.{param} is at {value:g}{unit}, the {end} of darktable's "
-            f"slider (its soft limit {limit:g}{unit}); a nudge {effect} cannot go past it. "
-            f"`darkroom_set` or `darkroom_adjust` can go further{beyond}. "
-            "Nothing was sent to darktable"
-        ],
+        warnings=[f"no-op: {module}.{param} is at {value:g}{unit}, the {end} of darktable's "
+                  f"slider (its soft limit {limit:g}{unit}); a nudge {effect} cannot go past it. "
+                  f"`darkroom_set` or `darkroom_adjust` can go further{beyond}. "
+                  "Nothing was sent to darktable"],
     )
 
 
@@ -1610,9 +1500,8 @@ def nudge(
         )
     resolved = _current_image()
     _require_job_image(job, resolved.image_id)
-    refuse_wb_late(
-        resolved.path, module, [param], instance, what=f"darkroom nudge {module}.{param}"
-    )
+    refuse_wb_late(resolved.path, module, [param], instance,
+                   what=f"darkroom nudge {module}.{param}")
     dtbridge.require_darkroom()
     raw_state, before_state, pending_uncommitted = _raw_and_before_state(
         job, resolved.image_id, resolved.path, module, param, instance
@@ -1708,14 +1597,7 @@ def nudge(
             )
         except CommitTimeout as e:
             return _nudge_timeout(
-                e,
-                resolved,
-                module,
-                param,
-                instance,
-                effect,
-                raw_state,
-                pending_uncommitted,
+                e, resolved, module, param, instance, effect, raw_state, pending_uncommitted,
                 before_fp,
             )
         applied = _read_value(resolved.path, module, param, instance)
@@ -2190,9 +2072,8 @@ def _undo_temperature_via_kelvin(
     return committed, warnings, undone
 
 
-def _warn_late_not_restored(
-    entry: journal.Entry, before_params: dict | None, undone: dict, warnings: list[str]
-) -> None:
+def _warn_late_not_restored(entry: journal.Entry, before_params: dict | None, undone: dict,
+                            warnings: list[str]) -> None:
     """Undo is never blocked by the late-WB guard, but a move made while the
     white balance was in camera reference (late) mode (`preset` 4) cannot be
     fully restored: every tier restores through darktable's sliders, which
@@ -2205,7 +2086,7 @@ def _warn_late_not_restored(
     undone["late_correction_restored"] = restored
     if not restored:
         warnings.append(
-            f'seq {entry.seq} was made while white balance was in "camera reference (late)" '
+            f"seq {entry.seq} was made while white balance was in \"camera reference (late)\" "
             f"mode (preset 4); the coefficients are restored, but darktable's sliders cannot "
             f"switch that mode back on (preset now {after}), so the late D65 correction is "
             "still off and the colours will not match the pre-move look. To get it back, "
@@ -2522,18 +2403,14 @@ def _undo_one(*, dry_run: bool = False, job: str | None = None) -> UndoResult:
                 previous = float(spec.default)
                 restored_from_default = True
         if previous is None:
-            why = (
-                "was unknown (an uncommitted nudge preceded it)"
-                if entry.before.get("value_unknown")
-                else "was never readable from the XMP"
-            )
+            why = ("was unknown (an uncommitted nudge preceded it)"
+                   if entry.before.get("value_unknown") else "was never readable from the XMP")
             raise ScouterError(
                 f"cannot undo seq {entry.seq}: the previous value of "
                 f"{entry.module}.{entry.param} {why}",
                 fix="press Ctrl-Z in darktable, or set the value you want explicitly",
                 detail={"seq": entry.seq},
             )
-
         def _restored() -> bool:
             return _close(
                 _effective_read(entry.path, entry.module, entry.param, entry.instance),
@@ -2636,27 +2513,14 @@ def undo_last(*, single: bool = False, dry_run: bool = False, job: str | None = 
     if single or newest is None or newest.group is None:
         return _undo_one(dry_run=dry_run, job=job)
     group = newest.group
-    members = [
-        e
-        for e in reversed(journal.read_all(job))
-        if e.group == group and not e.undone and not (e.outcome or "").startswith("error")
-    ]
+    members = [e for e in reversed(journal.read_all(job))
+               if e.group == group and not e.undone
+               and not (e.outcome or "").startswith("error")]
     if dry_run:
         return UndoResult(
-            outcome="dry_run",
-            image_id=newest.image_id,
-            path=newest.path,
-            seq=newest.seq,
-            plan=[
-                {
-                    "action": "darkroom.undo_last",
-                    "seq": e.seq,
-                    "module": e.module,
-                    "param": e.param,
-                    "restore_to": e.before.get("value"),
-                }
-                for e in members
-            ],
+            outcome="dry_run", image_id=newest.image_id, path=newest.path, seq=newest.seq,
+            plan=[{"action": "darkroom.undo_last", "seq": e.seq, "module": e.module,
+                   "param": e.param, "restore_to": e.before.get("value")} for e in members],
             reason=f"would undo {len(members)} write(s) of move {group}, newest first",
         )
     results: list[dict] = []
@@ -2667,12 +2531,8 @@ def undo_last(*, single: bool = False, dry_run: bool = False, job: str | None = 
             if not results:
                 raise
             return UndoResult(
-                outcome="partial",
-                image_id=newest.image_id,
-                path=newest.path,
-                seq=newest.seq,
-                undone=results[0].get("undone"),
-                undone_group=results,
+                outcome="partial", image_id=newest.image_id, path=newest.path, seq=newest.seq,
+                undone=results[0].get("undone"), undone_group=results,
                 # Fix round 1, controller ruling: report what the members
                 # that DID undo actually committed/warned, the same as the
                 # success path -- not a hard-coded `False`/`[]` that throws
@@ -2691,25 +2551,16 @@ def undo_last(*, single: bool = False, dry_run: bool = False, job: str | None = 
         still_open = any(e.seq == member.seq and not e.undone for e in journal.read_all(job))
         if still_open:
             return UndoResult(
-                outcome="partial",
-                image_id=newest.image_id,
-                path=newest.path,
-                seq=newest.seq,
-                undone=results[0].get("undone"),
-                undone_group=results,
+                outcome="partial", image_id=newest.image_id, path=newest.path, seq=newest.seq,
+                undone=results[0].get("undone"), undone_group=results,
                 committed=all(r.get("committed") for r in results),
                 warnings=[w for r in results for w in r.get("warnings", [])],
-                reason=(
-                    f"undid {len(results)} of move {group}, then seq {member.seq} "
-                    f"({member.module}.{member.param}) stayed open after its own undo"
-                ),
+                reason=(f"undid {len(results)} of move {group}, then seq {member.seq} "
+                        f"({member.module}.{member.param}) stayed open after its own undo"),
             )
     return UndoResult(
-        image_id=newest.image_id,
-        path=newest.path,
-        seq=newest.seq,
-        undone=results[0].get("undone") if results else None,
-        undone_group=results,
+        image_id=newest.image_id, path=newest.path, seq=newest.seq,
+        undone=results[0].get("undone") if results else None, undone_group=results,
         committed=all(r.get("committed") for r in results),
         warnings=[w for r in results for w in r.get("warnings", [])],
     )
@@ -2893,12 +2744,8 @@ for verb in (
         group="darkroom",
         fn=undo_last,
         args=(
-            ArgSpec(
-                "single",
-                "bool",
-                default=False,
-                help="undo only the newest write, not the whole move it was part of",
-            ),
+            ArgSpec("single", "bool", default=False,
+                    help="undo only the newest write, not the whole move it was part of"),
             DRY_RUN_ARG,
         ),
         writes=True,

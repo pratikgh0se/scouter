@@ -70,11 +70,8 @@ def test_edu_warmer_and_cooler_expect_the_wb_route_a_refusal():
     cases = guide.generate()
     for level in guide.LEVELS:
         for phrase in ("warmer", "cooler"):
-            c = next(
-                c
-                for c in cases
-                if c.meta.get("session") == f"edu-{level}" and c.steps[-1].args["phrase"] == phrase
-            )
+            c = next(c for c in cases if c.meta.get("session") == f"edu-{level}" and
+                     c.steps[-1].args["phrase"] == phrase)
             assert c.expect.kind == "typed_error"
             assert c.expect.codes == ["module_unavailable"]
 
@@ -85,11 +82,8 @@ def test_edu_brighter_and_darker_are_unaffected():
     cases = guide.generate()
     for level in guide.LEVELS:
         for phrase in ("brighter", "darker", "more contrast"):
-            c = next(
-                c
-                for c in cases
-                if c.meta.get("session") == f"edu-{level}" and c.steps[-1].args["phrase"] == phrase
-            )
+            c = next(c for c in cases if c.meta.get("session") == f"edu-{level}" and
+                     c.steps[-1].args["phrase"] == phrase)
             assert c.expect.kind == "workflow"
             # C18: only the `full` level carries the explained-concept reset
             assert (c.steps[0].tool == "reset_explained") == (level == "full")

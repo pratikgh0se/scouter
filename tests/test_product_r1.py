@@ -1,8 +1,8 @@
 """Round 1 gauntlet product fixes: C14 (export all-fail), C13 (undo of a
 module's first-ever set restores a verified default)."""
-
 import os
 import unittest
+from pathlib import Path
 
 from scouter import registry
 from scouter.core import darkroom, dtbridge, export, journal, vocab
@@ -27,13 +27,9 @@ class ExportAllFailTest(unittest.TestCase):
         self.bad2 = self.root / "bad2.ORF"
         for p in (self.good, self.bad, self.bad2):
             p.write_bytes(b"raw")
-        dtbridge.set_bridge(
-            FakeBridge(
-                {
-                    "image.lookup": lambda p: {"found": True, "image_id": 12, "path": p["path"]},
-                }
-            )
-        )
+        dtbridge.set_bridge(FakeBridge({
+            "image.lookup": lambda p: {"found": True, "image_id": 12, "path": p["path"]},
+        }))
         self._saved = os.environ.get("SCOUTER_DARKTABLE_CLI")
         self.out = self.root / "exports"
 
@@ -58,23 +54,16 @@ class ExportAllFailTest(unittest.TestCase):
 
     def test_all_fail_surfaces_as_envelope_not_ok(self) -> None:
         self._cli(_CLI_FAILS_ALL)
-        env = registry.call(
-            "export.run", "cli", images=[str(self.bad)], preset="preview", out_dir=str(self.out)
-        )
+        env = registry.call("export.run", "cli", images=[str(self.bad)], preset="preview",
+                            out_dir=str(self.out))
         self.assertFalse(env.ok)
-        self.assertEqual(
-            env.error["code"] if isinstance(env.error, dict) else env.error.code,
-            "export_all_failed",
-        )
+        self.assertEqual(env.error["code"] if isinstance(env.error, dict) else env.error.code,
+                         "export_all_failed")
 
     def test_partial_success_still_ok_with_counts(self) -> None:
         self._cli(_CLI_FAILS_BAD)
-        result = export.run(
-            images=[str(self.good), str(self.bad)],
-            preset="preview",
-            out_dir=str(self.out),
-            confirm=True,
-        )
+        result = export.run(images=[str(self.good), str(self.bad)], preset="preview",
+                            out_dir=str(self.out), confirm=True)
         self.assertEqual((result.exported, result.failed), (1, 1))
         self.assertEqual(len(list(self.out.glob("*"))), 1)
 
@@ -92,13 +81,8 @@ class ExportAllFailTest(unittest.TestCase):
 class UndoFirstSetTest(_DarkroomFixture):
     def _first_set(self, module: str, param: str, enabled=None) -> None:
         entry = journal.begin(
-            "job-test",
-            verb="darkroom.set",
-            image_id=12,
-            path=str(self.raw),
-            module=module,
-            param=param,
-            instance=0,
+            "job-test", verb="darkroom.set", image_id=12, path=str(self.raw),
+            module=module, param=param, instance=0,
             before={"source": "xmp", "value": None, "enabled": enabled, "history_end": 11},
         )
         journal.complete("job-test", entry.seq, after={"value": 0.5})
@@ -153,13 +137,8 @@ class SigmoidContrastDefaultTest(_DarkroomFixture):
 
     def test_first_set_undo_restores_default_and_disables(self) -> None:
         entry = journal.begin(
-            "job-test",
-            verb="darkroom.set",
-            image_id=12,
-            path=str(self.raw),
-            module="sigmoid",
-            param="contrast",
-            instance=0,
+            "job-test", verb="darkroom.set", image_id=12, path=str(self.raw),
+            module="sigmoid", param="contrast", instance=0,
             before={"source": "xmp", "value": None, "enabled": None, "history_end": 11},
         )
         journal.complete("job-test", entry.seq, after={"value": 1.9})
@@ -169,6 +148,4 @@ class SigmoidContrastDefaultTest(_DarkroomFixture):
             darkroom.undo_last()
         sets = [p for m, p in self.bridge.calls if m == "darkroom.action"]
         self.assertEqual(sets[-1]["value"], 1.5)
-        self.assertIn(
-            "sigmoid", [p["module"] for m, p in self.bridge.calls if m == "module.disable"]
-        )
+        self.assertIn("sigmoid", [p["module"] for m, p in self.bridge.calls if m == "module.disable"])

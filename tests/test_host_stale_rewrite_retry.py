@@ -30,9 +30,7 @@ RUN = os.environ.get("SCOUTER_HOST_TESTS") == "1" and bool(ATTACH)
 _HE = re.compile(r'darktable:history_end="(\d+)"')
 
 
-@unittest.skipUnless(
-    RUN, "needs SCOUTER_HOST_TESTS=1 and SCOUTER_ATTACH_SCRATCH=<running scratch dir>"
-)
+@unittest.skipUnless(RUN, "needs SCOUTER_HOST_TESTS=1 and SCOUTER_ATTACH_SCRATCH=<running scratch dir>")
 class StaleRewriteRetryHostTest(unittest.TestCase):
     def test_no_stale_rewrite_refusal_over_n_writes(self) -> None:
         from scouter.core import darkroom, dtbridge, moves
@@ -54,9 +52,7 @@ class StaleRewriteRetryHostTest(unittest.TestCase):
                 kind = rng.choice(("set", "adjust"))
                 try:
                     if kind == "set":
-                        r = darkroom.set_param(
-                            "exposure", "exposure", round(rng.uniform(-0.5, 0.8), 3)
-                        )
+                        r = darkroom.set_param("exposure", "exposure", round(rng.uniform(-0.5, 0.8), 3))
                     else:
                         r = moves.adjust("exposure", "exposure", 0.1 * rng.choice((-1, 1)))
                     retried += any("re-bounce" in w for w in getattr(r, "warnings", []) or [])
@@ -71,16 +67,8 @@ class StaleRewriteRetryHostTest(unittest.TestCase):
                     con.close()
                 self.assertEqual(sc, lib)
         finally:
-            dtbridge.call(
-                "darkroom.action",
-                {
-                    "path": "global/switch views/lighttable",
-                    "instance": 0,
-                    "element": "",
-                    "effect": "activate",
-                    "value": 1.0,
-                },
-            )
+            dtbridge.call("darkroom.action", {"path": "global/switch views/lighttable", "instance": 0,
+                                              "element": "", "effect": "activate", "value": 1.0})
         print(f"writes={n} stale_refusals={stale} retried_and_landed={retried}")
         self.assertLessEqual(stale, max(0, int(n * 0.005)))
 

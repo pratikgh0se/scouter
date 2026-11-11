@@ -23,18 +23,8 @@ from scouter.types import VocabResult
 
 STATUSES = ("live", "absolute_only", "candidate", "unreachable")
 CONCEPT_IDS = (
-    "exposure",
-    "tone_mapper",
-    "white_balance",
-    "color_balance",
-    "chroma_saturation",
-    "grading",
-    "black_level",
-    "color_zones",
-    "presets",
-    "finishing",
-    "geometry",
-    "detail",
+    "exposure", "tone_mapper", "white_balance", "color_balance", "chroma_saturation",
+    "grading", "black_level", "color_zones", "presets", "finishing", "geometry", "detail",
 )
 
 
@@ -106,7 +96,7 @@ _CB_HUE_DEFAULT = 0.0
 #: case, still the simpler one to declare); the tolerance below exists so a
 #: read of the OTHER real default (scene-raw) is not mistaken for an
 #: uncorrected offset.
-EXPOSURE_BLACK_SCENE_RAW_DEFAULT = -(2**-12)
+EXPOSURE_BLACK_SCENE_RAW_DEFAULT = -(2 ** -12)
 
 #: Per-row overrides of the "is this live value its declared default"
 #: tolerance, keyed `(module, param)`. A row with no entry here keeps its
@@ -133,38 +123,15 @@ def default_tolerance(module: str, param: str, fallback: float = 1e-4) -> float:
     return _DEFAULT_TOLERANCE.get((module, param), fallback)
 
 
-def _cb(
-    param: str,
-    ui: str,
-    unit: str,
-    lo: float,
-    hi: float,
-    step: float,
-    concept: str,
-    why: str,
-    watch: str,
-    candidates: tuple[str, ...] = (),
-    *,
-    wraps: bool = False,
-    neutral: float | None = 0.0,
-) -> ParamSpec:
+def _cb(param: str, ui: str, unit: str, lo: float, hi: float, step: float, concept: str,
+        why: str, watch: str, candidates: tuple[str, ...] = (), *, wraps: bool = False,
+        neutral: float | None = 0.0) -> ParamSpec:
     """A colour balance rgb row (`%` rows get display_scale 100)."""
     return ParamSpec(
-        module="colorbalancergb",
-        param=param,
-        ui=f"color balance rgb › {ui}",
-        unit=unit,
-        display_scale=100.0 if unit == "%" else 1.0,
-        lo=lo,
-        hi=hi,
-        step=step,
-        value_source="xmp",
-        neutral=None if wraps else neutral,
-        wraps=wraps,
-        concept=concept,
-        why=why,
-        watch=watch,
-        candidate_paths=candidates,
+        module="colorbalancergb", param=param, ui=f"color balance rgb › {ui}", unit=unit,
+        display_scale=100.0 if unit == "%" else 1.0, lo=lo, hi=hi, step=step,
+        value_source="xmp", neutral=None if wraps else neutral, wraps=wraps,
+        concept=concept, why=why, watch=watch, candidate_paths=candidates,
         # Phase 3 task 10 ruling: a hue row declares darktable's module
         # default (0.0 degrees, read from the sidecar darktable itself wrote
         # for a freshly enabled colour balance rgb, tests/fixtures/
@@ -202,9 +169,8 @@ _ZONE_LUMINANCE_STEP = {"shadows": 0.125, "midtones": 0.06, "highlights": 0.10}
 _ZONE_CHROMA_STEP = 0.075
 
 
-def _zone(
-    zone: str, section: str, label: str, short: str | None = None
-) -> tuple[ParamSpec, ParamSpec, ParamSpec]:
+def _zone(zone: str, section: str, label: str,
+          short: str | None = None) -> tuple[ParamSpec, ParamSpec, ParamSpec]:
     base = f"iop/colorbalancergb/{section}"
     flat = f"iop/colorbalancergb/{label}"
     # Task 10 host probe: `power/<x>` answered but `shadows lift/<x>` and
@@ -212,189 +178,87 @@ def _zone(
     # section word (`lift`, `gain`) is tried first for those two zones.
     lead = (f"iop/colorbalancergb/{short}",) if short else ()
     return (
-        _cb(
-            f"{zone}_luminance",
-            f"4 ways › {section} › luminance",
-            "%",
-            -0.25,
-            0.25,
+        _cb(f"{zone}_luminance", f"4 ways › {section} › luminance", "%", -0.25, 0.25,
             _ZONE_LUMINANCE_STEP[zone],
-            "color_balance",
-            f"lifts or lowers only the {label}",
-            (
-                "noise in the darkest areas"
-                if zone == "shadows"
-                else ("clipping in the brightest areas" if zone == "highlights" else "skin")
-            ),
-            (*(f"{b}/luminance" for b in lead), f"{base}/luminance", f"{flat} luminance"),
-        ),
-        _cb(
-            f"{zone}_hue",
-            f"4 ways › {section} › hue",
-            "°",
-            0.0,
-            360.0,
-            10.0,
-            "grading",
-            f"picks the tint colour for the {label}",
-            "neutral greys in that range",
-            (*(f"{b}/hue" for b in lead), f"{base}/hue", f"{flat} hue"),
-            wraps=True,
-        ),
-        _cb(
-            f"{zone}_chroma",
-            f"4 ways › {section} › chroma",
-            "%",
-            0.0,
-            0.3,
-            _ZONE_CHROMA_STEP,
-            "grading",
-            f"sets how strong the {label} tint is",
-            "greys in that range turning coloured",
-            (*(f"{b}/chroma" for b in lead), f"{base}/chroma", f"{flat} chroma"),
-        ),
+            "color_balance", f"lifts or lowers only the {label}",
+            "noise in the darkest areas" if zone == "shadows" else
+            ("clipping in the brightest areas" if zone == "highlights" else "skin"),
+            (*(f"{b}/luminance" for b in lead), f"{base}/luminance", f"{flat} luminance")),
+        _cb(f"{zone}_hue", f"4 ways › {section} › hue", "°", 0.0, 360.0, 10.0,
+            "grading", f"picks the tint colour for the {label}",
+            "neutral greys in that range", (*(f"{b}/hue" for b in lead), f"{base}/hue", f"{flat} hue"), wraps=True),
+        _cb(f"{zone}_chroma", f"4 ways › {section} › chroma", "%", 0.0, 0.3, _ZONE_CHROMA_STEP,
+            "grading", f"sets how strong the {label} tint is",
+            "greys in that range turning coloured", (*(f"{b}/chroma" for b in lead), f"{base}/chroma", f"{flat} chroma")),
     )
 
 
 PARAMS: tuple[ParamSpec, ...] = (
-    ParamSpec(
-        "exposure",
-        "exposure",
-        "exposure › exposure",
-        "EV",
-        1.0,
-        -3.0,
-        4.0,
-        0.3,
-        "xmp",
-        None,
-        False,
-        "exposure",
-        "brightens or darkens the whole frame evenly, before any tone mapping",
-        "the highlights for clipping and the shadows for noise",
-    ),
-    ParamSpec(
-        "exposure",
-        "black",
-        "exposure › black level correction",
-        "ratio",
-        1.0,
-        # Phrase-step ruling 2026-11-09: 0.005 -> 0.01 (the most the
-        # "never more than double" rule allows), so "faded blacks a
-        # touch" (0.005) clears the M3 p01L floor on night-3 evidence.
-        -0.1,
-        0.1,
-        0.01,
-        "xmp",
-        None,
-        False,
-        "black_level",
-        "moves the point that renders as pure black",
-        "the darkest areas: a few thousandths is a visible change",
-        # Row 474 (final-review issue I1): §4.3's own table
-        # (docs/superpowers/specs/2026-09-24-scouter-phase3-design.md:
-        # 148-153) leaves this row's `default` column BLANK by design
-        # -- it fills that column only where a value is asserted
-        # neutral by construction, and groups exposure.black with
-        # exposure.exposure/sigmoid.skew/temperature.tint as rows that
-        # are not. `0.0` was a plausible CANDIDATE (darktable's
-        # dt_iop_exposure_params_t.black is 0.0f in its C default, and
-        # an additive correction with no active history entry applies
-        # none), pending host verification -- unlike the sign
-        # convention (§10, a rendered before/after scout.stats run),
-        # which was already measured.
-        #
-        # Row 495/496: `tests/test_host_phase3.py::
-        # ProbeExposureBlackDefaultHostTest` (host run 2026-09-27)
-        # found a fresh exposure module's `black` at
-        # -0.000244140625 == -(2**-12) -- darktable's OWN declared
-        # default for `black` on a scene-referred colour raw
-        # (`src/iop/exposure.c reload_defaults()`,
-        # `EXPOSURE_BLACK_SCENE_RAW_DEFAULT`, this module), not a
-        # quantisation artifact (fix round 1, finding 2: that reading
-        # was wrong and reviewer-refuted). Every other workflow
-        # (monochrome, non-scene-raw) defaults `black` to exactly
-        # 0.0, the value declared here; `default_tolerance` covers
-        # BOTH real defaults, so a fresh scene-raw module reads as
-        # "at default" too. PASS: promoted from `default_candidate`
-        # to the cited `default` below; this is NOT a spec §4.3 edit
-        # (that table stays as-is, blank), only this repo's own
-        # host-verified value.
-        default=0.0,
-    ),
+    ParamSpec("exposure", "exposure", "exposure › exposure", "EV", 1.0, -3.0, 4.0, 0.3,
+              "xmp", None, False, "exposure",
+              "brightens or darkens the whole frame evenly, before any tone mapping",
+              "the highlights for clipping and the shadows for noise"),
+    ParamSpec("exposure", "black", "exposure › black level correction", "ratio", 1.0,
+              # Phrase-step ruling 2026-11-09: 0.005 -> 0.01 (the most the
+              # "never more than double" rule allows), so "faded blacks a
+              # touch" (0.005) clears the M3 p01L floor on night-3 evidence.
+              -0.1, 0.1, 0.01, "xmp", None, False, "black_level",
+              "moves the point that renders as pure black",
+              "the darkest areas: a few thousandths is a visible change",
+              # Row 474 (final-review issue I1): §4.3's own table
+              # (docs/superpowers/specs/2026-09-24-scouter-phase3-design.md:
+              # 148-153) leaves this row's `default` column BLANK by design
+              # -- it fills that column only where a value is asserted
+              # neutral by construction, and groups exposure.black with
+              # exposure.exposure/sigmoid.skew/temperature.tint as rows that
+              # are not. `0.0` was a plausible CANDIDATE (darktable's
+              # dt_iop_exposure_params_t.black is 0.0f in its C default, and
+              # an additive correction with no active history entry applies
+              # none), pending host verification -- unlike the sign
+              # convention (§10, a rendered before/after scout.stats run),
+              # which was already measured.
+              #
+              # Row 495/496: `tests/test_host_phase3.py::
+              # ProbeExposureBlackDefaultHostTest` (host run 2026-09-27)
+              # found a fresh exposure module's `black` at
+              # -0.000244140625 == -(2**-12) -- darktable's OWN declared
+              # default for `black` on a scene-referred colour raw
+              # (`src/iop/exposure.c reload_defaults()`,
+              # `EXPOSURE_BLACK_SCENE_RAW_DEFAULT`, this module), not a
+              # quantisation artifact (fix round 1, finding 2: that reading
+              # was wrong and reviewer-refuted). Every other workflow
+              # (monochrome, non-scene-raw) defaults `black` to exactly
+              # 0.0, the value declared here; `default_tolerance` covers
+              # BOTH real defaults, so a fresh scene-raw module reads as
+              # "at default" too. PASS: promoted from `default_candidate`
+              # to the cited `default` below; this is NOT a spec §4.3 edit
+              # (that table stays as-is, blank), only this repo's own
+              # host-verified value.
+              default=0.0),
     # Phrase-step ruling 2026-11-09: 0.1 -> 0.15 so "more contrast a touch"
     # (0.075) lands at 1.2x-1.4x the M6 spread floor on night-3 evidence.
-    ParamSpec(
-        "sigmoid",
-        "contrast",
-        "sigmoid › contrast",
-        "ratio",
-        1.0,
-        0.5,
-        3.0,
-        0.15,
-        "xmp",
-        None,
-        False,
-        "tone_mapper",
-        "steepens or flattens the middle of the tone curve",
-        "shadow and highlight detail at the two ends",
-        # Product round 1 (C3): host-verified default, NOT a spec §4.3
-        # edit. `tests/test_host_phase3.py::
-        # ProbeSigmoidContrastDefaultHostTest` (host run 2026-11-09
-        # 20:46, isolated libraries): oracle A (fresh enable) read
-        # contrast=1.5, sentinel 1.9 read 1.9000000953674316 (slot 0
-        # live), oracle B (post-reset) read 1.5. See docs/measurements.md.
-        default=1.5,
-    ),
-    ParamSpec(
-        "sigmoid",
-        "skew",
-        "sigmoid › skew",
-        "ratio",
-        1.0,
-        -1.0,
-        1.0,
-        0.1,
-        "xmp",
-        None,
-        False,
-        "tone_mapper",
-        "shifts where the tone curve spends its contrast, toward shadows or highlights",
-        "whether the midtones still sit where you want them",
-    ),
-    ParamSpec(
-        "temperature",
-        "temperature",
-        "white balance › temperature",
-        "K",
-        1.0,
-        2000.0,
-        12000.0,
-        300.0,
-        "wb_table",
-        None,
-        False,
-        "white_balance",
-        "tells darktable the light was bluer or redder, so the picture turns warmer or cooler",
-        "neutral greys and skin",
-    ),
-    ParamSpec(
-        "temperature",
-        "tint",
-        "white balance › tint",
-        "ratio",
-        1.0,
-        0.5,
-        2.0,
-        0.05,
-        "none",
-        None,
-        False,
-        "white_balance",
-        "trades green against magenta in the light",
-        "skin and foliage",
-    ),
+    ParamSpec("sigmoid", "contrast", "sigmoid › contrast", "ratio", 1.0, 0.5, 3.0, 0.15,
+              "xmp", None, False, "tone_mapper",
+              "steepens or flattens the middle of the tone curve",
+              "shadow and highlight detail at the two ends",
+              # Product round 1 (C3): host-verified default, NOT a spec §4.3
+              # edit. `tests/test_host_phase3.py::
+              # ProbeSigmoidContrastDefaultHostTest` (host run 2026-11-09
+              # 20:46, isolated libraries): oracle A (fresh enable) read
+              # contrast=1.5, sentinel 1.9 read 1.9000000953674316 (slot 0
+              # live), oracle B (post-reset) read 1.5. See docs/measurements.md.
+              default=1.5),
+    ParamSpec("sigmoid", "skew", "sigmoid › skew", "ratio", 1.0, -1.0, 1.0, 0.1,
+              "xmp", None, False, "tone_mapper",
+              "shifts where the tone curve spends its contrast, toward shadows or highlights",
+              "whether the midtones still sit where you want them"),
+    ParamSpec("temperature", "temperature", "white balance › temperature", "K", 1.0,
+              2000.0, 12000.0, 300.0, "wb_table", None, False, "white_balance",
+              "tells darktable the light was bluer or redder, so the picture turns warmer or cooler",
+              "neutral greys and skin"),
+    ParamSpec("temperature", "tint", "white balance › tint", "ratio", 1.0, 0.5, 2.0, 0.05,
+              "none", None, False, "white_balance",
+              "trades green against magenta in the light", "skin and foliage"),
     # Route A for warmth (decision rows 458/461, Pratik 2026-09-27): when the
     # white balance is in camera reference (late) mode (temperature preset 4),
     # warmth moves through color calibration's CAT illuminant temperature
@@ -405,133 +269,51 @@ PARAMS: tuple[ParamSpec, ...] = (
     # illuminant K renders warmer (r/b rose on both bodies). The 2000 K floor
     # is below the CIE daylight formula's 4000 K validity; the Sony hero
     # landed exactly 2000.0 K there, so darktable does not clamp it.
-    ParamSpec(
-        "channelmixerrgb",
-        "temperature",
-        "color calibration › CAT › illuminant temperature",
-        "K",
-        1.0,
-        2000.0,
-        12000.0,
-        300.0,
-        "xmp",
-        None,
-        False,
-        "white_balance",
-        "tells color calibration the light was bluer or redder, so the picture turns "
-        "warmer or cooler, without touching the white balance module",
-        "neutral greys and skin",
-        ("iop/channelmixerrgb/temperature",),
-        note="used for warmer/cooler only while the white balance is in camera "
-        "reference (late) mode; needs a daylight or planckian illuminant; "
-        "direction (higher K = warmer) verified by the 2026-11-08 host probe",
-    ),
-    _cb(
-        "contrast",
-        "master › contrast",
-        "%",
-        -0.5,
-        0.5,
-        0.05,
-        "color_balance",
+    ParamSpec("channelmixerrgb", "temperature",
+              "color calibration › CAT › illuminant temperature", "K", 1.0,
+              2000.0, 12000.0, 300.0, "xmp", None, False, "white_balance",
+              "tells color calibration the light was bluer or redder, so the picture turns "
+              "warmer or cooler, without touching the white balance module",
+              "neutral greys and skin",
+              ("iop/channelmixerrgb/temperature",),
+              note="used for warmer/cooler only while the white balance is in camera "
+                   "reference (late) mode; needs a daylight or planckian illuminant; "
+                   "direction (higher K = warmer) verified by the 2026-11-08 host probe"),
+    _cb("contrast", "master › contrast", "%", -0.5, 0.5, 0.05, "color_balance",
         "adds or removes contrast around middle grey, after the tone mapper",
-        "that it does not fight the sigmoid contrast",
-    ),
+        "that it does not fight the sigmoid contrast"),
     #: Touch-floor ruling (see `_ZONE_CHROMA_STEP` above): raised from 0.05
     #: each so `a touch` clears the M5 C* floor (0.5) on the night-1
     #: evidence. `global_saturation`/`global_chroma` reach it (0.25 is the
     #: invariant ceiling for their +-0.5 clamp: `step <= (hi-lo)/4`).
     #: `global_vibrance` needs a touch of ~0.58 (olympus) / ~0.45 (sony_a7);
     #: the same ceiling caps its touch at 0.125 -- the residual noted above.
-    _cb(
-        "global_saturation",
-        "master › global saturation",
-        "%",
-        -0.5,
-        0.5,
-        0.25,
+    _cb("global_saturation", "master › global saturation", "%", -0.5, 0.5, 0.25,
         "chroma_saturation",
         "changes colourfulness and darkens strong colours slightly, which reads natural",
-        "skin and skies for over-cooked colour",
-    ),
-    _cb(
-        "global_vibrance",
-        "master › global vibrance",
-        "%",
-        -0.5,
-        0.5,
-        0.25,
-        "chroma_saturation",
-        "boosts the least colourful pixels most",
+        "skin and skies for over-cooked colour"),
+    _cb("global_vibrance", "master › global vibrance", "%", -0.5, 0.5, 0.25,
+        "chroma_saturation", "boosts the least colourful pixels most",
         "already-saturated areas, which should barely move",
-        ("iop/colorbalancergb/global vibrance",),
-    ),
-    _cb(
-        "global_chroma",
-        "master › global chroma",
-        "%",
-        -0.5,
-        0.5,
-        0.20,
-        "chroma_saturation",
-        "changes colourfulness at constant brightness",
-        "bright saturated colours going neon",
-        ("iop/colorbalancergb/global chroma",),
-    ),
+        ("iop/colorbalancergb/global vibrance",)),
+    _cb("global_chroma", "master › global chroma", "%", -0.5, 0.5, 0.20,
+        "chroma_saturation", "changes colourfulness at constant brightness",
+        "bright saturated colours going neon", ("iop/colorbalancergb/global chroma",)),
     *_zone("shadows", "shadows lift", "shadows", "lift"),
     *_zone("midtones", "power", "midtones"),
     *_zone("highlights", "highlights gain", "highlights", "gain"),
-    ParamSpec(
-        "filmicrgb",
-        "white_relative_exposure",
-        "filmic rgb › scene › white relative exposure",
-        "EV",
-        1.0,
-        2.0,
-        10.0,
-        0.25,
-        "xmp",
-        None,
-        False,
-        "tone_mapper",
-        "sets which scene brightness maps to pure white",
-        "clipped highlights",
-        ("iop/filmicrgb/white relative exposure",),
-    ),
-    ParamSpec(
-        "filmicrgb",
-        "black_relative_exposure",
-        "filmic rgb › scene › black relative exposure",
-        "EV",
-        1.0,
-        -14.0,
-        -3.0,
-        0.25,
-        "xmp",
-        None,
-        False,
-        "tone_mapper",
-        "sets which scene brightness maps to pure black",
-        "blocked shadows",
-        ("iop/filmicrgb/black relative exposure",),
-    ),
-    ParamSpec(
-        "filmicrgb",
-        "contrast",
-        "filmic rgb › look › contrast",
-        "ratio",
-        1.0,
-        0.5,
-        3.0,
-        0.1,
-        "xmp",
-        None,
-        False,
-        "tone_mapper",
-        "steepens or flattens the middle of the tone curve",
-        "shadow and highlight detail at the two ends",
-        ("iop/filmicrgb/contrast",),
-    ),
+    ParamSpec("filmicrgb", "white_relative_exposure", "filmic rgb › scene › white relative exposure",
+              "EV", 1.0, 2.0, 10.0, 0.25, "xmp", None, False, "tone_mapper",
+              "sets which scene brightness maps to pure white", "clipped highlights",
+              ("iop/filmicrgb/white relative exposure",)),
+    ParamSpec("filmicrgb", "black_relative_exposure", "filmic rgb › scene › black relative exposure",
+              "EV", 1.0, -14.0, -3.0, 0.25, "xmp", None, False, "tone_mapper",
+              "sets which scene brightness maps to pure black", "blocked shadows",
+              ("iop/filmicrgb/black relative exposure",)),
+    ParamSpec("filmicrgb", "contrast", "filmic rgb › look › contrast", "ratio", 1.0, 0.5, 3.0,
+              0.1, "xmp", None, False, "tone_mapper",
+              "steepens or flattens the middle of the tone curve",
+              "shadow and highlight detail at the two ends", ("iop/filmicrgb/contrast",)),
     #: Batch 3 item 9, fix round 1 (row 531): candidate evidence was the
     #: proof3-20260929 gauntlet run, not a host probe: on two cameras
     #: (olympus, sony_a7; cases cov-colorzones.strength-{olympus,
@@ -555,172 +337,54 @@ PARAMS: tuple[ParamSpec, ...] = (
     #: default probe" section (below the phase 3 host run table) has the
     #: full line. PASS: promoted from `default_candidate` to the cited
     #: `default` below.
-    ParamSpec(
-        "colorzones",
-        "strength",
-        "color zones › mix",
-        "%",
-        100.0,
-        0.0,
-        2.0,
-        0.1,
-        "xmp",
-        None,
-        False,
-        "color_zones",
-        "scales every colour-zone adjustment at once",
-        "the zones you set in darktable",
-        ("iop/colorzones/mix",),
-        default=0.0,
-    ),
-    ParamSpec(
-        "colorzones",
-        "curves",
-        "color zones › (zone curves)",
-        "—",
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        "none",
-        None,
-        False,
-        "color_zones",
-        "",
-        "",
-        (),
-        False,
-        "zones are curve nodes, not sliders: no dt.gui.action sets a zone value; "
-        "use color balance rgb's per-zone sliders (4 ways) instead",
-    ),
+    ParamSpec("colorzones", "strength", "color zones › mix", "%", 100.0, 0.0, 2.0, 0.1,
+              "xmp", None, False, "color_zones",
+              "scales every colour-zone adjustment at once", "the zones you set in darktable",
+              ("iop/colorzones/mix",), default=0.0),
+    ParamSpec("colorzones", "curves", "color zones › (zone curves)", "—", 1.0, 0.0, 0.0, 0.0,
+              "none", None, False, "color_zones", "", "", (), False,
+              "zones are curve nodes, not sliders: no dt.gui.action sets a zone value; "
+              "use color balance rgb's per-zone sliders (4 ways) instead"),
     # Row 437 family 1 (finishing). Internal units are the module's own params
     # (grain strength is stored 0-100; vignette brightness -1..1). Candidate
     # until the Task 32 host probe pins the path and the XMP slot.
-    ParamSpec(
-        "grain",
-        "strength",
-        "grain › strength",
-        "%",
-        1.0,
-        0.0,
-        60.0,
-        5.0,
-        "xmp",
-        0.0,
-        False,
-        "finishing",
-        "adds film-like grain; more strength is more visible grain",
-        "smooth skies and skin, where grain shows first",
-        ("iop/grain/strength",),
-    ),
-    ParamSpec(
-        "vignette",
-        "brightness",
-        "vignette › brightness",
-        "ratio",
-        1.0,
-        -0.8,
-        0.4,
-        0.05,
-        "xmp",
-        0.0,
-        False,
-        "finishing",
-        "darkens (negative) or lightens (positive) the corners around the centre",
-        "the frame edges: a strong vignette reads as a tunnel",
-        ("iop/vignette/brightness",),
-    ),
+    ParamSpec("grain", "strength", "grain › strength", "%", 1.0, 0.0, 60.0, 5.0,
+              "xmp", 0.0, False, "finishing",
+              "adds film-like grain; more strength is more visible grain",
+              "smooth skies and skin, where grain shows first",
+              ("iop/grain/strength",)),
+    ParamSpec("vignette", "brightness", "vignette › brightness", "ratio", 1.0, -0.8, 0.4, 0.05,
+              "xmp", 0.0, False, "finishing",
+              "darkens (negative) or lightens (positive) the corners around the centre",
+              "the frame edges: a strong vignette reads as a tunnel",
+              ("iop/vignette/brightness",)),
     # Row 437 family 2 (geometry). The lens toggle is a module on/off, live
     # whenever `lens` is a whitelisted module (the benchmark enabled it on the
     # host, L1/L2); rotation and crop margins wait for the Task 33 probe.
-    ParamSpec(
-        "lens",
-        "__enabled",
-        "lens correction › on/off",
-        "bool",
-        1.0,
-        0.0,
-        1.0,
-        1.0,
-        "xmp",
-        0.0,
-        False,
-        "geometry",
-        "applies the lens profile: distortion, vignetting and chromatic aberration",
-        "straight lines near the edges",
-    ),
-    ParamSpec(
-        "ashift",
-        "rotation",
-        "rotate and perspective › rotation",
-        "°",
-        1.0,
-        -10.0,
-        10.0,
-        0.5,
-        "xmp",
-        0.0,
-        False,
-        "geometry",
-        "rotates the whole frame to level a tilted horizon; the corners are cropped",
-        "the corners, which rotation crops away",
-        ("iop/ashift/rotation", "iop/ashift/rotate"),
-    ),
-    *(
-        ParamSpec(
-            "crop",
-            side,
-            f"crop › {side} margin",
-            "ratio",
-            1.0,
-            0.0,
-            1.0,
-            0.01,
-            "xmp",
-            0.0 if side in ("left", "top") else 1.0,
-            False,
-            "geometry",
-            f"moves the {side} edge of the crop",
-            "what the new edge cuts off",
-            (f"iop/crop/{side}",),
-        )
-        for side in ("left", "right", "top", "bottom")
-    ),
+    ParamSpec("lens", "__enabled", "lens correction › on/off", "bool", 1.0, 0.0, 1.0, 1.0,
+              "xmp", 0.0, False, "geometry",
+              "applies the lens profile: distortion, vignetting and chromatic aberration",
+              "straight lines near the edges"),
+    ParamSpec("ashift", "rotation", "rotate and perspective › rotation", "°", 1.0, -10.0, 10.0,
+              0.5, "xmp", 0.0, False, "geometry",
+              "rotates the whole frame to level a tilted horizon; the corners are cropped",
+              "the corners, which rotation crops away",
+              ("iop/ashift/rotation", "iop/ashift/rotate")),
+    *(ParamSpec("crop", side, f"crop › {side} margin", "ratio", 1.0, 0.0, 1.0, 0.01, "xmp",
+                0.0 if side in ("left", "top") else 1.0, False, "geometry",
+                f"moves the {side} edge of the crop", "what the new edge cuts off",
+                (f"iop/crop/{side}",)) for side in ("left", "right", "top", "bottom")),
     # Row 437 family 3 (detail). Candidates until the Task 34 host probe.
-    ParamSpec(
-        "denoiseprofile",
-        "strength",
-        "denoise (profiled) › strength",
-        "ratio",
-        1.0,
-        0.0,
-        4.0,
-        0.1,
-        "xmp",
-        1.0,
-        False,
-        "detail",
-        "how hard the profiled denoiser smooths noise for this camera and ISO",
-        "fine texture and skin: too much looks waxy",
-        ("iop/denoiseprofile/strength",),
-    ),
-    ParamSpec(
-        "sharpen",
-        "amount",
-        "sharpen › amount",
-        "ratio",
-        1.0,
-        0.0,
-        2.0,
-        0.1,
-        "xmp",
-        0.5,
-        False,
-        "detail",
-        "adds edge contrast so detail looks crisper",
-        "halos along high-contrast edges and amplified noise",
-        ("iop/sharpen/amount",),
-    ),
+    ParamSpec("denoiseprofile", "strength", "denoise (profiled) › strength", "ratio", 1.0,
+              0.0, 4.0, 0.1, "xmp", 1.0, False, "detail",
+              "how hard the profiled denoiser smooths noise for this camera and ISO",
+              "fine texture and skin: too much looks waxy",
+              ("iop/denoiseprofile/strength",)),
+    ParamSpec("sharpen", "amount", "sharpen › amount", "ratio", 1.0, 0.0, 2.0, 0.1,
+              "xmp", 0.5, False, "detail",
+              "adds edge contrast so detail looks crisper",
+              "halos along high-contrast edges and amplified noise",
+              ("iop/sharpen/amount",)),
 )
 
 _BY_KEY = {(s.module, s.param): s for s in PARAMS}
@@ -818,7 +482,7 @@ def dt_effective(module: str, param: str, value: float) -> tuple[float, float | 
 _FALLBACK_TOLERANCE = 1e-4
 #: float32 relative epsilon (2**-23), times a small safety factor: the XMP
 #: stores float32, so a read-back can never be closer than this.
-_F32_EPS = 2.0**-23
+_F32_EPS = 2.0 ** -23
 
 
 def _distance(s: ParamSpec | None, a: float, b: float) -> float:
@@ -828,9 +492,8 @@ def _distance(s: ParamSpec | None, a: float, b: float) -> float:
     return abs(a - b)
 
 
-def verify_tolerance(
-    module: str, param: str, value: float | None = None, previous: float | None = None
-) -> float:
+def verify_tolerance(module: str, param: str, value: float | None = None,
+                     previous: float | None = None) -> float:
     """How close a read-back must be to the value asked for (row 433).
 
     A tenth of the row's step: darktable's sliders round to their displayed
@@ -848,9 +511,8 @@ def verify_tolerance(
     return max(tol, floor)
 
 
-def values_match(
-    module: str, param: str, a: float | None, b: float | None, previous: float | None = None
-) -> bool:
+def values_match(module: str, param: str, a: float | None, b: float | None,
+                 previous: float | None = None) -> bool:
     """Read-back `a` agrees with the value asked for, `b`, within
     `verify_tolerance` (circularly, for a hue row). `None` never matches."""
     if a is None or b is None:

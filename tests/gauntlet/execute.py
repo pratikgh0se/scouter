@@ -35,9 +35,8 @@ class ImportIncomplete(RuntimeError):
     honestly naming what's missing."""
 
 
-def _imported_frames(
-    session, envelope: dict | None, source_frames: list[Path]
-) -> list[Path] | None:
+def _imported_frames(session, envelope: dict | None,
+                      source_frames: list[Path]) -> list[Path] | None:
     """Map `source_frames` (the staged copies -- the card, or a workflow
     case's `job_frames`) to the absolute paths `library_import` actually
     wrote them to, using ITS OWN envelope (`data.files[].source_name` ->
@@ -67,9 +66,8 @@ def _imported_frames(
     return [job_path / dest_by_source[src.name] for src in source_frames]
 
 
-def resolve_import_job_frames(
-    obs: Observation, session, rec: CallRecord, source_frames: list[Path]
-) -> list[Path] | None:
+def resolve_import_job_frames(obs: Observation, session, rec: CallRecord,
+                              source_frames: list[Path]) -> list[Path] | None:
     """After a `library_import` step, rewrite `session.staged.job_frames` to
     the paths it actually wrote (shared by `run_tool_case` and
     `exec_bulk.run_bulk_case` -- the same rewrite, one place). A no-op
@@ -101,7 +99,7 @@ def substitute(value, session, calls: list[CallRecord]):
             return str(st.job_frames[int(arg) - 1])
         if name == "step":
             idx, path = arg.split(":", 1)
-            cur = calls[int(idx)].envelope or {}
+            cur = (calls[int(idx)].envelope or {})
             for part in path.split("."):
                 cur = cur.get(part) if isinstance(cur, dict) else None
             return "" if cur is None else str(cur)
@@ -135,7 +133,6 @@ _JOB_PLACEHOLDERS = {"job_slug", "job_frame", "job_frames"}
 def _refs_job(case: Case) -> bool:
     """True when any step's args reference {job_slug}/{job_frame:N}/
     {job_frames} -- review round 2, finding 6 (GB-1)."""
-
     def walk(v) -> bool:
         if isinstance(v, str):
             return any(m.group(1) in _JOB_PLACEHOLDERS for m in _PH.finditer(v))
@@ -168,9 +165,8 @@ def isolate(session, frame: Path, role: str) -> bool:
     if session.touched:
         from scouter.core import vocab
 
-        mods = (
-            {s.module for s in vocab.PARAMS} if "*" in session.touched else session.touched - {"*"}
-        )
+        mods = {s.module for s in vocab.PARAMS} if "*" in session.touched else \
+            session.touched - {"*"}
         for m in sorted(mods):
             session.call("darkroom_reset", {"module": m, "confirm": True}, 12.0, write=True)
         session.touched.clear()
@@ -179,12 +175,9 @@ def isolate(session, frame: Path, role: str) -> bool:
     units = now.get("units", {})
     defaults = now.get("defaults", {})
     now_params = now["params"]
-    moved = [
-        k
-        for k in set(base) | set(now_params)
-        if not metrics.param_equal(units.get(k, "ratio"), now_params.get(k), base.get(k))
-        and not evaluate._absent_equiv(base, now_params, k, defaults)
-    ]
+    moved = [k for k in set(base) | set(now_params)
+             if not metrics.param_equal(units.get(k, "ratio"), now_params.get(k), base.get(k))
+             and not evaluate._absent_equiv(base, now_params, k, defaults)]
     if moved:
         session.refresh_frame(role)
         return True
@@ -232,9 +225,7 @@ def export_files_count(obs: Observation) -> tuple[int, dict] | None:
     return (reported if reported == on_disk else 0), detail
 
 
-def run_tool_case(
-    session, case: Case, *, clock=time.monotonic, pre_ping: bool = True
-) -> Observation:
+def run_tool_case(session, case: Case, *, clock=time.monotonic, pre_ping: bool = True) -> Observation:
     obs = Observation()
     t0 = clock()
     #: Fix A (night-1 triage rank 6, GD-walkthrough-state); review round 2
@@ -310,10 +301,8 @@ def run_tool_case(
         dt = getattr(session, "dt", None)
         if dt is not None and dt.health() == "unresponsive":
             obs.blocked = "inherited_wedge"
-            obs.hang_evidence.append(
-                "darktable was already unresponsive before this case's "
-                "own steps ran (inherited from an earlier case)"
-            )
+            obs.hang_evidence.append("darktable was already unresponsive before this case's "
+                                     "own steps ran (inherited from an earlier case)")
             _mark_walkthrough_broken(session, case, obs, walkthrough)
             obs.wall_s = clock() - t0
             return obs
@@ -357,9 +346,8 @@ def run_tool_case(
         else:
             obs.stats_before, masks = observe.stats(raster)
         obs.floors = dict(session.floors)
-        previews["before"] = observe.render_preview(
-            frame, session.previews_dir / case.id / "before.png"
-        )
+        previews["before"] = observe.render_preview(frame, session.previews_dir / case.id /
+                                                    "before.png")
     for st in case.steps:
         args = substitute(st.args, session, obs.calls)
         if st.tool in VIRTUAL:
@@ -369,9 +357,8 @@ def run_tool_case(
                 raise
             except subprocess.TimeoutExpired:
                 obs.blocked = f"hang: {st.tool} exceeded budget"
-                obs.hang_evidence.append(
-                    f"{st.tool}: no answer in {st.budget_s + 30:.0f}s " "(subprocess timeout)"
-                )
+                obs.hang_evidence.append(f"{st.tool}: no answer in {st.budget_s + 30:.0f}s "
+                                         "(subprocess timeout)")
                 break
             except Exception as e:  # noqa: BLE001 - a virtual tool crash must not crash the case
                 obs.blocked = f"harness_error: {st.tool}: {type(e).__name__}: {e}"
@@ -386,13 +373,11 @@ def run_tool_case(
             break
         if rec.error == "timeout" and rec.health == "unresponsive":
             obs.blocked = "hang"
-            obs.hang_evidence.append(
-                f"{st.tool}: no answer in {st.budget_s + 30:.0f}s, " "ping unresponsive"
-            )
+            obs.hang_evidence.append(f"{st.tool}: no answer in {st.budget_s + 30:.0f}s, "
+                                     "ping unresponsive")
             break
-        if rec.envelope and (
-            rec.envelope.get("healed") or (rec.envelope.get("data") or {}).get("healed")
-        ):
+        if rec.envelope and (rec.envelope.get("healed") or
+                             (rec.envelope.get("data") or {}).get("healed")):
             obs.healed = True
         snaps.append(observe.snapshot(frame, kelvin)["params"] if st.write else snaps[-1])
     obs.after = observe.snapshot(frame, kelvin)
@@ -402,10 +387,10 @@ def run_tool_case(
         obs.extra["export_files"], obs.extra["export_files_oracles"] = exported
     if stats and not obs.blocked:
         raster = observe.render_raster(frame, session.root / "render" / "after.ppm")
-        obs.stats_after = chart.patch_stats(raster) if is_chart else observe.stats(raster, masks)[0]
-        previews["after"] = observe.render_preview(
-            frame, session.previews_dir / case.id / "after.png"
-        )
+        obs.stats_after = chart.patch_stats(raster) if is_chart else \
+            observe.stats(raster, masks)[0]
+        previews["after"] = observe.render_preview(frame, session.previews_dir / case.id /
+                                                   "after.png")
         obs.extra["previews"] = {k: session.relative(v) for k, v in previews.items()}
     _mark_walkthrough_broken(session, case, obs, walkthrough)
     obs.wall_s = clock() - t0

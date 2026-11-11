@@ -139,8 +139,9 @@ def call(verb_id: str, layer: str, **kwargs: Any) -> Envelope:
     job = validate_job(kwargs["job"]) if kwargs.get("job") else current_job()
     kwargs["job"] = job
 
-    from scouter.core import darkroom as _darkroom
     from scouter.core import watchdog
+
+    from scouter.core import darkroom as _darkroom
 
     token = metrics.LAYER.set(layer)
     retries: list[str] = []

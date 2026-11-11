@@ -25,9 +25,8 @@ def mcp_servers_hash(path: Path = Path.home() / ".claude.json") -> str:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return "absent"
-    return hashlib.sha256(
-        json.dumps(doc.get("mcpServers", {}), sort_keys=True).encode()
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(doc.get("mcpServers", {}), sort_keys=True)
+                          .encode()).hexdigest()
 
 
 def newer_than(stamp: Path, roots=WATCHED) -> list[str]:
@@ -36,9 +35,8 @@ def newer_than(stamp: Path, roots=WATCHED) -> list[str]:
         p = Path(r).expanduser()
         if not p.exists():
             continue
-        out = subprocess.run(
-            ["find", str(p), "-newer", str(stamp)], capture_output=True, text=True, timeout=120
-        )
+        out = subprocess.run(["find", str(p), "-newer", str(stamp)], capture_output=True,
+                             text=True, timeout=120)
         hits += [x for x in out.stdout.splitlines() if x.strip()]
     return hits
 
@@ -119,42 +117,24 @@ class Rehearsal:
     def env(self) -> dict:
         import os
 
-        env = {
-            k: v
-            for k, v in os.environ.items()
-            if k
-            not in (
-                "SCOUTER_CONFIG",
-                "SCOUTER_CACHE",
-                "SCOUTER_JOB",
-                "OBSIDIAN_VAULT_PATH",
-                "SCOUTER_DARKTABLE_LIBRARY_DB",
-            )
-        }
-        env.update(
-            HOME=str(self.home),
-            XDG_CONFIG_HOME=str(self.config),
-            XDG_CACHE_HOME=str(self.cache),
-            PYTHONPATH=str(REPO),
-            SCOUTER_CONFIG=str(self.config / "scouter" / "config.json"),
-            SCOUTER_CACHE=str(self.cache / "scouter"),
-            OBSIDIAN_VAULT_PATH=str(self.root / "vault"),
-            # Pin the library: without it history/backup fall back to a running
-            # darktable's --library, then ~/.config/darktable/library.db (real one).
-            SCOUTER_DARKTABLE_LIBRARY_DB=str(self.config / "library.db"),
-            DARKTABLE_MCP_PLUGIN_PATH=str(self.config / "darktable" / "lua" / "darktable_mcp.lua"),
-        )
+        env = {k: v for k, v in os.environ.items() if k not in
+               ("SCOUTER_CONFIG", "SCOUTER_CACHE", "SCOUTER_JOB", "OBSIDIAN_VAULT_PATH",
+                "SCOUTER_DARKTABLE_LIBRARY_DB")}
+        env.update(HOME=str(self.home), XDG_CONFIG_HOME=str(self.config),
+                   XDG_CACHE_HOME=str(self.cache), PYTHONPATH=str(REPO),
+                   SCOUTER_CONFIG=str(self.config / "scouter" / "config.json"),
+                   SCOUTER_CACHE=str(self.cache / "scouter"),
+                   OBSIDIAN_VAULT_PATH=str(self.root / "vault"),
+                   # Pin the library: without it history/backup fall back to a running
+                   # darktable's --library, then ~/.config/darktable/library.db (real one).
+                   SCOUTER_DARKTABLE_LIBRARY_DB=str(self.config / "library.db"),
+                   DARKTABLE_MCP_PLUGIN_PATH=str(self.config / "darktable" / "lua" /
+                                                 "darktable_mcp.lua"))
         return env
 
     def _scouter(self, *args: str, timeout: float = 120) -> tuple[int, dict]:
-        p = self.run(
-            [sys.executable, "-m", "scouter", *args],
-            env=self.env(),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=str(self.root),
-        )
+        p = self.run([sys.executable, "-m", "scouter", *args], env=self.env(),
+                     capture_output=True, text=True, timeout=timeout, cwd=str(self.root))
         try:
             return p.returncode, json.loads(p.stdout)
         except ValueError:
@@ -170,14 +150,8 @@ class Rehearsal:
             return all(d.is_dir() for d in (self.home, self.config, self.cache)), {}
         if name == "check_env":
             env = self.env()
-            keys = (
-                "HOME",
-                "XDG_CONFIG_HOME",
-                "XDG_CACHE_HOME",
-                "SCOUTER_CONFIG",
-                "SCOUTER_CACHE",
-                "OBSIDIAN_VAULT_PATH",
-            )
+            keys = ("HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "SCOUTER_CONFIG",
+                    "SCOUTER_CACHE", "OBSIDIAN_VAULT_PATH")
             return all(env[k].startswith(str(self.root)) for k in keys), {k: env[k] for k in keys}
         if name == "first_launch":
             from scouter.core import dtprocess
@@ -192,11 +166,8 @@ class Rehearsal:
                 # SCOUTER_CACHE); the old bare terminate(pid) read the ambient
                 # cache, got refused_not_ours and left darktable running.
                 res = self.cleanup()
-            ok = (
-                bool(res.get("ok"))
-                and (cfg / "darktablerc").exists()
-                and (cfg / "library.db").exists()
-            )
+            ok = (bool(res.get("ok")) and (cfg / "darktablerc").exists()
+                  and (cfg / "library.db").exists())
             return ok, {"terminate": res}
         if name in ("setup", "setup_again", "rerun_existing"):
             #: Review round 3, GR-2 (P1 blocker): `config init --yes`
@@ -252,14 +223,12 @@ class Rehearsal:
                     "the rehearsal now runs `scouter config init --yes` itself right after "
                     "`scouter setup` (row 496 item 7, ins-04 only -- GR-2), which should make "
                     "this always true there -- still reported so a regression in `config init` "
-                    "itself is never silently folded into the doctor-down 'blocked' path"
-                )
+                    "itself is never silently folded into the doctor-down 'blocked' path")
             #: Review round 2, finding 2 (GD-1): setup_again's own
             #: idempotency break must never be masked by the doctor marker
             #: below (blocked short-circuits every check in evaluate()).
-            self._mark_needs_darktable(
-                code, rep, detail, extra_ok=tree_unchanged if name == "setup_again" else True
-            )
+            self._mark_needs_darktable(code, rep, detail,
+                                       extra_ok=tree_unchanged if name == "setup_again" else True)
             return ok, detail
         if name == "setup_check":
             code, rep = self._scouter("setup", "--check")
@@ -269,20 +238,11 @@ class Rehearsal:
             return ok, detail
         if name == "mcp_register":
             server = f"{sys.executable} -m scouter.mcp.server"
-            self.run(
-                ["claude", "mcp", "add", "scouter", "--scope", "user", "--", *server.split()],
-                env=self.env(),
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            p = self.run(
-                ["claude", "mcp", "list"],
-                env=self.env(),
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
+            self.run(["claude", "mcp", "add", "scouter", "--scope", "user", "--",
+                      *server.split()], env=self.env(), capture_output=True, text=True,
+                     timeout=60)
+            p = self.run(["claude", "mcp", "list"], env=self.env(), capture_output=True,
+                         text=True, timeout=60)
             ok = "scouter" in p.stdout and "scouter.mcp.server" in p.stdout
             return ok, {"list": p.stdout[-800:]}
         if name == "teardown":
@@ -316,7 +276,8 @@ class Rehearsal:
         return path.read_bytes() if path.is_file() else None
 
     @staticmethod
-    def _mark_needs_darktable(code: int, rep: dict, detail: dict, *, extra_ok: bool = True) -> None:
+    def _mark_needs_darktable(code: int, rep: dict, detail: dict, *, extra_ok: bool = True
+                              ) -> None:
         """Fix D (night-1 triage rank 5/8's doctor half, INS-doctor-needs-
         darktable): `scouter setup`/`setup --check`'s own `doctor` item is
         `required` (setup.py's default) and answers unavailable/bridge_timeout
@@ -342,11 +303,8 @@ class Rehearsal:
         doctor = next((i for i in items if i.get("item") == "doctor"), None)
         if doctor is None or doctor.get("status") == "ok":
             return
-        others_ok = all(
-            i.get("status") in ("ok", "installed", "updated")
-            for i in items
-            if i.get("item") != "doctor" and i.get("required", True)
-        )
+        others_ok = all(i.get("status") in ("ok", "installed", "updated")
+                        for i in items if i.get("item") != "doctor" and i.get("required", True))
         if others_ok:
             detail["_needs_darktable"] = True
 
@@ -370,15 +328,12 @@ class InstallSession:
         try:
             ok, detail = self.rehearsal.action(name)
         except subprocess.TimeoutExpired as e:
-            return Observation(
-                calls=[
-                    CallRecord("rehearsal", {"action": name}, {"ok": False, "outcome": "timeout"})
-                ],
-                blocked=f"hang: install action {name} exceeded its timeout",
-                hang_evidence=[str(e)],
-                extra={"action_ok": False},
-                wall_s=time.monotonic() - t0,
-            )
+            return Observation(calls=[CallRecord("rehearsal", {"action": name},
+                                                 {"ok": False, "outcome": "timeout"})],
+                               blocked=f"hang: install action {name} exceeded its timeout",
+                               hang_evidence=[str(e)],
+                               extra={"action_ok": False},
+                               wall_s=time.monotonic() - t0)
         except KeyboardInterrupt:
             self.rehearsal.cleanup()  # N14: stopped early mid-action
             raise
@@ -394,16 +349,11 @@ class InstallSession:
         blocked = None
         if isinstance(detail, dict) and detail.pop("_needs_darktable", False):
             blocked = "needs_darktable"
-        return Observation(
-            calls=[
-                CallRecord(
-                    "rehearsal", {"action": name}, {"ok": ok, "outcome": "ok", "data": detail}
-                )
-            ],
-            blocked=blocked,
-            extra={"action_ok": ok, "detail": detail},
-            wall_s=time.monotonic() - t0,
-        )
+        return Observation(calls=[CallRecord("rehearsal", {"action": name},
+                                             {"ok": ok, "outcome": "ok", "data": detail})],
+                           blocked=blocked,
+                           extra={"action_ok": ok, "detail": detail},
+                           wall_s=time.monotonic() - t0)
 
     def abort(self) -> None:
         self.rehearsal.cleanup()  # N14: an owned scratch darktable never outlives the layer

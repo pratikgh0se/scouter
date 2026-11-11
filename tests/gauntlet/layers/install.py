@@ -14,23 +14,11 @@ ACTIONS = (
     ("03_first_launch", "first_launch", "darktable --configdir writes darktablerc and library.db"),
     ("04_setup", "setup", "scouter setup writes a valid config (version field present)"),
     ("05_setup_check", "setup_check", "scouter setup --check reports healthy"),
-    (
-        "06_mcp_register",
-        "mcp_register",
-        "claude mcp list shows scouter -> python -m scouter.mcp.server",
-    ),  # noqa: E501
+    ("06_mcp_register", "mcp_register", "claude mcp list shows scouter -> python -m scouter.mcp.server"),  # noqa: E501
     ("07_teardown", "teardown", "scratch root deleted"),
-    (
-        "08_rerun_on_existing",
-        "rerun_existing",
-        "setup on a pre-existing empty config is idempotent",
-    ),  # noqa: E501
+    ("08_rerun_on_existing", "rerun_existing", "setup on a pre-existing empty config is idempotent"),  # noqa: E501
     ("09_setup_idempotent", "setup_again", "a second scouter setup changes nothing"),
-    (
-        "10_leak_check",
-        "leak_check",
-        "no file newer than the stamp outside the root; mcpServers hash unchanged",
-    ),  # noqa: E501
+    ("10_leak_check", "leak_check", "no file newer than the stamp outside the root; mcpServers hash unchanged"),  # noqa: E501
 )
 #: Fix D (night-1 triage rank 8, INS-config-version-assert): only `setup`
 #: (ins-04) runs `scouter config init --yes` (row 496 item 7; review round
@@ -48,11 +36,9 @@ ACTIONS = (
 #: ins-09's intent (idempotency) is covered by `action_ok`, which includes
 #: exec_install's `tree_unchanged`.
 _CONFIG_VERSION_ACTIONS = {"setup"}
-_CONFIG_VERSION_TAG = {
-    "disputed": "spec 3.7 vs scouter/cli/setup.py's own report-only "
-    "config item (setup writes it via `config init`, not `setup`) -- "
-    "night1-parity-install-guide-triage.md rank 8, needs Pratik"
-}
+_CONFIG_VERSION_TAG = {"disputed": "spec 3.7 vs scouter/cli/setup.py's own report-only "
+                       "config item (setup writes it via `config init`, not `setup`) -- "
+                       "night1-parity-install-guide-triage.md rank 8, needs Pratik"}
 #: Review round 3, GR-2: `rerun_existing` (ins-08, "setup on a pre-existing
 #: config is idempotent") no longer runs `config init` itself (that would
 #: clobber the pre-seeded config and make the case unable to catch a
@@ -67,13 +53,8 @@ _CONFIG_UNCHANGED_ACTIONS = {"rerun_existing"}
 def _checks(action: str) -> list[Check]:
     out = [Check("extra", target={"path": "action_ok", "op": "truthy"})]
     if action in _CONFIG_VERSION_ACTIONS:
-        out.append(
-            Check(
-                "extra",
-                target={"path": "detail.config_has_version", "op": "truthy"},
-                tags=dict(_CONFIG_VERSION_TAG),
-            )
-        )
+        out.append(Check("extra", target={"path": "detail.config_has_version", "op": "truthy"},
+                         tags=dict(_CONFIG_VERSION_TAG)))
     elif action in _CONFIG_UNCHANGED_ACTIONS:
         out.append(Check("extra", target={"path": "detail.config_unchanged", "op": "truthy"}))
     return out
@@ -81,23 +62,16 @@ def _checks(action: str) -> list[Check]:
 
 def generate(tax: Taxonomy) -> list[Case]:
     assert len(tax.measurement["install_rehearsal"]["steps"]) == 8
-    return [
-        Case(
-            id=case_id(PREFIX, label),
-            layer=LAYER,
-            tier="P0",
-            mode="cli",
-            steps=[Step("rehearsal", {"action": action}, 120.0, False)],
-            expect=Expect("workflow", _checks(action)),
-            source={"file": "measurement-and-robustness.json", "step": i + 1},
-            #: Review round 4, GR3-2: every install check is a hard
-            #: gate (the disputed one routes through evaluate's own
-            #: needs_review path first), so any failing untagged check
-            #: scores `failed` -- never the generic 2-check half credit.
-            meta={"action": action, "asserts": what, "order": i, "partial_min": 1.0},
-        )
-        for i, (label, action, what) in enumerate(ACTIONS)
-    ]
+    return [Case(id=case_id(PREFIX, label), layer=LAYER, tier="P0", mode="cli",
+                 steps=[Step("rehearsal", {"action": action}, 120.0, False)],
+                 expect=Expect("workflow", _checks(action)),
+                 source={"file": "measurement-and-robustness.json", "step": i + 1},
+                 #: Review round 4, GR3-2: every install check is a hard
+                 #: gate (the disputed one routes through evaluate's own
+                 #: needs_review path first), so any failing untagged check
+                 #: scores `failed` -- never the generic 2-check half credit.
+                 meta={"action": action, "asserts": what, "order": i, "partial_min": 1.0})
+            for i, (label, action, what) in enumerate(ACTIONS)]
 
 
 EXPECTED = 10

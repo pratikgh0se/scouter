@@ -15,12 +15,9 @@ from scouter.cli import setup
 from scouter.core import dtbridge
 from tests.scouter_fakes import FakeBridge
 
-EXAMPLES = {
-    e["id"]: e
-    for e in json.loads((Path(__file__).parent / "setup_mcp_add_order.json").read_text())[
-        "examples"
-    ]
-}
+EXAMPLES = {e["id"]: e for e in
+            json.loads((Path(__file__).parent / "setup_mcp_add_order.json").read_text())[
+                "examples"]}
 
 
 def _build(ex: dict) -> tuple[str, dict]:
@@ -48,16 +45,14 @@ def test_json_block_matches_the_command():
     # Oracle B: the same values appear in the command's tokens.
     toks = shlex.split(cmd)
     assert f"PYTHONPATH={entry['env']['PYTHONPATH']}" in toks
-    assert toks[toks.index("--") + 1 :] == [entry["command"], *entry["args"]]
+    assert toks[toks.index("--") + 1:] == [entry["command"], *entry["args"]]
 
 
 def test_setup_report_prints_the_working_order():
     ex = EXAMPLES["setup_report_prints_the_working_order"]
     with tempfile.TemporaryDirectory(prefix="scouter-mcp-order-") as tmp:
-        env = {
-            "DARKTABLE_MCP_PLUGIN_PATH": f"{tmp}/dt/lua/darktable_mcp.lua",
-            "SCOUTER_CONFIG": f"{tmp}/scouter/config.json",
-        }
+        env = {"DARKTABLE_MCP_PLUGIN_PATH": f"{tmp}/dt/lua/darktable_mcp.lua",
+               "SCOUTER_CONFIG": f"{tmp}/scouter/config.json"}
         dtbridge.set_bridge(FakeBridge({"view.current": {"view": "lighttable"}}))
         try:
             with mock.patch.dict(os.environ, env):

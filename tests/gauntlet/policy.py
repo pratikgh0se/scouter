@@ -32,21 +32,17 @@ def _active_flags(entries: list) -> frozenset[str]:
             raise UnknownFlagError(
                 f"check_map.json flags: {name!r} is not in gauntlet.evaluate.KNOWN_FLAGS "
                 f"({sorted(KNOWN_FLAGS)}) -- add it there in the same change that adds the "
-                "evaluate() branch reading it"
-            )
+                "evaluate() branch reading it")
         missing = [f for f in ("reason", "card", "expires") if not entry.get(f)]
         if missing:
             raise UnknownFlagError(
                 f"check_map.json flags: {name!r} is missing {missing} (Zenkai Rules Z4: "
-                "reason, rule named, fix card, expiry)"
-            )
+                "reason, rule named, fix card, expiry)")
         expires = datetime.strptime(entry["expires"], "%Y-%m-%d").date()
         if expires < today:
             warnings.warn(
                 f"check_map.json flags: {name!r} expired on {entry['expires']} "
-                f"(card {entry['card']!r}) -- ignored, not renewed",
-                stacklevel=2,
-            )
+                f"(card {entry['card']!r}) -- ignored, not renewed", stacklevel=2)
             continue
         active.add(name)
     return frozenset(active)
@@ -54,17 +50,15 @@ def _active_flags(entries: list) -> frozenset[str]:
 
 def load_policy() -> Policy:
     cm = json.loads((DATA / "check_map.json").read_text(encoding="utf-8"))
-    return Policy(
-        refusal_codes=frozenset(cm["refusal_codes"]),
-        transient_codes=frozenset(cm["transient_codes"]),
-        refusal_markers=tuple(cm["refusal_markers"]),
-        claim_markers=tuple(cm["claim_markers"]),
-        # Named, provisional overrides (check_map.json's own
-        # "flags_about"): absent here (older check_map.json with no
-        # "flags" key) reads as "nothing overridden", same as today.
-        flags=_active_flags(cm.get("flags", [])),
-        offer_markers=tuple(cm.get("offer_markers", ())),
-    )
+    return Policy(refusal_codes=frozenset(cm["refusal_codes"]),
+                  transient_codes=frozenset(cm["transient_codes"]),
+                  refusal_markers=tuple(cm["refusal_markers"]),
+                  claim_markers=tuple(cm["claim_markers"]),
+                  # Named, provisional overrides (check_map.json's own
+                  # "flags_about"): absent here (older check_map.json with no
+                  # "flags" key) reads as "nothing overridden", same as today.
+                  flags=_active_flags(cm.get("flags", [])),
+                  offer_markers=tuple(cm.get("offer_markers", ())))
 
 
 POLICY = load_policy()

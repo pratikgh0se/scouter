@@ -67,218 +67,94 @@ def _crop(aspect: float) -> Move:
 
 CB = "colorbalancergb"
 PHRASES: tuple[Phrase, ...] = (
-    Phrase(
-        "brighter",
-        ("brighter", "brighten", "lighter", "more exposure", "brighten up"),
-        (_adj("exposure", "exposure", 1),),
-    ),
-    Phrase(
-        "darker",
-        ("darker", "darken", "less exposure", "lower exposure"),
-        (_adj("exposure", "exposure", -1),),
-    ),
-    Phrase(
-        "more_contrast",
-        ("more contrast", "punchier", "add contrast", "increase contrast", "more punch"),
-        (_adj(TONE, "contrast", 1),),
-    ),
-    Phrase(
-        "less_contrast",
-        ("less contrast", "flatter", "reduce contrast", "lower contrast", "softer contrast"),
-        (_adj(TONE, "contrast", -1),),
-    ),
-    Phrase(
-        "warmer",
-        ("warmer", "warm up", "more warmth", "warm"),
-        (_adj("temperature", "temperature", 1),),
-    ),
-    Phrase(
-        "cooler",
-        ("cooler", "colder", "cool down", "less warm", "cool"),
-        (_adj("temperature", "temperature", -1),),
-    ),
+    Phrase("brighter", ("brighter", "brighten", "lighter", "more exposure", "brighten up"),
+           (_adj("exposure", "exposure", 1),)),
+    Phrase("darker", ("darker", "darken", "less exposure", "lower exposure"),
+           (_adj("exposure", "exposure", -1),)),
+    Phrase("more_contrast", ("more contrast", "punchier", "add contrast", "increase contrast",
+                             "more punch"), (_adj(TONE, "contrast", 1),)),
+    Phrase("less_contrast", ("less contrast", "flatter", "reduce contrast", "lower contrast",
+                             "softer contrast"), (_adj(TONE, "contrast", -1),)),
+    Phrase("warmer", ("warmer", "warm up", "more warmth", "warm"),
+           (_adj("temperature", "temperature", 1),)),
+    Phrase("cooler", ("cooler", "colder", "cool down", "less warm", "cool"),
+           (_adj("temperature", "temperature", -1),)),
     Phrase("more_magenta", ("more magenta", "less green"), (_adj("temperature", "tint", -1),)),
     Phrase("more_green", ("more green", "less magenta"), (_adj("temperature", "tint", 1),)),
-    Phrase(
-        "lift_shadows",
-        (
-            "lift shadows",
-            "lift the shadows",
-            "open shadows",
-            "open the shadows",
-            "open up the shadows",
-            "brighter shadows",
-        ),
-        (_adj(CB, "shadows_luminance", 1),),
-    ),
-    Phrase(
-        "deepen_shadows",
-        ("deeper shadows", "darker shadows", "crush the shadows", "crush shadows"),
-        (_adj(CB, "shadows_luminance", -1),),
-    ),
-    Phrase(
-        "brighter_midtones",
-        ("brighter midtones", "lift the midtones"),
-        (_adj(CB, "midtones_luminance", 1),),
-    ),
-    Phrase(
-        "darker_midtones",
-        ("darker midtones", "lower the midtones"),
-        (_adj(CB, "midtones_luminance", -1),),
-    ),
-    Phrase(
-        "brighter_highlights",
-        ("brighter highlights", "lift the highlights"),
-        (_adj(CB, "highlights_luminance", 1),),
-    ),
-    Phrase(
-        "tame_highlights",
-        (
-            "tame the highlights",
-            "darker highlights",
-            "pull down the highlights",
-            "recover highlights",
-        ),
-        (_adj(CB, "highlights_luminance", -1),),
-    ),
+    Phrase("lift_shadows", ("lift shadows", "lift the shadows", "open shadows", "open the shadows",
+                            "open up the shadows", "brighter shadows"),
+           (_adj(CB, "shadows_luminance", 1),)),
+    Phrase("deepen_shadows", ("deeper shadows", "darker shadows", "crush the shadows",
+                              "crush shadows"), (_adj(CB, "shadows_luminance", -1),)),
+    Phrase("brighter_midtones", ("brighter midtones", "lift the midtones"),
+           (_adj(CB, "midtones_luminance", 1),)),
+    Phrase("darker_midtones", ("darker midtones", "lower the midtones"),
+           (_adj(CB, "midtones_luminance", -1),)),
+    Phrase("brighter_highlights", ("brighter highlights", "lift the highlights"),
+           (_adj(CB, "highlights_luminance", 1),)),
+    Phrase("tame_highlights", ("tame the highlights", "darker highlights",
+                               "pull down the highlights", "recover highlights"),
+           (_adj(CB, "highlights_luminance", -1),)),
     Phrase("deeper_blacks", ("deeper blacks", "richer blacks"), (_adj("exposure", "black", 1),)),
-    Phrase(
-        "faded_blacks",
-        ("faded blacks", "lift the blacks", "matte blacks"),
-        (_adj("exposure", "black", -1),),
-    ),
-    Phrase(
-        "more_saturation",
-        ("more saturation", "more saturated", "more colour", "more colourful", "saturate"),
-        (_adj(CB, "global_saturation", 1),),
-    ),
-    Phrase(
-        "less_saturation",
-        ("less saturation", "less saturated", "desaturate", "muted", "less colour"),
-        (_adj(CB, "global_saturation", -1),),
-    ),
+    Phrase("faded_blacks", ("faded blacks", "lift the blacks", "matte blacks"),
+           (_adj("exposure", "black", -1),)),
+    Phrase("more_saturation", ("more saturation", "more saturated", "more colour",
+                               "more colourful", "saturate"),
+           (_adj(CB, "global_saturation", 1),)),
+    Phrase("less_saturation", ("less saturation", "less saturated", "desaturate", "muted",
+                               "less colour"), (_adj(CB, "global_saturation", -1),)),
     Phrase("more_vibrance", ("more vibrance", "more vibrant"), (_adj(CB, "global_vibrance", 1),)),
     Phrase("less_vibrance", ("less vibrance", "less vibrant"), (_adj(CB, "global_vibrance", -1),)),
     Phrase("more_chroma", ("more chroma",), (_adj(CB, "global_chroma", 1),)),
     Phrase("less_chroma", ("less chroma",), (_adj(CB, "global_chroma", -1),)),
-    Phrase(
-        "warm_highlights",
-        ("warm the highlights", "warmer highlights"),
-        (_set(CB, "highlights_hue", 60.0), _adj(CB, "highlights_chroma", 1)),
-    ),
-    Phrase(
-        "cool_shadows",
-        ("cool the shadows", "cooler shadows", "blue shadows"),
-        (_set(CB, "shadows_hue", 220.0), _adj(CB, "shadows_chroma", 1)),
-    ),
-    Phrase(
-        "teal_orange",
-        ("teal and orange", "orange and teal", "cinematic grade"),
-        (
-            _set(CB, "shadows_hue", 200.0),
-            _adj(CB, "shadows_chroma", 1),
-            _set(CB, "highlights_hue", 55.0),
-            _adj(CB, "highlights_chroma", 1),
-        ),
-    ),
-    Phrase(
-        "stronger_grade",
-        ("stronger colour grade", "stronger grade", "more grade", "more colour grade"),
-        (
-            _adj(CB, "shadows_chroma", 1),
-            _adj(CB, "midtones_chroma", 1),
-            _adj(CB, "highlights_chroma", 1),
-        ),
-    ),
-    Phrase(
-        "weaker_grade",
-        ("weaker colour grade", "weaker grade", "less grade", "less colour grade"),
-        (
-            _adj(CB, "shadows_chroma", -1),
-            _adj(CB, "midtones_chroma", -1),
-            _adj(CB, "highlights_chroma", -1),
-        ),
-    ),
-    Phrase(
-        "more_grain",
-        ("add grain", "more grain", "grainier", "film grain"),
-        (_adj("grain", "strength", 1),),
-    ),
-    Phrase(
-        "less_grain",
-        ("less grain", "remove grain", "smoother grain"),
-        (_adj("grain", "strength", -1),),
-    ),
-    Phrase(
-        "darker_corners",
-        ("darker corners", "add a vignette", "add vignette", "stronger vignette", "vignette"),
-        (_adj("vignette", "brightness", -1),),
-    ),
-    Phrase(
-        "lighter_corners",
-        ("lighter corners", "brighter corners", "weaker vignette", "less vignette"),
-        (_adj("vignette", "brightness", 1),),
-    ),
-    Phrase(
-        "lens_on",
-        (
-            "correct the lens",
-            "lens correction",
-            "turn on lens correction",
-            "fix the distortion",
-            "fix lens distortion",
-            "remove chromatic aberration",
-        ),
-        (_toggle("lens", True),),
-    ),
-    Phrase(
-        "lens_off", ("turn off lens correction", "no lens correction"), (_toggle("lens", False),)
-    ),
-    Phrase(
-        "rotate_right",
-        ("rotate right", "rotate clockwise", "tilt right"),
-        (_adj("ashift", "rotation", 1),),
-    ),
-    Phrase(
-        "rotate_left",
-        ("rotate left", "rotate counterclockwise", "rotate anticlockwise", "tilt left"),
-        (_adj("ashift", "rotation", -1),),
-    ),
-    Phrase(
-        "crop_square",
-        ("crop square", "square crop", "crop to 1:1", "make it square"),
-        (_crop(1.0),),
-    ),
+    Phrase("warm_highlights", ("warm the highlights", "warmer highlights"),
+           (_set(CB, "highlights_hue", 60.0), _adj(CB, "highlights_chroma", 1))),
+    Phrase("cool_shadows", ("cool the shadows", "cooler shadows", "blue shadows"),
+           (_set(CB, "shadows_hue", 220.0), _adj(CB, "shadows_chroma", 1))),
+    Phrase("teal_orange", ("teal and orange", "orange and teal", "cinematic grade"),
+           (_set(CB, "shadows_hue", 200.0), _adj(CB, "shadows_chroma", 1),
+            _set(CB, "highlights_hue", 55.0), _adj(CB, "highlights_chroma", 1))),
+    Phrase("stronger_grade", ("stronger colour grade", "stronger grade", "more grade",
+                              "more colour grade"),
+           (_adj(CB, "shadows_chroma", 1), _adj(CB, "midtones_chroma", 1),
+            _adj(CB, "highlights_chroma", 1))),
+    Phrase("weaker_grade", ("weaker colour grade", "weaker grade", "less grade",
+                            "less colour grade"),
+           (_adj(CB, "shadows_chroma", -1), _adj(CB, "midtones_chroma", -1),
+            _adj(CB, "highlights_chroma", -1))),
+    Phrase("more_grain", ("add grain", "more grain", "grainier", "film grain"),
+           (_adj("grain", "strength", 1),)),
+    Phrase("less_grain", ("less grain", "remove grain", "smoother grain"),
+           (_adj("grain", "strength", -1),)),
+    Phrase("darker_corners", ("darker corners", "add a vignette", "add vignette",
+                              "stronger vignette", "vignette"),
+           (_adj("vignette", "brightness", -1),)),
+    Phrase("lighter_corners", ("lighter corners", "brighter corners", "weaker vignette",
+                               "less vignette"),
+           (_adj("vignette", "brightness", 1),)),
+    Phrase("lens_on", ("correct the lens", "lens correction", "turn on lens correction",
+                       "fix the distortion", "fix lens distortion", "remove chromatic aberration"),
+           (_toggle("lens", True),)),
+    Phrase("lens_off", ("turn off lens correction", "no lens correction"),
+           (_toggle("lens", False),)),
+    Phrase("rotate_right", ("rotate right", "rotate clockwise", "tilt right"),
+           (_adj("ashift", "rotation", 1),)),
+    Phrase("rotate_left", ("rotate left", "rotate counterclockwise", "rotate anticlockwise",
+                           "tilt left"), (_adj("ashift", "rotation", -1),)),
+    Phrase("crop_square", ("crop square", "square crop", "crop to 1:1", "make it square"),
+           (_crop(1.0),)),
     Phrase("crop_4x5", ("crop to 4:5", "crop 4:5", "portrait crop for instagram"), (_crop(0.8),)),
     Phrase("crop_16x9", ("crop to 16:9", "crop 16:9", "widescreen crop"), (_crop(16 / 9),)),
     Phrase("crop_3x2", ("crop to 3:2", "crop 3:2"), (_crop(1.5),)),
-    Phrase(
-        "denoise_more",
-        (
-            "reduce noise",
-            "less noise",
-            "denoise",
-            "denoise more",
-            "more denoising",
-            "clean up the noise",
-        ),
-        (_adj("denoiseprofile", "strength", 1),),
-    ),
-    Phrase(
-        "denoise_less",
-        ("less denoising", "denoise less", "keep more texture"),
-        (_adj("denoiseprofile", "strength", -1),),
-    ),
-    Phrase(
-        "sharpen_more",
-        ("sharpen", "sharper", "more sharpening", "crisper", "sharpen it"),
-        (_adj("sharpen", "amount", 1),),
-    ),
-    Phrase(
-        "sharpen_less",
-        ("less sharpening", "sharpen less", "less crunchy"),
-        (_adj("sharpen", "amount", -1),),
-    ),
+    Phrase("denoise_more", ("reduce noise", "less noise", "denoise", "denoise more",
+                            "more denoising", "clean up the noise"),
+           (_adj("denoiseprofile", "strength", 1),)),
+    Phrase("denoise_less", ("less denoising", "denoise less", "keep more texture"),
+           (_adj("denoiseprofile", "strength", -1),)),
+    Phrase("sharpen_more", ("sharpen", "sharper", "more sharpening", "crisper",
+                            "sharpen it"), (_adj("sharpen", "amount", 1),)),
+    Phrase("sharpen_less", ("less sharpening", "sharpen less", "less crunchy"),
+           (_adj("sharpen", "amount", -1),)),
 )
 
 _INDEX: dict[str, Phrase] = {syn: p for p in PHRASES for syn in p.synonyms}
@@ -287,30 +163,13 @@ _INDEX: dict[str, Phrase] = {syn: p for p in PHRASES for syn in p.synonyms}
 #: the brief specifies (controller ruling): the spec's literal "a lot more"
 #: would swallow "more" and break "a lot more saturation" (a golden input).
 INTENSITY: tuple[tuple[str, float], ...] = (
-    ("a little bit", 0.5),
-    ("a tiny bit", 0.5),
-    ("a touch", 0.5),
-    ("a little", 0.5),
-    ("a bit", 0.5),
-    ("slightly", 0.5),
-    ("a lot", 2.0),
-    ("strongly", 2.0),
-    ("much", 2.0),
-    ("lots", 2.0),
-    ("way", 2.0),
+    ("a little bit", 0.5), ("a tiny bit", 0.5), ("a touch", 0.5), ("a little", 0.5),
+    ("a bit", 0.5), ("slightly", 0.5),
+    ("a lot", 2.0), ("strongly", 2.0), ("much", 2.0), ("lots", 2.0), ("way", 2.0),
 )
 #: "more of" per spec §5.1, on top of the brief's filler list.
-FILLER = (
-    "make the image",
-    "make the photo",
-    "make it",
-    "can you",
-    "the image",
-    "the photo",
-    "the picture",
-    "please",
-    "more of",
-)
+FILLER = ("make the image", "make the photo", "make it", "can you", "the image", "the photo",
+          "the picture", "please", "more of")
 _DROP_TOKENS = {"it", "a", "bit"}
 _BY_RE = re.compile(r"\bby\s+([+-]?\d+(?:\.\d+)?)\s*(ev|k|%|°|deg|degrees)?(?=\s|$)")
 _UNIT_ALIASES = {"ev": "EV", "k": "K", "%": "%", "°": "°", "deg": "°", "degrees": "°"}
@@ -398,7 +257,7 @@ def resolve(text: str, amount: float | None = None) -> Resolution:
                 detail={"phrase": text},
             )
         explicit = (float(raw_number), m.group(2))
-        core = (core[: m.start()] + " " + core[m.end() :]).strip()
+        core = (core[: m.start()] + " " + core[m.end():]).strip()
     factor = 1.0
     for word, f in INTENSITY:
         pattern = re.compile(rf"\b{re.escape(word)}\b")
@@ -432,10 +291,8 @@ def resolve(text: str, amount: float | None = None) -> Resolution:
         )
     if amount is not None:
         if explicit is not None:
-            raise UsageError(
-                "pass either `amount` or 'by N' in the phrase, not both",
-                detail={"phrase": text, "amount": amount},
-            )
+            raise UsageError("pass either `amount` or 'by N' in the phrase, not both",
+                             detail={"phrase": text, "amount": amount})
         if not (isinstance(amount, (int, float)) and math.isfinite(amount) and 0 < amount <= 5):
             raise UsageError("amount must be a number in (0, 5]", detail={"amount": amount})
         factor = float(amount)
@@ -470,11 +327,8 @@ def resolve(text: str, amount: float | None = None) -> Resolution:
         moves = (Move(mv.module, mv.param, "adjust", None, sign * number / row.display_scale),)
         return Resolution(text, norm, phrase.key, 1.0, True, moves)
     moves = tuple(
-        (
-            Move(mv.module, mv.param, "adjust", (mv.notches or 0.0) * factor, None)
-            if mv.kind == "adjust"
-            else mv
-        )
+        Move(mv.module, mv.param, "adjust", (mv.notches or 0.0) * factor, None)
+        if mv.kind == "adjust" else mv
         for mv in phrase.moves
     )
     # Fix round 1, M3: a toggle/crop phrase has no adjust move for an
@@ -486,12 +340,8 @@ def resolve(text: str, amount: float | None = None) -> Resolution:
 
 
 def resolution_dict(res: Resolution) -> dict:
-    return {
-        "key": res.key,
-        "intensity": res.intensity,
-        "explicit": res.explicit,
-        "moves": [asdict(mv) for mv in res.moves],
-    }
+    return {"key": res.key, "intensity": res.intensity, "explicit": res.explicit,
+            "moves": [asdict(mv) for mv in res.moves]}
 
 
 def move_view(mv: Move) -> dict:
@@ -508,20 +358,14 @@ def move_view(mv: Move) -> dict:
 
 
 @metrics.instrumented("vocab.resolve")
-def resolve_verb(
-    phrase: str, *, amount: float | None = None, job: str | None = None
-) -> ResolveResult:
+def resolve_verb(phrase: str, *, amount: float | None = None,
+                 job: str | None = None) -> ResolveResult:
     """What a phrase would do, with each move's status. No darktable calls."""
     job = job or current_job()
     res = resolve(phrase, amount)
-    return ResolveResult(
-        phrase=res.phrase,
-        normalised=res.normalised,
-        key=res.key,
-        intensity=res.intensity,
-        explicit=res.explicit,
-        moves=[move_view(mv) for mv in res.moves],
-    )
+    return ResolveResult(phrase=res.phrase, normalised=res.normalised, key=res.key,
+                         intensity=res.intensity, explicit=res.explicit,
+                         moves=[move_view(mv) for mv in res.moves])
 
 
 register(
@@ -530,19 +374,10 @@ register(
         group="vocab",
         fn=resolve_verb,
         args=(
-            ArgSpec(
-                "phrase",
-                "str",
-                required=True,
-                positional=True,
-                help="plain words, e.g. 'a touch warmer'",
-            ),
-            ArgSpec(
-                "amount",
-                "float",
-                default=None,
-                help="multiplier on the phrase's step (0-5]; replaces 'slightly'/'much'",
-            ),
+            ArgSpec("phrase", "str", required=True, positional=True,
+                    help="plain words, e.g. 'a touch warmer'"),
+            ArgSpec("amount", "float", default=None,
+                    help="multiplier on the phrase's step (0-5]; replaces 'slightly'/'much'"),
         ),
         writes=False,
         gated=False,

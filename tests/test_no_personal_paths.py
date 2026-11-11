@@ -1,6 +1,5 @@
 """No tracked file may carry the maintainer's home-directory path (public-launch pre-flight).
 The needle is assembled at runtime so this file does not match itself."""
-
 import subprocess
 from pathlib import Path
 

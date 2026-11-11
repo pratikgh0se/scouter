@@ -28,9 +28,7 @@ EXAMPLES = _DOC["examples"]
 def test_no_history_entry_resolves_through_the_declared_default() -> None:
     """The exact gap fix round 0/1 diagnosed: no active colorzones history
     entry means darktable runs the module at its default."""
-    ex = next(
-        e for e in EXAMPLES if e["id"] == "no-history-entry-resolves-through-the-declared-default"
-    )
+    ex = next(e for e in EXAMPLES if e["id"] == "no-history-entry-resolves-through-the-declared-default")
 
     # Oracle 1 (structural, external to darkroom): the declared default
     # itself, straight from vocab.PARAMS.
@@ -49,8 +47,7 @@ def test_no_history_entry_resolves_through_the_declared_default() -> None:
 
 
 @pytest.mark.parametrize(
-    "ex",
-    [e for e in EXAMPLES if "at_default" in e["expect"]],
+    "ex", [e for e in EXAMPLES if "at_default" in e["expect"]],
     ids=[e["id"] for e in EXAMPLES if "at_default" in e["expect"]],
 )
 def test_colorzones_strength_default_tolerance(ex: dict) -> None:
@@ -68,9 +65,7 @@ def test_colorzones_strength_default_tolerance(ex: dict) -> None:
 
 
 def test_strength_at_default_does_not_put_colorzones_at_defaults(tmp_path: Path) -> None:
-    ex = next(
-        e for e in EXAMPLES if e["id"] == "strength-at-default-does-not-put-colorzones-at-defaults"
-    )
+    ex = next(e for e in EXAMPLES if e["id"] == "strength-at-default-does-not-put-colorzones-at-defaults")
     want = ex["expect"]["module_at_defaults"]
 
     # Oracle 1 (structural, external to darkroom): colorzones has a row
@@ -83,6 +78,5 @@ def test_strength_at_default_does_not_put_colorzones_at_defaults(tmp_path: Path)
     default = vocab.spec("colorzones", "strength").default
     raw = tmp_path / "phase3-host.ORF"
     (tmp_path / "phase3-host.ORF.xmp").write_text(
-        with_param_value(fixture.read_text(), "colorzones", "strength", default)
-    )
+        with_param_value(fixture.read_text(), "colorzones", "strength", default))
     assert darkroom._module_at_defaults(str(raw), "colorzones", 0) is want

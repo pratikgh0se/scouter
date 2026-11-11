@@ -16,11 +16,8 @@ from scouter.types import CommitResult
 def _stale(restored: bool = True) -> CommitTimeout:
     return CommitTimeout(
         "stale_rewrite: darktable rewrote the sidecar with an older history",
-        detail={
-            "stale_rewrite": "history_end went back from 76 to 54",
-            "stale_rewrite_restored": restored,
-            "strategy_used": "view_bounce_action",
-        },
+        detail={"stale_rewrite": "history_end went back from 76 to 54",
+                "stale_rewrite_restored": restored, "strategy_used": "view_bounce_action"},
     )
 
 

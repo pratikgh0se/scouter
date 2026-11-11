@@ -42,27 +42,16 @@ class NudgeSoftLimitIntentTest(unittest.TestCase):
         self.raw = root / "P6281348.ORF"
         self.raw.write_bytes(b"not really a raw")
         self.sidecar = Path(str(self.raw) + ".xmp")
-        self.sidecar.write_text(
-            (Path(__file__).resolve().parents[1] / "fixtures" / "P6281348.ORF.xmp").read_text()
-        )
+        self.sidecar.write_text((Path(__file__).resolve().parents[1] / "fixtures" /
+                                 "P6281348.ORF.xmp").read_text())
         self.value = 0.0
-        self.bridge = FakeBridge(
-            {
-                "darkroom.current": {
-                    "image_id": 12,
-                    "path": str(self.raw),
-                    "view": "darkroom",
-                    "source": "action_images",
-                },
-                "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-                "darkroom.action": lambda p: {
-                    "nan": False,
-                    "view": "darkroom",
-                    **p,
-                    "status": _measured_position(self.value),
-                },
-            }
-        )
+        self.bridge = FakeBridge({
+            "darkroom.current": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
+                                 "source": "action_images"},
+            "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+            "darkroom.action": lambda p: {"nan": False, "view": "darkroom", **p,
+                                          "status": _measured_position(self.value)},
+        })
         dtbridge.set_bridge(self.bridge)
 
     def tearDown(self) -> None:
@@ -73,22 +62,16 @@ class NudgeSoftLimitIntentTest(unittest.TestCase):
         i = fx["input"]
         self.value = i["sidecar_value"]
         state = {"value": self.value, "source": "xmp", "enabled": True}
-        with (
-            mock.patch("scouter.core.darkroom._read_state", return_value=state),
-            mock.patch("scouter.core.darkroom._read_value", return_value=self.value),
-            mock.patch(
-                "scouter.core.darkroom._commit", side_effect=CommitTimeout("no sidecar write")
-            ) as commit,
-        ):
+        with mock.patch("scouter.core.darkroom._read_state", return_value=state), \
+                mock.patch("scouter.core.darkroom._read_value", return_value=self.value), \
+                mock.patch("scouter.core.darkroom._commit",
+                           side_effect=CommitTimeout("no sidecar write")) as commit:
             try:
                 result = darkroom.nudge(module=i["module"], param=i["param"], steps=i["steps"])
             except CommitTimeout:
                 result = None
-        sent = [
-            p.get("effect")
-            for m, p in self.bridge.calls
-            if m == "darkroom.action" and p.get("effect") in ("up", "down")
-        ]
+        sent = [p.get("effect") for m, p in self.bridge.calls if m == "darkroom.action"
+                and p.get("effect") in ("up", "down")]
         return result, sent, commit
 
     def _oracle_a_cannot_step_up(self, value: float) -> bool:

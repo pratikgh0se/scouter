@@ -200,7 +200,7 @@ TOOL_SPECS: list[dict] = [
                 "single": {
                     "type": "boolean",
                     "default": False,
-                    "description": "undo only the newest write, not the whole phrase it was part of",  # noqa: E501
+                    "description": "undo only the newest write, not the whole phrase it was part of",
                 },
                 "dry_run": DRY_RUN,
             },
@@ -889,7 +889,7 @@ TOOL_SPECS: list[dict] = [
         "camera-reference white balance) it is colour calibration's illuminant "
         "(`route.illuminant_kelvin`) and `note` says so; on the white "
         "balance route it equals `kelvin` and `note` is null; when the route is "
-        "`unavailable` it is null and `note` cites `route.reason`. Read `effective_kelvin` after a warmth move.",  # noqa: E501
+        "`unavailable` it is null and `note` cites `route.reason`. Read `effective_kelvin` after a warmth move.",
         "inputSchema": _schema({"image": IMAGE}, ["image"]),
     },
     {
@@ -960,12 +960,7 @@ TOOL_SPECS: list[dict] = [
         "by words, with unit, safe range, step, and status (live, absolute_only, candidate, "
         "unreachable). Read once per session.",
         "inputSchema": _schema(
-            {
-                "module": {
-                    "type": "string",
-                    "description": "only this module's rows, e.g. colorbalancergb",
-                }
-            },
+            {"module": {"type": "string", "description": "only this module's rows, e.g. colorbalancergb"}},
             [],
         ),
     },
@@ -981,12 +976,10 @@ TOOL_SPECS: list[dict] = [
         "via the camera's measured table). Never moves the view unless bounce; `fresh: false` "
         "means darktable may hold newer, uncommitted changes.",
         "inputSchema": _schema(
-            {
-                "module": {"type": "string", "description": "darktable module, e.g. sigmoid"},
-                "param": {"type": "string", "description": "parameter, e.g. contrast"},
-                "instance": INSTANCE,
-                "bounce": BOUNCE,
-            },
+            {"module": {"type": "string", "description": "darktable module, e.g. sigmoid"},
+             "param": {"type": "string", "description": "parameter, e.g. contrast"},
+             "instance": INSTANCE,
+             "bounce": BOUNCE},
             ["module", "param"],
         ),
     },
@@ -994,29 +987,21 @@ TOOL_SPECS: list[dict] = [
         "name": "darkroom_adjust",
         "description": "Change one module parameter by a relative delta in internal units (EV for "
         "exposure, K for temperature, fractions for color balance rgb: 0.05 means 5 %). Reads the "
-        "current value first (trusting the sidecar unless the staleness guard sees it is older than "  # noqa: E501
+        "current value first (trusting the sidecar unless the staleness guard sees it is older than "
         "the last move or the image changed; then one view bounce), "
         "clamps to Scouter's safe range, sets it, and returns previous/target/applied plus a "
         "one-line summary.",
         "inputSchema": _schema(
-            {
-                "module": {"type": "string", "description": "darktable module, e.g. exposure"},
-                "param": {"type": "string", "description": "parameter, e.g. exposure"},
-                "delta": {
-                    "type": "number",
-                    "description": "relative change, internal units, non-zero",
-                },
-                "instance": INSTANCE,
-                "commit": {
-                    "type": "boolean",
-                    "default": True,
-                    "description": "commit history to the XMP after the write",
-                },
-                "trust_sidecar": TRUST_SIDECAR,
-                "bounce": BOUNCE,
-                "educative": EDUCATIVE,
-                "dry_run": DRY_RUN,
-            },
+            {"module": {"type": "string", "description": "darktable module, e.g. exposure"},
+             "param": {"type": "string", "description": "parameter, e.g. exposure"},
+             "delta": {"type": "number", "description": "relative change, internal units, non-zero"},
+             "instance": INSTANCE,
+             "commit": {"type": "boolean", "default": True,
+                        "description": "commit history to the XMP after the write"},
+             "trust_sidecar": TRUST_SIDECAR,
+             "bounce": BOUNCE,
+             "educative": EDUCATIVE,
+             "dry_run": DRY_RUN},
             ["module", "param", "delta"],
         ),
     },
@@ -1030,19 +1015,13 @@ TOOL_SPECS: list[dict] = [
         "(not_pinned) or its current value cannot be read (value_unknown). Prefer this for "
         "conversational editing; use darkroom_adjust for an exact delta.",
         "inputSchema": _schema(
-            {
-                "phrase": PHRASE,
-                "amount": AMOUNT,
-                "commit": {
-                    "type": "boolean",
-                    "default": True,
-                    "description": "commit history to the XMP after the write",
-                },
-                "trust_sidecar": TRUST_SIDECAR,
-                "bounce": BOUNCE,
-                "educative": EDUCATIVE,
-                "dry_run": DRY_RUN,
-            },
+            {"phrase": PHRASE, "amount": AMOUNT,
+             "commit": {"type": "boolean", "default": True,
+                        "description": "commit history to the XMP after the write"},
+             "trust_sidecar": TRUST_SIDECAR,
+             "bounce": BOUNCE,
+             "educative": EDUCATIVE,
+             "dry_run": DRY_RUN},
             ["phrase"],
         ),
     },
@@ -1052,26 +1031,14 @@ TOOL_SPECS: list[dict] = [
         "style (a preset/filter). Modules default to the ones changed in this session; pass "
         "modules to choose. Needs confirm=true only to replace an existing preset of that name.",
         "inputSchema": _schema(
-            {
-                "name": PRESET_NAME,
-                "modules": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "modules to keep (default: this session's edits)",
-                },
-                "description": {
-                    "type": "string",
-                    "default": "",
-                    "description": "style description",
-                },
-                "educative": EDUCATIVE,
-                "confirm": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "required only to replace an existing preset of this name",
-                },
-                "dry_run": DRY_RUN,
-            },
+            {"name": PRESET_NAME,
+             "modules": {"type": "array", "items": {"type": "string"},
+                         "description": "modules to keep (default: this session's edits)"},
+             "description": {"type": "string", "default": "", "description": "style description"},
+             "educative": EDUCATIVE,
+             "confirm": {"type": "boolean", "default": False,
+                         "description": "required only to replace an existing preset of this name"},
+             "dry_run": DRY_RUN},
             ["name"],
         ),
     },
@@ -1087,7 +1054,10 @@ TOOL_SPECS: list[dict] = [
         "bounce, visible live) or to another image by path/id. Always appends to history; "
         "cannot be undone by Scouter (use darktable's history panel).",
         "inputSchema": _schema(
-            {"name": PRESET_NAME, "image": IMAGE, "educative": EDUCATIVE, "dry_run": DRY_RUN},
+            {"name": PRESET_NAME,
+             "image": IMAGE,
+             "educative": EDUCATIVE,
+             "dry_run": DRY_RUN},
             ["name"],
         ),
     },
@@ -1096,28 +1066,17 @@ TOOL_SPECS: list[dict] = [
         "description": "Apply a preset to every frame of a job, in batches, with per-image "
         "results and Scouter's idempotency ledger. Always gated: confirm=true.",
         "inputSchema": _schema(
-            {
-                "name": PRESET_NAME,
-                "job_slug": {"type": "string", "description": "job whose frames get the preset"},
-                "exclude": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "paths or ids to leave out",
-                },
-                "force": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "apply even where Scouter's ledger says it is already "
-                    "applied",
-                },
-                "confirm": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "required: authorises a batched write to every frame "
-                    "of the job",
-                },
-                "dry_run": DRY_RUN,
-            },
+            {"name": PRESET_NAME,
+             "job_slug": {"type": "string", "description": "job whose frames get the preset"},
+             "exclude": {"type": "array", "items": {"type": "string"},
+                         "description": "paths or ids to leave out"},
+             "force": {"type": "boolean", "default": False,
+                       "description": "apply even where Scouter's ledger says it is already "
+                       "applied"},
+             "confirm": {"type": "boolean", "default": False,
+                         "description": "required: authorises a batched write to every frame "
+                         "of the job"},
+             "dry_run": DRY_RUN},
             ["name", "job_slug"],
         ),
     },
@@ -1132,42 +1091,25 @@ TOOL_SPECS: list[dict] = [
         "confirm=true it is a dry run: nothing is written, and the plan shows what each step "
         "would touch. preset/outliers are skipped when no preset/hero is given.",
         "inputSchema": _schema(
-            {
-                "job_slug": {"type": "string", "description": "the job (library job slug)"},
-                "preset": {
-                    "type": "string",
-                    "description": "hero preset (darktable style) to apply to the set",
-                },
-                "hero": IMAGE,
-                "exclude": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "paths or ids the preset step leaves out",
-                },
-                "export_preset": {
-                    "type": "string",
-                    "enum": ["preview", "client-proof", "client-final", "print-tiff"],
-                    "default": "client-proof",
-                    "description": "export release preset",
-                },
-                "min_rating": {
-                    "type": "integer",
-                    "minimum": -1,
-                    "maximum": 5,
-                    "description": "export selection floor for proof presets",
-                },
-                "steps": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": ["cull", "preset", "outliers", "export"]},
-                    "description": "subset to run, in chain order (default: all)",
-                },
-                "confirm": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "required: the chain writes ratings, styles, exports",
-                },
-                "dry_run": DRY_RUN,
-            },
+            {"job_slug": {"type": "string", "description": "the job (library job slug)"},
+             "preset": {"type": "string",
+                        "description": "hero preset (darktable style) to apply to the set"},
+             "hero": IMAGE,
+             "exclude": {"type": "array", "items": {"type": "string"},
+                         "description": "paths or ids the preset step leaves out"},
+             "export_preset": {"type": "string",
+                               "enum": ["preview", "client-proof", "client-final", "print-tiff"],
+                               "default": "client-proof",
+                               "description": "export release preset"},
+             "min_rating": {"type": "integer", "minimum": -1, "maximum": 5,
+                            "description": "export selection floor for proof presets"},
+             "steps": {"type": "array",
+                       "items": {"type": "string",
+                                 "enum": ["cull", "preset", "outliers", "export"]},
+                       "description": "subset to run, in chain order (default: all)"},
+             "confirm": {"type": "boolean", "default": False,
+                         "description": "required: the chain writes ratings, styles, exports"},
+             "dry_run": DRY_RUN},
             ["job_slug"],
         ),
     },

@@ -18,26 +18,11 @@ from tests.scouter_smoke_args import (
 
 LAYER, PREFIX = "parity", "par"
 #: The verbs the user guide and README walkthrough use (P0 per spec 3.6).
-GUIDE_VERBS = {
-    "darkroom.open",
-    "darkroom.set",
-    "darkroom.say",
-    "darkroom.undo_last",
-    "scout.stats",
-    "history.read",
-    "preset.save",
-    "preset.apply_job",
-    "job.run",
-    "vocab.list",
-    "export.release",
-    "wb.kelvin",
-}
-PLACEHOLDERS = {
-    SMOKE_RAW: "{frame:hero}",
-    SMOKE_OUT_DIR: "{out_dir}",
-    SMOKE_CONFIG_PATH: "{config_path}",
-    SMOKE_SOURCE_DIR: "{card}",
-}
+GUIDE_VERBS = {"darkroom.open", "darkroom.set", "darkroom.say", "darkroom.undo_last",
+               "scout.stats", "history.read", "preset.save", "preset.apply_job", "job.run",
+               "vocab.list", "export.release", "wb.kelvin"}
+PLACEHOLDERS = {SMOKE_RAW: "{frame:hero}", SMOKE_OUT_DIR: "{out_dir}",
+                SMOKE_CONFIG_PATH: "{config_path}", SMOKE_SOURCE_DIR: "{card}"}
 MISSING = "/nonexistent/htc-missing.ORF"
 
 
@@ -111,28 +96,14 @@ def generate() -> list[Case]:
         verb = verbs[vid]
         tier = "P0" if vid in GUIDE_VERBS else "P1"
         for variant, args in (("happy", happy_args(vid)), ("error", error_args(verb))):
-            out.append(
-                Case(
-                    id=case_id(PREFIX, vid, variant),
-                    layer=LAYER,
-                    tier=tier,
-                    mode="tool",
-                    steps=[Step("parity_pair", {"verb": vid, "args": args}, 60.0, verb.writes)],
-                    expect=Expect(
-                        "workflow",
-                        [Check("extra", target={"path": "envelopes_match", "op": "truthy"})],
-                    ),
-                    body="olympus",
-                    frame_role="hero",
-                    source={"file": "registry", "id": vid},
-                    meta={
-                        "verb": vid,
-                        "variant": variant,
-                        "mcp": verb.mcp_name,
-                        "cli": [verb.group, verb.cli_command],
-                    },
-                )
-            )
+            out.append(Case(
+                id=case_id(PREFIX, vid, variant), layer=LAYER, tier=tier, mode="tool",
+                steps=[Step("parity_pair", {"verb": vid, "args": args}, 60.0, verb.writes)],
+                expect=Expect("workflow", [Check("extra", target={"path": "envelopes_match",
+                                                                  "op": "truthy"})]),
+                body="olympus", frame_role="hero", source={"file": "registry", "id": vid},
+                meta={"verb": vid, "variant": variant, "mcp": verb.mcp_name,
+                      "cli": [verb.group, verb.cli_command]}))
     return out
 
 

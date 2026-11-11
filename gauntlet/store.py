@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -90,9 +91,8 @@ class RunDir:
     def read_results(self) -> list[dict]:
         if not self.cases_dir.exists():
             return []
-        return [
-            json.loads(p.read_text(encoding="utf-8")) for p in sorted(self.cases_dir.glob("*.json"))
-        ]
+        return [json.loads(p.read_text(encoding="utf-8"))
+                for p in sorted(self.cases_dir.glob("*.json"))]
 
     def case_workdir(self, case_id: str) -> Path:
         return case_workdir(self.root, case_id)
@@ -114,9 +114,7 @@ class RunDir:
         if not d.exists():
             return 0
         work_root = (self.root / "work").resolve()
-        assert (
-            d.resolve().parent == work_root
-        ), f"retain refuses a workdir outside {work_root}: {d}"  # noqa: E501
+        assert d.resolve().parent == work_root, f"retain refuses a workdir outside {work_root}: {d}"  # noqa: E501
         freed = 0
         for dirpath, dirnames, filenames in os.walk(d, topdown=False, followlinks=False):
             base = Path(dirpath)
@@ -140,9 +138,8 @@ class RunDir:
                     pass
         return freed
 
-    def prune_session(
-        self, session_root: Path, names: tuple[str, ...], keep: tuple[str, ...] = ()
-    ) -> int:
+    def prune_session(self, session_root: Path, names: tuple[str, ...],
+                      keep: tuple[str, ...] = ()) -> int:
         """Session-close retention (N15): delete the bulky regenerable
         copies `names` (direct children, e.g. `frames`, `card`) of one
         CLOSED session folder `<run>/sessions/<layer>/NNN-<body>`; files matching a `keep` glob (XMP
@@ -154,9 +151,8 @@ class RunDir:
         unlinked as themselves, never followed. Returns bytes freed."""
         sessions = (self.root / "sessions").resolve()
         root = Path(session_root)
-        assert (
-            root.resolve().parent.parent == sessions
-        ), f"prune_session refuses a root outside {sessions}: {root}"
+        assert root.resolve().parent.parent == sessions, \
+            f"prune_session refuses a root outside {sessions}: {root}"
         freed = 0
         for name in names:
             assert name and "/" not in name and name not in (".", ".."), f"bad name {name!r}"
@@ -202,12 +198,9 @@ class RunDir:
             return {}
         totals: dict[str, int] = {}
         for c in self.read_cases():
-            n = (
-                _dir_size(self.case_workdir(c.id))
-                + _dir_size(self.case_path(c.id))
-                + _dir_size(self.previews_dir / c.id)
-                + sum(p.stat().st_size for p in self.previews_dir.glob(f"{c.id}.*"))
-            )
+            n = (_dir_size(self.case_workdir(c.id)) + _dir_size(self.case_path(c.id)) +
+                 _dir_size(self.previews_dir / c.id) +
+                 sum(p.stat().st_size for p in self.previews_dir.glob(f"{c.id}.*")))
             if n:
                 totals[c.layer] = totals.get(c.layer, 0) + n
         return totals

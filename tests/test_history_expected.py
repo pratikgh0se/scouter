@@ -32,8 +32,7 @@ def xmp(history_end: int, newest_op: str, newest_params: str, stamp: str = "1") 
         f'   darktable:change_timestamp="{stamp}"\n'
         f'   darktable:history_end="{history_end}"\n'
         f'   darktable:history_current_hash="h{history_end}{newest_params}">\n'
-        "   <darktable:history>\n    <rdf:Seq>\n"
-        + "".join(items)
+        "   <darktable:history>\n    <rdf:Seq>\n" + "".join(items)
         + "    </rdf:Seq>\n   </darktable:history>\n  </rdf:Description>\n"
         " </rdf:RDF>\n</x:xmpmeta>\n"
     )
@@ -91,13 +90,8 @@ class CommitWithExpectModuleTest(unittest.TestCase):
             self.sent.append(params)
             time.sleep(0.01)
             self.sidecar.write_text(rewrite)
-            return {
-                "strategy_used": "no_bounce",
-                "ok": True,
-                "view_after": "darkroom",
-                "cpu_ms": 10,
-                "sidecar_written": True,
-            }
+            return {"strategy_used": "no_bounce", "ok": True, "view_after": "darkroom",
+                    "cpu_ms": 10, "sidecar_written": True}
 
         dtbridge.set_bridge(FakeBridge({**self.base, "history.commit": commit}))
 
@@ -105,20 +99,16 @@ class CommitWithExpectModuleTest(unittest.TestCase):
         # cov-phrase-faded_blacks-olympus-touch: 112 -> 92, reported ok.
         self._bridge(xmp(92, "exposure", "black_0.0098", "db"))
         with self.assertRaises(CommitTimeout) as ctx:
-            history.commit_expecting(
-                image=str(self.raw), timeout_s=0.3, expect_change=True, expect_module="exposure"
-            )
-        self.assertIn(
-            "went back from 112 to 92",
-            str(ctx.exception.detail.get("sidecar_rewritten_not_this_edit")),
-        )
+            history.commit_expecting(image=str(self.raw), timeout_s=0.3, expect_change=True,
+                                     expect_module="exposure")
+        self.assertIn("went back from 112 to 92",
+                      str(ctx.exception.detail.get("sidecar_rewritten_not_this_edit")))
         self.assertEqual(self.sent[0].get("expect_module"), "exposure")
 
     def test_the_expected_newest_item_is_committed(self) -> None:
         self._bridge(xmp(113, "exposure", "black_m0.0027", "db"))
-        result = history.commit_expecting(
-            image=str(self.raw), timeout_s=2.0, expect_change=True, expect_module="exposure"
-        )
+        result = history.commit_expecting(image=str(self.raw), timeout_s=2.0, expect_change=True,
+                                          expect_module="exposure")
         self.assertTrue(result.committed)
 
     def test_without_expect_module_a_history_end_that_went_back_is_still_refused(self) -> None:
@@ -164,42 +154,32 @@ class StaleRewriteReportedByThePluginTest(unittest.TestCase):
     STALE = xmp(92, "exposure", "black_0.0098", "db")
     GOOD = xmp(113, "exposure", "black_m0.0027", "autosave")
 
-    def _bridge(
-        self, *, restored: bool, strategy: str = "no_bounce", then_write: str | None = None
-    ) -> None:
+    def _bridge(self, *, restored: bool, strategy: str = "no_bounce",
+                then_write: str | None = None) -> None:
         def commit(params: dict) -> dict:
             self.sidecar.write_text(self.STALE)
             if restored:
                 self.sidecar.write_text(self.pre)
             if then_write is not None:  # a write that lands after the plugin answered
                 self.sidecar.write_text(then_write)
-            return {
-                "strategy_used": strategy,
-                "ok": False,
-                "view_after": "darkroom",
-                "sidecar_written": strategy != "no_bounce",
-                "stale_rewrite": True,
-                "stale_rewrite_restored": restored or None,
-                "stale_hash": "h92black_0.0098",
-                "detail": "stale_rewrite: history_end went back from 112 to 92",
-            }
+            return {"strategy_used": strategy, "ok": False, "view_after": "darkroom",
+                    "sidecar_written": strategy != "no_bounce",
+                    "stale_rewrite": True,
+                    "stale_rewrite_restored": restored or None,
+                    "stale_hash": "h92black_0.0098",
+                    "detail": "stale_rewrite: history_end went back from 112 to 92"}
 
-        dtbridge.set_bridge(
-            FakeBridge(
-                {
-                    "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-                    "history.commit": commit,
-                }
-            )
-        )
+        dtbridge.set_bridge(FakeBridge({
+            "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+            "history.commit": commit,
+        }))
 
     def test_python_restores_when_the_plugin_could_not(self) -> None:
         self._bridge(restored=False)
         t0 = time.monotonic()
         with self.assertRaises(CommitTimeout) as ctx:
-            history.commit_expecting(
-                image=str(self.raw), timeout_s=3.0, expect_change=False, strategy="no_bounce"
-            )
+            history.commit_expecting(image=str(self.raw), timeout_s=3.0, expect_change=False,
+                                     strategy="no_bounce")
         self.assertLess(time.monotonic() - t0, 1.0, "refused at once, no poll to the deadline")
         self.assertTrue(ctx.exception.detail["stale_rewrite_restored"])
         self.assertEqual(ctx.exception.detail["sidecar_end_now"], 112)
@@ -213,17 +193,13 @@ class StaleRewriteReportedByThePluginTest(unittest.TestCase):
         self.assertTrue(ctx.exception.detail["stale_rewrite_restored"])
         self.assertEqual(self.sidecar.read_text(), self.pre)
 
+
     def test_the_bounce_path_is_restored_too(self) -> None:
         # Round 2: the fallback restore is not gated on no_bounce.
         self._bridge(restored=False, strategy="view_bounce_action")
         with self.assertRaises(CommitTimeout) as ctx:
-            history.commit_expecting(
-                image=str(self.raw),
-                timeout_s=3.0,
-                expect_change=True,
-                strategy="view_bounce_action",
-                expect_module="exposure",
-            )
+            history.commit_expecting(image=str(self.raw), timeout_s=3.0, expect_change=True,
+                                     strategy="view_bounce_action", expect_module="exposure")
         self.assertTrue(ctx.exception.detail["stale_rewrite_restored"])
         self.assertEqual(self.sidecar.read_text(), self.pre)
 
@@ -232,13 +208,8 @@ class StaleRewriteReportedByThePluginTest(unittest.TestCase):
         # stale rewrite; restoring now would throw the good write away.
         self._bridge(restored=False, strategy="view_bounce_action", then_write=self.GOOD)
         with self.assertRaises(CommitTimeout) as ctx:
-            history.commit_expecting(
-                image=str(self.raw),
-                timeout_s=3.0,
-                expect_change=True,
-                strategy="view_bounce_action",
-                expect_module="exposure",
-            )
+            history.commit_expecting(image=str(self.raw), timeout_s=3.0, expect_change=True,
+                                     strategy="view_bounce_action", expect_module="exposure")
         self.assertTrue(ctx.exception.detail["stale_rewrite_healed"])
         self.assertFalse(ctx.exception.detail["stale_rewrite_restored"])
         self.assertEqual(self.sidecar.read_text(), self.GOOD)
@@ -257,12 +228,8 @@ class RestoreRaceGuardTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.cache.stop()
 
-    def _run(
-        self,
-        current: str,
-        module: str | None = "exposure",
-        stale_hash: str | None = "h92black_0.0098",
-    ) -> str:
+    def _run(self, current: str, module: str | None = "exposure",
+             stale_hash: str | None = "h92black_0.0098") -> str:
         self.sidecar.write_text(current)
         return history._restore_if_still_stale(self.sidecar, self.pre, stale_hash, module)
 

@@ -14,12 +14,9 @@ from gauntlet.adapter import CallRecord, Observation
 from gauntlet.evaluate import Policy, evaluate
 from tests.gauntlet.layers import coverage
 
-EXAMPLES = {
-    e["id"]: e
-    for e in json.loads((Path(__file__).parent / "batch3_candidate_refusal.json").read_text())[
-        "examples"
-    ]
-}
+EXAMPLES = {e["id"]: e for e in
+            json.loads((Path(__file__).parent /
+                       "batch3_candidate_refusal.json").read_text())["examples"]}
 
 POLICY = Policy(
     refusal_codes=frozenset({"usage", "value_unknown", "not_pinned", "unreachable"}),
@@ -34,18 +31,12 @@ def _snap(fp: str, **params) -> dict:
 
 
 def _refusal_envelope(module: str, param: str, code: str = "not_pinned") -> dict:
-    return {
-        "ok": False,
-        "outcome": f"error:{code}",
-        "error": {
-            "code": code,
-            "detail": {
-                "refused": [{"module": module, "param": param, "code": code, "status": "candidate"}]
-            },
-            "fix": "this parameter has no pinned darktable action path",
-            "message": f"'{param}' cannot run: not reachable",
-        },
-    }
+    return {"ok": False, "outcome": f"error:{code}",
+            "error": {"code": code,
+                      "detail": {"refused": [{"module": module, "param": param,
+                                              "code": code, "status": "candidate"}]},
+                      "fix": "this parameter has no pinned darktable action path",
+                      "message": f"'{param}' cannot run: not reachable"}}
 
 
 _not_pinned_envelope = _refusal_envelope
@@ -61,15 +52,9 @@ def _bare_refusal_case(cid: str, module: str, param: str) -> None:
     assert case.expect.kind == "edit"
     # Oracle B: the evaluator's verdict on a synthetic observation shaped
     # exactly like the recorded case json's own refusal envelope.
-    obs = Observation(
-        calls=[
-            CallRecord(
-                "darkroom_say", {}, _not_pinned_envelope(module, param), wall_s=0.01, write=True
-            )
-        ],
-        before=_snap("a"),
-        after=_snap("a"),
-    )
+    obs = Observation(calls=[CallRecord("darkroom_say", {}, _not_pinned_envelope(module, param),
+                                        wall_s=0.01, write=True)],
+                      before=_snap("a"), after=_snap("a"))
     v = evaluate(case, obs, POLICY)
     assert (v.score, v.outcome) == ("pass", "correct_refusal")
 
@@ -92,19 +77,10 @@ def test_rotate_family_p4_property_sequence_all_refuse():
     # Oracle B: the evaluator never gets a real M1 pair (every "say" in the
     # sequence refuses honestly first) but still passes as a refusal.
     obs = Observation(
-        calls=[
-            CallRecord(
-                "darkroom_say",
-                {},
-                _not_pinned_envelope("ashift", "rotation"),
-                wall_s=0.01,
-                write=True,
-            )
-        ],
-        before=_snap("a"),
-        after=_snap("a"),
-        extra={"snapshots": [{"ashift.rotation": 0.0}] * 6},
-    )
+        calls=[CallRecord("darkroom_say", {}, _not_pinned_envelope("ashift", "rotation"),
+                          wall_s=0.01, write=True)],
+        before=_snap("a"), after=_snap("a"),
+        extra={"snapshots": [{"ashift.rotation": 0.0}] * 6})
     v = evaluate(case, obs, POLICY)
     assert (v.score, v.outcome) == ("pass", "correct_refusal")
 
@@ -119,19 +95,9 @@ def test_pinned_live_phrase_still_expects_a_plain_edit():
     assert case.expect.checks
     # Oracle B: the evaluator has no honest-refusal escape hatch for it --
     # a refusal on this case scores wrong_refusal, not a pass.
-    obs = Observation(
-        calls=[
-            CallRecord(
-                "darkroom_say",
-                {},
-                _not_pinned_envelope("exposure", "exposure"),
-                wall_s=0.01,
-                write=True,
-            )
-        ],
-        before=_snap("a"),
-        after=_snap("a"),
-    )
+    obs = Observation(calls=[CallRecord("darkroom_say", {}, _not_pinned_envelope(
+        "exposure", "exposure"), wall_s=0.01, write=True)],
+                      before=_snap("a"), after=_snap("a"))
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "wrong_refusal"
 
@@ -149,38 +115,18 @@ def test_crop_family_wrong_refusal_code_is_not_accepted():
     # `_code(...) in policy.refusal_codes` gate would have let it through
     # before this fix): must score `wrong_refusal`, never a pass.
     for code in ("usage", "unreachable"):
-        obs = Observation(
-            calls=[
-                CallRecord(
-                    "darkroom_say",
-                    {},
-                    _refusal_envelope("crop", "left", code=code),
-                    wall_s=0.01,
-                    write=True,
-                )
-            ],
-            before=_snap("a"),
-            after=_snap("a"),
-        )
+        obs = Observation(calls=[CallRecord("darkroom_say", {}, _refusal_envelope(
+            "crop", "left", code=code), wall_s=0.01, write=True)],
+                          before=_snap("a"), after=_snap("a"))
         v = evaluate(case, obs, POLICY)
         assert v.outcome == "wrong_refusal", (code, v.outcome)
     # A code the policy does not even recognise as a refusal at all
     # (`disk_full`, `not_in_darkroom`) -- never a pass either way, but
     # scored generically rather than as a typed wrong refusal.
     for code in ("disk_full", "not_in_darkroom"):
-        obs = Observation(
-            calls=[
-                CallRecord(
-                    "darkroom_say",
-                    {},
-                    _refusal_envelope("crop", "left", code=code),
-                    wall_s=0.01,
-                    write=True,
-                )
-            ],
-            before=_snap("a"),
-            after=_snap("a"),
-        )
+        obs = Observation(calls=[CallRecord("darkroom_say", {}, _refusal_envelope(
+            "crop", "left", code=code), wall_s=0.01, write=True)],
+                          before=_snap("a"), after=_snap("a"))
         v = evaluate(case, obs, POLICY)
         assert v.score != "pass", (code, v.outcome)
 
@@ -193,14 +139,8 @@ def test_crop_family_refusal_naming_an_unrelated_param_is_not_accepted():
     cases = {c.id: c for c in coverage.phrase_cases("olympus")}
     case = cases["cov-phrase-crop_16x9-olympus-bare"]
     assert "crop.left" in case.meta.get("candidate_keys", [])
-    obs = Observation(
-        calls=[
-            CallRecord(
-                "darkroom_say", {}, _refusal_envelope("sharpen", "amount"), wall_s=0.01, write=True
-            )
-        ],
-        before=_snap("a"),
-        after=_snap("a"),
-    )
+    obs = Observation(calls=[CallRecord("darkroom_say", {}, _refusal_envelope(
+        "sharpen", "amount"), wall_s=0.01, write=True)],
+                      before=_snap("a"), after=_snap("a"))
     v = evaluate(case, obs, POLICY)
     assert v.outcome == "wrong_refusal"

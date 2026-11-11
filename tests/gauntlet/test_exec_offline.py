@@ -23,9 +23,8 @@ def test_grammar_cases_pass_on_todays_resolver(cases):
 
 def test_sweep_runs_every_phrase_without_crashing(cases):
     s = OfflineSession()
-    out = collections.Counter(
-        evaluate(c, s.run_case(c), POLICY).score for c in cases if "-gram-" not in c.id
-    )
+    out = collections.Counter(evaluate(c, s.run_case(c), POLICY).score for c in cases
+                              if "-gram-" not in c.id)
     assert sum(out.values()) == 979
 
 

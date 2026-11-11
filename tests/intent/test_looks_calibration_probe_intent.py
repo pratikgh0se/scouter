@@ -16,8 +16,7 @@ from tests.gauntlet import exec_looks
 from tests.gauntlet.test_exec_looks import _FakeChartSession, _stats
 
 EXAMPLES = json.loads((Path(__file__).parent / "looks_calibration_probe.json").read_text())[
-    "examples"
-]
+    "examples"]
 
 #: the look-target field that exercises `plan_moves`'s `add()` for each key
 #: (spec §4.2's linear solve), so a calibration hole is proven to block
@@ -46,27 +45,18 @@ class LooksCalibrationProbeIntentTest(unittest.TestCase):
                     return bumped
                 return _stats()
 
-            with (
-                mock.patch.object(exec_looks.chart_render, "render_stats", fake_render_stats),
-                mock.patch.object(
-                    exec_looks.chart_render,
-                    "compare_golden",
-                    lambda stats, golden=None: {"patch_de": 0.0, "verdict": "pass"},
-                ),
-                mock.patch.object(
-                    exec_looks.chart_render, "write_golden_candidate", lambda run_root, stats: None
-                ),
-            ):
+            with mock.patch.object(exec_looks.chart_render, "render_stats", fake_render_stats), \
+                mock.patch.object(exec_looks.chart_render, "compare_golden",
+                                  lambda stats, golden=None: {"patch_de": 0.0, "verdict": "pass"}), \
+                mock.patch.object(exec_looks.chart_render, "write_golden_candidate",
+                                  lambda run_root, stats: None):
                 obs = Observation()
                 rec = exec_looks.chart_golden(session, case=None, step=None, obs=obs)
             self.assertIsNone(rec.error, (ex["id"], rec.error))
 
             # Oracle 1: which tool the probe sent for this key (or none).
-            sent = [
-                (t, a)
-                for t, a in session.calls
-                if a.get("module") == inp["module"] and a.get("param") == inp["param"]
-            ]
+            sent = [(t, a) for t, a in session.calls if a.get("module") == inp["module"] and
+                   a.get("param") == inp["param"]]
             if want["tool"] is None:
                 self.assertEqual(sent, [], (ex["id"], sent))
             else:
@@ -105,7 +95,6 @@ class LooksCalibrationProbeIntentTest(unittest.TestCase):
 def _make(ex: dict):
     def test(self: LooksCalibrationProbeIntentTest) -> None:
         self.run_example(ex)
-
     return test
 
 

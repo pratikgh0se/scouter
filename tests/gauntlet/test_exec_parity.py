@@ -15,10 +15,8 @@ def corpus(tmp_path):
     trial = tmp_path / "trial"
     trial.mkdir()
     (trial / "H.ORF").write_bytes(b"raw")
-    doc = {
-        "frames": [{"rel": "H.ORF", "body": "olympus"}],
-        "roles": {"olympus": {"hero": "H.ORF", "dark": "H.ORF"}},
-    }
+    doc = {"frames": [{"rel": "H.ORF", "body": "olympus"}],
+           "roles": {"olympus": {"hero": "H.ORF", "dark": "H.ORF"}}}
     return Corpus(doc, trial)
 
 
@@ -31,9 +29,8 @@ def test_normalise_drops_volatile_fields():
 
 
 def test_cli_argv_follows_the_registry():
-    argv = exec_parity.cli_argv(
-        "darkroom.set", {"module": "exposure", "param": "exposure", "value": 1.0, "commit": True}
-    )
+    argv = exec_parity.cli_argv("darkroom.set", {"module": "exposure", "param": "exposure",
+                                                 "value": 1.0, "commit": True})
     assert argv[:2] == ["darkroom", "set"] and "--no-commit" not in argv
     argv = exec_parity.cli_argv("darkroom.say", {"phrase": "brighter", "dry_run": True})
     assert "--dry-run" in argv and "brighter" in argv
@@ -45,38 +42,24 @@ def test_cli_argv_never_emits_the_nonexistent_commit_flag():
     # never defines (only `--no-commit` exists, for a default-True commit) --
     # argparse rejected it, failing both P0 darkroom.set pairs. `commit=True`
     # is already the default, so no flag at all should be emitted for it.
-    argv = exec_parity.cli_argv(
-        "darkroom.set", {"module": "exposure", "param": "exposure", "value": 1.0, "commit": True}
-    )
+    argv = exec_parity.cli_argv("darkroom.set", {"module": "exposure", "param": "exposure",
+                                                 "value": 1.0, "commit": True})
     assert "--commit" not in argv
     # commit=False must still emit --no-commit (unchanged behaviour).
-    argv = exec_parity.cli_argv(
-        "darkroom.set", {"module": "exposure", "param": "exposure", "value": 1.0, "commit": False}
-    )
+    argv = exec_parity.cli_argv("darkroom.set", {"module": "exposure", "param": "exposure",
+                                                 "value": 1.0, "commit": False})
     assert "--no-commit" in argv
 
 
 def test_cli_timeout_blocks_as_hang_without_raising(corpus, tmp_path, monkeypatch):
     s = _session(corpus, tmp_path).open()
-    monkeypatch.setattr(
-        exec_parity.subprocess,
-        "run",
-        lambda *a, **k: (_ for _ in ()).throw(
-            subprocess.TimeoutExpired(cmd="scouter", timeout=90.0)
-        ),
-    )
-    case = Case(
-        id="par-darkroom-say-happy",
-        layer="parity",
-        tier="P0",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "darkroom_say", "variant": "happy"},
-    )
-    step = Step("parity_pair", {"verb": "darkroom.say", "args": {"phrase": "brighter"}}, 60.0, True)
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: (_ for _ in ())
+                        .throw(subprocess.TimeoutExpired(cmd="scouter", timeout=90.0)))
+    case = Case(id="par-darkroom-say-happy", layer="parity", tier="P0", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "darkroom_say", "variant": "happy"})
+    step = Step("parity_pair", {"verb": "darkroom.say", "args": {"phrase": "brighter"}}, 60.0,
+               True)
     obs = Observation()
     rec = exec_parity.parity_pair(s, case, step, obs)
     assert rec.error == "timeout"
@@ -92,64 +75,36 @@ def test_cli_timeout_blocks_as_hang_without_raising(corpus, tmp_path, monkeypatc
 
 
 def test_happy_variant_both_sides_error_same_way_needs_review(corpus, tmp_path, monkeypatch):
-    err = {
-        "ok": False,
-        "outcome": "error:not_in_darkroom",
-        "error": {"code": "not_in_darkroom", "message": "bad"},
-    }
+    err = {"ok": False, "outcome": "error:not_in_darkroom",
+          "error": {"code": "not_in_darkroom", "message": "bad"}}
     mcp = FakeMcp(answers={"vocab_list": err})
     s = _session(corpus, tmp_path, mcp=mcp).open()
-    monkeypatch.setattr(
-        exec_parity.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(a[0], 6, stdout=json.dumps(err), stderr=""),
-    )
-    case = Case(
-        id="par-vocab-list-happy",
-        layer="parity",
-        tier="P1",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "vocab_list", "variant": "happy"},
-    )
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 6, stdout=json.dumps(err), stderr=""))
+    case = Case(id="par-vocab-list-happy", layer="parity", tier="P1", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "vocab_list", "variant": "happy"})
     step = Step("parity_pair", {"verb": "vocab.list", "args": {}}, 60.0, False)
     obs = Observation()
     exec_parity.parity_pair(s, case, step, obs)
     assert obs.extra["envelopes_match"] is True
-    assert (
-        obs.extra["parity_needs_review"]
-        == "happy variant: both sides failed the same way -- the verb never ran"
-    )
+    assert obs.extra["parity_needs_review"] == \
+        "happy variant: both sides failed the same way -- the verb never ran"
 
 
-def test_error_variant_both_sides_refuse_the_same_typed_way_is_verified(
-    corpus, tmp_path, monkeypatch
-):
+def test_error_variant_both_sides_refuse_the_same_typed_way_is_verified(corpus, tmp_path,
+                                                                        monkeypatch):
     # This is the error variant's whole point: the harness deliberately
     # breaks the call so both sides refuse identically. That is a genuine
     # pass, never needs_review.
     err = {"ok": False, "outcome": "error:usage", "error": {"code": "usage", "message": "bad"}}
     mcp = FakeMcp(answers={"vocab_list": err})
     s = _session(corpus, tmp_path, mcp=mcp).open()
-    monkeypatch.setattr(
-        exec_parity.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(a[0], 2, stdout=json.dumps(err), stderr=""),
-    )
-    case = Case(
-        id="par-vocab-list-error",
-        layer="parity",
-        tier="P1",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "vocab_list", "variant": "error"},
-    )
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 2, stdout=json.dumps(err), stderr=""))
+    case = Case(id="par-vocab-list-error", layer="parity", tier="P1", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "vocab_list", "variant": "error"})
     step = Step("parity_pair", {"verb": "vocab.list", "args": {"__htc_unknown__": 1}}, 60.0, False)
     obs = Observation()
     exec_parity.parity_pair(s, case, step, obs)
@@ -158,36 +113,20 @@ def test_error_variant_both_sides_refuse_the_same_typed_way_is_verified(
 
 
 def test_error_variant_transient_shared_code_needs_review(corpus, tmp_path, monkeypatch):
-    err = {
-        "ok": False,
-        "outcome": "error:bridge_timeout",
-        "error": {"code": "bridge_timeout", "message": "no answer"},
-    }
+    err = {"ok": False, "outcome": "error:bridge_timeout",
+          "error": {"code": "bridge_timeout", "message": "no answer"}}
     mcp = FakeMcp(answers={"vocab_list": err})
     s = _session(corpus, tmp_path, mcp=mcp).open()
-    monkeypatch.setattr(
-        exec_parity.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(a[0], 3, stdout=json.dumps(err), stderr=""),
-    )
-    case = Case(
-        id="par-vocab-list-error",
-        layer="parity",
-        tier="P1",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "vocab_list", "variant": "error"},
-    )
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 3, stdout=json.dumps(err), stderr=""))
+    case = Case(id="par-vocab-list-error", layer="parity", tier="P1", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "vocab_list", "variant": "error"})
     step = Step("parity_pair", {"verb": "vocab.list", "args": {"__htc_unknown__": 1}}, 60.0, False)
     obs = Observation()
     exec_parity.parity_pair(s, case, step, obs)
-    assert (
-        obs.extra["parity_needs_review"]
-        == "error variant: the shared code 'bridge_timeout' is transient, not a typed refusal"
-    )
+    assert obs.extra["parity_needs_review"] == \
+        "error variant: the shared code 'bridge_timeout' is transient, not a typed refusal"
 
 
 def test_error_variant_accepted_by_a_side_needs_review(corpus, tmp_path, monkeypatch):
@@ -195,22 +134,11 @@ def test_error_variant_accepted_by_a_side_needs_review(corpus, tmp_path, monkeyp
     err = {"ok": False, "outcome": "error:usage", "error": {"code": "usage", "message": "bad"}}
     mcp = FakeMcp(answers={"vocab_list": ok})  # MCP wrongly accepted the bad input
     s = _session(corpus, tmp_path, mcp=mcp).open()
-    monkeypatch.setattr(
-        exec_parity.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(a[0], 2, stdout=json.dumps(err), stderr=""),
-    )
-    case = Case(
-        id="par-vocab-list-error",
-        layer="parity",
-        tier="P1",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "vocab_list", "variant": "error"},
-    )
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 2, stdout=json.dumps(err), stderr=""))
+    case = Case(id="par-vocab-list-error", layer="parity", tier="P1", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "vocab_list", "variant": "error"})
     step = Step("parity_pair", {"verb": "vocab.list", "args": {"__htc_unknown__": 1}}, 60.0, False)
     obs = Observation()
     exec_parity.parity_pair(s, case, step, obs)
@@ -224,52 +152,28 @@ def test_error_variant_both_sides_wrongly_accept_needs_review(corpus, tmp_path, 
     ok = {"ok": True, "outcome": "ok", "data": {}}
     mcp = FakeMcp(answers={"vocab_list": ok})
     s = _session(corpus, tmp_path, mcp=mcp).open()
-    monkeypatch.setattr(
-        exec_parity.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout=json.dumps(ok), stderr=""),
-    )
-    case = Case(
-        id="par-vocab-list-error",
-        layer="parity",
-        tier="P1",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "vocab_list", "variant": "error"},
-    )
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(ok), stderr=""))
+    case = Case(id="par-vocab-list-error", layer="parity", tier="P1", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "vocab_list", "variant": "error"})
     step = Step("parity_pair", {"verb": "vocab.list", "args": {"__htc_unknown__": 1}}, 60.0, False)
     obs = Observation()
     exec_parity.parity_pair(s, case, step, obs)
     assert obs.extra["envelopes_match"] is True
-    assert (
-        obs.extra["parity_needs_review"]
-        == "error variant: a side accepted the bad input instead of refusing it"
-    )
+    assert obs.extra["parity_needs_review"] == \
+        "error variant: a side accepted the bad input instead of refusing it"
 
 
 def test_happy_variant_both_sides_ok_is_still_pass(corpus, tmp_path, monkeypatch):
     ok = {"ok": True, "outcome": "ok", "data": {}}
     mcp = FakeMcp(answers={"vocab_list": ok})
     s = _session(corpus, tmp_path, mcp=mcp).open()
-    monkeypatch.setattr(
-        exec_parity.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout=json.dumps(ok), stderr=""),
-    )
-    case = Case(
-        id="par-vocab-list-happy",
-        layer="parity",
-        tier="P1",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "vocab_list", "variant": "happy"},
-    )
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(ok), stderr=""))
+    case = Case(id="par-vocab-list-happy", layer="parity", tier="P1", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "vocab_list", "variant": "happy"})
     step = Step("parity_pair", {"verb": "vocab.list", "args": {}}, 60.0, False)
     obs = Observation()
     exec_parity.parity_pair(s, case, step, obs)
@@ -303,9 +207,8 @@ class _FakeStageSession:
         self._library_import_envelope = library_import_envelope
         config_path = self.root / "config" / "config.json"
         _write_scouter_config(config_path, self.root / "jobs")
-        self.staged = SimpleNamespace(
-            config=config_path, env={}, frames={"hero": tmp_path / "trial" / "H.ORF"}
-        )
+        self.staged = SimpleNamespace(config=config_path, env={},
+                                      frames={"hero": tmp_path / "trial" / "H.ORF"})
 
     def call(self, tool, args, budget_s, write=False):
         from gauntlet.adapter import CallRecord
@@ -325,23 +228,17 @@ def test_stage_side_resolves_to_the_imported_destination(tmp_path):
     src = tmp_path / "parity" / "mcp" / "H-mcp.ORF"
     src.parent.mkdir(parents=True, exist_ok=True)
     src.write_bytes(b"raw")
-    envelope = {
-        "ok": True,
-        "data": {
-            "job_slug": exec_parity.SMOKE_JOB_SLUG,
-            "date": "2026-05-24",
-            "files": [{"source_name": "H-mcp.ORF", "dest": "raw/2026-05-24_smoke-job_H-mcp.ORF"}],
-        },
-    }
+    envelope = {"ok": True, "data": {
+        "job_slug": exec_parity.SMOKE_JOB_SLUG, "date": "2026-05-24",
+        "files": [{"source_name": "H-mcp.ORF", "dest": "raw/2026-05-24_smoke-job_H-mcp.ORF"}]}}
     s = _FakeStageSession(tmp_path, library_import_envelope=envelope)
     resolved = exec_parity._stage_side(s, src, "mcp")
     assert resolved != src
     assert resolved.name == "2026-05-24_smoke-job_H-mcp.ORF"
     # C17: an unconfirmed import is a dry-run plan that copies nothing
-    assert (
-        "library_import",
-        {"source": str(src.parent), "job_slug": exec_parity.SMOKE_JOB_SLUG, "confirm": True},
-    ) in s.calls
+    assert ("library_import", {"source": str(src.parent),
+                               "job_slug": exec_parity.SMOKE_JOB_SLUG,
+                               "confirm": True}) in s.calls
     assert exec_parity._fixture_errors(s) == []
 
 
@@ -388,12 +285,8 @@ def test_ensure_smoke_style_failure_is_retried_and_recorded(tmp_path):
             from gauntlet.adapter import CallRecord
 
             self.calls.append((tool, args))
-            return CallRecord(
-                tool=tool,
-                args=args,
-                envelope={"ok": False, "error": {"code": "no_sidecar"}},
-                write=write,
-            )
+            return CallRecord(tool=tool, args=args,
+                             envelope={"ok": False, "error": {"code": "no_sidecar"}}, write=write)
 
     s = _Session(tmp_path)
     path = tmp_path / "parity" / "mcp" / "H-mcp.ORF"
@@ -401,10 +294,8 @@ def test_ensure_smoke_style_failure_is_retried_and_recorded(tmp_path):
     exec_parity._ensure_smoke_style(s, path)
     style_calls = [c for c in s.calls if c[0] == "style_extract"]
     assert len(style_calls) == 2  # retried, since it never succeeded
-    assert exec_parity._fixture_errors(s) == [
-        "smoke_style_failed: no_sidecar",
-        "smoke_style_failed: no_sidecar",
-    ]
+    assert exec_parity._fixture_errors(s) == \
+        ["smoke_style_failed: no_sidecar", "smoke_style_failed: no_sidecar"]
 
 
 def test_call_with_frame_switch_retries_once_and_records_it(tmp_path):
@@ -419,14 +310,14 @@ def test_call_with_frame_switch_retries_once_and_records_it(tmp_path):
             self._n += 1
             if self._n == 1:
                 return CallRecord(tool=tool, args=args, error="not_in_darkroom", write=write)
-            return CallRecord(tool=tool, args=args, envelope={"ok": True, "data": {}}, write=write)
+            return CallRecord(tool=tool, args=args, envelope={"ok": True, "data": {}},
+                             write=write)
 
     s = _Session(tmp_path)
     path = tmp_path / "parity" / "mcp" / "H-mcp.ORF"
     obs = Observation()
-    rec = exec_parity._call_with_frame_switch(
-        s, obs, "darkroom_open", {"image": str(path)}, path, 30.0, False, "mcp"
-    )
+    rec = exec_parity._call_with_frame_switch(s, obs, "darkroom_open", {"image": str(path)}, path,
+                                              30.0, False, "mcp")
     assert s.relaunches == [path]
     assert rec.error is None and s.current_frame == path
     assert obs.extra["frame_switch_relaunch"] == ["mcp"]
@@ -443,9 +334,8 @@ def test_call_with_frame_switch_does_not_retry_other_errors(tmp_path):
     s = _Session(tmp_path)
     path = tmp_path / "parity" / "mcp" / "H-mcp.ORF"
     obs = Observation()
-    rec = exec_parity._call_with_frame_switch(
-        s, obs, "darkroom_open", {"image": str(path)}, path, 30.0, False, "mcp"
-    )
+    rec = exec_parity._call_with_frame_switch(s, obs, "darkroom_open", {"image": str(path)}, path,
+                                              30.0, False, "mcp")
     assert s.relaunches == []
     assert rec.error == "usage"
     assert "frame_switch_relaunch" not in obs.extra
@@ -455,25 +345,13 @@ def test_parity_pair_imports_both_sides_once_for_a_non_open_verb(corpus, tmp_pat
     ok = {"ok": True, "outcome": "ok", "data": {}}
     mcp = FakeMcp(answers={"wb_kelvin": ok})
     s = _session(corpus, tmp_path, mcp=mcp).open()
-    monkeypatch.setattr(
-        exec_parity.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout=json.dumps(ok), stderr=""),
-    )
-    case = Case(
-        id="par-wb-kelvin-happy",
-        layer="parity",
-        tier="P0",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "wb_kelvin", "variant": "happy"},
-    )
-    step = Step(
-        "parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0, False
-    )
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(ok), stderr=""))
+    case = Case(id="par-wb-kelvin-happy", layer="parity", tier="P0", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "wb_kelvin", "variant": "happy"})
+    step = Step("parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0,
+               False)
     obs1 = Observation()
     exec_parity.parity_pair(s, case, step, obs1)
     import_calls = [c for c in mcp.calls if c[0] == "library_import"]
@@ -495,25 +373,13 @@ def test_parity_pair_uses_distinct_source_names_per_side(corpus, tmp_path, monke
     ok = {"ok": True, "outcome": "ok", "data": {}}
     mcp = FakeMcp(answers={"wb_kelvin": ok})
     s = _session(corpus, tmp_path, mcp=mcp).open()
-    monkeypatch.setattr(
-        exec_parity.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout=json.dumps(ok), stderr=""),
-    )
-    case = Case(
-        id="par-wb-kelvin-happy",
-        layer="parity",
-        tier="P0",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "wb_kelvin", "variant": "happy"},
-    )
-    step = Step(
-        "parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0, False
-    )
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(ok), stderr=""))
+    case = Case(id="par-wb-kelvin-happy", layer="parity", tier="P0", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "wb_kelvin", "variant": "happy"})
+    step = Step("parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0,
+               False)
     obs = Observation()
     exec_parity.parity_pair(s, case, step, obs)
     import_calls = [c for c in mcp.calls if c[0] == "library_import"]
@@ -523,7 +389,6 @@ def test_parity_pair_uses_distinct_source_names_per_side(corpus, tmp_path, monke
     # The two staged directories are the per-side "mcp"/"cli" ones, each
     # holding one distinctly-named file.
     import os
-
     names = [os.listdir(src)[0] for src in sources]
     assert names[0] != names[1]
     assert names[0].endswith("-mcp.ORF") or names[0].endswith("-cli.ORF")
@@ -533,25 +398,13 @@ def test_parity_pair_skips_staging_for_darkroom_open(corpus, tmp_path, monkeypat
     ok = {"ok": True, "outcome": "ok", "data": {}}
     mcp = FakeMcp(answers={"darkroom_open": ok})
     s = _session(corpus, tmp_path, mcp=mcp).open()
-    monkeypatch.setattr(
-        exec_parity.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout=json.dumps(ok), stderr=""),
-    )
-    case = Case(
-        id="par-darkroom-open-happy",
-        layer="parity",
-        tier="P0",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "darkroom_open", "variant": "happy"},
-    )
-    step = Step(
-        "parity_pair", {"verb": "darkroom.open", "args": {"image": "{frame:hero}"}}, 60.0, False
-    )
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(ok), stderr=""))
+    case = Case(id="par-darkroom-open-happy", layer="parity", tier="P0", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "darkroom_open", "variant": "happy"})
+    step = Step("parity_pair", {"verb": "darkroom.open", "args": {"image": "{frame:hero}"}},
+               60.0, False)
     obs = Observation()
     exec_parity.parity_pair(s, case, step, obs)
     assert not [c for c in mcp.calls if c[0] == "library_import"]
@@ -561,31 +414,17 @@ def test_parity_pair_records_fixture_errors_in_obs_extra(corpus, tmp_path, monke
     ok = {"ok": True, "outcome": "ok", "data": {}}
     mcp = FakeMcp(answers={"wb_kelvin": ok, "library_import": {"ok": False, "data": {}}})
     s = _session(corpus, tmp_path, mcp=mcp).open()
-    monkeypatch.setattr(
-        exec_parity.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout=json.dumps(ok), stderr=""),
-    )
-    case = Case(
-        id="par-wb-kelvin-happy",
-        layer="parity",
-        tier="P0",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "wb_kelvin", "variant": "happy"},
-    )
-    step = Step(
-        "parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0, False
-    )
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(ok), stderr=""))
+    case = Case(id="par-wb-kelvin-happy", layer="parity", tier="P0", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "wb_kelvin", "variant": "happy"})
+    step = Step("parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0,
+               False)
     obs = Observation()
     exec_parity.parity_pair(s, case, step, obs)
-    assert obs.extra["fixture_errors"] == [
-        "mcp_import_failed: no_files_named",
-        "cli_import_failed: no_files_named",
-    ]
+    assert obs.extra["fixture_errors"] == \
+        ["mcp_import_failed: no_files_named", "cli_import_failed: no_files_named"]
 
 
 def test_frame_switch_relaunch_does_not_hide_a_real_mismatch(corpus, tmp_path, monkeypatch):
@@ -594,7 +433,8 @@ def test_frame_switch_relaunch_does_not_hide_a_real_mismatch(corpus, tmp_path, m
     # when the pair still AGREES after both relaunches. Real
     # par-darkroom.open-happy shape: not_in_darkroom on the first try, a
     # genuine (differing) open answer on the retry.
-    err = {"ok": False, "outcome": "error:not_in_darkroom", "error": {"code": "not_in_darkroom"}}
+    err = {"ok": False, "outcome": "error:not_in_darkroom",
+          "error": {"code": "not_in_darkroom"}}
     ok_mcp = {"ok": True, "outcome": "ok", "data": {"opened": True, "view": "darkroom"}}
     ok_cli = {"ok": True, "outcome": "ok", "data": {"opened": True, "view": "lighttable"}}
     mcp = FakeMcp(answers={"darkroom_open": [err, ok_mcp]})
@@ -608,20 +448,11 @@ def test_frame_switch_relaunch_does_not_hide_a_real_mismatch(corpus, tmp_path, m
         return subprocess.CompletedProcess(a[0], code, stdout=json.dumps(env), stderr="")
 
     monkeypatch.setattr(exec_parity.subprocess, "run", fake_run)
-    case = Case(
-        id="par-darkroom-open-happy",
-        layer="parity",
-        tier="P0",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "darkroom_open", "variant": "happy"},
-    )
-    step = Step(
-        "parity_pair", {"verb": "darkroom.open", "args": {"image": "{frame:hero}"}}, 60.0, False
-    )
+    case = Case(id="par-darkroom-open-happy", layer="parity", tier="P0", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "darkroom_open", "variant": "happy"})
+    step = Step("parity_pair", {"verb": "darkroom.open", "args": {"image": "{frame:hero}"}},
+               60.0, False)
     obs = Observation()
     exec_parity.parity_pair(s, case, step, obs)
     assert obs.extra["frame_switch_relaunch"] == ["mcp", "cli"]
@@ -696,25 +527,13 @@ def test_parity_pair_records_the_isolation_mechanism_honestly(corpus, tmp_path, 
     ok = {"ok": True, "outcome": "ok", "data": {}}
     mcp = FakeMcp(answers={"wb_kelvin": ok})
     s = _session(corpus, tmp_path, mcp=mcp).open()
-    monkeypatch.setattr(
-        exec_parity.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout=json.dumps(ok), stderr=""),
-    )
-    case = Case(
-        id="par-wb-kelvin-happy",
-        layer="parity",
-        tier="P0",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "wb_kelvin", "variant": "happy"},
-    )
-    step = Step(
-        "parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0, False
-    )
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(ok), stderr=""))
+    case = Case(id="par-wb-kelvin-happy", layer="parity", tier="P0", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "wb_kelvin", "variant": "happy"})
+    step = Step("parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0,
+               False)
     obs = Observation()
     exec_parity.parity_pair(s, case, step, obs)
     assert obs.extra["isolation"] == "xmp_file_restore (library.db not reset)"
@@ -726,25 +545,13 @@ def test_parity_pair_names_a_missing_mcp_envelope(corpus, tmp_path, monkeypatch)
     ok = {"ok": True, "outcome": "ok", "data": {}}
     mcp = FakeMcp(answers={"wb_kelvin": None})
     s = _session(corpus, tmp_path, mcp=mcp).open()
-    monkeypatch.setattr(
-        exec_parity.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout=json.dumps(ok), stderr=""),
-    )
-    case = Case(
-        id="par-wb-kelvin-happy",
-        layer="parity",
-        tier="P0",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "wb_kelvin", "variant": "happy"},
-    )
-    step = Step(
-        "parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0, False
-    )
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(ok), stderr=""))
+    case = Case(id="par-wb-kelvin-happy", layer="parity", tier="P0", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "wb_kelvin", "variant": "happy"})
+    step = Step("parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0,
+               False)
     obs = Observation()
     rec = exec_parity.parity_pair(s, case, step, obs)
     assert "mcp_no_envelope" in obs.extra["parity_diffs"]
@@ -760,32 +567,12 @@ def _env(data, **kw):
 
 
 def test_compare_ignores_per_leg_volatile_keys():
-    mcp = _env(
-        {
-            "applied": 1.5,
-            "analyse_ms": 3,
-            "render_ms": 2060,
-            "cached": False,
-            "archive_dir": "/a/2026-11-09T10",
-            "xmp_mtime": 1.0,
-            "preview_path": "/p/1.ppm",
-            "from_ts": "2026-11-09T12:46:48Z",
-            "totals": {"calls": 3},
-        }
-    )
-    cli = _env(
-        {
-            "applied": 1.5,
-            "analyse_ms": 0,
-            "render_ms": 11,
-            "cached": True,
-            "archive_dir": "/a/2026-11-09T11",
-            "xmp_mtime": 2.0,
-            "preview_path": "/p/2.ppm",
-            "from_ts": "2026-11-09T12:50:00Z",
-            "totals": {"calls": 9},
-        }
-    )
+    mcp = _env({"applied": 1.5, "analyse_ms": 3, "render_ms": 2060, "cached": False,
+                "archive_dir": "/a/2026-11-09T10", "xmp_mtime": 1.0, "preview_path": "/p/1.ppm",
+                "from_ts": "2026-11-09T12:46:48Z", "totals": {"calls": 3}})
+    cli = _env({"applied": 1.5, "analyse_ms": 0, "render_ms": 11, "cached": True,
+                "archive_dir": "/a/2026-11-09T11", "xmp_mtime": 2.0, "preview_path": "/p/2.ppm",
+                "from_ts": "2026-11-09T12:50:00Z", "totals": {"calls": 9}})
     assert exec_parity.compare(mcp, cli) == []
 
 
@@ -806,38 +593,25 @@ def test_compare_histograms_by_shape_not_by_raw_counts():
 
 def _pair_session(corpus, tmp_path, mcp, monkeypatch, cli_env):
     s = _session(corpus, tmp_path, mcp=mcp).open()
-    monkeypatch.setattr(
-        exec_parity.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout=json.dumps(cli_env), stderr=""),
-    )
+    monkeypatch.setattr(exec_parity.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], 0, stdout=json.dumps(cli_env), stderr=""))
     return s
 
 
 def _kelvin_case(variant="happy"):
-    case = Case(
-        id=f"par-wb-kelvin-{variant}",
-        layer="parity",
-        tier="P0",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "wb_kelvin", "variant": variant},
-    )
-    step = Step(
-        "parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0, False
-    )
+    case = Case(id=f"par-wb-kelvin-{variant}", layer="parity", tier="P0", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "wb_kelvin", "variant": variant})
+    step = Step("parity_pair", {"verb": "wb.kelvin", "args": {"image": "{frame:hero}"}}, 60.0,
+               False)
     return case, step
 
 
 def test_parity_pair_stores_the_mcp_envelope_next_to_the_cli_one(corpus, tmp_path, monkeypatch):
     mcp_env = _env({"kelvin": 4000})
     cli_env = _env({"kelvin": 4000})
-    s = _pair_session(
-        corpus, tmp_path, FakeMcp(answers={"wb_kelvin": mcp_env}), monkeypatch, cli_env
-    )
+    s = _pair_session(corpus, tmp_path, FakeMcp(answers={"wb_kelvin": mcp_env}), monkeypatch,
+                      cli_env)
     case, step = _kelvin_case()
     obs = Observation()
     exec_parity.parity_pair(s, case, step, obs)
@@ -859,23 +633,12 @@ def test_parity_pair_resets_the_frame_between_the_two_legs(corpus, tmp_path, mon
         return subprocess.CompletedProcess(a[0], 0, stdout=json.dumps(ok), stderr="")
 
     monkeypatch.setattr(exec_parity.subprocess, "run", run)
-    case = Case(
-        id="par-darkroom-set-happy",
-        layer="parity",
-        tier="P0",
-        mode="tool",
-        steps=[],
-        expect=Expect("workflow"),
-        body="olympus",
-        frame_role="hero",
-        meta={"mcp": "darkroom_set", "variant": "happy"},
-    )
-    step = Step(
-        "parity_pair",
-        {"verb": "darkroom.set", "args": {"module": "exposure", "param": "exposure", "value": 1.0}},
-        60.0,
-        True,
-    )
+    case = Case(id="par-darkroom-set-happy", layer="parity", tier="P0", mode="tool", steps=[],
+                expect=Expect("workflow"), body="olympus", frame_role="hero",
+                meta={"mcp": "darkroom_set", "variant": "happy"})
+    step = Step("parity_pair", {"verb": "darkroom.set",
+                                "args": {"module": "exposure", "param": "exposure",
+                                         "value": 1.0}}, 60.0, True)
     obs = Observation()
     exec_parity.parity_pair(s, case, step, obs)
     assert order == ["reset", "cli"]

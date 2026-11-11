@@ -24,11 +24,8 @@ SOURCED = ("documented", "community-consensus")
 #: role still groups by body, and 3 distinct frames floor the achievable
 #: total at 2 switches (chart -> real, then hero <-> hero_bright), not 1.
 FRAME_ROLE_ORDER = ("chart", "hero", "hero_bright")
-TONE_PATCH = {
-    "shadows_ev": "patch:ramp_-4",
-    "mids_ev": "patch:ramp_+0",
-    "highlights_ev": "patch:ramp_+2",
-}
+TONE_PATCH = {"shadows_ev": "patch:ramp_-4", "mids_ev": "patch:ramp_+0",
+              "highlights_ev": "patch:ramp_+2"}
 TONE_REGION = {"shadows_ev": "shadows", "mids_ev": "frame", "highlights_ev": "highlights"}
 
 
@@ -77,9 +74,8 @@ def zone_crosstalk(tone: dict) -> list[str]:
     for k, v in moves.items():
         if not v:
             continue
-        if any(
-            w and (w > 0) != (v > 0) and abs(w) * 2 >= abs(v) for j, w in moves.items() if j != k
-        ):
+        if any(w and (w > 0) != (v > 0) and abs(w) * 2 >= abs(v)
+               for j, w in moves.items() if j != k):
             out.append(k)
     return out
 
@@ -89,9 +85,8 @@ _ZONE_CHECK = {"shadows_ev": "shadows", "mids_ev": "zone", "highlights_ev": "zon
 
 def _split_active(t: dict) -> bool:
     st = t.get("split_toning") or {}
-    return any(
-        st.get(f"{e}_hue") is not None and st.get(f"{e}_sat") for e in ("shadow", "highlight")
-    )
+    return any(st.get(f"{e}_hue") is not None and st.get(f"{e}_sat")
+               for e in ("shadow", "highlight"))
 
 
 def confounders(t: dict, check: str) -> list[str]:
@@ -129,9 +124,7 @@ def confounders(t: dict, check: str) -> list[str]:
         if tone.get("contrast"):
             out.append("tone:contrast")
         out += [f"tone:{k}" for k in TONE_PATCH if tone.get(k)]
-    elif (
-        check == "contrast"
-    ):  # M6 slope/spread: zone luminance and split-tone moves reshape the ramp
+    elif check == "contrast":  # M6 slope/spread: zone luminance and split-tone moves reshape the ramp
         out += [f"tone:{k}" for k in TONE_PATCH if tone.get(k)]
         if _split_active(t):
             out.append("split_toning")
@@ -144,9 +137,8 @@ def _gap_tag(t: dict, check: str, zone_gap: str | None = None) -> str | None:
     why = confounders(t, check)
     if not why:
         return zone_gap
-    return "confounded by " + ", ".join(
-        ([zone_gap.replace("zone_crosstalk:", "zone ")] if zone_gap else []) + why
-    )
+    return "confounded by " + ", ".join(([zone_gap.replace("zone_crosstalk:", "zone ")]
+                                         if zone_gap else []) + why)
 
 
 def _hue_axis(hue: float) -> tuple[str, int]:
@@ -173,40 +165,25 @@ def chart_checks(look: dict, tol: dict) -> tuple[list[Check], list[dict]]:
     for k, patch in TONE_PATCH.items():
         v = tone.get(k) or 0
         if v:
-            ch = Check(
-                "M2",
-                stat="ev",
-                region=patch,
-                sign=1 if v > 0 else -1,
-                target={"value": v, "tol": tol[conf.get("tone", "inferred")]["ev"]},
-            )
-            gap = _gap_tag(t, _ZONE_CHECK[k], f"zone_crosstalk:{k}" if k in shared else None)
+            ch = Check("M2", stat="ev", region=patch, sign=1 if v > 0 else -1,
+                       target={"value": v, "tol": tol[conf.get("tone", "inferred")]["ev"]})
+            gap = _gap_tag(t, _ZONE_CHECK[k], f"zone_crosstalk:{k}"
+                           if k in shared else None)
             if gap:  # kept, tagged: the evaluator reports it as a NOT served gap
                 ch.tags["declared_gap"] = gap
             add(ch, "tone")
     if tone.get("contrast"):
         v = tone["contrast"]
-        ch = Check(
-            "M6",
-            stat="slope",
-            region="chart_tone",
-            sign=1 if v > 0 else -1,
-            kind="frac",
-            target={"value": v, "tol": tol[conf.get("tone", "inferred")]["sat"]},
-        )
+        ch = Check("M6", stat="slope", region="chart_tone", sign=1 if v > 0 else -1, kind="frac",
+                   target={"value": v, "tol": tol[conf.get("tone", "inferred")]["sat"]})
         if _gap_tag(t, "contrast"):
             ch.tags["declared_gap"] = _gap_tag(t, "contrast")
         add(ch, "tone", "sigmoid.contrast")
     sat = t.get("saturation_delta") or 0
     if sat:
-        ch = Check(
-            "M5",
-            stat="C",
-            region="chart_chromatic",
-            sign=1 if sat > 0 else -1,
-            kind="frac",
-            target={"value": sat, "tol": tol[conf.get("saturation_delta", "inferred")]["sat"]},
-        )
+        ch = Check("M5", stat="C", region="chart_chromatic", sign=1 if sat > 0 else -1,
+                   kind="frac", target={"value": sat, "tol": tol[conf.get(
+                       "saturation_delta", "inferred")]["sat"]})
         if _gap_tag(t, "chroma"):
             ch.tags["declared_gap"] = _gap_tag(t, "chroma")
         add(ch, "saturation_delta", "colorbalancergb.global_chroma")
@@ -214,17 +191,9 @@ def chart_checks(look: dict, tol: dict) -> tuple[list[Check], list[dict]]:
     for axis in ("a", "b"):
         v = gc.get(axis) or 0
         if v:
-            add(
-                Check(
-                    "M4",
-                    stat=axis,
-                    region="patch:ramp_+0",
-                    sign=1 if v > 0 else -1,
-                    target={"value": v, "tol": tol[conf.get("grey_cast", "inferred")]["ab"]},
-                ),
-                "grey_cast",
-                "temperature.tint" if axis == "a" else "temperature.temperature",
-            )
+            add(Check("M4", stat=axis, region="patch:ramp_+0", sign=1 if v > 0 else -1,
+                      target={"value": v, "tol": tol[conf.get("grey_cast", "inferred")]["ab"]}),
+                "grey_cast", "temperature.tint" if axis == "a" else "temperature.temperature")
     st = t.get("split_toning") or {}
     for end, patch in (("shadow", "patch:ramp_-3"), ("highlight", "patch:ramp_+2")):
         hue, s = st.get(f"{end}_hue"), st.get(f"{end}_sat") or 0
@@ -252,7 +221,8 @@ def frame_checks(look: dict) -> tuple[list[Check], list[dict]]:
         v = tone.get(k) or 0
         if v:
             ch = Check("M2", stat="L", region=region, sign=1 if v > 0 else -1)
-            gap = _gap_tag(t, _ZONE_CHECK[k], f"zone_crosstalk:{k}" if k in shared else None)
+            gap = _gap_tag(t, _ZONE_CHECK[k],
+                           f"zone_crosstalk:{k}" if k in shared else None)
             if gap:
                 ch.tags["declared_gap"] = gap
             checks.append(ch)
@@ -261,46 +231,21 @@ def frame_checks(look: dict) -> tuple[list[Check], list[dict]]:
         tags_ = {"look_key": "sigmoid.contrast"}
         if _gap_tag(t, "contrast"):
             tags_["declared_gap"] = _gap_tag(t, "contrast")
-        checks.append(
-            Check(
-                "M6",
-                stat="spread",
-                region="frame",
-                sign=1 if tone["contrast"] > 0 else -1,
-                tags=tags_,
-            )
-        )
+        checks.append(Check("M6", stat="spread", region="frame",
+                            sign=1 if tone["contrast"] > 0 else -1, tags=tags_))
         tags.append({"confidence": conf.get("tone", "inferred"), "component": "tone"})
     if t.get("saturation_delta"):
         tags_ = {"look_key": "colorbalancergb.global_chroma"}
         if _gap_tag(t, "chroma"):
             tags_["declared_gap"] = _gap_tag(t, "chroma")
-        checks.append(
-            Check(
-                "M5",
-                stat="C",
-                region="frame",
-                sign=1 if t["saturation_delta"] > 0 else -1,
-                tags=tags_,
-            )
-        )
-        tags.append(
-            {
-                "confidence": conf.get("saturation_delta", "inferred"),
-                "component": "saturation_delta",
-            }
-        )
+        checks.append(Check("M5", stat="C", region="frame",
+                            sign=1 if t["saturation_delta"] > 0 else -1, tags=tags_))
+        tags.append({"confidence": conf.get("saturation_delta", "inferred"),
+                     "component": "saturation_delta"})
     gc = t.get("grey_cast") or {}
     if gc.get("b"):
-        checks.append(
-            Check(
-                "M4",
-                stat="rb",
-                region="frame",
-                sign=1 if gc["b"] > 0 else -1,
-                tags={"look_key": "temperature.temperature"},
-            )
-        )
+        checks.append(Check("M4", stat="rb", region="frame", sign=1 if gc["b"] > 0 else -1,
+                            tags={"look_key": "temperature.temperature"}))
         tags.append({"confidence": conf.get("grey_cast", "inferred"), "component": "grey_cast"})
     if t.get("black_lift"):
         tags_ = {"look_key": "exposure.black"}
@@ -316,53 +261,27 @@ def frame_checks(look: dict) -> tuple[list[Check], list[dict]]:
 
 def generate(tax: Taxonomy) -> list[Case]:
     tol = tax.look_conventions["suggested_tolerances"]
-    out = [
-        Case(
-            id=case_id(PREFIX, "golden", "chart"),
-            layer=LAYER,
-            tier="P1",
-            mode="tool",
-            steps=[Step("chart_golden", {}, 300.0, False)],
-            expect=Expect(
-                "workflow",
-                [
-                    Check("M9", kind="unchanged"),
-                    Check("extra", target={"path": "calibration_ok", "op": "truthy"}),
-                ],
-                property="P7",
-            ),
-            frame_role="chart",
-            source={"file": "looks.json", "id": "golden"},
-        )
-    ]
+    out = [Case(id=case_id(PREFIX, "golden", "chart"), layer=LAYER, tier="P1", mode="tool",
+                steps=[Step("chart_golden", {}, 300.0, False)],
+                expect=Expect("workflow", [Check("M9", kind="unchanged"),
+                                           Check("extra", target={"path": "calibration_ok",
+                                                                  "op": "truthy"})],
+                              property="P7"),
+                frame_role="chart", source={"file": "looks.json", "id": "golden"})]
     for i, look in enumerate(tax.looks):
         tier = "P1" if look["confidence"] in SOURCED else "P2"
         g = gaps(look)
         checks, tags = chart_checks(look, tol)
-        meta = {
-            "look": look["id"],
-            "family": look["family"],
-            "gaps": g,
-            "check_tags": tags,
-            "partial_min": 0.6,
-            "monochrome": (look["targets"].get("saturation_delta") == -1),
-        }
-        out.append(
-            Case(
-                id=case_id(PREFIX, look["id"], "chart"),
-                layer=LAYER,
-                tier=tier,
-                mode="tool",
-                steps=[
-                    Step("look_plan", {"look_id": look["id"], "image": "{frame:chart}"}, 40.0, True)
-                ],
-                expect=Expect("edit", checks, {"changed": bool(checks and checks[0].sign)}),
-                body="chart",
-                frame_role="chart",
-                source={"file": "looks.json", "id": look["id"]},
-                meta=meta,
-            )
-        )
+        meta = {"look": look["id"], "family": look["family"], "gaps": g, "check_tags": tags,
+                "partial_min": 0.6, "monochrome": (look["targets"].get("saturation_delta") == -1)}
+        out.append(Case(id=case_id(PREFIX, look["id"], "chart"), layer=LAYER, tier=tier,
+                        mode="tool", steps=[Step("look_plan", {"look_id": look["id"],
+                                                               "image": "{frame:chart}"},
+                                                 40.0, True)],
+                        expect=Expect("edit", checks, {"changed": bool(checks and
+                                                                    checks[0].sign)}),
+                        body="chart", frame_role="chart",
+                        source={"file": "looks.json", "id": look["id"]}, meta=meta))
         body = BODIES[i % 2]
         fchecks, ftags = frame_checks(look)
         # Row LK-hero-below-floor: olympus's `hero` (P6281348.ORF) surveys
@@ -372,26 +291,15 @@ def generate(tax: Taxonomy) -> list[Case]:
         # coverage's touch-floor rows) is the normally-exposed stand-in;
         # sony_a7 has no bright hero yet and stays on `hero`.
         role = "hero_bright" if body == "olympus" else "hero"
-        out.append(
-            Case(
-                id=case_id(PREFIX, look["id"], body),
-                layer=LAYER,
-                tier=tier,
-                mode="tool",
-                steps=[
-                    Step("look_plan", {"look_id": look["id"], "image": frame(role)}, 40.0, True)
-                ],
-                expect=Expect("edit", fchecks, {"changed": bool(fchecks and fchecks[0].sign)}),
-                body=body,
-                frame_role=role,
-                source={"file": "looks.json", "id": look["id"]},
-                meta=dict(
-                    meta,
-                    check_tags=ftags,
-                    gaps=[x for x in g if x.startswith(("zone_crosstalk:", "confounded:"))],
-                ),
-            )
-        )
+        out.append(Case(id=case_id(PREFIX, look["id"], body), layer=LAYER, tier=tier,
+                        mode="tool", steps=[Step("look_plan", {"look_id": look["id"],
+                                                               "image": frame(role)},
+                                                 40.0, True)],
+                        expect=Expect("edit", fchecks, {"changed": bool(fchecks and fchecks[0].sign)}),
+                        body=body, frame_role=role,
+                        source={"file": "looks.json", "id": look["id"]},
+                        meta=dict(meta, check_tags=ftags,
+                                  gaps=[x for x in g if x.startswith(("zone_crosstalk:", "confounded:"))])))
     return order_by_frame_role(out)
 
 

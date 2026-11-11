@@ -36,14 +36,8 @@ def main(argv: list[str] | None = None) -> int:
         r = parse_ppm(out.read_bytes())
         s = metrics.region_stats(r, metrics.build_masks(r), ("frame",))["frame"]
         out.unlink()
-        return {
-            "L_mean": s["L"],
-            "spread": s["spread"],
-            "p99": s["p99L"],
-            "clip_high": s["clip_high"],
-            "rg": s["rg"],
-            "bg": s["bg"],
-        }
+        return {"L_mean": s["L"], "spread": s["spread"], "p99": s["p99L"],
+                "clip_high": s["clip_high"], "rg": s["rg"], "bg": s["bg"]}
 
     def exif_model_iso(copy: Path) -> tuple[str, int]:
         tags = exif.read_tags(copy)
@@ -53,10 +47,8 @@ def main(argv: list[str] | None = None) -> int:
     frames = corpus.survey(render_stats, exif_model_iso, work)
     doc = corpus.Corpus.write(root / "corpus.json", frames)
     assert corpus.sha256_originals() == before, "an original changed during the survey"
-    print(
-        f"{root / 'corpus.json'}: {len(frames)} frames; roles "
-        f"{ {b: sorted(r) for b, r in doc['roles'].items()} }"
-    )
+    print(f"{root / 'corpus.json'}: {len(frames)} frames; roles "
+          f"{ {b: sorted(r) for b, r in doc['roles'].items()} }")
     return 0
 
 

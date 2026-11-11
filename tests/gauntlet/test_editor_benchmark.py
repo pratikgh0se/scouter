@@ -647,10 +647,7 @@ def test_plan_v2_remaps_steps_and_never_changes_thresholds():
     assert w1["assertions"]["kelvin"]["value"] == {
         "$env": {"step": 1, "path": "data.moves.0.target"}
     }
-    assert (
-        w1["assertions"]["render"]["before_step"],
-        w1["assertions"]["render"]["after_step"],
-    ) == (0, 3)
+    assert (w1["assertions"]["render"]["before_step"], w1["assertions"]["render"]["after_step"]) == (0, 3)
     c4 = rb.effective_task(by_id["C4"], "v2")
     assert c4["plan"] == by_id["C4"]["plan"] and c4["plan_used"] == "v2=v1"
     f1 = rb.effective_task(by_id["F1"], "v2")
@@ -809,21 +806,13 @@ def _stats_env(rg, bg):
 
 def test_warmth_slot_route_a_checks_direction_and_amount():
     # The target is the sidecar BEFORE value plus the asked delta, never what was sent.
-    a = {
-        "type": "warmth_slot",
-        "frame": "hero",
-        "sign": 1,
-        "delta": 600,
-        "tol": 150,
-        "min_rel": 0.005,
-    }
+    a = {"type": "warmth_slot", "frame": "hero", "sign": 1, "delta": 600, "tol": 150,
+         "min_rel": 0.005}
 
     def run(before_k, after_k, spec=a, wb_after=None):
         wb_before = _mod(coeff_r=2.0, coeff_g=1.0, coeff_b=1.7)
-        ctx = {
-            "before": {"hero": _cc_snap(before_k, "a", temperature=wb_before)},
-            "after": {"hero": _cc_snap(after_k, "b", temperature=wb_after or wb_before)},
-        }
+        ctx = {"before": {"hero": _cc_snap(before_k, "a", temperature=wb_before)},
+               "after": {"hero": _cc_snap(after_k, "b", temperature=wb_after or wb_before)}}
         return rb.evaluate(spec, ctx)
 
     assert run(3927.0, 4527.0)["ok"]
@@ -833,9 +822,8 @@ def test_warmth_slot_route_a_checks_direction_and_amount():
     assert not run(3927.0, 5600.0)["ok"]  # +1673 K for "a little warmer" (the v1 5000+600 case)
     assert not run(3927.0, 3927.0)["ok"]  # nothing committed
     assert run(4527.0, 3627.0, a | {"sign": -1, "delta": -900})["ok"]
-    assert run(
-        3927.0, 5500.0, {k: v for k, v in a.items() if k != "delta"} | {"value": 5500.0, "tol": 250}
-    )["ok"]
+    assert run(3927.0, 5500.0, {k: v for k, v in a.items() if k != "delta"} | {"value": 5500.0,
+                                                                              "tol": 250})["ok"]
     # route A must leave the WB module alone: a moved slot AND moved WB coefficients fails
     moved_wb = _mod(coeff_r=2.2, coeff_g=1.0, coeff_b=1.5)
     assert not run(3927.0, 4527.0, wb_after=moved_wb)["ok"]
@@ -844,36 +832,18 @@ def test_warmth_slot_route_a_checks_direction_and_amount():
 def test_warmth_slot_legacy_route_reads_the_wb_module():
     warm = _snap(fp="b", temperature=_mod(coeff_r=2.2, coeff_g=1.0, coeff_b=1.5))
     base = _snap(fp="a", temperature=_mod(coeff_r=2.0, coeff_g=1.0, coeff_b=1.7))
-    a = {
-        "type": "warmth_slot",
-        "frame": "hero",
-        "sign": 1,
-        "delta": 600,
-        "tol": 150,
-        "min_rel": 0.005,
-    }
+    a = {"type": "warmth_slot", "frame": "hero", "sign": 1, "delta": 600, "tol": 150,
+         "min_rel": 0.005}
     assert rb.evaluate(a, {"before": {"hero": base}, "after": {"hero": warm}})["ok"]
-    assert not rb.evaluate(a | {"sign": -1}, {"before": {"hero": base}, "after": {"hero": warm}})[
-        "ok"
-    ]
+    assert not rb.evaluate(a | {"sign": -1}, {"before": {"hero": base}, "after": {"hero": warm}})["ok"]
     assert not rb.evaluate(a, {"before": {"hero": base}, "after": {"hero": base}})["ok"]
 
 
 def test_render_rb_delta_needs_a_move_beyond_the_noise_floor():
     def run(after, sign=1, min_rel=0.005):
-        ctx = {
-            "steps": [{"envelope": _stats_env(0.80, 0.50)}, {}, {"envelope": _stats_env(*after)}]
-        }
-        return rb.evaluate(
-            {
-                "type": "render_rb_delta",
-                "before_step": 0,
-                "after_step": 2,
-                "sign": sign,
-                "min_rel": min_rel,
-            },
-            ctx,
-        )
+        ctx = {"steps": [{"envelope": _stats_env(0.80, 0.50)}, {}, {"envelope": _stats_env(*after)}]}
+        return rb.evaluate({"type": "render_rb_delta", "before_step": 0, "after_step": 2,
+                            "sign": sign, "min_rel": min_rel}, ctx)
 
     assert run((0.88, 0.48))["ok"]  # r/b 1.6 -> 1.833: warmer
     assert not run((0.88, 0.48), sign=-1)["ok"]
@@ -881,30 +851,16 @@ def test_render_rb_delta_needs_a_move_beyond_the_noise_floor():
     assert run((0.72, 0.52), sign=-1)["ok"]
     assert not run((0.82, 0.49), min_rel=0.05)["ok"]  # +4.6%: under a 5% floor
     assert run((0.88, 0.48), min_rel=0.05)["ok"]
-
     # not_opposite: only "went the other way beyond the floor" fails
     def opp(after):
-        ctx = {
-            "steps": [{"envelope": _stats_env(0.80, 0.50)}, {}, {"envelope": _stats_env(*after)}]
-        }
-        return rb.evaluate(
-            {
-                "type": "render_rb_delta",
-                "before_step": 0,
-                "after_step": 2,
-                "sign": 1,
-                "min_rel": 0.005,
-                "not_opposite": True,
-            },
-            ctx,
-        )
+        ctx = {"steps": [{"envelope": _stats_env(0.80, 0.50)}, {}, {"envelope": _stats_env(*after)}]}
+        return rb.evaluate({"type": "render_rb_delta", "before_step": 0, "after_step": 2,
+                            "sign": 1, "min_rel": 0.005, "not_opposite": True}, ctx)
 
     assert opp((0.8, 0.5))["ok"] and opp((0.88, 0.48))["ok"]
     assert not opp((0.70, 0.55))["ok"]
-    assert not rb.evaluate(
-        {"type": "render_rb_delta", "before_step": 0, "after_step": 2, "sign": 1, "min_rel": 0.005},
-        {"steps": []},
-    )["ok"]
+    assert not rb.evaluate({"type": "render_rb_delta", "before_step": 0, "after_step": 2,
+                            "sign": 1, "min_rel": 0.005}, {"steps": []})["ok"]
 
 
 def _warmth_ctx(tid, version, *, before_k, after_k, rb_after, effective, target, ok=True):
@@ -916,120 +872,55 @@ def _warmth_ctx(tid, version, *, before_k, after_k, rb_after, effective, target,
             env = _stats_env(0.80, 0.50) if stats_seen == 0 else _stats_env(*rb_after)
             stats_seen += 1
         elif s["tool"] == "wb_kelvin":
-            env = {
-                "ok": True,
-                "outcome": "ok",
-                "data": {"kelvin": 5000.0, "effective_kelvin": effective},
-            }
+            env = {"ok": True, "outcome": "ok", "data": {"kelvin": 5000.0,
+                                                         "effective_kelvin": effective}}
         elif s["tool"] == "darkroom_say":
             env = {"ok": True, "outcome": "ok", "data": {"moves": [{"target": target}]}}
         else:
             args["value"] = target
             env = {"ok": ok, "outcome": "ok" if ok else "failed", "data": {}}
         steps.append({"tool": s["tool"], "args": args, "envelope": env})
-    ctx = {
-        "before": {"hero": _cc_snap(before_k, "a")},
-        "after": {"hero": _cc_snap(after_k, "b")},
-        "steps": steps,
-    }
-    results = {
-        aid: rb.evaluate(a, ctx) | {"type": a["type"]} for aid, a in task["assertions"].items()
-    }
-    return (
-        rb.score_task(
-            task["scoring"],
-            results,
-            wall_s=1,
-            budget_s=99,
-            category="white_balance",
-            last_envelope_ok=ok,
-        ),
-        results,
-    )
+    ctx = {"before": {"hero": _cc_snap(before_k, "a")}, "after": {"hero": _cc_snap(after_k, "b")},
+           "steps": steps}
+    results = {aid: rb.evaluate(a, ctx) | {"type": a["type"]}
+               for aid, a in task["assertions"].items()}
+    return rb.score_task(task["scoring"], results, wall_s=1, budget_s=99,
+                         category="white_balance", last_envelope_ok=ok), results
 
 
 def test_w1_w2_route_a_move_verifies_in_both_plan_versions():
     for version in ("v1", "v2"):
-        score, res = _warmth_ctx(
-            "W1",
-            version,
-            before_k=3927.0,
-            after_k=4527.0,
-            rb_after=(0.86, 0.46),
-            effective=4527.0,
-            target=4527.0,
-        )
+        score, res = _warmth_ctx("W1", version, before_k=3927.0, after_k=4527.0,
+                                 rb_after=(0.86, 0.46), effective=4527.0, target=4527.0)
         assert score == ("pass", "verified"), (version, res)
-        score, res = _warmth_ctx(
-            "W2",
-            version,
-            before_k=4527.0,
-            after_k=3627.0,
-            rb_after=(0.74, 0.54),
-            effective=3627.0,
-            target=3627.0,
-        )
+        score, res = _warmth_ctx("W2", version, before_k=4527.0, after_k=3627.0,
+                                 rb_after=(0.74, 0.54), effective=3627.0, target=3627.0)
         assert score == ("pass", "verified"), (version, res)
 
 
 def test_w1_a_reported_ok_with_nothing_on_the_sidecar_or_the_render_is_not_verified():
     for version in ("v1", "v2"):
-        score, _ = _warmth_ctx(
-            "W1",
-            version,
-            before_k=3927.0,
-            after_k=3927.0,
-            rb_after=(0.80, 0.50),
-            effective=3927.0,
-            target=4527.0,
-        )
+        score, _ = _warmth_ctx("W1", version, before_k=3927.0, after_k=3927.0,
+                               rb_after=(0.80, 0.50), effective=3927.0, target=4527.0)
         assert score == ("fail", "reported_ok_unverified")
         # sidecar moved but the render did not: the second oracle refuses the pass
-        score, _ = _warmth_ctx(
-            "W1",
-            version,
-            before_k=3927.0,
-            after_k=4527.0,
-            rb_after=(0.80, 0.50),
-            effective=4527.0,
-            target=4527.0,
-        )
+        score, _ = _warmth_ctx("W1", version, before_k=3927.0, after_k=4527.0,
+                               rb_after=(0.80, 0.50), effective=4527.0, target=4527.0)
         assert score == ("partial", "partial")  # inconclusive render only
         # the render moved the wrong way (the 2026-09 night-1 failure): a FAIL, not partial
-        score, _ = _warmth_ctx(
-            "W1",
-            version,
-            before_k=3927.0,
-            after_k=4527.0,
-            rb_after=(0.70, 0.55),
-            effective=4527.0,
-            target=4527.0,
-        )
+        score, _ = _warmth_ctx("W1", version, before_k=3927.0, after_k=4527.0,
+                               rb_after=(0.70, 0.55), effective=4527.0, target=4527.0)
         assert score[0] == "fail"
-        score, _ = _warmth_ctx(
-            "W2",
-            version,
-            before_k=4527.0,
-            after_k=3627.0,
-            rb_after=(0.90, 0.45),
-            effective=3627.0,
-            target=3627.0,
-        )
+        score, _ = _warmth_ctx("W2", version, before_k=4527.0, after_k=3627.0,
+                               rb_after=(0.90, 0.45), effective=3627.0, target=3627.0)
         assert score[0] == "fail"
 
 
 def test_w1_a_wrong_size_move_is_not_verified_even_when_the_slot_equals_what_was_sent():
     # plan v1 used to start from the WB module's 5000 K: 3927 -> 5600 K for "a little warmer"
     for version in ("v1", "v2"):
-        score, res = _warmth_ctx(
-            "W1",
-            version,
-            before_k=3927.0,
-            after_k=5600.0,
-            rb_after=(0.96, 0.40),
-            effective=5600.0,
-            target=5600.0,
-        )
+        score, res = _warmth_ctx("W1", version, before_k=3927.0, after_k=5600.0,
+                                 rb_after=(0.96, 0.40), effective=5600.0, target=5600.0)
         assert score[0] != "pass", (version, res)
         assert res["warmer"]["ok"] is False
     v1 = rb.effective_task(rb.tasks_by_id(rb.load_tasks())["W1"], "v1")
@@ -1040,38 +931,17 @@ def test_w1_a_wrong_size_move_is_not_verified_even_when_the_slot_equals_what_was
 def test_w4_partial_needs_the_slot_to_have_moved_the_right_way():
     w4 = rb.tasks_by_id(rb.load_tasks())["W4"]["scoring"]["partial"]
     assert all("warmer" in g and "render_ok" in g for g in w4)
-    score, _ = _warmth_ctx(
-        "W4",
-        "v2",
-        before_k=3927.0,
-        after_k=3927.0,
-        rb_after=(0.80, 0.50),
-        effective=3927.0,
-        target=5500.0,
-    )
+    score, _ = _warmth_ctx("W4", "v2", before_k=3927.0, after_k=3927.0,
+                           rb_after=(0.80, 0.50), effective=3927.0, target=5500.0)
     assert score[0] == "fail"
 
 
 def test_w4_daylight_route_a_sets_the_illuminant_and_is_verified_by_two_oracles():
-    score, res = _warmth_ctx(
-        "W4",
-        "v2",
-        before_k=3927.0,
-        after_k=5500.0,
-        rb_after=(0.90, 0.45),
-        effective=5500.0,
-        target=5500.0,
-    )
+    score, res = _warmth_ctx("W4", "v2", before_k=3927.0, after_k=5500.0,
+                             rb_after=(0.90, 0.45), effective=5500.0, target=5500.0)
     assert score == ("pass", "verified"), res
-    score, _ = _warmth_ctx(
-        "W4",
-        "v2",
-        before_k=3927.0,
-        after_k=3927.0,
-        rb_after=(0.80, 0.50),
-        effective=3927.0,
-        target=5500.0,
-    )
+    score, _ = _warmth_ctx("W4", "v2", before_k=3927.0, after_k=3927.0,
+                           rb_after=(0.80, 0.50), effective=3927.0, target=5500.0)
     assert score == ("fail", "reported_ok_unverified")
 
 

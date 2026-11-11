@@ -26,18 +26,16 @@ from tests.gauntlet.session import SessionBlocked
 #: forms below and was never matched, so the case was scored as the agent's
 #: own answer instead of parked (14 cases: 12 partial, 1 fail, 1 hollow pass
 #: sca-r0159).
-LIMIT_RE = re.compile(
-    r"(usage limit|rate limit|limit reached|limit will reset|"
-    r"out of (extra )?usage|5-hour limit|weekly limit|session limit)",
-    re.I,
-)
+LIMIT_RE = re.compile(r"(usage limit|rate limit|limit reached|limit will reset|"
+                      r"out of (extra )?usage|5-hour limit|weekly limit|session limit)", re.I)
 RESET_RE = re.compile(r"resets? (?:at )?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", re.I)
 TURN_TIMEOUT_S = AGENT_TURN_TIMEOUT_S
 
 
 def parse_stream(lines: list[str]) -> dict:
     """{session_id, text, tool_calls: [{name, input, result}], is_error, limit}."""
-    out: dict = {"session_id": None, "text": "", "tool_calls": [], "is_error": False, "limit": None}
+    out: dict = {"session_id": None, "text": "", "tool_calls": [], "is_error": False,
+                 "limit": None}
     pending: dict[str, dict] = {}
     for line in lines:
         try:
@@ -91,28 +89,11 @@ def mcp_config(staged) -> dict:
 
     # (final fix M4): the library is pinned too, as session.isolated_env pins it
     # for the tool-mode MCP child -- never a running darktable's or the user's.
-    env = {
-        k: staged.env[k]
-        for k in (
-            "PYTHONPATH",
-            "SCOUTER_CONFIG",
-            "SCOUTER_CACHE",
-            "OBSIDIAN_VAULT_PATH",
-            "SCOUTER_JOB",
-            "SCOUTER_DARKTABLE_LIBRARY_DB",
-        )
-        if k in staged.env
-    }
-    return {
-        "mcpServers": {
-            "scouter": {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": ["-m", "scouter.mcp.server"],
-                "env": env,
-            }
-        }
-    }
+    env = {k: staged.env[k] for k in ("PYTHONPATH", "SCOUTER_CONFIG", "SCOUTER_CACHE",
+                                      "OBSIDIAN_VAULT_PATH", "SCOUTER_JOB",
+                                      "SCOUTER_DARKTABLE_LIBRARY_DB") if k in staged.env}
+    return {"mcpServers": {"scouter": {"type": "stdio", "command": sys.executable,
+                                       "args": ["-m", "scouter.mcp.server"], "env": env}}}
 
 
 def claude_argv(prompt: str, mcp_json: Path, resume: str | None = None) -> list[str]:
@@ -126,23 +107,9 @@ def claude_argv(prompt: str, mcp_json: Path, resume: str | None = None) -> list[
     # is ever reachable (scout_preview PNGs), every other built-in tool is
     # unavailable by omission, not by name. The scouter MCP tools are scoped
     # separately through --allowedTools/--mcp-config, as before.
-    argv = [
-        "claude",
-        "-p",
-        prompt,
-        "--model",
-        "sonnet",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--mcp-config",
-        str(mcp_json),
-        "--strict-mcp-config",
-        "--tools",
-        "Read",
-        "--allowedTools",
-        "mcp__scouter__*",
-    ]
+    argv = ["claude", "-p", prompt, "--model", "sonnet", "--output-format", "stream-json",
+            "--verbose", "--mcp-config", str(mcp_json), "--strict-mcp-config",
+            "--tools", "Read", "--allowedTools", "mcp__scouter__*"]
     if resume:
         argv += ["--resume", resume]
     return argv
@@ -162,15 +129,9 @@ class AgentSession:
     and the MCP server it spawned) instead of leaving it running up to
     TURN_TIMEOUT_S against the next session's darktable."""
 
-    def __init__(
-        self,
-        inner,
-        *,
-        popen=subprocess.Popen,
-        killpg=os.killpg,
-        clock=time.monotonic,
-        check_usage_budget=agent_budget.check_usage_budget,
-    ) -> None:
+    def __init__(self, inner, *, popen=subprocess.Popen, killpg=os.killpg,
+                 clock=time.monotonic, check_usage_budget=agent_budget.check_usage_budget
+                 ) -> None:
         self.inner = inner
         self.popen = popen
         self.killpg = killpg
@@ -189,15 +150,9 @@ class AgentSession:
         self.check_usage_budget()
         path = self.inner.root / "mcp.json"
         path.write_text(json.dumps(mcp_config(self.inner.staged)))
-        proc = self.popen(
-            claude_argv(prompt, path, resume),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            cwd=str(self.inner.root),
-            start_new_session=True,
-        )
+        proc = self.popen(claude_argv(prompt, path, resume), stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True,
+                          cwd=str(self.inner.root), start_new_session=True)
         self.proc = proc
         if self.aborted:  # abort() ran between the check above and the handle
             self.stop_claude()
@@ -214,9 +169,8 @@ class AgentSession:
             raise AgentAborted("agent session aborted during a claude turn")
         parsed = parse_stream((stdout or "").splitlines())
         if parsed["limit"]:
-            raise Park(
-                f"agent usage limit: {parsed['limit'][:120]}", until=reset_time(parsed["limit"])
-            )
+            raise Park(f"agent usage limit: {parsed['limit'][:120]}",
+                       until=reset_time(parsed["limit"]))
         return parsed
 
     def stop_claude(self) -> None:
@@ -245,7 +199,8 @@ class AgentSession:
                     env = {"ok": False, "outcome": "error:unparsed", "raw": c["result"][:300]}
             name = (c["name"] or "").removeprefix("mcp__scouter__")
             # (final fix M4): the one write-tool set (layers.common.WRITE_TOOLS).
-            obs.calls.append(CallRecord(name, c["input"] or {}, env, write=name in WRITE_TOOLS))
+            obs.calls.append(CallRecord(name, c["input"] or {}, env,
+                                        write=name in WRITE_TOOLS))
 
     def run_case(self, case: Case) -> Observation:
         t0 = self.clock()

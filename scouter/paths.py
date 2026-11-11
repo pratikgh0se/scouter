@@ -227,7 +227,9 @@ def _locked_job_state(job: str, *, wait_s: float | None = None) -> Iterator[None
             lock_fh.seek(0)
             lock_fh.truncate()
             lock_fh.write(
-                json.dumps({"pid": os.getpid(), "since": datetime.now(timezone.utc).isoformat()})
+                json.dumps(
+                    {"pid": os.getpid(), "since": datetime.now(timezone.utc).isoformat()}
+                )
             )
             lock_fh.flush()
             yield

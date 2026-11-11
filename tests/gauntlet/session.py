@@ -108,13 +108,8 @@ class Staged:
 
 def isolated_env(root: Path, *, job: str | None = None) -> dict[str, str]:
     env = dict(os.environ)
-    for k in (
-        "SCOUTER_CONFIG",
-        "SCOUTER_CACHE",
-        "SCOUTER_JOB",
-        "OBSIDIAN_VAULT_PATH",
-        "SCOUTER_DARKTABLE_LIBRARY_DB",
-    ):
+    for k in ("SCOUTER_CONFIG", "SCOUTER_CACHE", "SCOUTER_JOB", "OBSIDIAN_VAULT_PATH",
+              "SCOUTER_DARKTABLE_LIBRARY_DB"):
         env.pop(k, None)
     env["PYTHONPATH"] = str(REPO)
     # Pin the library: without it history/backup fall back to a running darktable's
@@ -187,19 +182,12 @@ def write_config(root: Path) -> Path:
     passfile.chmod(0o600)
     for d in ("jobs", "backup", "cache", "vault"):
         (root / d).mkdir(parents=True, exist_ok=True)
-    cfg = {
-        "version": 1,
-        "library_root": str(root / "jobs"),
-        "cameras": {"E-M10 Mark III": "em10iii", "ILCE-7": "a7", "NEX-5N": "nex5n"},
-        "educative": "brief",
-        "backup": {
-            "enabled": True,
-            "target": str(root / "backup"),
-            "encryption": "openssl",
-            "openssl_passfile": str(passfile),
-        },
-        "vault": {"jobs_dir": "Projects/Photo jobs"},
-    }
+    cfg = {"version": 1, "library_root": str(root / "jobs"),
+           "cameras": {"E-M10 Mark III": "em10iii", "ILCE-7": "a7", "NEX-5N": "nex5n"},
+           "educative": "brief",
+           "backup": {"enabled": True, "target": str(root / "backup"), "encryption": "openssl",
+                      "openssl_passfile": str(passfile)},
+           "vault": {"jobs_dir": "Projects/Photo jobs"}}
     path = cfg_dir / "config.json"
     path.write_text(json.dumps(cfg, indent=2) + "\n")
     wb_src = Path(os.environ.get("HTC_WB_TABLES", str(Path.home() / ".config/scouter/wb")))
@@ -223,9 +211,8 @@ def _neutral_role_dir(root: Path, role: str) -> Path:
     return root / "frames" / ("f" + hashlib.sha1(role.encode()).hexdigest()[:6])
 
 
-def stage(
-    corpus: Corpus, body: str, root: Path, *, job_size: int = 7, chart: Path | None = None
-) -> Staged:
+def stage(corpus: Corpus, body: str, root: Path, *, job_size: int = 7,
+          chart: Path | None = None) -> Staged:
     """Fresh 0644 copies of every role frame and a small card for this session.
     `chart` (the run's synthetic chart) is copied in as role `chart`. Every
     role's frame is staged under a hashed, role-blind directory
@@ -250,28 +237,14 @@ def stage(
     config = write_config(root)
     stamp = root.name
     env = isolated_env(root, job=f"htc-{stamp}")
-    return Staged(
-        root=root,
-        frames=frames,
-        job_frames=job_frames,
-        card=root / "card",
-        config=config,
-        cache=root / "cache",
-        vault=root / "vault",
-        library=root / "library" / "library.db",
-        env=env,
-        vars={
-            "job_slug": job_slug_for(f"{body}-{stamp}"),
-            "card": str(root / "card"),
-            "out_dir": str(root / "exports"),
-            "export_preset": EXPORT_PRESETS[0],
-            "export_preset_2": EXPORT_PRESETS[1],
-            "preset": f"htc-{stamp}",
-            "style": f"htc-style-{stamp}",
-            "config_path": str(config),
-            "relocate_root": str(root / "relocated"),
-        },
-    )
+    return Staged(root=root, frames=frames, job_frames=job_frames, card=root / "card",
+                  config=config, cache=root / "cache", vault=root / "vault",
+                  library=root / "library" / "library.db", env=env,
+                  vars={"job_slug": job_slug_for(f"{body}-{stamp}"), "card": str(root / "card"),
+                        "out_dir": str(root / "exports"), "export_preset": EXPORT_PRESETS[0],
+                        "export_preset_2": EXPORT_PRESETS[1], "preset": f"htc-{stamp}",
+                        "style": f"htc-style-{stamp}", "config_path": str(config),
+                        "relocate_root": str(root / "relocated")})
 
 
 class DtControl:
@@ -291,9 +264,8 @@ class DtControl:
     def foreign(self) -> list[int]:
         from scouter.core import dtprocess
 
-        return dtprocess.unregistered_foreign_pids(
-            self.cache_root, grace_s=dtprocess.REGISTRY_GRACE_S
-        )
+        return dtprocess.unregistered_foreign_pids(self.cache_root,
+                                                   grace_s=dtprocess.REGISTRY_GRACE_S)
 
     def owned(self) -> int | None:
         from scouter.core import dtprocess
@@ -343,18 +315,9 @@ class DtControl:
 class ScouterSession:
     """Implements gauntlet.adapter.Session for tool-mode layers."""
 
-    def __init__(
-        self,
-        corpus: Corpus,
-        root: Path,
-        body: str,
-        *,
-        dt: DtControl | None = None,
-        mcp_factory=None,
-        clock=time.monotonic,
-        run_root: Path | None = None,
-        floors_fn=None,
-    ) -> None:
+    def __init__(self, corpus: Corpus, root: Path, body: str, *, dt: DtControl | None = None,
+                 mcp_factory=None, clock=time.monotonic, run_root: Path | None = None,
+                 floors_fn=None) -> None:
         self.corpus = corpus
         self.root = root
         self.run_root = run_root or root
@@ -425,10 +388,8 @@ class ScouterSession:
             self.dt.cache_root = self.root / "cache"
         foreign = self.dt.foreign()
         if foreign:
-            raise ForeignDarktable(
-                f"darktable pids {foreign} were not launched by the "
-                "gauntlet; quit them first (the runner never signals them)"
-            )
+            raise ForeignDarktable(f"darktable pids {foreign} were not launched by the "
+                                   "gauntlet; quit them first (the runner never signals them)")
         if self.dt.owned() is not None:  # left over from a killed run: ours, so quit it
             self._quit("leftover darktable from a killed run")
         chart = self.run_root / "chart" / "chart-v1.pfm"
@@ -441,10 +402,8 @@ class ScouterSession:
             if self.floors_fn is not None:
                 self.floors, deterministic = self.floors_fn(self.staged.frames["hero"])
                 if not deterministic:
-                    raise SessionBlocked(
-                        "harness_bug: the untouched frame renders differently "
-                        "twice (noise floor > 2x minimum, spec 5.2)"
-                    )
+                    raise SessionBlocked("harness_bug: the untouched frame renders differently "
+                                         "twice (noise floor > 2x minimum, spec 5.2)")
         except BaseException:  # never leave our darktable or MCP child running
             self.abort()
             raise
@@ -459,9 +418,8 @@ class ScouterSession:
         one) unless the quit ladder reports ok."""
         res = self.dt.terminate(responsive=False)
         if not (res or {}).get("ok"):
-            raise SessionBlocked(
-                f"{why}: darktable did not quit ({res}); " "refusing to launch another"
-            )
+            raise SessionBlocked(f"{why}: darktable did not quit ({res}); "
+                                 "refusing to launch another")
 
     def relative(self, path: Path) -> str:
         return str(Path(path).relative_to(self.run_root))
@@ -522,8 +480,7 @@ class ScouterSession:
             #: 6 s, instead of waiting out the full LAUNCH_READY_S (30 s).
             ready = self.dt.ready(
                 LAUNCH_READY_S,
-                stop_if=lambda: _check_library_lock(log_path, since=since) is not None,
-            )
+                stop_if=lambda: _check_library_lock(log_path, since=since) is not None)
             #: Defense in depth: a lock line landing in the narrow window
             #: between the last stop_if check and wait_gui_ready returning
             #: (or a caller that never wires stop_if) is still caught here.
@@ -580,7 +537,8 @@ class ScouterSession:
         harness process's own ambient `os.environ` (same reasoning as
         `dtprocess.owner_path`'s `cache_root` override)."""
         env = self.staged.env
-        base = env.get("XDG_CACHE_HOME") or str(Path(env.get("HOME", str(Path.home()))) / ".cache")
+        base = env.get("XDG_CACHE_HOME") or str(Path(env.get("HOME", str(Path.home()))) /
+                                                 ".cache")
         spool = Path(base) / "darktable-mcp"
         for pattern in ("request-*.json", "*.json.tmp"):
             for f in spool.glob(pattern):
@@ -602,11 +560,8 @@ class ScouterSession:
         (`ensure_frame` sets it back, only on that call's success). Never
         launched -> current."""
         assert self.staged is not None
-        src = (
-            self.corpus.roles(self.body)[role]
-            if role != "chart"
-            else self.run_root / "chart" / "chart-v1.pfm"
-        )
+        src = self.corpus.roles(self.body)[role] if role != "chart" else \
+            self.run_root / "chart" / "chart-v1.pfm"
         n = 1
         while (self.root / "frames" / f"{role}-fresh{n}").exists():
             n += 1  # never reuse a dir: its raw and .xmp sidecar may be contaminated
@@ -623,11 +578,8 @@ class ScouterSession:
         owner record -- SCOUTER_CACHE may name the next session's by then --
         and only kills the pids this session recorded. Returns a typed result."""
         again, self.aborted = self.aborted, True
-        res = (
-            {"ok": True, "how": "repeat_abort"}
-            if again
-            else (self.dt.terminate(responsive=False) or {})
-        )
+        res = {"ok": True, "how": "repeat_abort"} if again else \
+            (self.dt.terminate(responsive=False) or {})
         killed = []
         kill = getattr(self.dt, "kill_launched", None)
         if self.launched is not None and kill is not None and kill(self.launched):
@@ -716,8 +668,7 @@ class ScouterSession:
             prefix = f"{tag}: " if tag else ""
             raise SessionBlocked(
                 f"{prefix}darkroom_open did not open frame {role} ({path}) after a relaunch "
-                f"on it: error={again.error!r} health={again.health!r}"
-            )
+                f"on it: error={again.error!r} health={again.health!r}")
 
     def ensure_frame(self, role: str) -> Path:
         assert self.staged is not None
@@ -739,10 +690,8 @@ class ScouterSession:
                 # job records it as its opened image.
                 self._relaunch_then_reopen(role, path)
             else:
-                raise SessionBlocked(
-                    f"darkroom_open did not open frame {role} ({path}): "
-                    f"error={rec.error!r} health={rec.health!r}"
-                )
+                raise SessionBlocked(f"darkroom_open did not open frame {role} ({path}): "
+                                     f"error={rec.error!r} health={rec.health!r}")
         return path
 
     def stage_job(self) -> None:
@@ -767,15 +716,8 @@ class ScouterSession:
         self.job_stage_error = None
         if self.staged is None or not self.staged.job_frames:
             return
-        rec = self.call(
-            "library_import",
-            {
-                "source": str(self.staged.card),
-                "job_slug": self.staged.vars["job_slug"],
-                "confirm": True,
-            },
-            60.0,
-            write=True,
-        )
+        rec = self.call("library_import", {"source": str(self.staged.card),
+                                           "job_slug": self.staged.vars["job_slug"],
+                                           "confirm": True}, 60.0, write=True)
         if rec.error:
             self.job_stage_error = rec.error

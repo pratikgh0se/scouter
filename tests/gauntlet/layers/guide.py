@@ -54,30 +54,16 @@ def _wb_expect(text: str, fallback: Expect) -> Expect:
     if wb["expect"] == "typed_error":
         return Expect("typed_error", codes=list(wb["codes"]))
     return checkmap.wb_route_a_pinned_edit(wb, sign=_WB_SIGN[key])
-
-
 #: (label, kind, payload, expected). kind "cli": argv after `scouter`; kind
 #: "say": an MCP darkroom_say phrase from the guide's phrase table.
 WALKTHROUGH: tuple[tuple[str, str, object, dict], ...] = (
     ("readme_open", "cli", ["darkroom", "open", "{frame:hero}"], {"ok": True}),
-    (
-        "readme_set_exposure",
-        "cli",
-        ["darkroom", "set", "exposure", "exposure", "1.2"],
-        {"ok": True, "param": ("exposure.exposure", 1.2, "EV")},
-    ),
-    (
-        "readme_set_contrast",
-        "cli",
-        ["darkroom", "set", "sigmoid", "contrast", "1.35"],
-        {"ok": True, "param": ("sigmoid.contrast", 1.35, "ratio")},
-    ),
-    (
-        "readme_stats",
-        "cli",
-        ["--pretty", "scout", "stats", "{frame:hero}", "--px", "1024"],
-        {"exit": 0},
-    ),
+    ("readme_set_exposure", "cli", ["darkroom", "set", "exposure", "exposure", "1.2"],
+     {"ok": True, "param": ("exposure.exposure", 1.2, "EV")}),
+    ("readme_set_contrast", "cli", ["darkroom", "set", "sigmoid", "contrast", "1.35"],
+     {"ok": True, "param": ("sigmoid.contrast", 1.35, "ratio")}),
+    ("readme_stats", "cli", ["--pretty", "scout", "stats", "{frame:hero}", "--px", "1024"],
+     {"exit": 0}),
     ("readme_undo", "cli", ["darkroom", "undo-last"], {"ok": True}),
     ("readme_history", "cli", ["--pretty", "history", "read", "{frame:hero}"], {"exit": 0}),
     #: Pratik's ruling, row 496 item 8 (triage rank 7's "needs Pratik"
@@ -85,92 +71,35 @@ WALKTHROUGH: tuple[tuple[str, str, object, dict], ...] = (
     #: first (always live, never hits the WB guard); the guard-refusal case
     #: is documented separately (README's new "Warmer/cooler can refuse"
     #: note) and still exercised below by guide_touch_warmer (gd-12).
-    (
-        "session_touch_brighter",
-        "cli",
-        ["--pretty", "darkroom", "say", "a touch brighter"],
-        {"exit": 0},
-    ),
-    (
-        "session_less_contrast_full",
-        "cli",
-        ["--pretty", "darkroom", "say", "less contrast", "--educative", "full"],
-        {"exit": 0},
-    ),
+    ("session_touch_brighter", "cli", ["--pretty", "darkroom", "say", "a touch brighter"],
+     {"exit": 0}),
+    ("session_less_contrast_full", "cli",
+     ["--pretty", "darkroom", "say", "less contrast", "--educative", "full"], {"exit": 0}),
     ("session_undo", "cli", ["darkroom", "undo-last"], {"ok": True}),
     ("session_preset_save", "cli", ["preset", "save", "harbour-warm"], {"ok": True}),
-    (
-        "session_preset_apply_job",
-        "cli",
-        ["preset", "apply-job", "harbour-warm", "--job-slug", "{job_slug}", "--yes"],
-        {"ok": True},
-    ),
-    (
-        "guide_slightly_brighter",
-        "say",
-        "slightly brighter",
-        {"ok": True, "delta": ("exposure.exposure", 0.15, "EV")},
-    ),
-    (
-        "guide_touch_warmer",
-        "say",
-        "a touch warmer",
-        {"ok": True, "delta": ("temperature.temperature", 150.0, "K")},
-    ),
+    ("session_preset_apply_job", "cli",
+     ["preset", "apply-job", "harbour-warm", "--job-slug", "{job_slug}", "--yes"], {"ok": True}),
+    ("guide_slightly_brighter", "say", "slightly brighter",
+     {"ok": True, "delta": ("exposure.exposure", 0.15, "EV")}),
+    ("guide_touch_warmer", "say", "a touch warmer",
+     {"ok": True, "delta": ("temperature.temperature", 150.0, "K")}),
     ("guide_less_contrast", "say", "less contrast", {"ok": True}),
     ("guide_lift_shadows", "say", "lift the shadows", {"ok": True}),
     ("guide_more_vibrance", "say", "a bit more vibrance", {"ok": True}),
-    (
-        "guide_warm_highlights",
-        "say",
-        "warm the highlights",
-        {"ok": True, "param": ("colorbalancergb.highlights_hue", 60.0, "°")},
-    ),
+    ("guide_warm_highlights", "say", "warm the highlights",
+     {"ok": True, "param": ("colorbalancergb.highlights_hue", 60.0, "°")}),
     ("guide_more_magenta_refuses", "say", "more magenta", {"code": "value_unknown"}),
-    (
-        "guide_job_run_dry",
-        "cli",
-        [
-            "--pretty",
-            "job",
-            "run",
-            "--job-slug",
-            "{job_slug}",
-            "--preset",
-            "harbour-warm",
-            "--hero",
-            "{job_frame:1}",
-            "--dry-run",
-        ],
-        #: Round 1 C18: a dry run exits 5 BY DESIGN (phase-1 spec section 9,
-        #: `scouter.errors.EXIT_CODES["dry_run"]`); the case wrongly asked for 0.
-        {"exit": 5, "ok": True},
-    ),
-    (
-        "guide_job_run",
-        "cli",
-        [
-            "--pretty",
-            "job",
-            "run",
-            "--job-slug",
-            "{job_slug}",
-            "--preset",
-            "harbour-warm",
-            "--hero",
-            "{job_frame:1}",
-            "--yes",
-        ],
-        {"exit": 0},
-    ),
+    ("guide_job_run_dry", "cli", ["--pretty", "job", "run", "--job-slug", "{job_slug}",
+                                  "--preset", "harbour-warm", "--hero", "{job_frame:1}",
+                                  "--dry-run"],
+     #: Round 1 C18: a dry run exits 5 BY DESIGN (phase-1 spec section 9,
+     #: `scouter.errors.EXIT_CODES["dry_run"]`); the case wrongly asked for 0.
+     {"exit": 5, "ok": True}),
+    ("guide_job_run", "cli", ["--pretty", "job", "run", "--job-slug", "{job_slug}", "--preset",
+                              "harbour-warm", "--hero", "{job_frame:1}", "--yes"], {"exit": 0}),
 )
-EDU_MOVES = (
-    ("brighter", "exposure"),
-    ("darker", "exposure"),
-    ("warmer", "white_balance"),
-    ("cooler", "white_balance"),
-    ("more contrast", "tone_mapper"),
-)
+EDU_MOVES = (("brighter", "exposure"), ("darker", "exposure"), ("warmer", "white_balance"),
+             ("cooler", "white_balance"), ("more contrast", "tone_mapper"))
 LEVELS = ("off", "brief", "full")
 
 
@@ -179,42 +108,29 @@ def _walk_case(i: int, label: str, kind: str, payload, want: dict) -> Case:
     if kind == "cli":
         step = Step("cli", {"argv": list(payload)}, 60.0, True)
         if "exit" in want:
-            checks.append(
-                Check("extra", target={"path": "exit", "op": "eq", "value": want["exit"]})
-            )
+            checks.append(Check("extra", target={"path": "exit", "op": "eq",
+                                                 "value": want["exit"]}))
     else:
         step = Step("darkroom_say", {"phrase": payload}, 8.0, True)
     if want.get("ok"):
-        checks.append(Check("envelope", step=0, target={"path": "ok", "op": "eq", "value": True}))
+        checks.append(Check("envelope", step=0, target={"path": "ok", "op": "eq",
+                                                        "value": True}))
     if "param" in want:
         k, v, unit = want["param"]
         checks.append(Check("M1", kind="equals", target={"key": k, "value": v, "unit": unit}))
     if "delta" in want:
         k, d, unit = want["delta"]
-        checks.append(
-            Check(
-                "M1", kind="delta", target={"key": k, "delta": d, "unit": unit, "tol": abs(d) * 0.1}
-            )
-        )
-    exp = (
-        Expect("typed_error", checks, codes=[want["code"]])
-        if "code" in want
-        else Expect("workflow", checks)
-    )
+        checks.append(Check("M1", kind="delta", target={"key": k, "delta": d, "unit": unit,
+                                                        "tol": abs(d) * 0.1}))
+    exp = Expect("typed_error", checks, codes=[want["code"]]) if "code" in want else \
+        Expect("workflow", checks)
     text = payload[-1] if kind == "cli" else payload
     exp = _wb_expect(text, exp)
-    return Case(
-        id=case_id(PREFIX, f"{i:02d}", label),
-        layer=LAYER,
-        tier="P0",
-        mode="cli" if kind == "cli" else "tool",
-        steps=[step],
-        expect=exp,
-        body="olympus",
-        frame_role="hero",
-        source={"file": "README/user guide", "label": label},
-        meta={"order": i, "kind": kind, "session": "walkthrough"},
-    )
+    return Case(id=case_id(PREFIX, f"{i:02d}", label), layer=LAYER, tier="P0",
+                mode="cli" if kind == "cli" else "tool", steps=[step], expect=exp,
+                body="olympus", frame_role="hero", source={"file": "README/user guide",
+                                                           "label": label},
+                meta={"order": i, "kind": kind, "session": "walkthrough"})
 
 
 def _edu_case(level: str, j: int, phrase: str, concept: str) -> Case:
@@ -235,40 +151,25 @@ def _edu_case(level: str, j: int, phrase: str, concept: str) -> Case:
             setup.append(Step("darkroom_say", {"phrase": prior, "educative": level}, 8.0, True))
     at = len(setup)
     if level == "off":
-        chk = Check(
-            "envelope", step=at, target={"path": "data.explain", "op": "len_eq", "value": 0}
-        )
+        chk = Check("envelope", step=at, target={"path": "data.explain", "op": "len_eq",
+                                                 "value": 0})
     elif level == "brief" or seen_before:
-        chk = Check(
-            "envelope", step=at, target={"path": "data.explain", "op": "len_eq", "value": 1}
-        )
+        chk = Check("envelope", step=at, target={"path": "data.explain", "op": "len_eq",
+                                                 "value": 1})
     else:
-        chk = Check(
-            "envelope", step=at, target={"path": "data.explain", "op": "len_gte", "value": 2}
-        )
+        chk = Check("envelope", step=at, target={"path": "data.explain", "op": "len_gte",
+                                                 "value": 2})
     checks = [chk]
     if level == "brief":
-        checks.append(
-            Check(
-                "envelope",
-                step=at,
-                target={"path": "data.explain.0", "op": "regex", "value": r"\d.*\d"},
-            )
-        )
+        checks.append(Check("envelope", step=at, target={"path": "data.explain.0",
+                                                         "op": "regex", "value": r"\d.*\d"}))
     exp = _wb_expect(phrase, Expect("workflow", checks))
     steps = [*setup, Step("darkroom_say", {"phrase": phrase, "educative": level}, 8.0, True)]
-    return Case(
-        id=case_id(PREFIX, "edu", level, f"{j}", phrase),
-        layer=LAYER,
-        tier="P0",
-        mode="tool",
-        steps=steps,
-        expect=exp,
-        body="olympus",
-        frame_role="hero",
-        source={"file": "README", "section": "Educative mode"},
-        meta={"session": f"edu-{level}", "order": j, "concept": concept},
-    )
+    return Case(id=case_id(PREFIX, "edu", level, f"{j}", phrase), layer=LAYER, tier="P0",
+                mode="tool", steps=steps,
+                expect=exp, body="olympus", frame_role="hero",
+                source={"file": "README", "section": "Educative mode"},
+                meta={"session": f"edu-{level}", "order": j, "concept": concept})
 
 
 def generate() -> list[Case]:

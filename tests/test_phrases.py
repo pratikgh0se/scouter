@@ -12,54 +12,25 @@ from scouter.errors import UsageError
 
 GOLDEN = Path(__file__).resolve().parent / "fixtures" / "phrases_golden.json"
 REGEN = (
-    'uv run --extra dev python -c "import json; from tests.test_phrases import INPUTS; '
+    "uv run --extra dev python -c \"import json; from tests.test_phrases import INPUTS; "
     "from scouter.core import phrases; "
     "print(json.dumps({t: phrases.resolution_dict(phrases.resolve(t)) for t in INPUTS}, "
-    'indent=2, sort_keys=True))" > tests/fixtures/phrases_golden.json'
+    "indent=2, sort_keys=True))\" > tests/fixtures/phrases_golden.json"
 )
 
 #: 40 fixed inputs: canonical forms, intensity words, explicit amounts, noise.
 INPUTS = [
-    "brighter",
-    "darker",
-    "more contrast",
-    "less contrast",
-    "warmer",
-    "cooler",
-    "more magenta",
-    "more green",
-    "lift the shadows",
-    "deeper shadows",
-    "brighter midtones",
-    "darker midtones",
-    "brighter highlights",
-    "tame the highlights",
-    "deeper blacks",
-    "faded blacks",
-    "more saturation",
-    "less saturation",
-    "more vibrance",
-    "less vibrance",
-    "more chroma",
-    "less chroma",
-    "warm the highlights",
-    "cool the shadows",
-    "teal and orange",
-    "stronger colour grade",
-    "weaker color grade",
-    "a touch warmer",
-    "slightly less contrast",
-    "much cooler",
-    "way brighter",
-    "a little bit darker",
-    "a lot more saturation",
-    "Make it warmer, please!",
-    "cooler by 300k",
-    "brighter by 0.5 EV",
-    "more saturation by 10%",
-    "Lift The Shadows",
-    "punchier",
-    "desaturate",
+    "brighter", "darker", "more contrast", "less contrast", "warmer", "cooler",
+    "more magenta", "more green", "lift the shadows", "deeper shadows",
+    "brighter midtones", "darker midtones", "brighter highlights", "tame the highlights",
+    "deeper blacks", "faded blacks", "more saturation", "less saturation",
+    "more vibrance", "less vibrance", "more chroma", "less chroma",
+    "warm the highlights", "cool the shadows", "teal and orange",
+    "stronger colour grade", "weaker color grade",
+    "a touch warmer", "slightly less contrast", "much cooler", "way brighter",
+    "a little bit darker", "a lot more saturation", "Make it warmer, please!",
+    "cooler by 300k", "brighter by 0.5 EV", "more saturation by 10%",
+    "Lift The Shadows", "punchier", "desaturate",
 ]
 
 
@@ -67,24 +38,17 @@ class PhraseGoldenTest(unittest.TestCase):
     maxDiff = None
 
     def test_every_input_resolves_as_pinned(self) -> None:
-        actual = (
-            json.dumps(
-                {text: phrases.resolution_dict(phrases.resolve(text)) for text in INPUTS},
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n"
-        )
+        actual = json.dumps(
+            {text: phrases.resolution_dict(phrases.resolve(text)) for text in INPUTS},
+            indent=2, sort_keys=True,
+        ) + "\n"
         if not GOLDEN.exists():
             GOLDEN.write_text(actual)
             self.fail(f"golden created at {GOLDEN}; review and commit it")
         expected = GOLDEN.read_text()
         if expected != actual:
-            diff = "\n".join(
-                difflib.unified_diff(
-                    expected.splitlines(), actual.splitlines(), "golden", "actual", lineterm=""
-                )
-            )
+            diff = "\n".join(difflib.unified_diff(expected.splitlines(), actual.splitlines(),
+                                                  "golden", "actual", lineterm=""))
             self.fail(f"phrase resolution changed; regenerate deliberately with:\n{REGEN}\n{diff}")
 
 
@@ -142,7 +106,8 @@ class PhraseRulesTest(unittest.TestCase):
         # Fix round 1, M1: "make it square" is itself a registered synonym
         # containing the filler word "make it" -- an outer "please"/"can
         # you" must still resolve to it, not just the bare synonym.
-        for text in ("please make it square", "make it square please", "can you make it square"):
+        for text in ("please make it square", "make it square please",
+                     "can you make it square"):
             with self.subTest(text=text):
                 self.assertEqual(phrases.resolve(text).key, "crop_square")
 
@@ -208,9 +173,7 @@ class ResolveVerbTest(unittest.TestCase):
     def test_view_reports_delta_unit_and_status(self) -> None:
         r = phrases.resolve_verb.__wrapped__("warmer", job="job-test")
         mv = r.moves[0]
-        self.assertEqual(
-            (mv["module"], mv["param"], mv["unit"]), ("temperature", "temperature", "K")
-        )
+        self.assertEqual((mv["module"], mv["param"], mv["unit"]), ("temperature", "temperature", "K"))
         self.assertAlmostEqual(mv["delta"], 300.0)
         self.assertEqual(mv["status"], "live")
         tone = phrases.resolve_verb.__wrapped__("more contrast", job="job-test").moves[0]

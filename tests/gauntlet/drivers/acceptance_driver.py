@@ -42,17 +42,8 @@ SHORT = STAMP.replace("t", "").replace("z", "")[-10:]
 BODIES = {
     "olympus": {
         "hero": TRIAL / "P6281348.ORF",
-        "job": [
-            TRIAL / n
-            for n in (
-                "P6281361.ORF",
-                "P6281373.ORF",
-                "P5240152.ORF",
-                "P5240153.ORF",
-                "P5240154.ORF",
-                "P5240155.ORF",
-            )
-        ],
+        "job": [TRIAL / n for n in ("P6281361.ORF", "P6281373.ORF", "P5240152.ORF",
+                                    "P5240153.ORF", "P5240154.ORF", "P5240155.ORF")],
     },
     "sony": {
         "hero": SONY / "DSC01426.ARW",
@@ -77,18 +68,12 @@ def log(text: str) -> None:
 
 
 def record(step: str, status: str, secs: float | None, note: str = "", payload=None) -> dict:
-    row = {
-        "step": step,
-        "status": status,
-        "secs": None if secs is None else round(secs, 2),
-        "note": note,
-    }
+    row = {"step": step, "status": status, "secs": None if secs is None else round(secs, 2),
+           "note": note}
     ROWS.append(row)
     n = len(ROWS)
     if payload is not None:
-        out = (
-            RUN / "steps" / f"{n:02d}-{''.join(c if c.isalnum() else '-' for c in step)[:60]}.json"
-        )
+        out = RUN / "steps" / f"{n:02d}-{''.join(c if c.isalnum() else '-' for c in step)[:60]}.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         try:
             out.write_text(json.dumps(payload, indent=2, default=str) + "\n")
@@ -158,22 +143,16 @@ def write_acceptance_config() -> None:
 # ---------------------------------------------------------------- the CLI
 
 
-def cli(
-    step: str, args: list[str], env: dict, timeout: float, *, ok_when=None, note_fn=None
-) -> tuple[str, dict]:
+def cli(step: str, args: list[str], env: dict, timeout: float, *, ok_when=None,
+        note_fn=None) -> tuple[str, dict]:
     """Run `python -m scouter <args>`; record ok/refused/timeout with wall time."""
     t0 = time.monotonic()
     try:
-        p = subprocess.run(
-            [PY, "-m", "scouter", *args],
-            env=env,
-            cwd=str(REPO),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        p = subprocess.run([PY, "-m", "scouter", *args], env=env, cwd=str(REPO),
+                           capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        record(step, "timeout", time.monotonic() - t0, f"no answer in {timeout:g}s", {"args": args})
+        record(step, "timeout", time.monotonic() - t0, f"no answer in {timeout:g}s",
+               {"args": args})
         return "timeout", {}
     secs = time.monotonic() - t0
     try:
@@ -193,16 +172,9 @@ def cli(
     if not ok:
         err = env_out.get("error") or {}
         why = err.get("message") or (env_out.get("data") or {}).get("reason") or p.stderr[-300:]
-        note = (
-            note + " " if note else ""
-        ) + f"[{env_out.get('outcome', 'exit ' + str(p.returncode))}] {str(why)[:300]}"
-    record(
-        step,
-        status,
-        secs,
-        note,
-        {"args": args, "exit": p.returncode, "envelope": env_out, "stderr": p.stderr[-4000:]},
-    )
+        note = (note + " " if note else "") + f"[{env_out.get('outcome', 'exit ' + str(p.returncode))}] {str(why)[:300]}"
+    record(step, status, secs, note,
+           {"args": args, "exit": p.returncode, "envelope": env_out, "stderr": p.stderr[-4000:]})
     return status, env_out
 
 
@@ -258,12 +230,8 @@ class Darktable:
         ok = loaded is not None and os.path.realpath(loaded) == os.path.realpath(frame)
         secs = time.monotonic() - t0
         time.sleep(settle_s)  # let the first full render finish
-        record(
-            step,
-            "ok" if ok else "fail",
-            secs,
-            f"darkroom on {Path(loaded).name if loaded else None} (+{settle_s:g}s settle)",
-        )
+        record(step, "ok" if ok else "fail", secs,
+               f"darkroom on {Path(loaded).name if loaded else None} (+{settle_s:g}s settle)")
         return ok
 
     def quit(self, step: str) -> None:
@@ -275,12 +243,8 @@ class Darktable:
         self.proc = None
         time.sleep(3)
         gone = not darktable_running()
-        record(
-            step,
-            "ok" if gone else "fail",
-            time.monotonic() - t0,
-            f"{how}; crash reports now {crash_count()}",
-        )
+        record(step, "ok" if gone else "fail", time.monotonic() - t0,
+               f"{how}; crash reports now {crash_count()}")
 
 
 # ---------------------------------------------------------------- MCP
@@ -291,14 +255,8 @@ class Mcp:
 
     def __init__(self, argv: list[str], env: dict, stderr_path: Path) -> None:
         self._err = open(stderr_path, "ab")
-        self.proc = subprocess.Popen(
-            argv,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=self._err,
-            env=env,
-            cwd=str(RUN),
-        )
+        self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=self._err, env=env, cwd=str(RUN))
         self._next = 0
         self._pending: dict[int, queue.Queue] = {}
         self._lock = threading.Lock()
@@ -366,53 +324,31 @@ def step1_setup() -> str | None:
     def setup_note(e: dict) -> str:
         return ", ".join(f"{i.get('item')}={i.get('status')}" for i in e.get("items") or [])
 
-    _, env_out = cli(
-        "setup (real: plugin, luarc, wb tables, doctor)",
-        ["setup"],
-        base_env(),
-        90,
-        ok_when=setup_ok,
-        note_fn=setup_note,
-    )
+    _, env_out = cli("setup (real: plugin, luarc, wb tables, doctor)", ["setup"], base_env(), 90,
+                     ok_when=setup_ok, note_fn=setup_note)
     mcp_line = env_out.get("claude_mcp_add")
     RESULTS["claude_mcp_add"] = mcp_line
     if mcp_line:
         log(f"  - MCP line: `{mcp_line}`")
     # The acceptance config gets the shipped tables (em10iii) the same way.
-    cli(
-        "setup (acceptance config: shipped wb tables)",
-        ["setup"],
-        acc_env(),
-        90,
-        ok_when=setup_ok,
-        note_fn=setup_note,
-    )
+    cli("setup (acceptance config: shipped wb tables)", ["setup"], acc_env(), 90,
+        ok_when=setup_ok, note_fn=setup_note)
     return mcp_line
 
 
 def setup_check(step: str) -> None:
-    cli(
-        step,
-        ["setup", "--check"],
-        base_env(),
-        90,
-        note_fn=lambda e: ", ".join(
-            f"{i.get('item')}={i.get('status')}" for i in e.get("items") or []
-        ),
-    )
+    cli(step, ["setup", "--check"], base_env(), 90,
+        note_fn=lambda e: ", ".join(f"{i.get('item')}={i.get('status')}"
+                                    for i in e.get("items") or []))
 
 
 def step2_wb(dt: Darktable) -> None:
     log("\n### 2. Sony white-balance calibration (folder mode)")
     checked = False
     for cam in ("a7", "nex5n"):
-        st, dry = cli(
-            f"wb calibrate {cam} --dry-run",
-            ["wb", "calibrate", str(SONY), "--camera", cam, "--dry-run"],
-            acc_env(),
-            60,
-            note_fn=lambda e: f"frame {Path(data(e).get('source_image') or '-').name}",
-        )
+        st, dry = cli(f"wb calibrate {cam} --dry-run",
+                      ["wb", "calibrate", str(SONY), "--camera", cam, "--dry-run"], acc_env(), 60,
+                      note_fn=lambda e: f"frame {Path(data(e).get('source_image') or '-').name}")
         d = data(dry)
         src, copy, table = d.get("source_image"), d.get("scratch_copy"), d.get("table_path")
         if st != "ok" or not (src and copy and table):
@@ -422,33 +358,21 @@ def step2_wb(dt: Darktable) -> None:
         if not Path(copy).exists():
             shutil.copy2(src, copy)
             Path(copy).chmod(0o644)
-        if not dt.launch(
-            f"launch darktable on the {cam} scratch copy",
-            Path(copy),
-            RUN / "wb-library" / "library.db",
-        ):
+        if not dt.launch(f"launch darktable on the {cam} scratch copy", Path(copy),
+                         RUN / "wb-library" / "library.db"):
             dt.quit(f"quit darktable ({cam})")
             continue
         if not checked:
             setup_check("setup --check (darktable up)")
             checked = True
-        cli(
-            f"wb calibrate {cam} --yes",
-            ["wb", "calibrate", str(SONY), "--camera", cam, "--yes"],
-            acc_env(),
-            300,
-            note_fn=lambda e: f"points {len(data(e).get('points') or [])}, written {data(e).get('written')}",
-        )
+        cli(f"wb calibrate {cam} --yes", ["wb", "calibrate", str(SONY), "--camera", cam, "--yes"],
+            acc_env(), 300,
+            note_fn=lambda e: f"points {len(data(e).get('points') or [])}, written {data(e).get('written')}")
         exists = Path(table).is_file()
         record(f"wb {cam}: table where `wb kelvin` reads", "ok" if exists else "fail", None, table)
-        cli(
-            f"wb kelvin ({cam} scratch copy)",
-            ["wb", "kelvin", copy],
-            acc_env(),
-            60,
+        cli(f"wb kelvin ({cam} scratch copy)", ["wb", "kelvin", copy], acc_env(), 60,
             ok_when=lambda e: data(e).get("kelvin") is not None,
-            note_fn=lambda e: f"kelvin {data(e).get('kelvin')}",
-        )
+            note_fn=lambda e: f"kelvin {data(e).get('kelvin')}")
         dt.quit(f"quit darktable ({cam})")
     RESULTS["wb_tables"] = sorted(str(p) for p in (ROOT / "config" / "wb").glob("*.json"))
 
@@ -481,14 +405,10 @@ def step3_body(body: str, dt: Darktable, keep_open: bool) -> dict:
     if not dt.launch(f"{body}: launch darktable (boot copy of the hero)", boot, library):
         dt.quit(f"{body}: quit darktable")
         return out
-    st, imp = cli(
-        f"{body}: library import",
-        ["library", "import", str(card), "--job-slug", slug, "--yes"],
-        job_env,
-        300,
-        note_fn=lambda e: f"{len(data(e).get('files') or [])} files, film roll "
-        f"registered {data(e).get('film_roll_registered')}",
-    )
+    st, imp = cli(f"{body}: library import", ["library", "import", str(card), "--job-slug", slug,
+                                               "--yes"], job_env, 300,
+                  note_fn=lambda e: f"{len(data(e).get('files') or [])} files, film roll "
+                                    f"registered {data(e).get('film_roll_registered')}")
     d = data(imp)
     job_dir = Path(d.get("path") or "")
     by_source = {f.get("source_name"): f.get("dest") for f in d.get("files") or []}
@@ -500,94 +420,47 @@ def step3_body(body: str, dt: Darktable, keep_open: bool) -> dict:
         return out
     hero = hero_dest if os.path.isabs(hero_dest) else str(job_dir / hero_dest)
     out.update(job_slug=slug, job_dir=str(job_dir), hero=hero)
-    applied = next(
-        (
-            str(job_dir / v) if not os.path.isabs(v) else v
-            for k, v in by_source.items()
-            if k != hero_name and v
-        ),
-        None,
-    )
-    cli(
-        f"{body}: cull propose",
-        ["cull", "propose", "--job-slug", slug],
-        job_env,
-        600,
-        note_fn=lambda e: f"outcome {e.get('outcome')}",
-    )
-    cli(
-        f"{body}: cull apply",
-        ["cull", "apply", "--job-slug", slug, "--yes"],
-        job_env,
-        300,
-        note_fn=lambda e: f"outcome {e.get('outcome')}",
-    )
+    applied = next((str(job_dir / v) if not os.path.isabs(v) else v
+                    for k, v in by_source.items() if k != hero_name and v), None)
+    cli(f"{body}: cull propose", ["cull", "propose", "--job-slug", slug], job_env, 600,
+        note_fn=lambda e: f"outcome {e.get('outcome')}")
+    cli(f"{body}: cull apply", ["cull", "apply", "--job-slug", slug, "--yes"], job_env, 300,
+        note_fn=lambda e: f"outcome {e.get('outcome')}")
     # darktable cannot move the darkroom onto a frame imported in the same
     # session: relaunch on the job's hero (now a known library image).
     dt.quit(f"{body}: quit darktable (before relaunching on the job hero)")
     if not dt.launch(f"{body}: relaunch darktable on the job hero", Path(hero), library):
         dt.quit(f"{body}: quit darktable")
         return out
-    cli(
-        f"{body}: darkroom open hero",
-        ["darkroom", "open", hero],
-        job_env,
-        90,
-        note_fn=lambda e: f"view {data(e).get('view')}",
-    )
+    cli(f"{body}: darkroom open hero", ["darkroom", "open", hero], job_env, 90,
+        note_fn=lambda e: f"view {data(e).get('view')}")
     for phrase in PHRASES:
-        cli(
-            f"{body}: darkroom say '{phrase}'",
-            ["darkroom", "say", phrase],
-            job_env,
-            90,
+        cli(f"{body}: darkroom say '{phrase}'", ["darkroom", "say", phrase], job_env, 90,
             note_fn=lambda e: "; ".join(
                 f"{r.get('action')}{' bounced' if r.get('bounced') else ''}"
                 f"{' ' + str(r.get('ms')) + 'ms' if r.get('ms') is not None else ''}"
-                for r in (data(e).get("plan") or [])
-                if r.get("action") == "precommit"
-            )
-            or f"outcome {e.get('outcome')}",
-        )
-    cli(
-        f"{body}: darkroom undo-last",
-        ["darkroom", "undo-last"],
-        job_env,
-        90,
-        note_fn=lambda e: f"outcome {e.get('outcome')}",
-    )
-    cli(
-        f"{body}: preset save {body}-hero",
-        ["preset", "save", f"{body}-hero", "--yes"],
-        job_env,
-        90,
-        note_fn=lambda e: f"modules {data(e).get('modules')}",
-    )
-    cli(
-        f"{body}: job run --preset {body}-hero",
-        ["job", "run", "--job-slug", slug, "--preset", f"{body}-hero", "--hero", hero, "--yes"],
-        job_env,
-        1200,
-        note_fn=lambda e: "; ".join(
-            f"{r.get('step')}={r.get('outcome')}" for r in (data(e).get("steps") or [])
-        )
-        + (f"; stopped_at {data(e).get('stopped_at')}" if data(e).get("stopped_at") else ""),
-    )
+                for r in (data(e).get("plan") or []) if r.get("action") == "precommit")
+            or f"outcome {e.get('outcome')}")
+    cli(f"{body}: darkroom undo-last", ["darkroom", "undo-last"], job_env, 90,
+        note_fn=lambda e: f"outcome {e.get('outcome')}")
+    cli(f"{body}: preset save {body}-hero", ["preset", "save", f"{body}-hero", "--yes"],
+        job_env, 90, note_fn=lambda e: f"modules {data(e).get('modules')}")
+    cli(f"{body}: job run --preset {body}-hero", ["job", "run", "--job-slug", slug, "--preset",
+                                                   f"{body}-hero", "--hero", hero, "--yes"],
+        job_env, 1200,
+        note_fn=lambda e: "; ".join(f"{r.get('step')}={r.get('outcome')}"
+                                    for r in (data(e).get("steps") or []))
+        + (f"; stopped_at {data(e).get('stopped_at')}" if data(e).get("stopped_at") else ""))
     if applied:
-        cli(
-            f"{body}: history read (applied frame, --source auto)",
-            ["history", "read", applied, "--source", "auto"],
-            job_env,
-            90,
+        cli(f"{body}: history read (applied frame, --source auto)",
+            ["history", "read", applied, "--source", "auto"], job_env, 90,
             note_fn=lambda e: f"{Path(applied).name}: source {data(e).get('source')}, "
-            f"history_end {data(e).get('history_end')}, "
-            f"{len(data(e).get('entries') or [])} entries",
-        )
+                              f"history_end {data(e).get('history_end')}, "
+                              f"{len(data(e).get('entries') or [])} entries")
         out["applied_frame"] = applied
     exports = job_dir / "exports"
-    out["exports"] = (
-        sorted(str(p) for p in exports.rglob("*") if p.is_file())[:50] if exports.is_dir() else []
-    )
+    out["exports"] = sorted(str(p) for p in exports.rglob("*") if p.is_file())[:50] \
+        if exports.is_dir() else []
     if not keep_open:
         dt.quit(f"{body}: quit darktable")
     return out
@@ -599,7 +472,7 @@ def step4_mcp(mcp_line: str | None, sony: dict) -> None:
         record("mcp: server command", "skip", None, "setup printed no claude mcp add line")
         return
     toks = shlex.split(mcp_line)
-    argv = toks[toks.index("--") + 1 :] if "--" in toks else []
+    argv = toks[toks.index("--") + 1:] if "--" in toks else []
     env = acc_env()  # scratch config, so job_run sees the acceptance job
     env.pop("SCOUTER_JOB", None)
     for i, t in enumerate(toks):
@@ -612,15 +485,9 @@ def step4_mcp(mcp_line: str | None, sony: dict) -> None:
     t0 = time.monotonic()
     try:
         mcp = Mcp(argv, env, RUN / "mcp-server.stderr.log")
-        mcp.request(
-            "initialize",
-            {
-                "protocolVersion": "2025-06-18",
-                "capabilities": {},
-                "clientInfo": {"name": "scouter-acceptance", "version": "1"},
-            },
-            timeout=30,
-        )
+        mcp.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                   "clientInfo": {"name": "scouter-acceptance", "version": "1"}},
+                    timeout=30)
         mcp._send({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
         names = [t["name"] for t in mcp.request("tools/list", {}, timeout=30).get("tools", [])]
     except Exception as e:  # noqa: BLE001
@@ -628,30 +495,16 @@ def step4_mcp(mcp_line: str | None, sony: dict) -> None:
         return
     need = ("darkroom_say", "preset_list", "job_run")
     missing = [n for n in need if n not in names]
-    record(
-        "mcp: initialize + tools/list",
-        "ok" if not missing else "fail",
-        time.monotonic() - t0,
-        f"{len(names)} tools" + (f"; missing {missing}" if missing else ""),
-    )
+    record("mcp: initialize + tools/list", "ok" if not missing else "fail",
+           time.monotonic() - t0, f"{len(names)} tools" + (f"; missing {missing}" if missing else ""))
     calls = [
         ("mcp: darkroom_say 'a touch warmer'", "darkroom_say", {"phrase": "a touch warmer"}, 90),
         ("mcp: preset_list", "preset_list", {}, 60),
     ]
     if sony.get("job_slug"):
-        calls.append(
-            (
-                "mcp: job_run --dry-run",
-                "job_run",
-                {
-                    "job_slug": sony["job_slug"],
-                    "preset": "sony-hero",
-                    "hero": sony.get("hero"),
-                    "dry_run": True,
-                },
-                120,
-            )
-        )
+        calls.append(("mcp: job_run --dry-run", "job_run",
+                      {"job_slug": sony["job_slug"], "preset": "sony-hero",
+                       "hero": sony.get("hero"), "dry_run": True}, 120))
     else:
         record("mcp: job_run --dry-run", "skip", None, "no sony job from step 3")
     for step, tool, args, timeout in calls:
@@ -659,12 +512,8 @@ def step4_mcp(mcp_line: str | None, sony: dict) -> None:
         try:
             env_out = mcp.call(tool, args, timeout)
         except Exception as e:  # noqa: BLE001
-            record(
-                step,
-                "timeout" if isinstance(e, TimeoutError) else "fail",
-                time.monotonic() - t1,
-                str(e)[:300],
-            )
+            record(step, "timeout" if isinstance(e, TimeoutError) else "fail",
+                   time.monotonic() - t1, str(e)[:300])
             continue
         ok = bool(env_out.get("ok"))
         note = f"outcome {env_out.get('outcome')}"
@@ -688,74 +537,38 @@ def step5_bench() -> None:
             record(f"bench {body}", "skip", None, "a darktable is still running")
             continue
         t0 = time.monotonic()
-        argv = [
-            PY,
-            "tests/gauntlet/benchmark/run_editor_benchmark.py",
-            "--live",
-            "--plan",
-            "v2",
-            "--body",
-            body,
-            "--label",
-            "phase3-v2",
-        ]
+        argv = [PY, "tests/gauntlet/benchmark/run_editor_benchmark.py", "--live", "--plan", "v2",
+                "--body", body, "--label", "phase3-v2"]
         try:
-            p = subprocess.run(
-                argv, cwd=str(BENCH), env=base_env(), capture_output=True, text=True, timeout=2400
-            )
+            p = subprocess.run(argv, cwd=str(BENCH), env=base_env(), capture_output=True,
+                               text=True, timeout=2400)
         except subprocess.TimeoutExpired:
             record(f"bench {body}", "timeout", time.monotonic() - t0, "no finish in 2400s")
-            subprocess.run(
-                ["osascript", "-e", 'tell application "darktable" to quit'],
-                capture_output=True,
-                timeout=30,
-                check=False,
-            )
+            subprocess.run(["osascript", "-e", 'tell application "darktable" to quit'],
+                           capture_output=True, timeout=30, check=False)
             continue
         (RUN / f"bench-{body}.stdout.log").write_text(p.stdout + "\n--- stderr\n" + p.stderr)
-        paths = [
-            ln.strip()
-            for ln in p.stdout.splitlines()
-            if ln.strip().endswith((".json", ".md")) and "/results/" in ln
-        ]
+        paths = [ln.strip() for ln in p.stdout.splitlines()
+                 if ln.strip().endswith((".json", ".md")) and "/results/" in ln]
         produced += paths
         summary = ""
         md = next((x for x in paths if x.endswith(".md")), None)
         if md and Path(md).is_file():
-            summary = next(
-                (ln.strip("- *") for ln in Path(md).read_text().splitlines() if " pass / " in ln),
-                "",
-            )
-        record(
-            f"bench {body} (phase3-v2)",
-            "ok" if p.returncode == 0 and paths else "fail",
-            time.monotonic() - t0,
-            summary or f"exit {p.returncode}; {p.stdout[-200:]}",
-        )
+            summary = next((ln.strip("- *") for ln in Path(md).read_text().splitlines()
+                            if " pass / " in ln), "")
+        record(f"bench {body} (phase3-v2)", "ok" if p.returncode == 0 and paths else "fail",
+               time.monotonic() - t0, summary or f"exit {p.returncode}; {p.stdout[-200:]}")
     RESULTS["bench_results"] = produced
     if produced:
-        subprocess.run(
-            ["git", "-C", str(BENCH), "add", "tests/gauntlet/benchmark/results"],
-            capture_output=True,
-            timeout=60,
-        )
-        msg = (
-            "bench: run 2 (plan v2, phase3-v2) after row 429's no_bounce/action-transport "
-            f"fix, acceptance run {STAMP}\n\nCo-Authored-By: Claude Fable 5.1 "
-            "<noreply@anthropic.com>\n"
-        )
-        c = subprocess.run(
-            ["git", "-C", str(BENCH), "commit", "-q", "-m", msg],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        record(
-            "bench: commit results on bench/editor",
-            "ok" if c.returncode == 0 else "fail",
-            None,
-            (c.stdout + c.stderr).strip()[:200],
-        )
+        subprocess.run(["git", "-C", str(BENCH), "add", "tests/gauntlet/benchmark/results"],
+                       capture_output=True, timeout=60)
+        msg = ("bench: run 2 (plan v2, phase3-v2) after row 429's no_bounce/action-transport "
+               f"fix, acceptance run {STAMP}\n\nCo-Authored-By: Claude Fable 5.1 "
+               "<noreply@anthropic.com>\n")
+        c = subprocess.run(["git", "-C", str(BENCH), "commit", "-q", "-m", msg],
+                           capture_output=True, text=True, timeout=60)
+        record("bench: commit results on bench/editor", "ok" if c.returncode == 0 else "fail",
+               None, (c.stdout + c.stderr).strip()[:200])
 
 
 def final_table(before: int) -> None:
@@ -771,24 +584,17 @@ def final_table(before: int) -> None:
     counts: dict[str, int] = {}
     for r in ROWS:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
-    lines += [
-        "",
-        f"- totals: {counts}",
-        f"- darktable crash reports: before {before}, after {after}"
-        + (" (NO NEW CRASH)" if after == before else " (NEW CRASH REPORTS)"),
-        f"- run dir: {RUN}",
-        f"- results: {RUN / 'results.json'}",
-        f"- log: {LOG}",
-    ]
+    lines += ["", f"- totals: {counts}",
+              f"- darktable crash reports: before {before}, after {after}"
+              + (" (NO NEW CRASH)" if after == before else " (NEW CRASH REPORTS)"),
+              f"- run dir: {RUN}", f"- results: {RUN / 'results.json'}", f"- log: {LOG}"]
     for k in ("wb_tables", "bench_results"):
         for v in RESULTS.get(k) or []:
             lines.append(f"- {k}: {v}")
     for b in ("olympus", "sony"):
         info = RESULTS.get(b) or {}
         if info.get("job_dir"):
-            lines.append(
-                f"- {b} job: {info['job_dir']} ({len(info.get('exports') or [])} export files)"
-            )
+            lines.append(f"- {b} job: {info['job_dir']} ({len(info.get('exports') or [])} export files)")
     log("\n".join(lines))
     print()
     print(f"{'STEP'.ljust(w)}  STATUS    SECONDS")
@@ -804,13 +610,10 @@ def main() -> int:
     RUN.mkdir(parents=True, exist_ok=True)
     write_acceptance_config()
     before = crash_count()
-    head = subprocess.run(
-        ["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"], capture_output=True, text=True
-    ).stdout.strip()
-    log(
-        f"\n## Acceptance run {STAMP} (main {head})\n\n- run dir: {RUN}\n"
-        f"- crash reports before: {before}"
-    )
+    head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+    log(f"\n## Acceptance run {STAMP} (main {head})\n\n- run dir: {RUN}\n"
+        f"- crash reports before: {before}")
     dt = Darktable()
     try:
         mcp_line = step1_setup()

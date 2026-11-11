@@ -4,7 +4,6 @@ scripts/htc_post_run.sh via subprocess, over a fake run dir AND (fix round
 the real scouter checkout, so the merge-base precondition it added is a
 real, correct git computation rather than a placeholder sha -- two oracles
 per example (Z2): the exit code AND the printed stdout content."""
-
 from __future__ import annotations
 
 import json
@@ -17,18 +16,8 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parent.parent.parent / "scripts" / "htc_post_run.sh"
 EXAMPLES = json.loads((Path(__file__).parent / "htc_post_run.json").read_text())["examples"]
 
-DEFAULT_LAYERS = (
-    "offline",
-    "coverage",
-    "scenarios",
-    "bulk",
-    "looks",
-    "robustness",
-    "parity",
-    "install",
-    "guide",
-    "scenarios_agent",
-)
+DEFAULT_LAYERS = ("offline", "coverage", "scenarios", "bulk", "looks", "robustness",
+                  "parity", "install", "guide", "scenarios_agent")
 
 
 def _git(cwd, *args):
@@ -67,25 +56,19 @@ class HtcPostRunIntentTest(unittest.TestCase):
             runs_root = root / "gauntlet"
             run_dir = runs_root / "night1-20260927"
             run_dir.mkdir(parents=True)
-            layers = (
-                {name: {"status": "done"} for name in DEFAULT_LAYERS}
-                if inp["progress_status"] == "done"
-                else {}
-            )
+            layers = ({name: {"status": "done"} for name in DEFAULT_LAYERS}
+                     if inp["progress_status"] == "done" else {})
             (run_dir / "progress.json").write_text(
-                json.dumps({"status": inp["progress_status"], "layers": layers}), encoding="utf-8"
-            )
+                json.dumps({"status": inp["progress_status"], "layers": layers}),
+                encoding="utf-8")
             if inp["pidfile"] == "self":
                 night_dir = runs_root / "night1"
                 night_dir.mkdir(parents=True, exist_ok=True)
                 (night_dir / "runner.pid").write_text(str(os.getpid()), encoding="utf-8")
 
-            p = subprocess.run(
-                ["bash", str(SCRIPT)],
-                capture_output=True,
-                text=True,
-                env={**os.environ, "BATCH": batch_sha, "RUN_DIR": str(run_dir), "HTC_REPO": repo},
-            )
+            p = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True,
+                              env={**os.environ, "BATCH": batch_sha, "RUN_DIR": str(run_dir),
+                                  "HTC_REPO": repo})
 
         self.assertEqual(p.returncode, want["exit_code"], ex["id"] + "\n" + p.stdout + p.stderr)
         for needle in want["stdout_contains"]:
@@ -95,7 +78,6 @@ class HtcPostRunIntentTest(unittest.TestCase):
 def _make(ex: dict):
     def test(self: HtcPostRunIntentTest) -> None:
         self.run_example(ex)
-
     return test
 
 

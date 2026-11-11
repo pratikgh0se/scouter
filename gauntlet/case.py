@@ -42,9 +42,7 @@ class Check:
     stat: str | None = None
     region: str = "frame"
     sign: int = 0
-    kind: str = (
-        "delta"  # delta|toward_zero|to_zero|capped|restored|unchanged|equals|within|contains  # noqa: E501
-    )
+    kind: str = "delta"  # delta|toward_zero|to_zero|capped|restored|unchanged|equals|within|contains  # noqa: E501
     target: dict | None = None
     step: int | None = None
     tags: dict = field(default_factory=dict)

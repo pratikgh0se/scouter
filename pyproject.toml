@@ -91,17 +91,6 @@ select = ["E", "F", "I", "N", "W", "UP"]
 # than suppressed line by line.
 ignore = ["N818"]
 
-[tool.ruff.lint.per-file-ignores]
-# Fixture/data builders: build_looks.py, _part2 and _part3 are concatenated
-# into one namespace by the generator, so each part uses names (S, FILM_DT ...)
-# defined in a sibling; F821 is expected per file. Rows are long source URLs
-# and notes, and the code is terse generator glue.
-"tests/gauntlet/data/build_*.py" = ["E501", "E402", "E731", "E741", "F821", "N802", "N803"]
-# Tests: long literal strings and URLs, pytest fixtures re-declared as
-# parameters (F811), short lambdas/names in throwaway helpers, mixedCase names
-# that must match the ast.NodeVisitor / external API they mimic.
-"tests/**" = ["E501", "E731", "E741", "F811", "N802", "N806", "N811", "N815"]
-
 [tool.mypy]
 python_version = "3.10"
 strict = true

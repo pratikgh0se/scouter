@@ -96,13 +96,8 @@ def lch(a: float, b: float) -> tuple[float, float]:
     return math.hypot(a, b), math.degrees(math.atan2(b, a)) % 360.0
 
 
-def delta_e2000(
-    lab1: tuple[float, float, float],
-    lab2: tuple[float, float, float],
-    kL: float = 1.0,
-    kC: float = 1.0,
-    kH: float = 1.0,
-) -> float:
+def delta_e2000(lab1: tuple[float, float, float], lab2: tuple[float, float, float],
+                kL: float = 1.0, kC: float = 1.0, kH: float = 1.0) -> float:
     """CIEDE2000 per Sharma, Wu and Dalal (2005), including their hue rules."""
     L1, a1, b1 = lab1
     L2, a2, b2 = lab2
@@ -134,22 +129,13 @@ def delta_e2000(
         hbp = (h1p + h2p + 360) / 2
     else:
         hbp = (h1p + h2p - 360) / 2
-    T = (
-        1
-        - 0.17 * math.cos(math.radians(hbp - 30))
-        + 0.24 * math.cos(math.radians(2 * hbp))
-        + 0.32 * math.cos(math.radians(3 * hbp + 6))
-        - 0.20 * math.cos(math.radians(4 * hbp - 63))
-    )
+    T = (1 - 0.17 * math.cos(math.radians(hbp - 30)) + 0.24 * math.cos(math.radians(2 * hbp))
+         + 0.32 * math.cos(math.radians(3 * hbp + 6)) - 0.20 * math.cos(math.radians(4 * hbp - 63)))
     dtheta = 30 * math.exp(-(((hbp - 275) / 25) ** 2))
     Rc = 2 * math.sqrt(Cbp**7 / (Cbp**7 + 25.0**7))
     Sl = 1 + (0.015 * (Lbp - 50) ** 2) / math.sqrt(20 + (Lbp - 50) ** 2)
     Sc = 1 + 0.045 * Cbp
     Sh = 1 + 0.015 * Cbp * T
     Rt = -math.sin(math.radians(2 * dtheta)) * Rc
-    return math.sqrt(
-        (dLp / (kL * Sl)) ** 2
-        + (dCp / (kC * Sc)) ** 2
-        + (dHp / (kH * Sh)) ** 2
-        + Rt * (dCp / (kC * Sc)) * (dHp / (kH * Sh))
-    )
+    return math.sqrt((dLp / (kL * Sl)) ** 2 + (dCp / (kC * Sc)) ** 2 + (dHp / (kH * Sh)) ** 2
+                     + Rt * (dCp / (kC * Sc)) * (dHp / (kH * Sh)))

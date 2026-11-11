@@ -25,13 +25,8 @@ def units() -> dict[str, str]:
 #: The stored white-balance keys temperature.temperature (Kelvin, via the body's
 #: WB table) and temperature.tint are decoded from (bug 4 of the night-1
 #: evaluator fixes): a move reported on either owns all of them.
-WB_STORED = (
-    "temperature.coeff_r",
-    "temperature.coeff_g",
-    "temperature.coeff_b",
-    "temperature.coeff_g2",
-    "temperature.preset",
-)
+WB_STORED = ("temperature.coeff_r", "temperature.coeff_g", "temperature.coeff_b",
+             "temperature.coeff_g2", "temperature.preset")
 
 
 def defaults() -> dict[str, float]:
@@ -67,15 +62,11 @@ def param_meta() -> dict:
     keys, null equivalents. `coeff_g2` is inf/unused on these bodies: it
     decodes 0.0 on a fresh history and None (inf) after a WB write, which is
     not a change."""
-    return {
-        "defaults": defaults(),
-        "verified_defaults": verified_defaults(),
-        "derived": {
-            "temperature.temperature": [*WB_STORED, "temperature.tint"],
-            "temperature.tint": [*WB_STORED, "temperature.temperature"],
-        },
-        "null_equiv": {"temperature.coeff_g2": 0.0},
-    }
+    return {"defaults": defaults(),
+            "verified_defaults": verified_defaults(),
+            "derived": {"temperature.temperature": [*WB_STORED, "temperature.tint"],
+                        "temperature.tint": [*WB_STORED, "temperature.temperature"]},
+            "null_equiv": {"temperature.coeff_g2": 0.0}}
 
 
 def flatten(snap: dict, kelvin=None) -> dict:
@@ -91,24 +82,14 @@ def flatten(snap: dict, kelvin=None) -> dict:
                 continue
             params[f"{op}.{name}"] = v
     if kelvin is not None and "temperature.coeff_r" in params:
-        k = kelvin(
-            [
-                params["temperature.coeff_r"],
-                params["temperature.coeff_g"],
-                params["temperature.coeff_b"],
-            ]
-        )
+        k = kelvin([params["temperature.coeff_r"], params["temperature.coeff_g"],
+                    params["temperature.coeff_b"]])
         if k is not None:
             params["temperature.temperature"] = k
     u = units()
     u.update({k: "bool" for k in params if k.endswith(".__enabled")})
-    return {
-        "fingerprint": snap.get("fingerprint", ""),
-        "history_end": snap.get("history_end", 0),
-        "params": params,
-        "units": u,
-        **param_meta(),
-    }
+    return {"fingerprint": snap.get("fingerprint", ""), "history_end": snap.get("history_end", 0),
+            "params": params, "units": u, **param_meta()}
 
 
 def snapshot(raw_path: Path, kelvin=None) -> dict:
@@ -160,6 +141,5 @@ def noise_floors(raw_path: Path, work: Path) -> tuple[dict, bool]:
     a = render_raster(raw_path, work / "floor-a.ppm")
     b = render_raster(raw_path, work / "floor-b.ppm")
     masks = metrics.build_masks(a)
-    return metrics.noise_floor(
-        metrics.region_stats(a, masks, ("frame",)), metrics.region_stats(b, masks, ("frame",))
-    )
+    return metrics.noise_floor(metrics.region_stats(a, masks, ("frame",)),
+                               metrics.region_stats(b, masks, ("frame",)))

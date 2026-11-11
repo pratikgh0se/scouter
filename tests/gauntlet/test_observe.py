@@ -28,9 +28,8 @@ def test_observe_verified_defaults_matches_vocab_default_rows_exactly():
     assert got == want
     assert want  # sanity: the vocab rows with a real default are not empty
     # every neutral-only row (has neutral, no default) must be absent.
-    neutral_only = {
-        f"{s.module}.{s.param}" for s in vocab.PARAMS if s.default is None and s.neutral is not None
-    }
+    neutral_only = {f"{s.module}.{s.param}" for s in vocab.PARAMS
+                    if s.default is None and s.neutral is not None}
     assert neutral_only and not (neutral_only & got.keys())
 
 
@@ -47,11 +46,9 @@ def test_m1_declared_default_fallback_rejects_neutral_only_key_via_real_adapter(
     assert "grain.strength" not in vd and "grain.strength" in observe.defaults()
     chk = _cz_chk(target=0.0, key="grain.strength")
     case = _cz_case(chk=chk, key="grain.strength")
-    obs = Observation(
-        calls=[_cz_call(0.0, True, 0.0, module="grain", param="strength")],
-        before=_cz_snap("a", verified_defaults=vd),
-        after=_cz_snap("a", verified_defaults=vd),
-    )
+    obs = Observation(calls=[_cz_call(0.0, True, 0.0, module="grain", param="strength")],
+                      before=_cz_snap("a", verified_defaults=vd),
+                      after=_cz_snap("a", verified_defaults=vd))
     # oracle B: the fixed evaluator, on the real adapter's own table.
     v = evaluate(case, obs, POLICY)
     assert v.checks[0].measured is None
@@ -72,11 +69,9 @@ def test_m1_declared_default_fallback_accepts_a_real_verified_default_via_real_a
     vd = observe.verified_defaults()
     # oracle A: the raw vocab fact this whole test depends on.
     assert vd.get("colorzones.strength") == 0.0
-    obs = Observation(
-        calls=[_cz_call(0.0, True, 0.0)],
-        before=_cz_snap("a", verified_defaults=vd),
-        after=_cz_snap("a", verified_defaults=vd),
-    )
+    obs = Observation(calls=[_cz_call(0.0, True, 0.0)],
+                      before=_cz_snap("a", verified_defaults=vd),
+                      after=_cz_snap("a", verified_defaults=vd))
     # oracle B: the fixed evaluator, on the real adapter's own table.
     v = evaluate(_cz_case(), obs, POLICY)
     assert (v.score, v.outcome) == ("pass", "verified")
@@ -91,16 +86,10 @@ def test_m1_declared_default_fallback_accepts_a_real_verified_default_via_real_a
 #: non_hue_colorbalancergb_rows` below asserts this literal list equals a
 #: fresh derivation from `vocab.PARAMS`, so it cannot silently drift.
 _CB_PROMOTED_ROWS = (
-    "contrast",
-    "global_chroma",
-    "global_saturation",
-    "global_vibrance",
-    "shadows_luminance",
-    "shadows_chroma",
-    "midtones_luminance",
-    "midtones_chroma",
-    "highlights_luminance",
-    "highlights_chroma",
+    "contrast", "global_chroma", "global_saturation", "global_vibrance",
+    "shadows_luminance", "shadows_chroma",
+    "midtones_luminance", "midtones_chroma",
+    "highlights_luminance", "highlights_chroma",
 )
 
 

@@ -31,17 +31,9 @@ def _examples() -> list[str]:
 class UserGuideTest(unittest.TestCase):
     def test_the_guide_has_its_sections(self) -> None:
         guide = _guide()
-        for heading in (
-            "Register the server",
-            "Single frame by phrases",
-            "Undo",
-            "Save as a preset",
-            "Apply to a job",
-            "Batch: `job run`",
-            "Export",
-            "Educative mode",
-            "What refuses, and why",
-        ):
+        for heading in ("Register the server", "Single frame by phrases", "Undo",
+                        "Save as a preset", "Apply to a job", "Batch: `job run`", "Export",
+                        "Educative mode", "What refuses, and why"):
             self.assertIn(heading, guide)
 
     def test_six_example_sentences_map_to_live_rows(self) -> None:

@@ -30,7 +30,6 @@ class WeakerGradeNoopIntentTest(_MovesFixture):
 def _make(ex: dict):
     def test(self: WeakerGradeNoopIntentTest) -> None:
         self.run_example(ex)
-
     return test
 
 

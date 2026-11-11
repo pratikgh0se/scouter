@@ -33,29 +33,17 @@ class _MovesFixture(unittest.TestCase):
         cam = mock.patch("scouter.core.moves._camera_for", return_value="em10iii")
         cam.start()
         self.addCleanup(cam.stop)
-        self.bridge = FakeBridge(
-            {
-                "darkroom.current": {
-                    "image_id": 12,
-                    "path": str(self.raw),
-                    "view": "darkroom",
-                    "source": "action_images",
-                },
-                "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-                "darkroom.action": lambda p: {
-                    "nan": False,
-                    "status": p.get("value"),
-                    "view": "darkroom",
-                    **p,
-                },
-            }
-        )
+        self.bridge = FakeBridge({
+            "darkroom.current": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
+                                 "source": "action_images"},
+            "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+            "darkroom.action": lambda p: {"nan": False, "status": p.get("value"),
+                                          "view": "darkroom", **p},
+        })
         dtbridge.set_bridge(self.bridge)
         self.commits: list[tuple] = []
 
-        def fake_commit(
-            job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None
-        ):
+        def fake_commit(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
             self.commits.append((attempts, expect_change, expect_module))
             return CommitResult(committed=True, changed=expect_change, warnings=[])
 
@@ -96,9 +84,8 @@ class AdjustTest(_MovesFixture):
         self.assertEqual(self.commits[0][2], "colorbalancergb")
 
     def test_trust_sidecar_skips_the_pre_commit(self) -> None:
-        moves.adjust.__wrapped__(
-            "exposure", "exposure", 0.3, commit=False, trust_sidecar=True, job="job-test"
-        )
+        moves.adjust.__wrapped__("exposure", "exposure", 0.3, commit=False,
+                                 trust_sidecar=True, job="job-test")
         self.assertEqual(self.commits, [])
 
     def test_clamp_is_reported(self) -> None:
@@ -119,19 +106,10 @@ class AdjustTest(_MovesFixture):
         # not claim a VERIFIED `moved_to_limit` -- a real write was sent and
         # we do not know where it landed. Falls back to plain "ok", `cap`
         # None, with a warning naming the gap.
-        with mock.patch(
-            "scouter.core.moves._set_recording_before",
-            return_value=SetResult(
-                module="exposure",
-                param="exposure",
-                requested=4.0,
-                applied=None,
-                previous=1.55,
-                committed=True,
-                clamped=True,
-                noop=False,
-            ),
-        ):
+        with mock.patch("scouter.core.moves._set_recording_before",
+                        return_value=SetResult(module="exposure", param="exposure",
+                                                requested=4.0, applied=None, previous=1.55,
+                                                committed=True, clamped=True, noop=False)):
             r = moves.adjust.__wrapped__("exposure", "exposure", 10.0, commit=True, job="job-test")
         self.assertTrue(r.clamped)
         self.assertEqual(r.outcome, "ok")
@@ -145,19 +123,10 @@ class AdjustTest(_MovesFixture):
         # slightly from `vocab.clamp`'s own computed `target` -- `cap` must
         # NAME the value that actually bound it (the verified readback,
         # `applied`), not our own guess (`target`).
-        with mock.patch(
-            "scouter.core.moves._set_recording_before",
-            return_value=SetResult(
-                module="exposure",
-                param="exposure",
-                requested=4.0,
-                applied=3.95,
-                previous=1.55,
-                committed=True,
-                clamped=True,
-                noop=False,
-            ),
-        ):
+        with mock.patch("scouter.core.moves._set_recording_before",
+                        return_value=SetResult(module="exposure", param="exposure",
+                                                requested=4.0, applied=3.95, previous=1.55,
+                                                committed=True, clamped=True, noop=False)):
             r = moves.adjust.__wrapped__("exposure", "exposure", 10.0, commit=True, job="job-test")
         self.assertTrue(r.clamped)
         self.assertEqual(r.outcome, "moved_to_limit")
@@ -177,9 +146,8 @@ class AdjustTest(_MovesFixture):
         self.assertIn("ms_read", r.plan[0])
 
     def test_kelvin_comes_from_the_measured_table(self) -> None:
-        r = moves.adjust.__wrapped__(
-            "temperature", "temperature", 300.0, commit=False, job="job-test"
-        )
+        r = moves.adjust.__wrapped__("temperature", "temperature", 300.0, commit=False,
+                                     job="job-test")
         self.assertEqual(r.source, "wb_table")
         self.assertAlmostEqual(r.previous, 5399.05, places=1)
         self.assertAlmostEqual(self.sets()[0]["value"], 5699.05, places=1)
@@ -193,9 +161,8 @@ class AdjustTest(_MovesFixture):
         self.assertEqual(self.sets(), [])
 
     def test_absent_module_uses_the_declared_neutral(self) -> None:
-        r = moves.adjust.__wrapped__(
-            "colorbalancergb", "contrast", 0.05, commit=False, job="job-test"
-        )
+        r = moves.adjust.__wrapped__("colorbalancergb", "contrast", 0.05, commit=False,
+                                     job="job-test")
         self.assertEqual((r.previous, r.source), (0.0, "neutral"))
         self.assertIn("+5% (0% → 5%)", r.summary)
 
@@ -208,7 +175,8 @@ class AdjustTest(_MovesFixture):
         # could never be undone. Assert the journal entry carries the
         # neutral, and that `undo_last` sends the neutral back rather than
         # raising "the previous value ... was never readable from the XMP".
-        moves.adjust.__wrapped__("colorbalancergb", "contrast", 0.05, commit=False, job="job-test")
+        moves.adjust.__wrapped__("colorbalancergb", "contrast", 0.05, commit=False,
+                                 job="job-test")
         entry = journal.read_all("job-test")[-1]
         self.assertEqual(entry.before.get("value"), 0.0)
         self.assertEqual(entry.before.get("source"), "neutral")
@@ -223,9 +191,7 @@ class AdjustTest(_MovesFixture):
         "seq N ... never readable"."""
         from scouter.errors import CommitTimeout
 
-        def timeout_on_change(
-            job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None
-        ):
+        def timeout_on_change(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
             if expect_change:
                 raise CommitTimeout("sidecar never advanced")
             return CommitResult(committed=True, changed=False, warnings=[])
@@ -247,9 +213,8 @@ class AdjustTest(_MovesFixture):
         still journal the neutral as before, or `undo_last` wedges."""
         from scouter.errors import BridgeTimeout
 
-        def bridge_dies_on_change(
-            job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None
-        ):
+        def bridge_dies_on_change(job, image, *, strategy="auto", attempts=None,
+                                  expect_change=True, expect_module=None):
             if expect_change:
                 raise BridgeTimeout("bridge went away mid-commit")
             return CommitResult(committed=True, changed=False, warnings=[])
@@ -302,7 +267,8 @@ class AdjustTest(_MovesFixture):
     def test_precommit_timeout_is_downgraded_to_a_warning(self) -> None:
         from scouter.errors import CommitTimeout
 
-        with mock.patch("scouter.core.darkroom._commit", side_effect=CommitTimeout("no bounce")):
+        with mock.patch("scouter.core.darkroom._commit",
+                        side_effect=CommitTimeout("no bounce")):
             r = moves.adjust.__wrapped__("exposure", "exposure", 0.3, commit=False, job="job-test")
         self.assertTrue(any("pre-commit did not confirm" in w for w in r.warnings))
         self.assertEqual(len(self.sets()), 1)
@@ -323,11 +289,9 @@ class AdjustTest(_MovesFixture):
 
     def test_hue_wraps_modulo_360(self) -> None:
         hue = ("colorbalancergb", "shadows_hue")
-        with (
-            mock.patch.dict(dtbridge.ACTION_PATHS, {hue: "iop/colorbalancergb/lift/hue"}),
-            mock.patch("scouter.core.vocab.xmp_named", return_value=True),
-            mock.patch("scouter.core.moves.read_current", return_value=(350.0, "xmp", None)),
-        ):
+        with mock.patch.dict(dtbridge.ACTION_PATHS, {hue: "iop/colorbalancergb/lift/hue"}), \
+             mock.patch("scouter.core.vocab.xmp_named", return_value=True), \
+             mock.patch("scouter.core.moves.read_current", return_value=(350.0, "xmp", None)):
             r = moves.adjust.__wrapped__(*hue, 20.0, commit=False, job="job-test")
         self.assertAlmostEqual(r.target, 10.0)
         self.assertFalse(r.clamped)
@@ -349,22 +313,18 @@ class AdjustTest(_MovesFixture):
         self.assertEqual(r.plan[0]["path"], "iop/exposure/exposure")
 
     def test_brief_explain_is_attached(self) -> None:
-        r = moves.adjust.__wrapped__(
-            "exposure", "exposure", 0.3, commit=False, educative="brief", job="job-test"
-        )
+        r = moves.adjust.__wrapped__("exposure", "exposure", 0.3, commit=False,
+                                     educative="brief", job="job-test")
         self.assertEqual(len(r.explain), 1)
         self.assertIn("watch the highlights", r.explain[0])
-        off = moves.adjust.__wrapped__(
-            "exposure", "exposure", 0.3, commit=False, educative="off", job="job-test"
-        )
+        off = moves.adjust.__wrapped__("exposure", "exposure", 0.3, commit=False,
+                                       educative="off", job="job-test")
         self.assertEqual(off.explain, [])
 
     def test_ruling_30_guard_applies(self) -> None:
         from scouter import paths
-
         paths.job_state_update("job-test", lambda s: s.__setitem__("opened_image_id", 99))
         from scouter.errors import NotInDarkroom
-
         with self.assertRaises(NotInDarkroom):
             moves.adjust.__wrapped__("exposure", "exposure", 0.3, job="job-test")
         self.assertEqual(self.sets(), [])
@@ -402,15 +362,15 @@ class BeforeFallbackDefaultConsumerTest(_MovesFixture):
     `exposure.black` undo-before value, and the contrasting refusal for
     `exposure.exposure` (no declared neutral/default) in the same shape."""
 
-    def test_before_fallback_uses_exposure_black_default_when_module_has_no_history(self) -> None:
+    def test_before_fallback_uses_exposure_black_default_when_module_has_no_history(
+            self) -> None:
         resolved = ResolvedImage(image_id=12, path=str(self.raw), xmp_path=str(self.raw) + ".xmp")
         s = vocab.spec("exposure", "black")
         assert s is not None
         raw = {"value": None, "history_end": 12, "enabled": None}
         before = {"value": None}
-        with mock.patch(
-            "scouter.core.darkroom._raw_and_before_state", return_value=(raw, before, False)
-        ):
+        with mock.patch("scouter.core.darkroom._raw_and_before_state",
+                        return_value=(raw, before, False)):
             result = moves.before_fallback(resolved, s, 0, "job-test")
         self.assertEqual(result, (0.0, "default"))
 
@@ -420,9 +380,8 @@ class BeforeFallbackDefaultConsumerTest(_MovesFixture):
         assert s is not None
         raw = {"value": None, "history_end": 12, "enabled": None}
         before = {"value": None}
-        with mock.patch(
-            "scouter.core.darkroom._raw_and_before_state", return_value=(raw, before, False)
-        ):
+        with mock.patch("scouter.core.darkroom._raw_and_before_state",
+                        return_value=(raw, before, False)):
             with self.assertRaises(ValueUnknown):
                 moves.before_fallback(resolved, s, 0, "job-test")
 
@@ -430,8 +389,5 @@ class BeforeFallbackDefaultConsumerTest(_MovesFixture):
 class CliNegativeDeltaTest(unittest.TestCase):
     def test_negative_positional_delta_parses(self) -> None:
         from scouter.cli.main import build_parser
-
-        ns = build_parser().parse_args(
-            ["darkroom", "adjust", "sigmoid", "contrast", "-0.1", "--dry-run"]
-        )
+        ns = build_parser().parse_args(["darkroom", "adjust", "sigmoid", "contrast", "-0.1", "--dry-run"])
         self.assertEqual(ns.delta, -0.1)

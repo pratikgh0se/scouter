@@ -22,8 +22,8 @@ import shutil
 import signal
 import subprocess
 import time
-from collections.abc import Callable
 from pathlib import Path
+from typing import Callable
 
 DARKTABLE = Path("/Applications/darktable.app/Contents/MacOS/darktable")
 EDITING_TRIAL = Path.home() / "Pictures/EditingTrial"
@@ -71,8 +71,7 @@ STALE_BRIDGE_FILE_S = 300.0
 
 
 def _pending_bridge_files(
-    cache_dir: Path,
-    max_age_s: float = STALE_BRIDGE_FILE_S,
+    cache_dir: Path, max_age_s: float = STALE_BRIDGE_FILE_S,
     now: Callable[[], float] | None = None,
 ) -> list[str]:
     """Names of files in `cache_dir` that mean a request is IN FLIGHT: the
@@ -87,10 +86,8 @@ def _pending_bridge_files(
         return []
     current = (now or time.time)()
     return sorted(
-        p.name
-        for p in cache_dir.iterdir()
-        if p.is_file()
-        and p.suffix == ".json"
+        p.name for p in cache_dir.iterdir()
+        if p.is_file() and p.suffix == ".json"
         and (p.name.startswith("request-") or p.name.startswith("response-"))
         and (current - p.stat().st_mtime) <= max_age_s
     )
@@ -122,8 +119,7 @@ def assert_no_concurrent_darktable(
     if running():
         raise RuntimeError(
             "another darktable is running (pgrep -x darktable found a pid) -- "
-            "host probes run one darktable launch at a time; quit it first"
-        )
+            "host probes run one darktable launch at a time; quit it first")
     cache = cache_dir if cache_dir is not None else _bridge_cache_dir()
     pending = _pending_bridge_files(cache, max_age_s=stale_after_s, now=now)
     if pending:
@@ -131,8 +127,7 @@ def assert_no_concurrent_darktable(
             f"pending bridge request/response file(s) in {cache}: {pending} -- "
             "another darktable session may still be using the spool "
             "(the heartbeat file and cli-config/ directory are normal residents, "
-            "these are not)"
-        )
+            "these are not)")
 
 
 class PluginInstall:
@@ -285,9 +280,8 @@ def quit_darktable(proc: subprocess.Popen[bytes]) -> None:
 REAL_LIBRARY = Path.home() / ".config" / "darktable" / "library.db"
 
 
-def assert_isolated_library(
-    library: Path, scratch: Path | None = None, real: Path | None = None
-) -> Path:
+def assert_isolated_library(library: Path, scratch: Path | None = None,
+                            real: Path | None = None) -> Path:
     """Refuse (ValueError) any library path that is not strictly under the
     scratch dir or that is the real default library. Returns the resolved path."""
     root = (scratch or SCRATCH_DIR).resolve()

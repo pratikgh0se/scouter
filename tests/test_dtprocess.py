@@ -34,9 +34,8 @@ def test_launch_writes_owner_file_and_owned_pid_matches(owner, monkeypatch, tmp_
     if sys.platform == "darwin":
         fake.write_text('#!/bin/bash\nexec -a "$0" sleep 30\n')
     else:
-        # Linux `ps -o comm=` is the kernel comm: the basename of the file that
-        # was exec'd (here the script itself), and `exec -a` does not change it.
-        # So the script must stay the running process rather than exec sleep.
+        # Linux `ps -o comm=` is the kernel comm: the basename of the file that was exec'd
+        # (the script itself); `exec -a` does not change it, so the script must stay running.
         fake.write_text("#!/bin/bash\nsleep 30 &\nwait\n")
     fake.chmod(0o755)
     rec = dtprocess.launch(None, tmp_path / "lib" / "library.db", exe=str(fake))

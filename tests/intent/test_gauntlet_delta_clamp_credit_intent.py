@@ -25,31 +25,23 @@ def _adjust_envelope(clamped: bool) -> dict:
     plain ok when it did not report a clamp."""
     if not clamped:
         return {"ok": True, "outcome": "ok", "data": {"clamped": False}}
-    return {
-        "ok": False,
-        "outcome": "moved_to_limit",
-        "data": {"clamped": True, "cap": 0.0, "applied": 0.0, "requested": -0.075},
-    }
+    return {"ok": False, "outcome": "moved_to_limit",
+            "data": {"clamped": True, "cap": 0.0, "applied": 0.0, "requested": -0.075}}
 
 
 def _observation(ex: dict) -> Observation:
     key = DOC["key"]
     module, param = key.split(".")
     args = {"module": module, "param": param}
-    snaps = [
-        {"fingerprint": fp, "history_end": n, "params": {key: v}}
-        for fp, n, v in (("a", 0, None), ("b", 1, ex["start"]), ("c", 2, ex["committed"]))
-    ]
+    snaps = [{"fingerprint": fp, "history_end": n, "params": {key: v}}
+             for fp, n, v in (("a", 0, None), ("b", 1, ex["start"]), ("c", 2, ex["committed"]))]
     calls = [
         CallRecord("darkroom_set", args, {"ok": True, "outcome": "ok", "data": {}}, write=True),
-        CallRecord("darkroom_adjust", args, _adjust_envelope(ex["clamped"]), write=True),
+        CallRecord("darkroom_adjust", args,
+                   _adjust_envelope(ex["clamped"]), write=True),
     ]
-    return Observation(
-        calls=calls,
-        before=snaps[0],
-        after=snaps[2],
-        extra={"snapshots": [x["params"] for x in snaps]},
-    )
+    return Observation(calls=calls, before=snaps[0], after=snaps[2],
+                       extra={"snapshots": [x["params"] for x in snaps]})
 
 
 @pytest.mark.parametrize("ex", DOC["examples"], ids=lambda e: e["id"])

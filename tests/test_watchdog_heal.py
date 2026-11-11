@@ -25,7 +25,6 @@ class HealTest(unittest.TestCase):
         def heal(job, budget):
             self.heals.append(job)
             return {"outcome": outcome, "ms": 5, "pid_old": 1, "pid_new": 2}
-
         return heal
 
     def _flaky(self):
@@ -36,23 +35,21 @@ class HealTest(unittest.TestCase):
             if len(calls) == 1:
                 raise DarktableUnresponsive("wedged", detail={})
             return "ok"
-
         return fn, calls
 
     def test_off_by_default_raises_with_counters(self) -> None:
         fn, _ = self._flaky()
         with self.assertRaises(DarktableUnresponsive) as cm:
-            watchdog.run_with_heal(
-                "darkroom.say", fn, "j1", cfg=WatchdogConfig(), heal=self._heal()
-            )
+            watchdog.run_with_heal("darkroom.say", fn, "j1", cfg=WatchdogConfig(),
+                                   heal=self._heal())
         self.assertEqual(cm.exception.detail["heals_max"], 1)
         self.assertEqual(self.heals, [])
 
     def test_one_heal_one_retry_and_telemetry(self) -> None:
         fn, calls = self._flaky()
-        res, healed = watchdog.run_with_heal(
-            "darkroom.set", fn, "j1", cfg=WatchdogConfig(auto_heal=True), heal=self._heal()
-        )
+        res, healed = watchdog.run_with_heal("darkroom.set", fn, "j1",
+                                             cfg=WatchdogConfig(auto_heal=True),
+                                             heal=self._heal())
         self.assertEqual((res, healed, len(calls)), ("ok", True, 2))
         self.assertEqual(watchdog.heals_used("j1"), 1)
         events = self.cache.events()
@@ -73,22 +70,16 @@ class HealTest(unittest.TestCase):
         for verb in ("job.run", "library.import"):
             fn, calls = self._flaky()
             with self.assertRaises(DarktableUnresponsive) as cm:
-                watchdog.run_with_heal(
-                    verb, fn, f"j-{verb}", cfg=WatchdogConfig(auto_heal=True), heal=self._heal()
-                )
+                watchdog.run_with_heal(verb, fn, f"j-{verb}", cfg=WatchdogConfig(auto_heal=True),
+                                       heal=self._heal())
             self.assertTrue(cm.exception.detail["healed"])
             self.assertEqual(len(calls), 1)
 
     def test_foreign_darktable_is_refused_not_healed(self) -> None:
         fn, calls = self._flaky()
         with self.assertRaises(DarktableUnresponsive):
-            watchdog.run_with_heal(
-                "darkroom.say",
-                fn,
-                "j2",
-                cfg=WatchdogConfig(auto_heal=True),
-                heal=self._heal("refused_not_ours"),
-            )
+            watchdog.run_with_heal("darkroom.say", fn, "j2", cfg=WatchdogConfig(auto_heal=True),
+                                   heal=self._heal("refused_not_ours"))
         self.assertEqual(self.cache.events()[-1]["outcome"], "refused_not_ours")
         self.assertEqual(len(calls), 1)
 
@@ -96,22 +87,18 @@ class HealTest(unittest.TestCase):
 # --- Beyond the brief's five: the real heal, registry and doctor wiring, all
 # with dtprocess/dtbridge mocked. Nothing here launches or signals a process.
 
-_REC = dtprocess.Launched(
-    4242, "Sat Sep 26 10:00:00 2026", "/x/darktable", "/tmp/lib.db", "/tmp/cfg", None
-)
+_REC = dtprocess.Launched(4242, "Sat Sep 26 10:00:00 2026", "/x/darktable", "/tmp/lib.db",
+                          "/tmp/cfg", None)
 
 
 class HealDarktableTest(unittest.TestCase):
     def setUp(self) -> None:
         self.cache = TempCache()
         self.cache.start()
-        self.launch = mock.patch.object(
-            dtprocess,
-            "launch",
-            return_value=dtprocess.Launched(
-                4343, "t", "/x/darktable", "/tmp/lib.db", "/tmp/cfg", None
-            ),
-        )
+        self.launch = mock.patch.object(dtprocess, "launch",
+                                        return_value=dtprocess.Launched(
+                                            4343, "t", "/x/darktable", "/tmp/lib.db",
+                                            "/tmp/cfg", None))
         self.patches = [
             mock.patch.object(dtprocess, "read_owner", return_value=_REC),
             mock.patch.object(dtprocess, "owned_pid", return_value=4242),
@@ -134,9 +121,8 @@ class HealDarktableTest(unittest.TestCase):
         self.mocks["terminate"].assert_called_once_with(4242, responsive=False)
         self.mocks["launch"].assert_called_once_with(None, "/tmp/lib.db", "/tmp/cfg")
         self.mocks["wait_gui_ready"].assert_called_once_with(30.0)
-        self.mocks["call"].assert_called_once_with(
-            "darkroom.open", {"path": "/tmp/a.ORF"}, timeout=30.0
-        )
+        self.mocks["call"].assert_called_once_with("darkroom.open", {"path": "/tmp/a.ORF"},
+                                                   timeout=30.0)
 
     def test_no_owned_pid_is_refused_and_nothing_is_touched(self) -> None:
         self.mocks["owned_pid"].return_value = None
@@ -158,22 +144,17 @@ class HealDarktableTest(unittest.TestCase):
 
     def test_gui_never_ready_is_heal_failed(self) -> None:
         self.mocks["wait_gui_ready"].return_value = {"ready": False}
-        self.assertEqual(
-            watchdog.heal_darktable("j1", 10.0, clock=lambda: 0.0)["outcome"], "heal_failed"
-        )
+        self.assertEqual(watchdog.heal_darktable("j1", 10.0, clock=lambda: 0.0)["outcome"],
+                         "heal_failed")
         self.mocks["wait_gui_ready"].assert_called_once_with(10.0)
 
     def test_failed_heal_spends_the_budget(self) -> None:
         cfg = WatchdogConfig(auto_heal=True)
         fn, _ = HealTest._flaky(self)
         with self.assertRaises(DarktableUnresponsive):
-            watchdog.run_with_heal(
-                "darkroom.say",
-                fn,
-                "j3",
-                cfg=cfg,
-                heal=lambda j, b: {"outcome": "heal_failed", "ms": 1, "pid_old": 1, "pid_new": 2},
-            )
+            watchdog.run_with_heal("darkroom.say", fn, "j3", cfg=cfg,
+                                   heal=lambda j, b: {"outcome": "heal_failed", "ms": 1,
+                                                      "pid_old": 1, "pid_new": 2})
         self.assertEqual(watchdog.heals_used("j3"), 1)
 
     def test_plain_bridge_timeout_never_heals(self) -> None:
@@ -181,12 +162,10 @@ class HealDarktableTest(unittest.TestCase):
 
         def fn():
             raise BridgeTimeout("closed")
-
         heal = mock.Mock()
         with self.assertRaises(BridgeTimeout) as cm:
-            watchdog.run_with_heal(
-                "darkroom.say", fn, "j4", cfg=WatchdogConfig(auto_heal=True), heal=heal
-            )
+            watchdog.run_with_heal("darkroom.say", fn, "j4", cfg=WatchdogConfig(auto_heal=True),
+                                   heal=heal)
         self.assertNotIsInstance(cm.exception, DarktableUnresponsive)
         heal.assert_not_called()
 
@@ -220,12 +199,10 @@ class WiringTest(unittest.TestCase):
     def test_doctor_heal_refuses_without_an_owned_darktable(self) -> None:
         from scouter.cli import main as cli
 
-        with (
-            mock.patch.object(dtprocess, "read_owner", return_value=None),
-            mock.patch.object(dtprocess, "owned_pid", return_value=None),
-            mock.patch.object(dtprocess, "terminate") as term,
-            mock.patch("builtins.print") as out,
-        ):
+        with mock.patch.object(dtprocess, "read_owner", return_value=None), \
+                mock.patch.object(dtprocess, "owned_pid", return_value=None), \
+                mock.patch.object(dtprocess, "terminate") as term, \
+                mock.patch("builtins.print") as out:
             self.assertEqual(cli.main(["doctor", "--heal"]), 1)
         term.assert_not_called()
         body = json.loads(out.call_args[0][0])
@@ -235,12 +212,10 @@ class WiringTest(unittest.TestCase):
     def test_doctor_reports_the_auto_heal_line(self) -> None:
         from scouter.cli import main as cli
 
-        with (
-            mock.patch.object(dtbridge, "health", return_value={"state": "alive", "ping_ms": 1}),
-            mock.patch.object(dtprocess, "running_pids", return_value=[]),
-            mock.patch.object(dtprocess, "owned_pid", return_value=None),
-            mock.patch("builtins.print") as out,
-        ):
+        with mock.patch.object(dtbridge, "health", return_value={"state": "alive", "ping_ms": 1}), \
+                mock.patch.object(dtprocess, "running_pids", return_value=[]), \
+                mock.patch.object(dtprocess, "owned_pid", return_value=None), \
+                mock.patch("builtins.print") as out:
             cli.main(["doctor"])
         report = json.loads(out.call_args[0][0])
         self.assertEqual(report["auto_heal_line"], "auto_heal: off, heals this job: 0/1")
@@ -269,7 +244,6 @@ class FixRound1Test(unittest.TestCase):
         def nudge():
             sent.append("steps")  # the steps land, then the commit wedges
             raise DarktableUnresponsive("history.commit wedged", detail={})
-
         with self.assertRaises(DarktableUnresponsive) as cm:
             watchdog.run_with_heal("darkroom.nudge", nudge, "n1", cfg=self.on, heal=self._healed)
         self.assertEqual(sent, ["steps"])
@@ -278,36 +252,17 @@ class FixRound1Test(unittest.TestCase):
 
     def test_darkroom_set_is_retried(self) -> None:
         fn, calls = HealTest._flaky(self)
-        res, healed = watchdog.run_with_heal(
-            "darkroom.set", fn, "s1", cfg=self.on, heal=self._healed
-        )
+        res, healed = watchdog.run_with_heal("darkroom.set", fn, "s1", cfg=self.on,
+                                             heal=self._healed)
         self.assertEqual((res, healed, len(calls)), ("ok", True, 2))
 
     def test_retry_safe_allow_list(self) -> None:
-        for verb in (
-            "darkroom.set",
-            "darkroom.enable",
-            "darkroom.reset",
-            "darkroom.open",
-            "darkroom.get",
-            "wb.kelvin",
-            "history.read",
-        ):
+        for verb in ("darkroom.set", "darkroom.enable", "darkroom.reset", "darkroom.open",
+                     "darkroom.get", "wb.kelvin", "history.read"):
             self.assertTrue(watchdog.retry_safe(verb), verb)
-        for verb in (
-            "darkroom.nudge",
-            "darkroom.say",
-            "darkroom.adjust",
-            "style.apply",
-            "style.apply_set",
-            "preset.apply",
-            "preset.apply_job",
-            "cull.apply",
-            "export.run",
-            "library.import",
-            "job.run",
-            "no.such_verb",
-        ):
+        for verb in ("darkroom.nudge", "darkroom.say", "darkroom.adjust", "style.apply",
+                     "style.apply_set", "preset.apply", "preset.apply_job", "cull.apply",
+                     "export.run", "library.import", "job.run", "no.such_verb"):
             self.assertFalse(watchdog.retry_safe(verb), verb)
 
     # I2 --------------------------------------------------------------
@@ -318,18 +273,17 @@ class FixRound1Test(unittest.TestCase):
         mock.patch.object(dtprocess, "owned_pid", return_value=4242).start()
         mock.patch.object(dtprocess, "terminate", return_value={"ok": True}).start()
         mock.patch.object(dtprocess, "clear_stale_locks", return_value=[]).start()
-        mock.patch.object(
-            dtprocess,
-            "launch",
-            return_value=dtprocess.Launched(4343, "t", "/x/darktable", "/tmp/lib.db", None, None),
-        ).start()
-        wait = mock.patch.object(dtprocess, "wait_gui_ready", return_value={"ready": True}).start()
+        mock.patch.object(dtprocess, "launch", return_value=dtprocess.Launched(
+            4343, "t", "/x/darktable", "/tmp/lib.db", None, None)).start()
+        wait = mock.patch.object(dtprocess, "wait_gui_ready",
+                                 return_value={"ready": True}).start()
         call = mock.patch.object(dtbridge, "call", return_value={}).start()
         return (lambda: next(t)), wait, call
 
     def test_heal_is_bounded_by_the_budget(self) -> None:
         # t0=0; terminate took 55 s of a 60 s budget: gui wait gets only 5 s.
-        clock, wait, call = self._heal_mocks([0.0, 55.0, 55.0, 55.0, 57.0, 57.0, 57.0, 58.0, 58.0])
+        clock, wait, call = self._heal_mocks([0.0, 55.0, 55.0, 55.0, 57.0, 57.0, 57.0, 58.0,
+                                              58.0])
         paths.job_state_update("b1", lambda s: s.update(opened_path="/tmp/a.ORF"))
         res = watchdog.heal_darktable("b1", 60.0, clock=clock)
         self.assertEqual(res["outcome"], "healed")
@@ -344,9 +298,8 @@ class FixRound1Test(unittest.TestCase):
         dtprocess.launch.assert_not_called()
         wait.assert_not_called()
         with self.assertRaises(DarktableUnresponsive):
-            watchdog.run_with_heal(
-                "darkroom.set", HealTest._flaky(self)[0], "b2", cfg=self.on, heal=lambda j, b: res
-            )
+            watchdog.run_with_heal("darkroom.set", HealTest._flaky(self)[0], "b2", cfg=self.on,
+                                   heal=lambda j, b: res)
         self.assertTrue(self.cache.events()[-1]["outcome"] == "heal_failed")
         self.assertTrue(self.cache.audit("b2")[-1]["detail"]["budget_exceeded"])
 
@@ -354,16 +307,10 @@ class FixRound1Test(unittest.TestCase):
     def test_watchdog_config_is_type_checked(self) -> None:
         from scouter.errors import UsageError
 
-        for bad in (
-            {"auto_heal": "false"},
-            {"auto_heal": 1},
-            {"max_heals_per_job": "1"},
-            {"max_heals_per_job": True},
-            {"max_heals_per_job": -1},
-            {"heal_budget_s": "60"},
-            {"heal_budget_s": 0},
-            {"heal_budget_s": float("inf")},
-        ):
+        for bad in ({"auto_heal": "false"}, {"auto_heal": 1}, {"max_heals_per_job": "1"},
+                    {"max_heals_per_job": True}, {"max_heals_per_job": -1},
+                    {"heal_budget_s": "60"}, {"heal_budget_s": 0},
+                    {"heal_budget_s": float("inf")}):
             with self.assertRaises(UsageError, msg=bad):
                 WatchdogConfig(**bad)
         WatchdogConfig(auto_heal=True, max_heals_per_job=0, heal_budget_s=30)
@@ -377,10 +324,8 @@ class FixRound1Test(unittest.TestCase):
         with self.assertRaises(UsageError):
             config.load(str(cfg_file))
         heal = mock.Mock()
-        with (
-            mock.patch.dict(os.environ, {"SCOUTER_CONFIG": str(cfg_file)}),
-            self.assertRaises(DarktableUnresponsive),
-        ):
+        with mock.patch.dict(os.environ, {"SCOUTER_CONFIG": str(cfg_file)}), \
+                self.assertRaises(DarktableUnresponsive):
             watchdog.run_with_heal("darkroom.set", HealTest._flaky(self)[0], "c1", heal=heal)
         heal.assert_not_called()
 
@@ -390,13 +335,11 @@ class FixRound1Test(unittest.TestCase):
 
         def fn():
             raise (DarktableUnresponsive if not fn.n else BridgeTimeout)("x", detail={})
-
         fn.n = 0
 
         def heal(job, budget):
             fn.n = 1
             return self._healed(job, budget)
-
         with self.assertRaises(BridgeTimeout) as cm:
             watchdog.run_with_heal("darkroom.set", fn, "r1", cfg=self.on, heal=heal)
         self.assertTrue(cm.exception.detail["healed"])

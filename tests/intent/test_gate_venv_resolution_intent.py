@@ -28,33 +28,31 @@ REAL_PYTHON_LIB_SH = REPO_ROOT / "scripts" / "_python.sh"
 EXAMPLES = json.loads((Path(__file__).parent / "gate_venv_resolution.json").read_text())["examples"]
 
 STUB_MUTATION_CHECK_PY = (
-    "import sys\n" "print('PYEXE:' + sys.executable)\n" "print('PYPREFIX:' + sys.prefix)\n"
+    "import sys\n"
+    "print('PYEXE:' + sys.executable)\n"
+    "print('PYPREFIX:' + sys.prefix)\n"
 )
 
 DIRECT_PROBE_SCRIPT = (
     'source "$1"\n'
     'resolve_scouter_python "$2"\n'
-    "exec \"$PYTHON\" -c \"import sys; print('PYEXE:'+sys.executable); print('PYPREFIX:'+sys.prefix)\"\n"
+    'exec "$PYTHON" -c "import sys; print(\'PYEXE:\'+sys.executable); print(\'PYPREFIX:\'+sys.prefix)"\n'
 )
 
 
 def _run_git(args: list[str], cwd: Path) -> None:
     subprocess.run(["git"] + args, cwd=cwd, check=True, capture_output=True, text=True)
 
-
 def _head_sha(repo: Path) -> str:
     return subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
     ).stdout.strip()
 
-
 def _make_venv(path: Path) -> None:
     subprocess.run(
         [sys.executable, "-m", "venv", "--without-pip", str(path)],
-        check=True,
-        capture_output=True,
+        check=True, capture_output=True,
     )
-
 
 def _clean_env(env_extra: dict) -> dict:
     # I2, R2-I1: never inherit the CALLING shell's own SCOUTER_PYTHON/PYTHON.
@@ -63,7 +61,6 @@ def _clean_env(env_extra: dict) -> dict:
     env.pop("PYTHON", None)
     env.update(env_extra)
     return env
-
 
 def _make_fixture_repo(base: Path, name: str, with_venv: bool) -> tuple[Path, str]:
     """A throwaway git repo with real copies of mutation_check.sh +
@@ -88,7 +85,6 @@ def _make_fixture_repo(base: Path, name: str, with_venv: bool) -> tuple[Path, st
         _make_venv(repo / ".venv")
     return repo, sha
 
-
 def _make_bare_sibling_fixture(base: Path, name: str) -> tuple[Path, str, str]:
     # A bare clone with a sibling .venv beside it -- the .git-basename
     # guard (M1) must exclude this, unlike a real main checkout's .venv.
@@ -101,27 +97,19 @@ def _make_bare_sibling_fixture(base: Path, name: str) -> tuple[Path, str, str]:
     bare_repo = base / (name + ".git")
     subprocess.run(
         ["git", "clone", "--bare", "-q", str(src), str(bare_repo)],
-        check=True,
-        capture_output=True,
-        text=True,
+        check=True, capture_output=True, text=True,
     )
     _make_venv(base / ".venv")
     return bare_repo, main_sha, batch_sha
 
-
 def _add_worktree(repo: Path, sha: str, dest: Path) -> None:
     _run_git(["worktree", "add", "--detach", "-q", str(dest), sha], repo)
-
 
 def _remove_worktree(repo: Path, dest: Path) -> None:
     subprocess.run(
         ["git", "worktree", "remove", "--force", str(dest)],
-        cwd=repo,
-        check=False,
-        capture_output=True,
-        text=True,
+        cwd=repo, check=False, capture_output=True, text=True,
     )
-
 
 def _identity(p: str) -> str:
     # Dir realpath + basename; never resolve() the final symlink, it
@@ -129,30 +117,24 @@ def _identity(p: str) -> str:
     path = Path(p)
     return str(path.parent.resolve() / path.name)
 
-
 def _python3_via_path(env_extra: dict) -> tuple[str, str]:
     """What a bare python3 resolves to via PATH, computed independently so
     the fallback example doesn't hardcode a path."""
     env = _clean_env(env_extra)
     proc = subprocess.run(
         ["python3", "-c", "import sys; print(sys.executable); print(sys.prefix)"],
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
+        env=env, check=True, capture_output=True, text=True, timeout=30,
     )
     out = proc.stdout.splitlines()
     return out[0], out[1]
-
 
 def _parse_probe_output(stdout: str) -> tuple[str, str]:
     pyexe = pyprefix = None
     for line in stdout.splitlines():
         if line.startswith("PYEXE:"):
-            pyexe = line[len("PYEXE:") :]
+            pyexe = line[len("PYEXE:"):]
         elif line.startswith("PYPREFIX:"):
-            pyprefix = line[len("PYPREFIX:") :]
+            pyprefix = line[len("PYPREFIX:"):]
     assert pyexe and pyprefix, f"probe did not report both oracles: {stdout!r}"
     return pyexe, pyprefix
 
@@ -165,9 +147,7 @@ class GateVenvResolutionIntentTest(unittest.TestCase):
         base = Path(cls._tmp.name)
         cls.base = base
         cls.main_repo, cls.main_sha = _make_fixture_repo(base, "main_venv_repo", with_venv=True)
-        cls.no_venv_repo, cls.no_venv_sha = _make_fixture_repo(
-            base, "no_venv_repo", with_venv=False
-        )
+        cls.no_venv_repo, cls.no_venv_sha = _make_fixture_repo(base, "no_venv_repo", with_venv=False)
         cls.bare_sibling_repo, cls.bare_sibling_main_sha, cls.bare_sibling_batch_sha = (
             _make_bare_sibling_fixture(base, "sibling_repo")
         )
@@ -194,9 +174,8 @@ class GateVenvResolutionIntentTest(unittest.TestCase):
             env_extra["PYTHON"] = str(self.override_venv / "bin" / "python3")
         return env_extra
 
-    def _expected_identity(
-        self, want_resolved_is: str, own_venv_dir: Path | None, env_extra: dict
-    ) -> tuple[str, str]:
+    def _expected_identity(self, want_resolved_is: str, own_venv_dir: Path | None,
+                            env_extra: dict) -> tuple[str, str]:
         if want_resolved_is == "main_venv":
             return (
                 _identity(str(self.main_repo / ".venv" / "bin" / "python3")),
@@ -221,22 +200,16 @@ class GateVenvResolutionIntentTest(unittest.TestCase):
         if target == "direct":
             return (
                 ["bash", "-c", DIRECT_PROBE_SCRIPT, "probe", str(REAL_PYTHON_LIB_SH), str(wt)],
-                None,
-                {},
+                None, {},
             )
         if target == "mutation_check_sh":
             return (["scripts/mutation_check.sh", "x", "y", str(wt)], wt, {})
         if target == "htc_post_run_sh":
             run_dir = self.base / ("rundir_" + ex["id"])
             run_dir.mkdir()
-            (run_dir / "progress.json").write_text(
-                json.dumps(
-                    {
-                        "status": "done",
-                        "layers": {"offline": {"status": "done"}},
-                    }
-                )
-            )
+            (run_dir / "progress.json").write_text(json.dumps({
+                "status": "done", "layers": {"offline": {"status": "done"}},
+            }))
             extra_env = {
                 "HTC_REPO": str(wt),
                 "BATCH": self.bare_sibling_batch_sha,
@@ -252,17 +225,12 @@ class GateVenvResolutionIntentTest(unittest.TestCase):
             return _parse_probe_output(stdout)
         # htc_post_run_sh is print-only: read the interpreter out of its
         # printed gate command, then run THAT interpreter for both oracles.
-        py_path = next(
-            (line.split()[0] for line in stdout.splitlines() if "mutation_check.py" in line), None
-        )
+        py_path = next((line.split()[0] for line in stdout.splitlines()
+                         if "mutation_check.py" in line), None)
         assert py_path, f"no printed gate command found: {stdout!r}"
         probe = subprocess.run(
             [py_path, "-c", "import sys; print(sys.executable); print(sys.prefix)"],
-            env=_clean_env({}),
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
+            env=_clean_env({}), check=True, capture_output=True, text=True, timeout=30,
         )
         pyexe, pyprefix = probe.stdout.splitlines()
         return pyexe, pyprefix
@@ -282,14 +250,11 @@ class GateVenvResolutionIntentTest(unittest.TestCase):
             env = _clean_env(env_extra)
             argv, cwd, extra_env = self._command(target, wt, ex)
             env.update(extra_env)
-            proc = subprocess.run(
-                argv, cwd=cwd, env=env, check=True, capture_output=True, text=True, timeout=30
-            )
+            proc = subprocess.run(argv, cwd=cwd, env=env, check=True,
+                                   capture_output=True, text=True, timeout=30)
             pyexe, pyprefix = self._parse(target, proc.stdout)
 
-            want_exe, want_prefix = self._expected_identity(
-                want["resolved_is"], own_venv_dir, env_extra
-            )
+            want_exe, want_prefix = self._expected_identity(want["resolved_is"], own_venv_dir, env_extra)
             # Oracle 1: the resolved interpreter's own reported path.
             self.assertEqual(_identity(pyexe), want_exe, ex["id"])
             # Oracle 2: that interpreter's own sys.prefix when actually run.
@@ -301,7 +266,6 @@ class GateVenvResolutionIntentTest(unittest.TestCase):
 def _make(ex: dict):
     def test(self: GateVenvResolutionIntentTest) -> None:
         self.run_example(ex)
-
     return test
 
 

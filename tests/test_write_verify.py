@@ -74,20 +74,14 @@ class _FakeDarktable(unittest.TestCase):
         self.force_rewrite = False
         self.history_end: int | None = None
         self.commits: list[tuple] = []
-        self.bridge = FakeBridge(
-            {
-                "darkroom.current": {
-                    "image_id": 12,
-                    "path": str(self.raw),
-                    "view": "darkroom",
-                    "source": "action_images",
-                },
-                "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
-                "darkroom.action": self._action,
-                "module.reset": self._reset,
-                "module.enable": {"nan": False, "view": "darkroom"},
-            }
-        )
+        self.bridge = FakeBridge({
+            "darkroom.current": {"image_id": 12, "path": str(self.raw), "view": "darkroom",
+                                 "source": "action_images"},
+            "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
+            "darkroom.action": self._action,
+            "module.reset": self._reset,
+            "module.enable": {"nan": False, "view": "darkroom"},
+        })
         dtbridge.set_bridge(self.bridge)
         patcher = mock.patch("scouter.core.darkroom._commit", side_effect=self._commit)
         patcher.start()
@@ -109,9 +103,8 @@ class _FakeDarktable(unittest.TestCase):
         self.pending.append((p["module"], "__reset__", 0.0))
         return {"nan": False, "view": "darkroom"}
 
-    def _commit(
-        self, job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None
-    ):
+    def _commit(self, job, image, *, strategy="auto", attempts=None, expect_change=True,
+                expect_module=None):
         self.commits.append((attempts, expect_change))
         before = self.sidecar.read_text()
         text = before
@@ -135,9 +128,8 @@ class _FakeDarktable(unittest.TestCase):
                 return CommitResult(committed=False, changed=False, confirmed=False)
             raise CommitTimeout("darktable did not write the sidecar (fake)")
         if self.history_end is not None:
-            text = re.sub(
-                r'darktable:history_end="\d+"', f'darktable:history_end="{self.history_end}"', text
-            )
+            text = re.sub(r'darktable:history_end="\d+"',
+                          f'darktable:history_end="{self.history_end}"', text)
         self.sidecar.write_text(with_new_history_hash(text))
         return CommitResult(committed=True, changed=True, warnings=[])
 
@@ -207,12 +199,9 @@ class SilentFailureTest(_FakeDarktable):
 
         self.bridge.responses["darkroom.action"] = action
         self.force_rewrite = True
-        with mock.patch(
-            "scouter.core.darkroom._temperature_extra",
-            side_effect=lambda path, inst: (
-                {"params": landed, "params_hex": None} if sent["n"] else before
-            ),
-        ):
+        with mock.patch("scouter.core.darkroom._temperature_extra",
+                        side_effect=lambda path, inst: {"params": landed, "params_hex": None}
+                        if sent["n"] else before):
             return moves.adjust.__wrapped__("temperature", "temperature", 300.0, job="job-test")
 
     def test_warmer_that_landed_within_the_model_offset_is_ok(self) -> None:
@@ -235,8 +224,7 @@ class SilentFailureTest(_FakeDarktable):
                 self.assertEqual(cm.exception.detail["tolerance"], 0.03)
 
     def test_wb_verify_tolerance_is_pinned_between_the_model_offset_and_one_table_step(
-        self,
-    ) -> None:
+            self) -> None:
         # Source: the shipped measured table scouter/data/wb/em10iii.json
         # (1000 K resolution, 3000-12000 K). Its smallest relative r/b change
         # between adjacent samples is 11000 -> 12000 K (~3.9%). The tolerance
@@ -271,11 +259,7 @@ class SilentFailureTest(_FakeDarktable):
 
     def test_a_nudge_whose_sidecar_disagrees_with_darktables_report_is_unverified(self) -> None:
         self.bridge.responses["darkroom.action"] = lambda p: {
-            "nan": False,
-            "status": 1.6,
-            "view": "darkroom",
-            **p,
-        }
+            "nan": False, "status": 1.6, "view": "darkroom", **p}
         self.force_rewrite = True
         with self.assertRaises(WriteUnverified):
             darkroom.nudge("exposure", "exposure", steps=1, job="job-test")
@@ -292,11 +276,8 @@ class SilentFailureTest(_FakeDarktable):
 
         from scouter.core import phrases
 
-        two = phrases.Phrase(
-            "two_moves",
-            ("two moves",),
-            (phrases._adj("exposure", "exposure", 1), phrases._adj("exposure", "black", -1)),
-        )
+        two = phrases.Phrase("two_moves", ("two moves",), (
+            phrases._adj("exposure", "exposure", 1), phrases._adj("exposure", "black", -1)))
         self.store = store
         with mock.patch.dict(phrases._INDEX, {"two moves": two}):
             env = registry.call("darkroom.say", "mcp", phrase="two moves", job="job-test")
@@ -324,9 +305,8 @@ class HardClampTest(_FakeDarktable):
         self.assertAlmostEqual(r.applied, 1.0, places=6)
         self.assertEqual(r.requested, 1.1)
         self.assertTrue(any("hard limit" in w and "1" in w for w in r.warnings), r.warnings)
-        env = registry.call(
-            "darkroom.set", "mcp", module="sigmoid", param="skew", value=-1.1, job="job-test"
-        )
+        env = registry.call("darkroom.set", "mcp", module="sigmoid", param="skew", value=-1.1,
+                            job="job-test")
         self.assertTrue(env.data["clamped"])
 
     def test_a_mismatch_no_bound_explains_is_still_unverified(self) -> None:

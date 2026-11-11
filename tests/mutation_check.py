@@ -57,11 +57,11 @@ regardless of size, which this repo's OWN 48-test self-suite (below) can
 exceed when a merge_gate run over a large range selects nearly all of them
 as "new/changed" at once.
 """
-
 import argparse
 import ast
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -94,15 +94,8 @@ def sh(argv, cwd=None, timeout=300, input_text=None):
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     try:
-        p = subprocess.run(
-            argv,
-            cwd=str(cwd) if cwd else None,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            input=input_text,
-            env=env,
-        )
+        p = subprocess.run(argv, cwd=str(cwd) if cwd else None, capture_output=True,
+                            text=True, timeout=timeout, input=input_text, env=env)
     except subprocess.TimeoutExpired:
         return 124, "timed out"
     except OSError as exc:
@@ -278,9 +271,8 @@ def collected_item_names(root, rel_path, python, timeout=60):
     `rel_path`, as a `{class_or_None: [method_or_function, ...]}` map (B3).
     Never raises - a failed collection just yields `{}`, so callers fall
     back to the AST-only view rather than crash."""
-    rc, out = sh(
-        [python, "-m", "pytest", "--collect-only", "-q", rel_path], cwd=root, timeout=timeout
-    )
+    rc, out = sh([python, "-m", "pytest", "--collect-only", "-q", rel_path],
+                 cwd=root, timeout=timeout)
     result = {}
     for line in (out or "").splitlines():
         line = line.strip()
@@ -378,7 +370,7 @@ PYTEST_FAILED_SUMMARY_RE = re.compile(r"\b(\d+) failed\b")
 
 
 def classify_pytest_outcome(rc, out):
-    """ "passed" (rc 0: nothing failed - the mutation did NOT discriminate),
+    """"passed" (rc 0: nothing failed - the mutation did NOT discriminate),
     "failed" (rc 1 AND the summary line reports >=1 failed: a genuine,
     discriminating failure), or "error_runner" (anything else: rc 2/3/4,
     "no tests ran", "not found"/"no match in any of", or no recognizable
@@ -426,9 +418,8 @@ def run_pytest(root, node_ids, python, timeout=None):
 # assertion failure, which never prints either string. Matched on OUTPUT, not
 # rc: a collection error and a real failure can both exit non-zero (fix
 # round 1).
-COLLECTION_ERROR_RE = re.compile(
-    r"ERROR collecting|ImportError while importing test module|" r"errors? during collection"
-)
+COLLECTION_ERROR_RE = re.compile(r"ERROR collecting|ImportError while importing test module|"
+                                  r"errors? during collection")
 
 
 def is_collection_error(out):
@@ -464,8 +455,7 @@ CANNOT_IMPORT_RE = re.compile(r"cannot import name '(\w+)' from '([\w.]+)'")
 MARKER_RE = re.compile(
     r"^#\s*mutation-check:\s*targets-predate-range\s+([0-9a-fA-F]{7,40})\s+--\s*(.+?)"
     r"(?:\s*::\s*([\w.]+(?:\s*,\s*[\w.]+)*))?\s*$",
-    re.MULTILINE,
-)
+    re.MULTILINE)
 
 
 def extract_marker(source, top_lines=20):
@@ -518,22 +508,15 @@ def new_module_import_error(out, new_prod_files):
     m2 = CANNOT_IMPORT_RE.search(out)
     for f in new_prod_files:
         dotted, attr, package = _prod_module_candidates(f)
-        if m1 and (
-            m1.group(1) == dotted
-            or dotted.startswith(m1.group(1) + ".")
-            or m1.group(1).startswith(dotted + ".")
-            # Fix round 4 (window-5 gate run, gate-w5.txt): a test file
-            # that hacks sys.path to import a submodule by its bare
-            # stem gets "No module named '<stem>'", not the dotted
-            # path - match the bare stem too.
-            or m1.group(1) == attr
-        ):
+        if m1 and (m1.group(1) == dotted or dotted.startswith(m1.group(1) + ".")
+                   or m1.group(1).startswith(dotted + ".")
+                   # Fix round 4 (window-5 gate run, gate-w5.txt): a test file
+                   # that hacks sys.path to import a submodule by its bare
+                   # stem gets "No module named '<stem>'", not the dotted
+                   # path - match the bare stem too.
+                   or m1.group(1) == attr):
             return True
-        if (
-            m2
-            and m2.group(1) == attr
-            and m2.group(2) in (package, dotted.rsplit(".", 1)[0] if "." in dotted else "")
-        ):
+        if m2 and m2.group(1) == attr and m2.group(2) in (package, dotted.rsplit(".", 1)[0] if "." in dotted else ""):
             return True
     return False
 
@@ -834,7 +817,7 @@ def any_assert_in_ranges(text, func_ranges):
     gate for round 6's file-level fallback rather than a report line."""
     lines = text.splitlines(keepends=True)
     for start, end in func_ranges:
-        body = "".join(lines[start - 1 : min(end, len(lines))])
+        body = "".join(lines[start - 1:min(end, len(lines))])
         if "assert" in body:
             return True
     return False
@@ -857,13 +840,13 @@ def apply_weakening(text, func_ranges):
         ):
             m = pattern.search(body)
             if m:
-                new_body = body[: m.start()] + repl + body[m.end() :]
+                new_body = body[:m.start()] + repl + body[m.end():]
                 return text[:body_start] + new_body + text[body_end:], what
         m = BARE_ASSERT_EQ_RE.search(body)
         if m:
             line = m.group(0)
             flipped = line.replace(" == ", " != ", 1)
-            new_body = body[: m.start()] + flipped + body[m.end() :]
+            new_body = body[:m.start()] + flipped + body[m.end():]
             return text[:body_start] + new_body + text[body_end:], "assert a == b -> assert a != b"
     return None, None
 
@@ -878,14 +861,7 @@ def _assertion_occurrences(body):
     for m in ASSERT_TRUE_RE.finditer(body):
         occ.append((m.start(), m.end(), "assertFalse(", "assertTrue -> assertFalse"))
     for m in BARE_ASSERT_EQ_RE.finditer(body):
-        occ.append(
-            (
-                m.start(),
-                m.end(),
-                m.group(0).replace(" == ", " != ", 1),
-                "assert a == b -> assert a != b",
-            )
-        )
+        occ.append((m.start(), m.end(), m.group(0).replace(" == ", " != ", 1), "assert a == b -> assert a != b"))
     occ.sort(key=lambda o: o[0])
     return occ
 
@@ -965,18 +941,13 @@ def _find_helper_with_assert(source, body, own_class, all_funcs):
             continue
         candidates = [(own_class, name), (None, name)]
         for cls, fname in all_funcs:
-            if (
-                fname == name
-                and cls
-                and cls != own_class
-                and (cls.endswith("Fixture") or cls.endswith("Base"))
-            ):
+            if fname == name and cls and cls != own_class and (cls.endswith("Fixture") or cls.endswith("Base")):
                 candidates.append((cls, name))
         for key in candidates:
             if key in all_funcs:
                 s2, e2 = all_funcs[key]
                 lines = source.splitlines()
-                helper_body = "\n".join(lines[s2 - 1 : e2])
+                helper_body = "\n".join(lines[s2 - 1:e2])
                 if "assert" in helper_body:
                     return name, s2, e2
     return None
@@ -990,7 +961,7 @@ def _asserts_via_helper(source, body, own_class, all_funcs):
 
 def static_flags(source, lineno, end_lineno, own_class=None, all_funcs=None):
     lines = source.splitlines()
-    body = "\n".join(lines[lineno - 1 : end_lineno])
+    body = "\n".join(lines[lineno - 1:end_lineno])
     flags = []
     if "assert" not in body:
         helper = _asserts_via_helper(source, body, own_class, all_funcs or {})
@@ -1002,7 +973,7 @@ def static_flags(source, lineno, end_lineno, own_class=None, all_funcs=None):
         flags.append("assertTrue(True) / assert True - a tautology")
     if BARE_EXCEPT_RE.search(body):
         flags.append("bare `except: pass` could swallow the subject's own error")
-    deco_window = "\n".join(lines[max(0, lineno - 6) : lineno - 1])
+    deco_window = "\n".join(lines[max(0, lineno - 6):lineno - 1])
     m = SKIP_MARK_RE.search(deco_window)
     if m:
         flags.append(f"@pytest.mark.{m.group(1)} on a new/changed test")
@@ -1058,11 +1029,7 @@ def _cell(state, why=None):
     if state == "fallback_ok":
         return f"FAIL (good) [{why}]" if why else "FAIL (good) [weaken: file-level fallback]"
     if state == "fallback_bad":
-        return (
-            f"did not fail (BAD) [{why}]"
-            if why
-            else "did not fail (BAD) [weaken: file-level fallback]"
-        )
+        return f"did not fail (BAD) [{why}]" if why else "did not fail (BAD) [weaken: file-level fallback]"
     if state == "helper_ok":
         return f"FAIL (good) [{why}]"
     if state == "helper_bad":
@@ -1214,11 +1181,7 @@ def _mentions_missing_prod_symbol(out, repo, base, prod_files):
     ALL of their `--base` sources."""
     for _, module_dotted, symbol in _symbol_error_candidates(out):
         module_path = _module_path_for_dotted(module_dotted, prod_files)
-        candidates = (
-            [module_path]
-            if module_path is not None
-            else _bare_stem_candidates(module_dotted, prod_files)
-        )
+        candidates = [module_path] if module_path is not None else _bare_stem_candidates(module_dotted, prod_files)
         if not candidates:
             continue
         pattern = _SYMBOL_WORD_RE_CACHE.get(symbol)
@@ -1343,11 +1306,7 @@ def _check_range_impl(repo, base, head):
     python = gate_python(repo)
     changed = changed_files(repo, base, head)
     test_files = [f for f in changed if is_test_file(f)]
-    prod_files = [
-        f
-        for f in changed
-        if f.endswith(".py") and not is_test_file(f) and not is_test_support_file(f)
-    ]
+    prod_files = [f for f in changed if f.endswith(".py") and not is_test_file(f) and not is_test_support_file(f)]
 
     rows = []
     ok = True
@@ -1445,27 +1404,20 @@ def _check_range_impl(repo, base, head):
             ok = False
             continue
         if not marker_ids:
-            why = (
-                f"marker has no `:: <ids>` list ({reason}) - a file-level marker with "
-                "no ids is stale as of round 13"
-            )
+            why = (f"marker has no `:: <ids>` list ({reason}) - a file-level marker with "
+                   "no ids is stale as of round 13")
             _assign_revert_state(revert_by_file, f, funcs, "marker_stale", why)
             ok = False
             continue
         unknown = [i for i in marker_ids if i not in file_ids]
         if unknown:
-            why = (
-                f"marker names test id(s) not in this range's new/changed set for "
-                f"{f}: {', '.join(unknown)} ({reason})"
-            )
+            why = (f"marker names test id(s) not in this range's new/changed set for "
+                   f"{f}: {', '.join(unknown)} ({reason})")
             _assign_revert_state(revert_by_file, f, funcs, "marker_stale", why)
             ok = False
             continue
-        covered = [
-            (cls, name, s, e)
-            for cls, name, s, e in funcs
-            if (f"{cls}.{name}" if cls else name) in set(marker_ids)
-        ]
+        covered = [(cls, name, s, e) for cls, name, s, e in funcs
+                   if (f"{cls}.{name}" if cls else name) in set(marker_ids)]
         _assign_revert_state(revert_by_file, f, covered, "targets_predate_range", reason)
 
     # Every id NOT already given a state above (no marker at all, or a marker
@@ -1481,11 +1433,8 @@ def _check_range_impl(repo, base, head):
         if f in revert_by_file and not uncovered_ids:
             continue
         if handled:
-            funcs = [
-                (cls, name, s, e)
-                for cls, name, s, e in funcs
-                if (f"{cls}.{name}" if cls else name) in uncovered_ids
-            ]
+            funcs = [(cls, name, s, e) for cls, name, s, e in funcs
+                     if (f"{cls}.{name}" if cls else name) in uncovered_ids]
         remaining[f] = (status, funcs)
 
     if prod_files and remaining:
@@ -1507,14 +1456,9 @@ def _check_range_impl(repo, base, head):
                     # BEFORE the no-production-change import check since
                     # there is nothing to import-match against either.
                     if not funcs:
-                        _assign_revert_state(
-                            revert_by_file,
-                            f,
-                            funcs,
-                            "no_functions",
-                            "no new/changed test function in this file "
-                            "(decorator-only or fixture-signature edit)",
-                        )
+                        _assign_revert_state(revert_by_file, f, funcs, "no_functions",
+                                             "no new/changed test function in this file "
+                                             "(decorator-only or fixture-signature edit)")
                         continue
                     # Fix round 4: this test file may not even be ABOUT any of
                     # the production files this range changed (e.g. new tests
@@ -1525,13 +1469,8 @@ def _check_range_impl(repo, base, head):
                     dotted_names = expand_via_init_reexports(repo, head, dotted_names)
                     test_imports = (dotted_names, bare_names)
                     if not any(references_prod_file(test_imports, pf) for pf in prod_files):
-                        _assign_revert_state(
-                            revert_by_file,
-                            f,
-                            funcs,
-                            "no_prod_change",
-                            "no production file changed in this range is imported by this test file",
-                        )
+                        _assign_revert_state(revert_by_file, f, funcs, "no_prod_change",
+                                             "no production file changed in this range is imported by this test file")
                         continue
                     ids = sorted({node_id(f, cls, name) for cls, name, _, _ in funcs})
                     # Card t_918ede52 (mirroring capsule-corp's t_285a8851):
@@ -1540,17 +1479,14 @@ def _check_range_impl(repo, base, head):
                     # a run-time `AttributeError` on a newly added name, not
                     # only a collection-time import error.
                     state, extra, out, chain_kept = _resolve_import_chain(
-                        repo, base, head, wt, f, prod_files, ids, python
-                    )
+                        repo, base, head, wt, f, prod_files, ids, python)
                     if state == "napt":
                         # B1 fallback: M's diff is not a pure addition
                         # (removed/changed existing names too) - restoring
                         # it whole is not safe to call a clean revert. n/a;
                         # the weaken column carries the requirement, as with
                         # new_module.
-                        _assign_revert_state(
-                            revert_by_file, f, funcs, "reverted_symbol_napt", extra
-                        )
+                        _assign_revert_state(revert_by_file, f, funcs, "reverted_symbol_napt", extra)
                         continue
                     if state == "new_module":
                         # n/a, not a fail: the module the test imports
@@ -1568,19 +1504,13 @@ def _check_range_impl(repo, base, head):
                         # the collapsed output tail.
                         parts = []
                         if chain_kept:
-                            parts.append(
-                                "; ".join(
-                                    f"{mp} kept at head for import of {sym}"
-                                    for mp, sym in chain_kept
-                                )
-                            )
+                            parts.append("; ".join(f"{mp} kept at head for import of {sym}"
+                                                    for mp, sym in chain_kept))
                         if isinstance(extra, tuple):
                             mp, sym = extra
                             parts.append(f"then {mp}'s change for {sym} is not a pure addition")
                         parts.append(_collapse_for_cell(out))
-                        _assign_revert_state(
-                            revert_by_file, f, funcs, "error", " | ".join(p for p in parts if p)
-                        )
+                        _assign_revert_state(revert_by_file, f, funcs, "error", " | ".join(p for p in parts if p))
                         ok = False
                         continue
                     if state == "unresolved":
@@ -1594,19 +1524,12 @@ def _check_range_impl(repo, base, head):
                         if isinstance(extra, tuple):
                             next_mp, next_sym = extra
                             chain_desc += f"; next unresolved: {next_mp}:{next_sym}"
-                        _assign_revert_state(
-                            revert_by_file, f, funcs, "unresolved_chain", chain_desc
-                        )
+                        _assign_revert_state(revert_by_file, f, funcs, "unresolved_chain", chain_desc)
                         ok = False
                         continue
                     if state == "no_tests":
-                        _assign_revert_state(
-                            revert_by_file,
-                            f,
-                            funcs,
-                            None,
-                            "n/a - only host-only tests changed (filtered by -k 'not host')",
-                        )
+                        _assign_revert_state(revert_by_file, f, funcs, None,
+                                             "n/a - only host-only tests changed (filtered by -k 'not host')")
                         continue
                     # state == "resolved": extra is the final rc.
                     rc = extra
@@ -1622,16 +1545,9 @@ def _check_range_impl(repo, base, head):
                             # kept at HEAD to get past collection/execution -
                             # never scored as a plain, unlabelled pass/fail;
                             # always shows what was kept.
-                            label = "; ".join(
-                                f"{mp} kept at head for import of {sym}" for mp, sym in chain_kept
-                            )
+                            label = "; ".join(f"{mp} kept at head for import of {sym}" for mp, sym in chain_kept)
                             _assign_revert_state(
-                                revert_by_file,
-                                f,
-                                funcs,
-                                "symbol_kept_ok" if failed else "symbol_kept_bad",
-                                label,
-                            )
+                                revert_by_file, f, funcs, "symbol_kept_ok" if failed else "symbol_kept_bad", label)
                             if not failed:
                                 ok = False
                         else:
@@ -1642,13 +1558,8 @@ def _check_range_impl(repo, base, head):
                 remove_worktree(repo, wt)
     else:
         for f, (status, funcs) in remaining.items():
-            _assign_revert_state(
-                revert_by_file,
-                f,
-                funcs,
-                None,
-                "no production .py file changed in this range - (b) skipped",
-            )
+            _assign_revert_state(revert_by_file, f, funcs, None,
+                                 "no production .py file changed in this range - (b) skipped")
 
     # ---- (c) assertion-weakening, per file, same HEAD worktree reused ----
     weaken_by_func = {}
@@ -1675,7 +1586,7 @@ def _check_range_impl(repo, base, head):
                     lines = original.splitlines()
                     helper_hit = None
                     for cls, name, s, e in funcs:
-                        body = "\n".join(lines[s - 1 : e])
+                        body = "\n".join(lines[s - 1:e])
                         if "assert" in body:
                             continue
                         hit = _find_helper_with_assert(original, body, cls, all_funcs)
@@ -1700,27 +1611,19 @@ def _check_range_impl(repo, base, head):
                                 resolved = ("error", out[-800:])
                                 break
                             if rc == NO_TESTS_COLLECTED_RC:
-                                resolved = (
-                                    None,
-                                    "n/a - only host-only tests changed (filtered by -k 'not host')",
-                                )
+                                resolved = (None, "n/a - only host-only tests changed (filtered by -k 'not host')")
                                 break
                             outcome = classify_pytest_outcome(rc, out)
                             if outcome == "error_runner":
                                 resolved = ("error_runner", out[-400:])
                                 break
                             if outcome == "failed":
-                                resolved = (
-                                    "helper_ok",
-                                    f"weaken: helper {h_name} assertion {idx + 1} ({cand_what})",
-                                )
+                                resolved = ("helper_ok", f"weaken: helper {h_name} assertion {idx + 1} ({cand_what})")
                                 break
                             idx += 1
                         if resolved is None:
-                            resolved = (
-                                "helper_bad",
-                                f"weaken: helper {h_name} - none of its {idx} assertion(s) discriminate",
-                            )
+                            resolved = ("helper_bad",
+                                        f"weaken: helper {h_name} - none of its {idx} assertion(s) discriminate")
                         weaken_by_func[f] = resolved
                         if resolved[0] in ("helper_bad", "error", "error_runner"):
                             ok = False
@@ -1742,10 +1645,7 @@ def _check_range_impl(repo, base, head):
                         fallback = True
                 ids = sorted({node_id(f, cls, name) for cls, name, _, _ in funcs})
                 if mutated is None:
-                    weaken_by_func[f] = (
-                        None,
-                        "no assertEqual/assertTrue/`==` assert found to flip",
-                    )
+                    weaken_by_func[f] = (None, "no assertEqual/assertTrue/`==` assert found to flip")
                     continue
                 if fallback:
                     # The file-level fallback may have mutated an assertion
@@ -1765,10 +1665,7 @@ def _check_range_impl(repo, base, head):
                     ok = False
                     continue
                 if rc == NO_TESTS_COLLECTED_RC:
-                    weaken_by_func[f] = (
-                        None,
-                        "n/a - only host-only tests changed (filtered by -k 'not host')",
-                    )
+                    weaken_by_func[f] = (None, "n/a - only host-only tests changed (filtered by -k 'not host')")
                     continue
                 outcome = classify_pytest_outcome(rc, out)
                 if outcome == "error_runner":
@@ -1779,10 +1676,7 @@ def _check_range_impl(repo, base, head):
                 if fallback:
                     weaken_by_func[f] = ("fallback_ok" if failed else "fallback_bad", what)
                 else:
-                    weaken_by_func[f] = (
-                        failed,
-                        what if failed else f"{what}, but the file still passed: {out[-400:]}",
-                    )
+                    weaken_by_func[f] = (failed, what if failed else f"{what}, but the file still passed: {out[-400:]}")
                 if not failed:
                     ok = False
         finally:
@@ -1829,11 +1723,8 @@ def dirty_tracked_paths(repo):
     has added yet. Returns a sorted list of relative paths, empty when
     clean (or when `repo` is not a git worktree at all - a fixture repo that
     has none of these paths simply reports nothing dirty)."""
-    rc, out = sh(
-        ["git", "status", "--porcelain", "--no-renames", "--", *DIRTY_TREE_WATCHED_PATHS],
-        cwd=str(repo),
-        timeout=30,
-    )
+    rc, out = sh(["git", "status", "--porcelain", "--no-renames", "--",
+                  *DIRTY_TREE_WATCHED_PATHS], cwd=str(repo), timeout=30)
     if rc != 0:
         return []
     dirty = []
@@ -1845,20 +1736,15 @@ def dirty_tracked_paths(repo):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base", required=True)
     ap.add_argument("--head", required=True)
     ap.add_argument("--repo", default=".")
-    ap.add_argument(
-        "--allow-dirty",
-        action="store_true",
-        help="Local-experiment escape hatch only: run even though Makefile, "
-        "scripts/, tests/mutation_check.py or scouter/ have uncommitted "
-        "changes in --repo. Prints a loud warning naming the dirty paths; "
-        "never use this for a real merge decision.",
-    )
+    ap.add_argument("--allow-dirty", action="store_true",
+                     help="Local-experiment escape hatch only: run even though Makefile, "
+                          "scripts/, tests/mutation_check.py or scouter/ have uncommitted "
+                          "changes in --repo. Prints a loud warning naming the dirty paths; "
+                          "never use this for a real merge decision.")
     a = ap.parse_args(argv)
     # The incident this closes: the gate's own wiring, or the production
     # code it protects, riding along uncommitted while a run exercised it by

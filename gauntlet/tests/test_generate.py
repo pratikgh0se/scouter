@@ -8,15 +8,8 @@ from gauntlet.tests.toy import ToyAdapter
 
 
 def _c(i, tier="P1", meta=None, layer="alpha"):
-    return Case(
-        id=f"{layer}-{i}",
-        layer=layer,
-        tier=tier,
-        mode="tool",
-        steps=[Step("set")],
-        expect=Expect("edit"),
-        meta=meta or {},
-    )
+    return Case(id=f"{layer}-{i}", layer=layer, tier=tier, mode="tool",
+                steps=[Step("set")], expect=Expect("edit"), meta=meta or {})
 
 
 def test_writes_cases_and_generation_md_byte_identically(tmp_path):

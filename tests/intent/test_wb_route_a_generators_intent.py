@@ -4,7 +4,6 @@ oracles per example (Z2): the Expect's kind/codes AND (review round 2,
 finding 14 / GC-2, for the guide examples) the real evaluator's own verdict
 against a synthetic refusal envelope (verified) and a synthetic landed one
 (must NOT verify) -- neither derived from the other."""
-
 from __future__ import annotations
 
 import json
@@ -18,8 +17,7 @@ from tests.gauntlet.layers import coverage, guide, scenarios
 from tests.gauntlet.policy import POLICY
 
 EXAMPLES = json.loads((Path(__file__).parent / "wb_route_a_generators.json").read_text())[
-    "examples"
-]
+    "examples"]
 
 
 def _coverage_case(case_id: str):
@@ -37,20 +35,16 @@ def _guide_case(case_id: str):
 
 def _refusal_obs(code: str) -> Observation:
     env = {"ok": False, "outcome": f"error:{code}", "error": {"code": code}}
-    return Observation(
-        calls=[CallRecord("call", {}, env, write=True)],
-        before={"fingerprint": "a", "params": {}},
-        after={"fingerprint": "a", "params": {}},
-    )
+    return Observation(calls=[CallRecord("call", {}, env, write=True)],
+                       before={"fingerprint": "a", "params": {}},
+                       after={"fingerprint": "a", "params": {}})
 
 
 def _landed_obs() -> Observation:
     env = {"ok": True, "outcome": "ok", "data": {}}
-    return Observation(
-        calls=[CallRecord("call", {}, env, write=True)],
-        before={"fingerprint": "a", "params": {}},
-        after={"fingerprint": "b", "params": {}},
-    )
+    return Observation(calls=[CallRecord("call", {}, env, write=True)],
+                       before={"fingerprint": "a", "params": {}},
+                       after={"fingerprint": "b", "params": {}})
 
 
 def run_example(ex: dict) -> None:
@@ -91,9 +85,8 @@ def _run_example(ex: dict) -> None:
         assert any(chk.metric == want["other_stat_present"] for chk in c.expect.checks), ex["id"]
         if want.get("envelope_refusal_present"):
             env = [chk for chk in c.expect.checks if chk.metric == "envelope"]
-            assert any(chk.target == {"path": "ok", "op": "eq", "value": False} for chk in env), ex[
-                "id"
-            ]
+            assert any(chk.target == {"path": "ok", "op": "eq", "value": False} for chk in env), \
+                ex["id"]
             assert any(chk.target.get("path") == "error.code" for chk in env), ex["id"]
 
 
@@ -116,7 +109,6 @@ def test_guide_touch_warmer_pinned(monkeypatch):
 def _make(ex: dict):
     def test(self=None) -> None:
         run_example(ex)
-
     return test
 
 

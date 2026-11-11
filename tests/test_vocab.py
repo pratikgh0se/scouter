@@ -13,8 +13,8 @@ from scouter.errors import UsageError
 
 GOLDEN = Path(__file__).resolve().parent / "fixtures" / "vocab_golden.json"
 REGEN = (
-    'uv run --extra dev python -c "from scouter.core import vocab; import json; '
-    'print(json.dumps(vocab.table(), indent=2, sort_keys=True))" > tests/fixtures/vocab_golden.json'
+    "uv run --extra dev python -c \"from scouter.core import vocab; import json; "
+    "print(json.dumps(vocab.table(), indent=2, sort_keys=True))\" > tests/fixtures/vocab_golden.json"
 )
 
 
@@ -28,11 +28,8 @@ class VocabGoldenTest(unittest.TestCase):
             self.fail(f"golden created at {GOLDEN}; review and commit it")
         expected = GOLDEN.read_text()
         if expected != actual:
-            diff = "\n".join(
-                difflib.unified_diff(
-                    expected.splitlines(), actual.splitlines(), "golden", "actual", lineterm=""
-                )
-            )
+            diff = "\n".join(difflib.unified_diff(expected.splitlines(), actual.splitlines(),
+                                                  "golden", "actual", lineterm=""))
             self.fail(f"vocabulary changed; if intended, regenerate with:\n{REGEN}\n{diff}")
 
 
@@ -65,11 +62,8 @@ class VocabShapeTest(unittest.TestCase):
                     self.assertEqual(s.display_scale, 100.0 if s.unit == "%" else 1.0)
         # The toggle carve-outs above excuse exactly the rows Task 33 added as
         # 0/1 flips, and each is a real bool row with a one-notch flip.
-        toggles = {
-            (s.module, s.param): (s.unit, s.lo, s.hi, s.step)
-            for s in vocab.PARAMS
-            if s.param == "__enabled"
-        }
+        toggles = {(s.module, s.param): (s.unit, s.lo, s.hi, s.step)
+                   for s in vocab.PARAMS if s.param == "__enabled"}
         self.assertEqual(toggles, {("lens", "__enabled"): ("bool", 0.0, 1.0, 1.0)})
 
     def test_statuses_after_the_task_10_pinning_run(self) -> None:
@@ -95,42 +89,25 @@ class VocabShapeTest(unittest.TestCase):
         # await a host probe.
         self.assertEqual(
             by.get("candidate"),
-            {
-                "grain.strength",
-                "vignette.brightness",
-                "ashift.rotation",
-                "crop.left",
-                "crop.right",
-                "crop.top",
-                "crop.bottom",
-                "denoiseprofile.strength",
-                "sharpen.amount",
-            },
+            {"grain.strength", "vignette.brightness",
+             "ashift.rotation", "crop.left", "crop.right", "crop.top", "crop.bottom",
+             "denoiseprofile.strength", "sharpen.amount"},
         )
         # channelmixerrgb.temperature went live with the 2026-11-08 route A
         # host probe (docs/measurements.md), 23 -> 24.
         self.assertEqual(len(by["live"]), 24)
-        for row in (
-            "channelmixerrgb.temperature",
-            "colorbalancergb.shadows_hue",
-            "colorbalancergb.highlights_chroma",
-            "sigmoid.skew",
-            "filmicrgb.contrast",
-            "colorzones.strength",
-        ):
+        for row in ("channelmixerrgb.temperature","colorbalancergb.shadows_hue", "colorbalancergb.highlights_chroma",
+                    "sigmoid.skew", "filmicrgb.contrast", "colorzones.strength"):
             self.assertIn(row, by["live"])
 
     def test_status_follows_a_new_path_pin_then_a_slot_pin(self) -> None:
         # Unpin global_vibrance's path and slot, then put them back one by one.
         s = vocab.spec("colorbalancergb", "global_vibrance")
         layout = dict(xmp.LAYOUTS[("colorbalancergb", 5)])
-        layout["named_slots"] = {
-            i: n for i, n in layout["named_slots"].items() if n != "global_vibrance"
-        }
-        with (
-            mock.patch.dict(dtbridge.ACTION_PATHS),
-            mock.patch.dict(xmp.LAYOUTS, {("colorbalancergb", 5): layout}),
-        ):
+        layout["named_slots"] = {i: n for i, n in layout["named_slots"].items()
+                                 if n != "global_vibrance"}
+        with mock.patch.dict(dtbridge.ACTION_PATHS), \
+             mock.patch.dict(xmp.LAYOUTS, {("colorbalancergb", 5): layout}):
             path = dtbridge.ACTION_PATHS.pop(("colorbalancergb", "global_vibrance"))
             self.assertEqual(vocab.status(s), "candidate")
             dtbridge.ACTION_PATHS[("colorbalancergb", "global_vibrance")] = path
@@ -179,12 +156,11 @@ class VocabPrettyTableTest(unittest.TestCase):
         self.assertIsNotNone(rendered)
         lines = rendered.splitlines()
         self.assertEqual(lines[0].split(), ["module.param", "status", "unit", "clamp", "step"])
-        body = lines[2 : 2 + len(vocab.PARAMS)]
+        body = lines[2:2 + len(vocab.PARAMS)]
         self.assertEqual(len(body), len(vocab.PARAMS))
         exposure = next(line for line in body if line.startswith("exposure.exposure "))
-        self.assertEqual(
-            exposure.split(), ["exposure.exposure", "live", "EV", "-3", "..", "4", "0.3"]
-        )
+        self.assertEqual(exposure.split(), ["exposure.exposure", "live", "EV", "-3", "..", "4",
+                                            "0.3"])
         hue = next(line for line in body if line.startswith("colorbalancergb.shadows_hue "))
         self.assertIn("0 .. 360 (wraps)", hue)
         curves = next(line for line in body if line.startswith("colorzones.curves "))

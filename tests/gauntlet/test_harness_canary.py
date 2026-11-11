@@ -22,38 +22,23 @@ POLICY = load_policy()
 CASES = {c.id: c for c in coverage.generate()}
 INTENT = json.loads((Path(__file__).parents[1] / "intent" / "canary_setup_write.json").read_text())
 
-BASE = {
-    "channelmixerrgb.temperature": 3926.7,
-    "channelmixerrgb.x": 0.3,
-    "channelmixerrgb.y": 0.32,
-    "channelmixerrgb.gamut": 1.0,
-    "temperature.preset": 4,
-}
+BASE = {"channelmixerrgb.temperature": 3926.7, "channelmixerrgb.x": 0.3, "channelmixerrgb.y": 0.32,
+        "channelmixerrgb.gamut": 1.0, "temperature.preset": 4}
 UNITS = {"channelmixerrgb.temperature": "K"}
 
 
 def _obs(call_envs: list[dict], snaps: list[dict]) -> Observation:
-    calls = [
-        CallRecord("darkroom_set" if i == 0 else "darkroom_nudge", {}, env, 1.0, write=True)
-        for i, env in enumerate(call_envs)
-    ]
-    return Observation(
-        calls=calls,
-        before={"params": snaps[0], "fingerprint": "a"},
-        after={
-            "params": snaps[-1],
-            "fingerprint": "a" if snaps[-1] == snaps[0] else "b",
-            "units": UNITS,
-        },
-        extra={"snapshots": snaps},
-    )
+    calls = [CallRecord("darkroom_set" if i == 0 else "darkroom_nudge", {}, env, 1.0, write=True)
+             for i, env in enumerate(call_envs)]
+    return Observation(calls=calls, before={"params": snaps[0], "fingerprint": "a"},
+                       after={"params": snaps[-1],
+                              "fingerprint": "a" if snaps[-1] == snaps[0] else "b",
+                              "units": UNITS},
+                       extra={"snapshots": snaps})
 
 
-OK = {
-    "ok": True,
-    "outcome": "ok",
-    "data": {"committed": True, "module": "channelmixerrgb", "param": "temperature"},
-}
+OK = {"ok": True, "outcome": "ok", "data": {"committed": True, "module": "channelmixerrgb",
+                                           "param": "temperature"}}
 TIMEOUT = {"ok": False, "outcome": "error", "error": {"code": "commit_timeout", "message": "x"}}
 
 
@@ -63,11 +48,8 @@ def test_setup_write_does_not_make_action_error_silent(ex):
     assert case.steps[0].setup and not case.steps[1].setup  # the prep is marked, the action is not
     after_set = {**BASE, "channelmixerrgb.temperature": 7000.0}
     action = TIMEOUT if ex["input"]["action"].startswith("error") else OK
-    final = (
-        after_set
-        if not ex["input"]["after_moved"]
-        else {**after_set, "channelmixerrgb.temperature": 7001.0}
-    )
+    final = after_set if not ex["input"]["after_moved"] else \
+        {**after_set, "channelmixerrgb.temperature": 7001.0}
     v = evaluate(case, _obs([OK, action], [BASE, after_set, final]), POLICY)
     assert v.outcome == ex["expect"]["outcome"], v
     assert bool(v.silent_failure) is ex["expect"]["silent_failure"]
@@ -81,31 +63,21 @@ def _adjust_obs(after: dict) -> Observation:
     start = {**BASE, "channelmixerrgb.temperature": 7000.0}
     case = _collateral_case()
     envs = [OK, {**OK, "data": {**OK["data"], "previous": 7000.0, "applied": 6700.0}}]
-    return _obs(envs[: len(case.steps)], [BASE, start, after][: len(case.steps) + 1])
+    return _obs(envs[:len(case.steps)], [BASE, start, after][:len(case.steps) + 1])
 
 
 def test_derived_xy_moving_with_temperature_is_not_collateral():
-    after = {
-        **BASE,
-        "channelmixerrgb.temperature": 6700.0,
-        "channelmixerrgb.x": 0.31,
-        "channelmixerrgb.y": 0.326,
-    }
-    assert _collateral_case().expect.sidecar["allowed"] == [
-        "channelmixerrgb.x",
-        "channelmixerrgb.y",
-    ]
+    after = {**BASE, "channelmixerrgb.temperature": 6700.0, "channelmixerrgb.x": 0.31,
+             "channelmixerrgb.y": 0.326}
+    assert _collateral_case().expect.sidecar["allowed"] == ["channelmixerrgb.x",
+                                                             "channelmixerrgb.y"]
     v = evaluate(_collateral_case(), _adjust_obs(after), POLICY)
     assert v.outcome != "collateral", v
 
 
 def test_other_channelmixerrgb_param_moving_is_still_collateral():
-    after = {
-        **BASE,
-        "channelmixerrgb.temperature": 6700.0,
-        "channelmixerrgb.x": 0.31,
-        "channelmixerrgb.gamut": 1.2,
-    }
+    after = {**BASE, "channelmixerrgb.temperature": 6700.0, "channelmixerrgb.x": 0.31,
+             "channelmixerrgb.gamut": 1.2}
     v = evaluate(_collateral_case(), _adjust_obs(after), POLICY)
     assert v.outcome == "collateral" and "channelmixerrgb.gamut" in " ".join(v.notes), v
 
@@ -140,9 +112,8 @@ def test_walkthrough_subset_gets_its_prefix():
     walk = [c for c in cases if c.meta.get("session") == "walkthrough"]
     gd12 = next(c for c in walk if c.meta["order"] == 12)
     out = with_walkthrough_prefix([gd12], cases)
-    assert [c.meta["order"] for c in out if c.meta.get("session") == "walkthrough"] == list(
-        range(13)
-    )
+    assert [c.meta["order"] for c in out if c.meta.get("session") == "walkthrough"] == \
+        list(range(13))
     edu = [c for c in cases if c.meta.get("session", "").startswith("edu-")][:2]
     assert with_walkthrough_prefix(edu, cases) == edu
     assert with_walkthrough_prefix(walk, cases) == walk

@@ -37,9 +37,8 @@ _FIXTURE_COLORCAL = "gz04eJxjYGiwZ8AAxIqRD5igmAWIGYH4MtcRO5vS/XbrskpdQXYxQuUBodM
 FIXTURE_ILLUMINANT_K = 3926.66748046875
 
 
-def colorcal_hex(
-    *, illuminant: int = 2, adaptation: int = 1, temperature: float = FIXTURE_ILLUMINANT_K
-) -> str:
+def colorcal_hex(*, illuminant: int = 2, adaptation: int = 1,
+                 temperature: float = FIXTURE_ILLUMINANT_K) -> str:
     """The fixture's color calibration params with fields swapped, as plain hex
     (`xmp.decode_params` takes hex as well as darktable's gz form)."""
     blob = bytearray(xmp.decode_params(_FIXTURE_COLORCAL))
@@ -59,16 +58,11 @@ def synthetic_table(test, shot_kelvin: float = 5000.0) -> None:
     c = xmp.latest_params(parsed, "temperature")
     r0, b0 = float(c["coeff_r"]), float(c["coeff_b"])
     ratio = r0 / b0
-    samples = [
-        {"k": k, "coeff_r": r0, "coeff_g": 1.0, "coeff_b": r0 / (ratio * f)}
-        for k, f in ((shot_kelvin - 2000, 0.6), (shot_kelvin, 1.0), (shot_kelvin + 2000, 1.4))
-    ]
-    table = {
-        "camera": "em10iii",
-        "camera_model": "synthetic",
-        "synthetic": True,
-        "samples": samples,
-    }
+    samples = [{"k": k, "coeff_r": r0, "coeff_g": 1.0, "coeff_b": r0 / (ratio * f)}
+               for k, f in ((shot_kelvin - 2000, 0.6), (shot_kelvin, 1.0),
+                            (shot_kelvin + 2000, 1.4))]
+    table = {"camera": "em10iii", "camera_model": "synthetic", "synthetic": True,
+             "samples": samples}
     path = Path(os.environ["SCOUTER_CONFIG"]).parent / "wb" / "em10iii.json"
     path.write_text(json.dumps(table), encoding="utf-8")
 
@@ -92,7 +86,8 @@ class _RouteFixture(_MovesFixture):
     def pin(self):
         """What the host probe will add once `iop/channelmixerrgb/temperature`
         answers non-nan: the pin that turns the row `live`."""
-        p = mock.patch.dict(dtbridge.ACTION_PATHS, {darkroom.COLORCAL_WB: COLORCAL_PATH})
+        p = mock.patch.dict(dtbridge.ACTION_PATHS,
+                            {darkroom.COLORCAL_WB: COLORCAL_PATH})
         p.start()
         self.addCleanup(p.stop)
         self.assertEqual(vocab.status(vocab.spec(*darkroom.COLORCAL_WB)), "live")
@@ -114,7 +109,7 @@ class LayoutAndRowTest(_RouteFixture):
         self.assertAlmostEqual(params["temperature"], FIXTURE_ILLUMINANT_K, places=3)
         # McCamy's CCT from the stored (x, y): the slot is the illuminant's.
         n = (params["x"] - 0.3320) / (0.1858 - params["y"])
-        cct = 449 * n**3 + 3525 * n**2 + 6823.3 * n + 5520.33
+        cct = 449 * n ** 3 + 3525 * n ** 2 + 6823.3 * n + 5520.33
         self.assertAlmostEqual(cct, params["temperature"], delta=15)
 
     def test_the_row_is_live_since_the_route_a_probe(self) -> None:
@@ -173,10 +168,8 @@ class RouteSelectionTest(_RouteFixture):
 
     def test_color_calibration_switched_off_is_unavailable(self) -> None:
         self.preset_4()
-        self.edit_sidecar(
-            'darktable:operation="channelmixerrgb"\n      darktable:enabled="1"',
-            'darktable:operation="channelmixerrgb"\n      darktable:enabled="0"',
-        )
+        self.edit_sidecar('darktable:operation="channelmixerrgb"\n      darktable:enabled="1"',
+                          'darktable:operation="channelmixerrgb"\n      darktable:enabled="0"')
         self.pin()
         r = darkroom.wb_route(str(self.raw))
         self.assertEqual(r["route"], "unavailable")
@@ -212,9 +205,7 @@ class PresetRevealedByTheBounceTest(_RouteFixture):
         text = self.sidecar.read_text(encoding="utf-8")
         self.sidecar.unlink()
 
-        def bounce(
-            job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None
-        ):
+        def bounce(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
             self.commits.append((attempts, expect_change))
             self.sidecar.write_text(text, encoding="utf-8")
             return CommitResult(committed=True, changed=False, warnings=[])
@@ -224,9 +215,8 @@ class PresetRevealedByTheBounceTest(_RouteFixture):
         self.addCleanup(p.stop)
 
     def test_adjust_reroutes_after_the_bounce(self) -> None:
-        r = moves.adjust.__wrapped__(
-            "temperature", "temperature", 300.0, commit=False, job="job-test"
-        )
+        r = moves.adjust.__wrapped__("temperature", "temperature", 300.0, commit=False,
+                                     job="job-test")
         self.assertEqual(r.module, "channelmixerrgb")
         self.assertEqual([s["path"] for s in self.sets()], [COLORCAL_PATH])
         self.assertAlmostEqual(self.sets()[0]["value"], FIXTURE_ILLUMINANT_K + 300.0, places=2)
@@ -249,9 +239,8 @@ class NoRerouteInsideRelativeMovesTest(_RouteFixture):
         token = darkroom.NO_WB_REROUTE.set(True)
         try:
             with self.assertRaises(ModuleUnavailable):
-                darkroom.set_param.__wrapped__(
-                    "temperature", "temperature", 5200.0, commit=False, job="job-test"
-                )
+                darkroom.set_param.__wrapped__("temperature", "temperature", 5200.0,
+                                               commit=False, job="job-test")
         finally:
             darkroom.NO_WB_REROUTE.reset(token)
         self.assertEqual(self.sets(), [])
@@ -306,18 +295,17 @@ class DirectVerbsRoutedTest(_RouteFixture):
 
     def test_kelvin_set_goes_to_the_illuminant(self) -> None:
         # "Match daylight" (editor benchmark W4: an absolute 5500 K target).
-        r = darkroom.set_param.__wrapped__(
-            "temperature", "temperature", 5500.0, commit=False, job="job-test"
-        )
+        r = darkroom.set_param.__wrapped__("temperature", "temperature", 5500.0,
+                                           commit=False, job="job-test")
         self.assertEqual((r.module, r.param), darkroom.COLORCAL_WB)
-        self.assertEqual([(s["path"], s["value"]) for s in self.sets()], [(COLORCAL_PATH, 5500.0)])
+        self.assertEqual([(s["path"], s["value"]) for s in self.sets()],
+                         [(COLORCAL_PATH, 5500.0)])
         self.assertTrue(any("color calibration" in w for w in r.warnings))
         self.assert_wb_untouched()
 
     def test_adjust_goes_to_the_illuminant(self) -> None:
-        r = moves.adjust.__wrapped__(
-            "temperature", "temperature", -300.0, commit=False, job="job-test"
-        )
+        r = moves.adjust.__wrapped__("temperature", "temperature", -300.0, commit=False,
+                                     job="job-test")
         self.assertEqual(r.module, "channelmixerrgb")
         self.assertAlmostEqual(self.sets()[0]["value"], FIXTURE_ILLUMINANT_K - 300.0, places=2)
         self.assert_wb_untouched()
@@ -331,9 +319,8 @@ class DirectVerbsRoutedTest(_RouteFixture):
     def test_wb_calibrate_exemption_still_writes_the_wb_module(self) -> None:
         token = darkroom.WB_LATE_EXEMPT.set(True)
         try:
-            darkroom.set_param.__wrapped__(
-                "temperature", "temperature", 5000.0, commit=False, job="job-test"
-            )
+            darkroom.set_param.__wrapped__("temperature", "temperature", 5000.0, commit=False,
+                                           job="job-test")
         finally:
             darkroom.WB_LATE_EXEMPT.reset(token)
         self.assertEqual([s["path"] for s in self.sets()], ["iop/temperature/temperature"])
@@ -357,7 +344,8 @@ class NeitherRouteTest(_RouteFixture):
         self.colorcal(illuminant=7)
         self.pin()
         with self.assertRaises(ModuleUnavailable) as cm:
-            darkroom.set_param.__wrapped__("temperature", "temperature", 5500.0, job="job-test")
+            darkroom.set_param.__wrapped__("temperature", "temperature", 5500.0,
+                                           job="job-test")
         self.assertIn("'custom'", cm.exception.fix)
         self.assertEqual(self.sets(), [])
         self.assertEqual(journal.read_all("job-test"), [])
@@ -366,10 +354,8 @@ class NeitherRouteTest(_RouteFixture):
 class KelvinReadbackTest(_RouteFixture):
     def setUp(self) -> None:
         super().setUp()
-        for target, value in (
-            ("scouter.core.exif.read_tags", {}),
-            ("scouter.core.exif.camera_slug", "em10iii"),
-        ):
+        for target, value in (("scouter.core.exif.read_tags", {}),
+                              ("scouter.core.exif.camera_slug", "em10iii")):
             p = mock.patch(target, return_value=value)
             p.start()
             self.addCleanup(p.stop)
@@ -432,7 +418,6 @@ class KelvinReadbackTest(_RouteFixture):
 
     def test_the_registered_verb_envelope_carries_both_fields(self) -> None:
         from scouter import registry
-
         self.preset_4()
         self.pin()
         self.colorcal(temperature=4527.0)

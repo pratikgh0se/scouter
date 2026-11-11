@@ -56,11 +56,8 @@ class _WbLateFixture(_MovesFixture):
         self.assertEqual(self.sets(), [], "no darkroom.action may be sent")
         self.assertEqual(self.commits, [], "no commit bounce may be sent")
         self.assertEqual(journal.read_all("job-test"), [], "nothing may be journalled")
-        self.assertEqual(
-            [m for m, _ in self.bridge.calls],
-            ["darkroom.current"],
-            "only the read-only darkroom.current lookup is allowed",
-        )
+        self.assertEqual([m for m, _ in self.bridge.calls], ["darkroom.current"],
+                         "only the read-only darkroom.current lookup is allowed")
 
     def assert_honest(self, err: ModuleUnavailable) -> None:
         self.assertEqual(err.code, "module_unavailable")
@@ -84,17 +81,8 @@ class SayUnderD65LateTest(_WbLateFixture):
         self.assert_nothing_written()
 
     def test_every_warmth_synonym_is_refused(self) -> None:
-        for phrase in (
-            "a touch warmer",
-            "warm up",
-            "more warmth",
-            "cooler",
-            "colder",
-            "cool down",
-            "less warm",
-            "a lot cooler",
-            "warmer by 300k",
-        ):
+        for phrase in ("a touch warmer", "warm up", "more warmth", "cooler", "colder",
+                       "cool down", "less warm", "a lot cooler", "warmer by 300k"):
             with self.subTest(phrase=phrase):
                 self.bridge.calls.clear()
                 with self.assertRaises(ModuleUnavailable):
@@ -106,23 +94,15 @@ class SayUnderD65LateTest(_WbLateFixture):
         # the resolution is built here: exposure FIRST, so a guard that only
         # fired inside the per-move loop would land the exposure write.
         res = phrases.Resolution(
-            phrase="brighter and warmer",
-            normalised="brighter and warmer",
-            key="mixed",
-            intensity=1.0,
-            explicit=False,
-            moves=(
-                phrases.Move("exposure", "exposure", "adjust", notches=1),
-                phrases.Move("temperature", "temperature", "adjust", notches=1),
-            ),
-        )
+            phrase="brighter and warmer", normalised="brighter and warmer", key="mixed",
+            intensity=1.0, explicit=False,
+            moves=(phrases.Move("exposure", "exposure", "adjust", notches=1),
+                   phrases.Move("temperature", "temperature", "adjust", notches=1)))
         with mock.patch("scouter.core.moves.phrases.resolve", return_value=res):
             with self.assertRaises(ModuleUnavailable) as cm:
                 moves.say.__wrapped__("brighter and warmer", job="job-test")
-        self.assertEqual(
-            [(r["module"], r["param"]) for r in cm.exception.detail["refused"]],
-            [("temperature", "temperature")],
-        )
+        self.assertEqual([(r["module"], r["param"]) for r in cm.exception.detail["refused"]],
+                         [("temperature", "temperature")])
         self.assert_nothing_written()
 
     def test_non_wb_phrases_still_run(self) -> None:
@@ -141,28 +121,18 @@ class SayUnderD65LateRevealedByTheBounceTest(_WbLateFixture):
         text = sidecar.read_text(encoding="utf-8").replace(_PRESET_2_HEX, _PRESET_4_HEX)
         sidecar.unlink()
 
-        def bounce(
-            job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None
-        ):
+        def bounce(job, image, *, strategy="auto", attempts=None, expect_change=True, expect_module=None):
             self.commits.append((attempts, expect_change))
             sidecar.write_text(text, encoding="utf-8")
             return CommitResult(committed=True, changed=False, warnings=[])
 
         res = phrases.Resolution(
-            phrase="brighter and warmer",
-            normalised="brighter and warmer",
-            key="mixed",
-            intensity=1.0,
-            explicit=False,
-            moves=(
-                phrases.Move("exposure", "exposure", "adjust", notches=1),
-                phrases.Move("temperature", "temperature", "adjust", notches=1),
-            ),
-        )
-        with (
-            mock.patch("scouter.core.darkroom._commit", side_effect=bounce),
-            mock.patch("scouter.core.moves.phrases.resolve", return_value=res),
-        ):
+            phrase="brighter and warmer", normalised="brighter and warmer", key="mixed",
+            intensity=1.0, explicit=False,
+            moves=(phrases.Move("exposure", "exposure", "adjust", notches=1),
+                   phrases.Move("temperature", "temperature", "adjust", notches=1)))
+        with mock.patch("scouter.core.darkroom._commit", side_effect=bounce), \
+                mock.patch("scouter.core.moves.phrases.resolve", return_value=res):
             with self.assertRaises(ModuleUnavailable):
                 moves.say.__wrapped__("brighter and warmer", job="job-test")
         self.assertEqual(len(self.commits), 1, "the one expect-no-change bounce only")
@@ -187,9 +157,8 @@ class SayUnderUserPresetTest(_WbLateFixture):
                 text = sidecar.read_text(encoding="utf-8")
                 sidecar.write_text(text.replace(_PRESET_2_HEX, hex_), encoding="utf-8")
                 try:
-                    darkroom.set_param.__wrapped__(
-                        "temperature", "temperature", 5000.0, commit=False, job="job-test"
-                    )
+                    darkroom.set_param.__wrapped__("temperature", "temperature", 5000.0,
+                                                   commit=False, job="job-test")
                 finally:
                     sidecar.write_text(text, encoding="utf-8")
         self.assertEqual(len(self.sets()), 3)
@@ -224,13 +193,13 @@ class DirectVerbsUnderD65LateTest(_WbLateFixture):
         self.assert_nothing_written()
 
     def test_other_modules_are_not_guarded(self) -> None:
-        darkroom.set_param.__wrapped__("exposure", "exposure", 1.0, commit=False, job="job-test")
+        darkroom.set_param.__wrapped__("exposure", "exposure", 1.0, commit=False,
+                                       job="job-test")
         self.assertEqual(len(self.sets()), 1)
 
     def test_dry_run_is_unchanged(self) -> None:
-        r = darkroom.set_param.__wrapped__(
-            "temperature", "temperature", 5000.0, dry_run=True, job="job-test"
-        )
+        r = darkroom.set_param.__wrapped__("temperature", "temperature", 5000.0, dry_run=True,
+                                           job="job-test")
         self.assertEqual(r.outcome, "dry_run")
         self.assertEqual(self.bridge.calls, [])
 
@@ -239,9 +208,8 @@ class DirectVerbsUnderD65LateTest(_WbLateFixture):
         # copy; the late correction does not enter that measurement.
         token = darkroom.WB_LATE_EXEMPT.set(True)
         try:
-            darkroom.set_param.__wrapped__(
-                "temperature", "temperature", 5000.0, commit=False, job="job-test"
-            )
+            darkroom.set_param.__wrapped__("temperature", "temperature", 5000.0, commit=False,
+                                           job="job-test")
         finally:
             darkroom.WB_LATE_EXEMPT.reset(token)
         self.assertEqual(len(self.sets()), 1)
@@ -264,21 +232,10 @@ class UndoOfALateModeMoveWarnsTest(_test_wb.UndoViaKelvinInversionTest):
     def setUp(self) -> None:
         super().setUp()
         entry = journal.begin(
-            "job-test",
-            verb="darkroom.set",
-            image_id=12,
-            path=str(self.raw),
-            module="temperature",
-            param="temperature",
-            instance=0,
-            before={
-                "source": "xmp",
-                "enabled": True,
-                "history_end": 14,
-                "value": None,
-                "params": {**self.before_params, "preset": 4},
-                "params_hex": "deadbeef",
-            },
+            "job-test", verb="darkroom.set", image_id=12, path=str(self.raw),
+            module="temperature", param="temperature", instance=0,
+            before={"source": "xmp", "enabled": True, "history_end": 14, "value": None,
+                    "params": {**self.before_params, "preset": 4}, "params_hex": "deadbeef"},
         )
         journal.complete("job-test", entry.seq, after={"value": 6500.0})
 
@@ -286,17 +243,14 @@ class UndoOfALateModeMoveWarnsTest(_test_wb.UndoViaKelvinInversionTest):
         self._landed_ratio = self._target_ratio
         result = darkroom.undo_last(single=True)
         assert result.undone is not None
-        self.assertTrue(
-            any("camera reference (late)" in w for w in result.warnings), result.warnings
-        )
+        self.assertTrue(any("camera reference (late)" in w for w in result.warnings),
+                        result.warnings)
         self.assertEqual(result.undone.get("late_correction_restored"), False)
 
 
 # The inherited base-class tests run in test_wb.py already.
-for _name in (
-    "test_undo_via_kelvin_inversion_when_verified",
-    "test_undo_via_kelvin_inversion_unverified_raises_and_leaves_entry_open",
-):
+for _name in ("test_undo_via_kelvin_inversion_when_verified",
+              "test_undo_via_kelvin_inversion_unverified_raises_and_leaves_entry_open"):
     setattr(UndoOfALateModeMoveWarnsTest, _name, None)
 
 
@@ -315,7 +269,6 @@ class CalibrateOnALateModeImageTest(_test_wb._CalibrateFixture):
 
     def test_sweep_runs_and_the_exemption_does_not_leak(self) -> None:
         from scouter.core import wb
-
         self.coeffs_by_k = {3000.0: (0.50, 1.0, 1.0), 3100.0: (0.60, 1.0, 1.0)}
         wb.calibrate(str(self.raw), 3000, 3100, 100, confirm=True, job="job-test")
         sent = [p for m, p in self.bridge.calls if m == "darkroom.action"]

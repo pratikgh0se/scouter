@@ -103,15 +103,8 @@ def _render_vocab_list(payload: dict) -> str:
             clamp, step = "-", "-"
         else:
             step = f"{r.get('step', 0):g}"
-        rows.append(
-            [
-                f"{r.get('module', '')}.{r.get('param', '')}",
-                str(r.get("status", "")),
-                str(r.get("unit", "")),
-                clamp,
-                step,
-            ]
-        )
+        rows.append([f"{r.get('module', '')}.{r.get('param', '')}", str(r.get("status", "")),
+                     str(r.get("unit", "")), clamp, step])
     table = _align(headers, rows)
     counts = payload.get("counts", {})
     footer = (

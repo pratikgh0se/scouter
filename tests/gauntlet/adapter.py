@@ -13,12 +13,13 @@ import subprocess
 from collections import Counter
 from pathlib import Path
 
-from gauntlet import workers
 from gauntlet.adapter import LayerSpec, RefuseRun
+from gauntlet import workers
 from gauntlet.case import Case
 from gauntlet.store import atomic_write_text
-from tests.gauntlet import agent_budget, taxonomy
+from tests.gauntlet import agent_budget
 from tests.gauntlet import corpus as corpus_mod
+from tests.gauntlet import taxonomy
 from tests.gauntlet.checkmap import plan_request
 from tests.gauntlet.layers import (
     bulk,
@@ -50,16 +51,8 @@ PROCESS_DIR = "_process"
 HARNESS_BASE_S = 90.0
 HARNESS_PER_RENDER_S = 45.0
 RENDERS_PER_STATS_CASE = 4
-LIVE_LAYERS = {
-    "coverage",
-    "scenarios",
-    "scenarios_agent",
-    "bulk",
-    "looks",
-    "robustness",
-    "parity",
-    "guide",
-}
+LIVE_LAYERS = {"coverage", "scenarios", "scenarios_agent", "bulk", "looks", "robustness",
+               "parity", "guide"}
 
 
 def isolate_process(root: Path) -> None:
@@ -71,12 +64,8 @@ def isolate_process(root: Path) -> None:
     env = isolated_env(root)
     # (fix round 1, N3) the library too, as isolated_env pins it for children:
     # never fall back to a running darktable's or ~/.config/darktable's library.
-    for k in (
-        "SCOUTER_CONFIG",
-        "SCOUTER_CACHE",
-        "OBSIDIAN_VAULT_PATH",
-        "SCOUTER_DARKTABLE_LIBRARY_DB",
-    ):
+    for k in ("SCOUTER_CONFIG", "SCOUTER_CACHE", "OBSIDIAN_VAULT_PATH",
+              "SCOUTER_DARKTABLE_LIBRARY_DB"):
         os.environ[k] = env[k]
 
 
@@ -124,20 +113,13 @@ def point_cache(cache: Path, *gauntlet_roots: Path, carry: bool = True) -> None:
     cache.mkdir(parents=True, exist_ok=True)
     os.environ["SCOUTER_CACHE"] = str(cache)
     new = dtprocess.owner_path()
-    if (
-        carry
-        and old != new
-        and old.exists()
-        and any(
-            old.resolve().is_relative_to(Path(r).expanduser().resolve()) for r in gauntlet_roots
-        )
-    ):
+    if carry and old != new and old.exists() and any(
+            old.resolve().is_relative_to(Path(r).expanduser().resolve()) for r in gauntlet_roots):
         shutil.copyfile(old, new)
 
 
-def adopt_leftover_owner(
-    run, process_cache: Path, *, owned_pid=None, shard: tuple[int, int] | None = None
-) -> Path | None:
+def adopt_leftover_owner(run, process_cache: Path, *, owned_pid=None,
+                         shard: tuple[int, int] | None = None) -> Path | None:
     """(final fix I1): after a killed run, the owner record of the darktable it
     left running sits in the killed session's cache (it reaches the process
     cache only through abort/close). Point the process cache at the newest
@@ -160,9 +142,8 @@ def adopt_leftover_owner(
         except OSError:
             return 0.0
 
-    records = sorted(
-        Path(run.sessions_dir).glob(f"*/*/cache/{dtprocess.OWNER_FILE}"), key=mtime, reverse=True
-    )
+    records = sorted(Path(run.sessions_dir).glob(f"*/*/cache/{dtprocess.OWNER_FILE}"),
+                     key=mtime, reverse=True)
     if shard is not None:  # a sibling worker's live darktable is never "our leftover"
         records = [r for r in records if workers.owns_session_dir(r.parent.parent.name, shard)]
     for rec in records:
@@ -241,12 +222,9 @@ def _stage_guide_job(session) -> None:
     session.guide_job_stage_error = None
     if staged is None or not staged.job_frames:
         return
-    rec = session.call(
-        "library_import",
-        {"source": str(staged.card), "job_slug": staged.vars["job_slug"], "confirm": True},
-        60.0,
-        write=True,
-    )
+    rec = session.call("library_import", {"source": str(staged.card),
+                                          "job_slug": staged.vars["job_slug"],
+                                          "confirm": True}, 60.0, write=True)
     if rec.error:
         session.guide_job_stage_error = rec.error
         return
@@ -264,9 +242,8 @@ def _stage_guide_job(session) -> None:
 class RoutedSession:
     """One ScouterSession per body, opened lazily; cases dispatch by layer."""
 
-    def __init__(
-        self, adapter: ScouterAdapter, layer: str, run, *, session_factory=None, agent_factory=None
-    ) -> None:
+    def __init__(self, adapter: ScouterAdapter, layer: str, run, *,
+                 session_factory=None, agent_factory=None) -> None:
         self.adapter = adapter
         self.layer = layer
         self.run = run
@@ -284,13 +261,8 @@ class RoutedSession:
         from tests.gauntlet.observe import noise_floors
         from tests.gauntlet.session import ScouterSession
 
-        return ScouterSession(
-            corpus,
-            root,
-            body,
-            run_root=run_root,
-            floors_fn=lambda f: noise_floors(f, root / "floor"),
-        )
+        return ScouterSession(corpus, root, body, run_root=run_root,
+                              floors_fn=lambda f: noise_floors(f, root / "floor"))
 
     @staticmethod
     def _agent_session(inner):
@@ -303,11 +275,8 @@ class RoutedSession:
 
         if self.aborted:  # (N1): an aborted routed session opens nothing new
             raise SessionBlocked("routed session aborted")
-        if (
-            self.current is not None
-            and self.current.body == body
-            and not getattr(self.current, "mcp_dead", False)
-        ):  # (final fix I3): reopen
+        if self.current is not None and self.current.body == body and \
+                not getattr(self.current, "mcp_dead", False):  # (final fix I3): reopen
             return self.current
         if self.current is not None:
             old, self.current = self.current, None
@@ -493,13 +462,8 @@ class ScouterAdapter:
         from tests.gauntlet.exec_looks import GOLDEN_ID
 
         ids = {c.id for c in todo}
-        return (
-            [GOLDEN_ID]
-            if GOLDEN_ID in ids
-            and len(ids) > 1
-            and any(c.layer == "looks" and c.id != GOLDEN_ID for c in todo)
-            else []
-        )
+        return [GOLDEN_ID] if GOLDEN_ID in ids and len(ids) > 1 and any(
+            c.layer == "looks" and c.id != GOLDEN_ID for c in todo) else []
 
     @property
     def process_dir(self) -> Path:
@@ -529,10 +493,8 @@ class ScouterAdapter:
         if self._corpus is None:
             path = self.runs_root / "corpus.json"
             if not path.exists():
-                raise FileNotFoundError(
-                    f"{path} missing: run the corpus survey first "
-                    "(python -m tests.gauntlet.corpus_survey)"
-                )
+                raise FileNotFoundError(f"{path} missing: run the corpus survey first "
+                                        "(python -m tests.gauntlet.corpus_survey)")
             self._corpus = corpus_mod.Corpus.load(path)
         return self._corpus
 
@@ -660,11 +622,8 @@ class ScouterAdapter:
             return 0.0
         from tests.gauntlet.execute import STAT_METRICS
 
-        renders = (
-            RENDERS_PER_STATS_CASE
-            if any(c.metric in STAT_METRICS for c in case.expect.checks)
-            else 0
-        )
+        renders = RENDERS_PER_STATS_CASE if any(
+            c.metric in STAT_METRICS for c in case.expect.checks) else 0
         return HARNESS_BASE_S + renders * HARNESS_PER_RENDER_S
 
     def foreign_pids(self) -> list[int]:
@@ -685,10 +644,8 @@ class ScouterAdapter:
         except (OSError, subprocess.TimeoutExpired) as e:
             return f"cannot tell whether a foreign darktable runs ({type(e).__name__}: {e})"
         if foreign:
-            return (
-                f"foreign darktable: pids {foreign} were not launched by the gauntlet; "
-                "quit them first (the runner never signals them)"
-            )
+            return (f"foreign darktable: pids {foreign} were not launched by the gauntlet; "
+                    "quit them first (the runner never signals them)")
         return None
 
     def _record_originals(self, run_root: Path) -> None:
@@ -711,9 +668,8 @@ class ScouterAdapter:
             return []
         out = []
         for p in entries:
-            if p.suffix not in (".ips", ".crash", ".hang") or not any(
-                n in p.name.lower() for n in ("darktable", "python")
-            ):
+            if p.suffix not in (".ips", ".crash", ".hang") or \
+                    not any(n in p.name.lower() for n in ("darktable", "python")):
                 continue
             try:  # (fix round 1, N2): one vanished file must not hide the others
                 if p.stat().st_mtime >= since:
@@ -743,10 +699,8 @@ class ScouterAdapter:
         if got is None:
             return ["EditingTrial originals: not checked (no live layer ran)"]
         before, after = got
-        return [
-            f"EditingTrial originals unchanged (sha256 of {len(after)}): "
-            f"{'yes' if after == before else 'NO'}"
-        ]
+        return [f"EditingTrial originals unchanged (sha256 of {len(after)}): "
+                f"{'yes' if after == before else 'NO'}"]
 
     def signoff_blockers(self, run=None) -> list[str]:
         got = self._originals(run)
@@ -757,23 +711,12 @@ class ScouterAdapter:
         plans = {r["id"]: plan_request(r, t.check_map) for r in t.requests}
         p0 = select_p0(t.requests)
         by_class = Counter(plans[r["id"]].klass for r in p0)
-        lines = [
-            "## Scouter notes",
-            "",
-            f"P0 dry run: {len(p0)} requests; by class {dict(sorted(by_class.items()))}.",
-            "Served = in + partial + workflow; the rest pass only as honest refusals.",
-            "",
-            "### Genre workflow step coverage (12 taxonomy workflows)",
-            "",
-        ]
-        served = {
-            "exposure",
-            "sigmoid",
-            "temperature",
-            "colorbalancergb",
-            "filmicrgb",
-            "colorzones",
-        }
+        lines = ["## Scouter notes", "",
+                 f"P0 dry run: {len(p0)} requests; by class {dict(sorted(by_class.items()))}.",
+                 "Served = in + partial + workflow; the rest pass only as honest refusals.",
+                 "", "### Genre workflow step coverage (12 taxonomy workflows)", ""]
+        served = {"exposure", "sigmoid", "temperature", "colorbalancergb", "filmicrgb",
+                  "colorzones"}
         for wf in t.workflows:
             steps = wf["steps"]
             ok = sum(1 for s in steps if (s.get("module") or "").split("|")[0] in served)
@@ -793,11 +736,13 @@ class ScouterAdapter:
         disk-heavy writes through a case workdir yet, so this is a no-op."""
         return () if layer == "bulk" else ("*.xmp",)
 
+
     def session_prune_names(self) -> tuple[str, ...]:
         """(N15): the bulky regenerable copies inside a CLOSED session folder
         (~175 MB frames/ raws, ~117 MB card/, render/). library/, config/,
         floor/, cache/, XMP sidecars' library state and logs stay."""
         return ("frames", "card", "render")
+
 
     def session_prune_keep(self) -> tuple[str, ...]:
         """(N15): XMP sidecars live beside the copied raws in frames/; the

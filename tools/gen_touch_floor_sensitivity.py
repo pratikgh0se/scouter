@@ -13,8 +13,7 @@ sizes against -- not hand-copied numbers.
 
 Usage: uv run python tools/gen_touch_floor_sensitivity.py > tests/fixtures/touch_floor_sensitivity.json
 (requires the night-1 case evidence at CASES_DIR below; read-only)
-"""  # noqa: E501
-
+"""
 from __future__ import annotations
 
 import json
@@ -84,10 +83,8 @@ def main() -> None:
             dstat = sa - sb
             sens = dstat / dparam
             out[key]["bodies"][body] = {
-                "dparam": dparam,
-                "dstat": round(dstat, 6),
-                "floor": floor,
-                "sensitivity": round(sens, 6),
+                "dparam": dparam, "dstat": round(dstat, 6),
+                "floor": floor, "sensitivity": round(sens, 6),
                 "case": fp.stem,
             }
     print(json.dumps(out, indent=2, sort_keys=True))

@@ -250,18 +250,12 @@ def health(timeout: float = HEALTH_TIMEOUT_S) -> dict:
     try:
         d = get_bridge().call("darktable_mcp.diag", {}, timeout=timeout) or {}
     except Exception as e:  # noqa: BLE001 - any failure to answer is "unresponsive"
-        return {
-            "state": "unresponsive",
-            "ping_ms": int(1000 * (time.monotonic() - t0)),
-            "error": str(e)[:200],
-        }
+        return {"state": "unresponsive", "ping_ms": int(1000 * (time.monotonic() - t0)),
+                "error": str(e)[:200]}
     ready = d.get("gui_ready")
-    return {
-        "state": "starting" if ready is False else "alive",
-        "ping_ms": int(1000 * (time.monotonic() - t0)),
-        "gui_ready": ready,
-        "gui_ready_source": d.get("gui_ready_source"),
-    }
+    return {"state": "starting" if ready is False else "alive",
+            "ping_ms": int(1000 * (time.monotonic() - t0)), "gui_ready": ready,
+            "gui_ready_source": d.get("gui_ready_source")}
 
 
 def _pid_facts() -> dict:
@@ -311,20 +305,12 @@ def _unresponsive(method: str, h: dict) -> tuple[Any, dict]:
     if owned is None and running == []:
         return None, facts
     pid = owned if owned is not None else (running[0] if running else None)
-    return (
-        DarktableUnresponsive(
-            f"darktable did not answer {method} and the {HEALTH_TIMEOUT_S:g} s health ping "
-            "failed too",
-            detail={
-                "pid": pid,
-                "launched_by_scouter": owned is not None,
-                "last_method": method,
-                "ping_ms": h.get("ping_ms"),
-                **facts,
-            },
-        ),
-        facts,
-    )
+    return DarktableUnresponsive(
+        f"darktable did not answer {method} and the {HEALTH_TIMEOUT_S:g} s health ping "
+        "failed too",
+        detail={"pid": pid, "launched_by_scouter": owned is not None, "last_method": method,
+                "ping_ms": h.get("ping_ms"), **facts},
+    ), facts
 
 
 def current_view() -> str:

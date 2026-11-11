@@ -28,36 +28,16 @@ class RerouteNestedIntentTest(_MovesFixture):
                 real_adjust_core = moves._adjust_core
                 attempted = []
 
-                def nesting(
-                    module,
-                    param,
-                    delta,
-                    *,
-                    resolved,
-                    instance,
-                    commit,
-                    level,
-                    job,
-                    ms_precommit=0,
-                    flushed=False,
-                ):
+                def nesting(module, param, delta, *, resolved, instance, commit, level,
+                            job, ms_precommit=0, flushed=False):
                     if not attempted:
                         attempted.append(True)
                         with self.assertRaises(RerouteNested):
                             with darkroom.no_wb_reroute_scope():
                                 pass
-                    return real_adjust_core(
-                        module,
-                        param,
-                        delta,
-                        resolved=resolved,
-                        instance=instance,
-                        commit=commit,
-                        level=level,
-                        job=job,
-                        ms_precommit=ms_precommit,
-                        flushed=flushed,
-                    )
+                    return real_adjust_core(module, param, delta, resolved=resolved,
+                                             instance=instance, commit=commit, level=level,
+                                             job=job, ms_precommit=ms_precommit, flushed=flushed)
 
                 # This example runs its own (non-nested) outer scope, so drop
                 # the `already_active` one set above and use a real one via
@@ -65,9 +45,8 @@ class RerouteNestedIntentTest(_MovesFixture):
                 darkroom.NO_WB_REROUTE.reset(outer_token)
                 outer_token = None
                 with mock.patch("scouter.core.moves._adjust_core", side_effect=nesting):
-                    result = moves.adjust.__wrapped__(
-                        "exposure", "exposure", 0.2, commit=False, job="job-test"
-                    )
+                    result = moves.adjust.__wrapped__("exposure", "exposure", 0.2,
+                                                       commit=False, job="job-test")
                 self.assertEqual(attempted, [True], ex["id"])
                 self.assertEqual(result.outcome, want["outcome"], ex["id"])
                 self.assertEqual(darkroom.NO_WB_REROUTE.get(), want["flag_after"], ex["id"])
@@ -100,7 +79,6 @@ class RerouteNestedIntentTest(_MovesFixture):
 def _make(ex: dict):
     def test(self: RerouteNestedIntentTest) -> None:
         self.run_example(ex)
-
     return test
 
 

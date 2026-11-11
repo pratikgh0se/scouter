@@ -66,7 +66,7 @@ LAYOUTS: dict[tuple[str, int], dict] = {
         "named_slots": {0: "contrast", 1: "skew"},
         "float_count": 14,
         "verified": "tests/fixtures/P6281348.ORF.xmp num 12 -> contrast 1.4; "
-        "tests/fixtures/phase3-host.xmp -> skew 0.16",
+                    "tests/fixtures/phase3-host.xmp -> skew 0.16",
     },
     ("temperature", 4): {
         "size": 20,
@@ -93,23 +93,15 @@ LAYOUTS: dict[tuple[str, int], dict] = {
         # each sentinel appeared at exactly one float slot. 19 matches the
         # editor benchmark's finding (global saturation = f19).
         "named_slots": {
-            0: "shadows_luminance",
-            1: "shadows_chroma",
-            2: "shadows_hue",
-            3: "midtones_luminance",
-            4: "midtones_chroma",
-            5: "midtones_hue",
-            6: "highlights_luminance",
-            7: "highlights_chroma",
-            8: "highlights_hue",
-            17: "global_chroma",
-            19: "global_saturation",
-            29: "global_vibrance",
+            0: "shadows_luminance", 1: "shadows_chroma", 2: "shadows_hue",
+            3: "midtones_luminance", 4: "midtones_chroma", 5: "midtones_hue",
+            6: "highlights_luminance", 7: "highlights_chroma", 8: "highlights_hue",
+            17: "global_chroma", 19: "global_saturation", 29: "global_vibrance",
             31: "contrast",
         },
         "float_count": 33,
         "verified": "tests/fixtures/colorbalancergb.xmp (task 12 host probe); "
-        "tests/fixtures/phase3-host.xmp (phase 3 task 10)",
+                    "tests/fixtures/phase3-host.xmp (phase 3 task 10)",
     },
     # Phase 3 task 10 host run, 2026-09-24: filmic rgb v6 (116 bytes, 29
     # four-byte slots). Sentinels 4.96 (white relative exposure) and 1.451
@@ -117,7 +109,8 @@ LAYOUTS: dict[tuple[str, int], dict] = {
     ("filmicrgb", 6): {
         "size": 116,
         # black: sentinel -9.94 at exactly one slot (1), second launch.
-        "named_slots": {1: "black_relative_exposure", 2: "white_relative_exposure", 14: "contrast"},
+        "named_slots": {1: "black_relative_exposure", 2: "white_relative_exposure",
+                        14: "contrast"},
         "float_count": 29,
         "verified": "tests/fixtures/phase3-host.xmp (phase 3 task 10)",
     },

@@ -166,7 +166,9 @@ class PlanTest(LibraryTestCase):
         _make_card(source, 2)
         with mock.patch.object(exif, "camera_slug", side_effect=["em10iii", "a7"]):
             with self.assertRaises(UsageError) as ctx:
-                library.import_card(str(source), "harbour-wedding", camera="nex5n", confirm=True)
+                library.import_card(
+                    str(source), "harbour-wedding", camera="nex5n", confirm=True
+                )
         self.assertIn("nex5n", str(ctx.exception))
         self.assertIn("em10iii", str(ctx.exception))
         self.assertIn("a7", str(ctx.exception))
@@ -183,9 +185,13 @@ class PlanTest(LibraryTestCase):
             "camera_slug",
             side_effect=[ExifUnreadable("no camera model"), "a7"],
         ):
-            result = library.import_card(str(source), "harbour-wedding", camera="a7", confirm=True)
+            result = library.import_card(
+                str(source), "harbour-wedding", camera="a7", confirm=True
+            )
         self.assertEqual(result.totals["copied"], 2, "the card never fails on this one file")
-        self.assertEqual(result.assumed_camera, [{"source_name": "P6281000.ORF", "camera": "a7"}])
+        self.assertEqual(
+            result.assumed_camera, [{"source_name": "P6281000.ORF", "camera": "a7"}]
+        )
         self.assertEqual(result.skipped_no_body, [])
         by_source = {f["source_name"]: f for f in result.files}
         self.assertEqual(by_source["P6281000.ORF"]["camera"], "a7")
@@ -332,10 +338,8 @@ class FilmRollTest(LibraryTestCase):
         _make_card(source, 2)
         self.bridge.raises["import_batch"] = BridgeTimeoutError("darktable not reachable")
         self.bridge.raises["darktable_mcp.diag"] = BridgeTimeoutError("no answer")
-        with (
-            mock.patch.object(dtprocess, "running_pids", return_value=[]),
-            mock.patch.object(dtprocess, "owned_pid", return_value=None),
-        ):
+        with mock.patch.object(dtprocess, "running_pids", return_value=[]), \
+                mock.patch.object(dtprocess, "owned_pid", return_value=None):
             result = library.import_card(str(source), "harbour-wedding", confirm=True)
 
         self.assertEqual(result.outcome, "ok")
@@ -353,10 +357,8 @@ class FilmRollTest(LibraryTestCase):
         _make_card(source, 2)
         self.bridge.raises["import_batch"] = BridgeTimeoutError("darktable not reachable")
         self.bridge.raises["darktable_mcp.diag"] = BridgeTimeoutError("no answer")
-        with (
-            mock.patch.object(dtprocess, "running_pids", return_value=[4242]),
-            mock.patch.object(dtprocess, "owned_pid", return_value=None),
-        ):
+        with mock.patch.object(dtprocess, "running_pids", return_value=[4242]), \
+                mock.patch.object(dtprocess, "owned_pid", return_value=None):
             result = library.import_card(str(source), "harbour-wedding", confirm=True)
 
         self.assertEqual(result.outcome, "ok")

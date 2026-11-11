@@ -30,10 +30,8 @@ EXAMPLES = json.loads((Path(__file__).parent / "inherited_wedge.json").read_text
 def _corpus(trial: Path) -> Corpus:
     trial.mkdir()
     (trial / "H.ORF").write_bytes(b"raw")
-    doc = {
-        "frames": [{"rel": "H.ORF", "body": "olympus"}],
-        "roles": {"olympus": {"hero": "H.ORF", "dark": "H.ORF"}},
-    }
+    doc = {"frames": [{"rel": "H.ORF", "body": "olympus"}],
+           "roles": {"olympus": {"hero": "H.ORF", "dark": "H.ORF"}}}
     return Corpus(doc, trial)
 
 
@@ -43,22 +41,12 @@ class InheritedWedgeIntentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             corpus = _corpus(root / "trial")
-            mcp = (
-                FakeMcp({"darkroom_say": TimeoutError("no answer")})
-                if inp["times_out"]
+            mcp = FakeMcp({"darkroom_say": TimeoutError("no answer")}) if inp["times_out"] \
                 else FakeMcp()
-            )
             s = _session(corpus, root, FakeDt(health=inp["health"]), mcp).open()
-            case = Case(
-                id=ex["id"],
-                layer="scenarios",
-                tier="P0",
-                mode="tool",
-                steps=[Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
-                expect=Expect("edit"),
-                body="olympus",
-                frame_role="hero",
-            )
+            case = Case(id=ex["id"], layer="scenarios", tier="P0", mode="tool",
+                        steps=[Step("darkroom_say", {"phrase": "brighter"}, 8.0, True)],
+                        expect=Expect("edit"), body="olympus", frame_role="hero")
             obs = execute.run_tool_case(s, case)
         self.assertEqual(obs.blocked, want["blocked"], ex["id"])
         self.assertIs(is_hang("blocked", obs.blocked), want["is_hang"], ex["id"])
@@ -69,7 +57,6 @@ class InheritedWedgeIntentTest(unittest.TestCase):
 def _make(ex: dict):
     def test(self: InheritedWedgeIntentTest) -> None:
         self.run_example(ex)
-
     return test
 
 

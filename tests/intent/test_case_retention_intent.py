@@ -38,7 +38,6 @@ def _make(ex: dict):
 
         with tempfile.TemporaryDirectory() as d:
             self.run_example(ex, Path(d))
-
     return test
 
 

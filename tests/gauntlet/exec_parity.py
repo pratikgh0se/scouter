@@ -12,35 +12,14 @@ from gauntlet.adapter import CallRecord
 from tests.gauntlet.corpus import copy_readonly
 from tests.gauntlet.execute import VIRTUAL, substitute
 
-VOLATILE = {
-    "ms",
-    "job",
-    "layer",
-    "ts",
-    "id",
-    "duration_s",
-    "elapsed_ms",
-    "event_id",
-    "path",
-    "dtstyle_path",
-    "memory_path",
-    "manifest",
-    "out_dir",
-    "image_id",
-    # HB6 (final-20261110): per-leg timings, cache state, timestamped
-    # archive dirs, file mtimes, per-leg preview paths, a window start
-    # time and the per-leg totals each leg's own calls bump. None of
-    # them says anything about whether the two sides agree.
-    "analyse_ms",
-    "render_ms",
-    "cached",
-    "archive_dir",
-    "xmp_mtime",
-    "preview_path",
-    "from_ts",
-    "totals",
-    "histogram",
-}
+VOLATILE = {"ms", "job", "layer", "ts", "id", "duration_s", "elapsed_ms", "event_id", "path",
+            "dtstyle_path", "memory_path", "manifest", "out_dir", "image_id",
+            # HB6 (final-20261110): per-leg timings, cache state, timestamped
+            # archive dirs, file mtimes, per-leg preview paths, a window start
+            # time and the per-leg totals each leg's own calls bump. None of
+            # them says anything about whether the two sides agree.
+            "analyse_ms", "render_ms", "cached", "archive_dir", "xmp_mtime", "preview_path",
+            "from_ts", "totals", "histogram"}
 
 #: Structured values compared by SHAPE only (HB6): two legs render their own
 #: frame, so raw histogram counts differ per leg while the layout must not.
@@ -59,18 +38,12 @@ def normalise(env: dict | None) -> dict:
     env = env or {}
     data = env.get("data") or {}
     err = env.get("error") or {}
-    return {
-        "ok": bool(env.get("ok")),
-        "outcome": env.get("outcome"),
-        "code": err.get("code"),
-        "data_keys": sorted(k for k in data if k not in VOLATILE),
-        "values": {
-            k: v
-            for k, v in sorted(data.items())
-            if k not in VOLATILE and isinstance(v, (bool, int, float, str))
-        },
-        "shapes": {k: _shape(data[k]) for k in SHAPE_ONLY if k in data},
-    }
+    return {"ok": bool(env.get("ok")), "outcome": env.get("outcome"),
+            "code": err.get("code"),
+            "data_keys": sorted(k for k in data if k not in VOLATILE),
+            "values": {k: v for k, v in sorted(data.items())
+                       if k not in VOLATILE and isinstance(v, (bool, int, float, str))},
+            "shapes": {k: _shape(data[k]) for k in SHAPE_ONLY if k in data}}
 
 
 def cli_argv(verb_id: str, args: dict) -> list[str]:
@@ -91,11 +64,8 @@ def cli_argv(verb_id: str, args: dict) -> list[str]:
                     # nothing is emitted here.
                     pass
                 else:
-                    argv.append(
-                        {"dry_run": "--dry-run", "confirm": "--yes"}.get(
-                            spec.name, f"--{spec.name.replace('_', '-')}"
-                        )
-                    )
+                    argv.append({"dry_run": "--dry-run", "confirm": "--yes"}.get(
+                        spec.name, f"--{spec.name.replace('_', '-')}"))
             elif spec.name == "commit" and spec.default is True:
                 argv.append("--no-commit")
             continue
@@ -175,12 +145,9 @@ def _stage_side(session, path, side: str):
     #: `files`, nothing copied), so every parity case silently fell back to
     #: the raw copy ("no_files_named") and every job/style fixture was
     #: missing. The import must be confirmed.
-    rec = session.call(
-        "library_import",
-        {"source": str(path.parent), "job_slug": SMOKE_JOB_SLUG, "confirm": True},
-        30.0,
-        write=True,
-    )
+    rec = session.call("library_import", {"source": str(path.parent),
+                                          "job_slug": SMOKE_JOB_SLUG,
+                                          "confirm": True}, 30.0, write=True)
     resolved = _imported_path(session, rec.envelope, path.name)
     if resolved is None:
         if (rec.envelope or {}).get("outcome") == "dry_run":
@@ -203,17 +170,9 @@ def _ensure_smoke_style(session, path) -> None:
     extract's filtered path takes no `dtbridge.require_darkroom()`)."""
     if getattr(session, "_parity_smoke_style_done", False):
         return
-    rec = session.call(
-        "style_extract",
-        {
-            "image": str(path),
-            "name": SMOKE_STYLE_NAME,
-            "modules": SMOKE_STYLE_MODULES,
-            "confirm": True,
-        },
-        30.0,
-        write=True,
-    )
+    rec = session.call("style_extract", {"image": str(path), "name": SMOKE_STYLE_NAME,
+                                         "modules": SMOKE_STYLE_MODULES, "confirm": True}, 30.0,
+                       write=True)
     if (rec.envelope or {}).get("ok"):
         session._parity_smoke_style_done = True
         return
@@ -221,9 +180,8 @@ def _ensure_smoke_style(session, path) -> None:
     _fixture_errors(session).append(f"smoke_style_failed: {err}")
 
 
-def _stage_once(
-    session, flag: str, label: str, tool: str, args: dict, budget_s: float, write: bool
-) -> None:
+def _stage_once(session, flag: str, label: str, tool: str, args: dict, budget_s: float,
+                write: bool) -> None:
     """HB7: run one fixture-staging call once per session, ONLY on success; a
     failure stays retryable and is recorded as a fixture error."""
     if getattr(session, flag, False):
@@ -238,22 +196,14 @@ def _stage_once(
 
 def _ensure_backup(session) -> None:
     """HB7: backup.verify needs an archives dir, i.e. one prior `backup run --yes`."""
-    _stage_once(
-        session, "_parity_backup_done", "backup_run", "backup_run", {"confirm": True}, 120.0, True
-    )
+    _stage_once(session, "_parity_backup_done", "backup_run", "backup_run",
+                {"confirm": True}, 120.0, True)
 
 
 def _ensure_cull_proposal(session) -> None:
     """HB7: cull.apply needs a cull-*.json proposal under the smoke job."""
-    _stage_once(
-        session,
-        "_parity_cull_done",
-        "cull_propose",
-        "cull_propose",
-        {"job_slug": SMOKE_JOB_SLUG},
-        120.0,
-        False,
-    )
+    _stage_once(session, "_parity_cull_done", "cull_propose", "cull_propose",
+                {"job_slug": SMOKE_JOB_SLUG}, 120.0, False)
 
 
 def _staged_dests(session):
@@ -359,9 +309,8 @@ def _restore_between_legs(session, obs, hero):
     return session.staged.frames["hero"]
 
 
-def _call_with_frame_switch(
-    session, obs, tool: str, args: dict, path, budget_s: float, write: bool, side: str
-) -> CallRecord:
+def _call_with_frame_switch(session, obs, tool: str, args: dict, path, budget_s: float,
+                            write: bool, side: str) -> CallRecord:
     """LK-frame-switch-relaunch (triage, PAR-hollow-pass note 3:
     'darkroom.open-happy ... fails on both sides with "wrong image loaded"
     ... known darkroom.open image-switch limit'): darktable cannot load a
@@ -404,9 +353,8 @@ def _run_cli_with_frame_switch(session, obs, argv: list[str], path, budget_s: fl
     return p
 
 
-def _parity_needs_review(
-    variant: str | None, mcp_norm: dict, cli_norm: dict, same: bool, transient_codes: frozenset[str]
-) -> str | None:
+def _parity_needs_review(variant: str | None, mcp_norm: dict, cli_norm: dict,
+                         same: bool, transient_codes: frozenset[str]) -> str | None:
     """Pratik's ruling (row 496 item 5, review fix round 2 D-1): a HAPPY
     variant where both sides fail the same way never ran the verb -- always
     needs_review. An ERROR variant is the harness deliberately breaking the
@@ -451,9 +399,8 @@ def _relevant_fixture_errors(verb_id: str, errors: list[str]) -> list[str]:
     verb = registry.load_verbs().get(verb_id)
     if verb is not None and any(a.name in _IMAGE_ARGS for a in verb.args):
         needs.append("import")
-    return [
-        e for e in errors if any(e.startswith(f"{n}_failed") or f"_{n}_failed" in e for n in needs)
-    ]
+    return [e for e in errors if any(e.startswith(f"{n}_failed") or f"_{n}_failed" in e
+                                     for n in needs)]
 
 
 def parity_pair(session, case, step, obs) -> CallRecord:
@@ -477,9 +424,8 @@ def parity_pair(session, case, step, obs) -> CallRecord:
     session.staged.frames["hero"] = mcp_copy
     mcp_args = substitute(step.args["args"], session, [])
     if is_open:
-        mcp_rec = _call_with_frame_switch(
-            session, obs, case.meta["mcp"], mcp_args, mcp_copy, step.budget_s, step.write, "mcp"
-        )
+        mcp_rec = _call_with_frame_switch(session, obs, case.meta["mcp"], mcp_args, mcp_copy,
+                                          step.budget_s, step.write, "mcp")
     else:
         mcp_rec = session.call(case.meta["mcp"], mcp_args, step.budget_s, write=step.write)
     if step.write and not is_open:
@@ -496,9 +442,8 @@ def parity_pair(session, case, step, obs) -> CallRecord:
             p = _run_cli(argv, session.staged.env, step.budget_s)
     except subprocess.TimeoutExpired:
         obs.blocked = "hang: scouter cli exceeded budget"
-        obs.hang_evidence.append(
-            f"parity_pair: scouter cli {verb_id} exceeded " f"{step.budget_s + 30:.0f}s"
-        )
+        obs.hang_evidence.append(f"parity_pair: scouter cli {verb_id} exceeded "
+                                 f"{step.budget_s + 30:.0f}s")
         obs.extra["envelopes_match"] = False
         obs.extra["parity_diffs"] = ["timeout"]
         return CallRecord("parity_pair", step.args, error="timeout", write=step.write)
@@ -509,12 +454,8 @@ def parity_pair(session, case, step, obs) -> CallRecord:
     try:
         cli_env = json.loads(p.stdout)
     except ValueError:
-        cli_env = {
-            "ok": False,
-            "outcome": f"exit {p.returncode}",
-            "raw": p.stdout[-300:],
-            "stderr": p.stderr[-300:],
-        }
+        cli_env = {"ok": False, "outcome": f"exit {p.returncode}", "raw": p.stdout[-300:],
+                   "stderr": p.stderr[-300:]}
     diffs = compare(mcp_rec.envelope, cli_env)
     if not isinstance(mcp_rec.envelope, dict):
         #: Round 1 C17: an MCP leg that produced no envelope at all (a
@@ -530,7 +471,8 @@ def parity_pair(session, case, step, obs) -> CallRecord:
     obs.extra["cli_envelope"] = cli_env
     obs.extra["mcp_envelope"] = mcp_rec.envelope  # HB6: both sides, for diagnosis
     variant = case.meta.get("variant")
-    reason = _parity_needs_review(variant, mcp_norm, cli_norm, not diffs, _policy.transient_codes)
+    reason = _parity_needs_review(variant, mcp_norm, cli_norm, not diffs,
+                                  _policy.transient_codes)
     fsr = obs.extra.get("frame_switch_relaunch") or []
     if not diffs and set(fsr) >= {"mcp", "cli"}:
         # Review fix round 3, R2-1: this must NEVER lift a genuine mismatch
@@ -549,12 +491,8 @@ def parity_pair(session, case, step, obs) -> CallRecord:
             #: HB7: the verb never ran because ITS fixture was not staged. That
             #: is the harness's failure, never a needs_review about the product.
             obs.blocked = f"harness_bug: parity fixture failed: {'; '.join(relevant)}"[:500]
-    return CallRecord(
-        "parity_pair",
-        step.args,
-        {"ok": not diffs, "outcome": "ok", "data": {"diffs": diffs}},
-        write=step.write,
-    )
+    return CallRecord("parity_pair", step.args, {"ok": not diffs, "outcome": "ok",
+                                                 "data": {"diffs": diffs}}, write=step.write)
 
 
 VIRTUAL["parity_pair"] = parity_pair

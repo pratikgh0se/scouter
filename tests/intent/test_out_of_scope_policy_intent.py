@@ -17,7 +17,8 @@ from pathlib import Path
 
 from gauntlet.adapter import Observation
 from gauntlet.evaluate import evaluate
-from tests.gauntlet import checkmap, taxonomy
+from tests.gauntlet import taxonomy
+from tests.gauntlet import checkmap
 from tests.gauntlet.layers import scenarios
 from tests.gauntlet.policy import POLICY
 
@@ -36,11 +37,9 @@ class OutOfScopePolicyIntentTest(unittest.TestCase):
     def run_example(self, ex: dict) -> None:
         inp, want = ex["input"], ex["expect"]
         case = _real_out_of_scope_case()
-        obs = Observation(
-            agent_text=inp["agent_text"],
-            before={"fingerprint": "a"},
-            after={"fingerprint": "b" if inp["wrote"] else "a"},
-        )
+        obs = Observation(agent_text=inp["agent_text"],
+                          before={"fingerprint": "a"},
+                          after={"fingerprint": "b" if inp["wrote"] else "a"})
         v = evaluate(case, obs, POLICY)
         self.assertEqual(v.score, want["status"], ex["id"])
         self.assertEqual(v.outcome, want["outcome"], ex["id"])
@@ -49,7 +48,6 @@ class OutOfScopePolicyIntentTest(unittest.TestCase):
 def _make(ex: dict):
     def test(self: OutOfScopePolicyIntentTest) -> None:
         self.run_example(ex)
-
     return test
 
 

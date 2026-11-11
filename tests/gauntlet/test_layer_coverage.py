@@ -25,23 +25,17 @@ def test_touch_floor_residual_cases_target_hero_bright_on_olympus_only():
     cases = coverage.generate()
     by_id = {c.id: c for c in cases}
     expect_bright = {
-        "cov-phrase-deepen_shadows-olympus-touch",
-        "cov-phrase-lift_shadows-olympus-touch",
-        "cov-phrase-more_vibrance-olympus-touch",
-        "cov-phrase-less_vibrance-olympus-touch",
-        "cov-phrase-cool_shadows-olympus-touch",
-        "cov-phrase-teal_orange-olympus-touch",
+        "cov-phrase-deepen_shadows-olympus-touch", "cov-phrase-lift_shadows-olympus-touch",
+        "cov-phrase-more_vibrance-olympus-touch", "cov-phrase-less_vibrance-olympus-touch",
+        "cov-phrase-cool_shadows-olympus-touch", "cov-phrase-teal_orange-olympus-touch",
     }
     for cid in expect_bright:
         assert by_id[cid].frame_role == "hero_bright", cid
     unaffected = {
-        "cov-phrase-deepen_shadows-sony_a7-touch",
-        "cov-phrase-lift_shadows-sony_a7-touch",
-        "cov-phrase-more_vibrance-sony_a7-touch",
-        "cov-phrase-less_vibrance-sony_a7-touch",
+        "cov-phrase-deepen_shadows-sony_a7-touch", "cov-phrase-lift_shadows-sony_a7-touch",
+        "cov-phrase-more_vibrance-sony_a7-touch", "cov-phrase-less_vibrance-sony_a7-touch",
         # bare/lot forms of the same olympus phrases stay on the plain hero
-        "cov-phrase-deepen_shadows-olympus-bare",
-        "cov-phrase-deepen_shadows-olympus-lot",
+        "cov-phrase-deepen_shadows-olympus-bare", "cov-phrase-deepen_shadows-olympus-lot",
     }
     for cid in unaffected:
         assert by_id[cid].frame_role == "hero", cid
@@ -205,12 +199,9 @@ def test_weaker_grade_bare_gets_a_graded_precondition_first():
 
 
 def test_weaker_grade_touch_lot_and_synonyms_all_get_the_precondition_too():
-    for cid in (
-        "cov-phrase-weaker_grade-olympus-touch",
-        "cov-phrase-weaker_grade-olympus-lot",
-        "cov-phrase-weaker_grade-sony_a7-bare",
-        "cov-synonym-weaker_grade-less_grade-olympus",
-    ):
+    for cid in ("cov-phrase-weaker_grade-olympus-touch", "cov-phrase-weaker_grade-olympus-lot",
+                "cov-phrase-weaker_grade-sony_a7-bare",
+                "cov-synonym-weaker_grade-less_grade-olympus"):
         c = _case(cid)
         assert c.steps[0].args["phrase"] == "stronger colour grade a lot", cid
         assert all(chk.target["from"] == 1 for chk in c.expect.checks), cid
@@ -321,12 +312,8 @@ def test_wb_route_a_pinned_verifies_the_real_target_not_a_placeholder(monkeypatc
     monkeypatch.setattr(checkmap, "route_a_pinned", lambda cmap: True)
     c = _case("cov-temperature.temperature-olympus-set_mid")
     assert c.expect.kind == "edit"
-    assert c.steps == [
-        coverage._set(
-            vocab.spec("temperature", "temperature"),
-            coverage._mid(vocab.spec("temperature", "temperature")),
-        )
-    ]
+    assert c.steps == [coverage._set(vocab.spec("temperature", "temperature"), coverage._mid(
+        vocab.spec("temperature", "temperature")))]
     m1 = next(chk for chk in c.expect.checks if chk.kind == "equals")
     assert m1.target["key"] == "channelmixerrgb.temperature"
     unchanged = next(chk for chk in c.expect.checks if chk.kind == "unchanged")
@@ -434,19 +421,14 @@ def test_night3_repeat_adjust_ratio_guard_second_step_not_moving_fails():
     from gauntlet.adapter import CallRecord, Observation
     from gauntlet.evaluate import evaluate
     from tests.gauntlet.policy import load_policy
-
     c = _case("cov-colorbalancergb.global_chroma-olympus-repeat_adjust")
     k = "colorbalancergb.global_chroma"
     ok = {"ok": True, "outcome": "ok", "data": {}}
     calls = [CallRecord(st.tool, st.args, ok, write=True) for st in c.steps]
     for landed, want in (((-0.1, 0.1, 0.3), "pass"), ((-0.1, 0.1, 0.1), "fail")):
         snaps = [{k: None}] + [{k: v} for v in landed]
-        obs = Observation(
-            calls=calls,
-            before={"params": snaps[0]},
-            after={"params": snaps[-1]},
-            extra={"snapshots": snaps},
-        )
+        obs = Observation(calls=calls, before={"params": snaps[0]}, after={"params": snaps[-1]},
+                          extra={"snapshots": snaps})
         assert evaluate(c, obs, load_policy()).score == want, landed
 
 
@@ -495,7 +477,6 @@ def test_night3_set_neutral_guard_real_silent_failure_still_scores_silent():
     from gauntlet.adapter import CallRecord, Observation
     from gauntlet.evaluate import evaluate
     from tests.gauntlet.policy import load_policy
-
     c = _case("cov-exposure.black-olympus-set_neutral")
     k = "exposure.black"
     ok = {"ok": True, "outcome": "ok", "data": {}}
@@ -504,12 +485,8 @@ def test_night3_set_neutral_guard_real_silent_failure_still_scores_silent():
     def run(snaps, fp_after):
         before = {"params": snaps[0], "fingerprint": "a"}
         after = {"params": snaps[-1], "fingerprint": fp_after}
-        return evaluate(
-            c,
-            Observation(calls=calls, before=before, after=after, extra={"snapshots": snaps}),
-            load_policy(),
-        )
-
+        return evaluate(c, Observation(calls=calls, before=before, after=after,
+                                       extra={"snapshots": snaps}), load_policy())
     old = -0.000244140625
     assert run([{k: old}, {k: 0.05}, {k: 0.0}], "b").outcome == "verified"
     # ok on both writes, the sidecar never moved at all: silent (under the old

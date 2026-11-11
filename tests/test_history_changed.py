@@ -42,9 +42,8 @@ def _write_sidecar(
     os.utime(sidecar, (future, future))
 
 
-def _commit_handler(
-    sidecar: Path, original_text: str, *, outcome: str = "auto", sent: dict | None = None
-):
+def _commit_handler(sidecar: Path, original_text: str, *, outcome: str = "auto",
+                    sent: dict | None = None):
     """A `history.commit` bridge double that behaves like the real plugin
     (task 12's Lua contract; fix round 1, should-fix 6 asked for more than
     one `outcome` so both blockers can be driven through this one double).
@@ -129,7 +128,9 @@ class HistoryChangedTest(unittest.TestCase):
                 "image.lookup": {"found": True, "image_id": 12, "path": str(self.raw)},
                 "darkroom.action": self._action,
                 "module.enable": {"nan": False, "view": "darkroom"},
-                "history.commit": _commit_handler(self.sidecar, self.original_text, sent=self.sent),
+                "history.commit": _commit_handler(
+                    self.sidecar, self.original_text, sent=self.sent
+                ),
             }
         )
         dtbridge.set_bridge(self.bridge)
@@ -380,7 +381,9 @@ class HistoryChangedTest(unittest.TestCase):
             self.sidecar, self.original_text, outcome="never_write", sent=self.sent
         )
         with self.assertRaises(CommitTimeout):
-            history.commit(image=str(self.raw), job="job-test", timeout_s=0.2, expect_change=True)
+            history.commit(
+                image=str(self.raw), job="job-test", timeout_s=0.2, expect_change=True
+            )
 
     def test_wrong_prediction_escalates_to_a_real_commit_not_a_false_noop(self) -> None:
         """Fix round 1, blocker 2, end-to-end: the mid path's `expect_change=

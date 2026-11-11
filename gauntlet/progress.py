@@ -16,21 +16,8 @@ SCHEMA = "gauntlet-progress/1"
 #: the generic `blocked` -- it is deliberately excluded from `hang`
 #: (`evaluate.is_hang`), and folding it into `blocked` alone hid whether a
 #: layer's blocked cases were wedges it inherited or something else entirely.
-_COUNTERS = (
-    "done",
-    "pass",
-    "partial",
-    "fail",
-    "silent",
-    "crash",
-    "hang",
-    "inherited_wedge",
-    "blocked",
-    "parked",
-    "p0_total",
-    "p0_pass",
-    "points",
-)
+_COUNTERS = ("done", "pass", "partial", "fail", "silent", "crash", "hang", "inherited_wedge",
+             "blocked", "parked", "p0_total", "p0_pass", "points")
 
 
 def _now() -> str:
@@ -38,27 +25,17 @@ def _now() -> str:
 
 
 class Progress:
-    def __init__(
-        self, run: RunDir, adapter_name: str, commit: str = "", clock=time.monotonic
-    ) -> None:
+    def __init__(self, run: RunDir, adapter_name: str, commit: str = "",
+                 clock=time.monotonic) -> None:
         self.run = run
         self.clock = clock
         self.t0 = clock()
         if run.progress_json.exists():
             self.doc = json.loads(run.progress_json.read_text(encoding="utf-8"))
         else:
-            self.doc = {
-                "schema": SCHEMA,
-                "stamp": run.stamp,
-                "adapter": adapter_name,
-                "commit": commit,
-                "started": _now(),
-                "status": "running",
-                "current_case": None,
-                "layers": {},
-                "parked": [],
-                "eta_s": None,
-            }
+            self.doc = {"schema": SCHEMA, "stamp": run.stamp, "adapter": adapter_name,
+                        "commit": commit, "started": _now(), "status": "running",
+                        "current_case": None, "layers": {}, "parked": [], "eta_s": None}
         #: (row 501 item H, fix round 1): a generate --subset's own record,
         #: folded in once so it survives every later progress.json
         #: save() -- "recorded in progress.json" (the ruling), read here
@@ -82,9 +59,8 @@ class Progress:
         self._layer_done0 = self.doc["layers"][name]["done"]
         self.save()
 
-    def _apply(
-        self, lay: dict, tier: str, verdict: dict, sign: int, blocked: str | None = None
-    ) -> None:
+    def _apply(self, lay: dict, tier: str, verdict: dict, sign: int,
+               blocked: str | None = None) -> None:
         """Add (sign=+1) or remove (sign=-1) one verdict's contribution to a
         layer's counters (fix round 1, I3: reruns must not double-count).
         (final fix I6): hangs by the shared `is_hang(outcome, blocked)`, and
@@ -105,18 +81,9 @@ class Progress:
         if tier == "P0" and verdict["score"] == "pass":
             lay["p0_pass"] += sign
 
-    def record(
-        self,
-        name: str,
-        case_id: str,
-        tier: str,
-        verdict: dict,
-        wall_s: float,
-        prev_verdict: dict | None = None,
-        *,
-        blocked: str | None = None,
-        prev_blocked: str | None = None,
-    ) -> None:
+    def record(self, name: str, case_id: str, tier: str, verdict: dict, wall_s: float,
+              prev_verdict: dict | None = None, *, blocked: str | None = None,
+              prev_blocked: str | None = None) -> None:
         """`prev_verdict` (fix round 1, I3): when this case already had a
         result (an `only_failed` or explicit-id rerun), the runner passes the
         verdict it is replacing so its old contribution is undone first --
@@ -135,10 +102,9 @@ class Progress:
         per_case = elapsed / done_here if done_here else 0.0
         lay["eta_s"] = max(0.0, round(per_case * (lay["total"] - lay["done"]), 1))
         self.doc["current_case"] = case_id
-        self.doc["eta_s"] = max(0.0, sum(v.get("eta_s") or 0 for v in self.doc["layers"].values()))
-        note = verdict.get("silent_failure") or "; ".join(
-            str(n) for n in verdict.get("notes", [])[:2]
-        )  # noqa: E501
+        self.doc["eta_s"] = max(0.0, sum(v.get("eta_s") or 0 for v in
+                                         self.doc["layers"].values()))
+        note = verdict.get("silent_failure") or "; ".join(str(n) for n in verdict.get("notes", [])[:2])  # noqa: E501
         self.log(f"- **{case_id}**: {outcome}, {wall_s:.2f}s{' -- ' + note if note else ''}")
         self.save()
 
@@ -171,11 +137,9 @@ class Progress:
         if not (still_parked and status == "done"):
             lay["status"] = status
         lay["eta_s"] = 0.0 if status == "done" else lay.get("eta_s")
-        self.log(
-            f"\n## Layer {name}: {status} ({lay['done']}/{lay['total']}, "
-            f"pass {lay['pass']}, partial {lay['partial']}, fail {lay['fail']}, "
-            f"silent {lay['silent']}, crash {lay['crash']})\n"
-        )
+        self.log(f"\n## Layer {name}: {status} ({lay['done']}/{lay['total']}, "
+                 f"pass {lay['pass']}, partial {lay['partial']}, fail {lay['fail']}, "
+                 f"silent {lay['silent']}, crash {lay['crash']})\n")
         self.save()
 
     def merge_shard(self, shard: dict) -> None:

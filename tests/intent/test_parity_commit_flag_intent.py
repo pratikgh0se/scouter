@@ -12,10 +12,9 @@ from pathlib import Path
 from scouter.cli.main import build_parser
 from tests.gauntlet import exec_parity
 
-EXAMPLES = {
-    e["id"]: e
-    for e in json.loads((Path(__file__).parent / "parity_commit_flag.json").read_text())["examples"]
-}
+EXAMPLES = {e["id"]: e for e in
+            json.loads((Path(__file__).parent / "parity_commit_flag.json").read_text())[
+                "examples"]}
 
 
 def test_commit_true_emits_no_flag():

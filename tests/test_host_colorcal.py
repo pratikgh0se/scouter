@@ -122,9 +122,8 @@ class _Session:
     def colorcal(self) -> tuple[dict | None, list[float]]:
         parsed = self.darkroom._read_sidecar_parsed(self.image)
         params = self.xmp.latest_params(parsed, "channelmixerrgb") if parsed else None
-        entries = [
-            e for e in self.history.read(self.image).entries if e.operation == "channelmixerrgb"
-        ]
+        entries = [e for e in self.history.read(self.image).entries
+                   if e.operation == "channelmixerrgb"]
         last = max(entries, key=lambda e: e.num) if entries else None
         return params, entry_floats(last.params_hex) if last else []
 
@@ -142,26 +141,22 @@ class _Session:
         b, a = before or {}, after or {}
         landed = a.get("temperature")
         slots = sentinel_slots(floats, float(k), tol=1.0)
-        self.log.append(
-            f"{label}: requested {k:.0f} K, landed {_fmt(landed)} K, slots {slots} "
-            f"(expect [{SLOT}]), illuminant {b.get('illuminant')} -> "
-            f"{a.get('illuminant')}, x/y {_fmt(b.get('x'))}/{_fmt(b.get('y'))} -> "
-            f"{_fmt(a.get('x'))}/{_fmt(a.get('y'))}"
-        )
+        self.log.append(f"{label}: requested {k:.0f} K, landed {_fmt(landed)} K, slots {slots} "
+                        f"(expect [{SLOT}]), illuminant {b.get('illuminant')} -> "
+                        f"{a.get('illuminant')}, x/y {_fmt(b.get('x'))}/{_fmt(b.get('y'))} -> "
+                        f"{_fmt(a.get('x'))}/{_fmt(a.get('y'))}")
         self.moves.append((label, float(k), landed, slots))
         return {"params": after, "floats": floats, "k": float(k), "slots": slots}
 
     def clamp_note(self) -> str:
         """Moves whose landed K differs from the request, both numbers named."""
-        return "; ".join(
-            f"{label}: requested {k:.0f} K, landed {_fmt(landed)} K"
-            for label, k, landed, _ in self.moves
-            if not isinstance(landed, (int, float)) or abs(landed - k) > 1.0
-        )
+        return "; ".join(f"{label}: requested {k:.0f} K, landed {_fmt(landed)} K"
+                         for label, k, landed, _ in self.moves
+                         if not isinstance(landed, (int, float)) or abs(landed - k) > 1.0)
 
     def flush(self) -> None:
         """Record log lines not yet recorded (also used on the error path)."""
-        for line in self.log[self.flushed :]:
+        for line in self.log[self.flushed:]:
             _record(f"- {self.tag} {line}")
         self.flushed = len(self.log)
 
@@ -196,19 +191,12 @@ def _oracle_a(s: _Session) -> dict:
     start, _ = s.colorcal()
     if not start:
         raise RuntimeError("no colorcal params at start")
-    a: dict = {
-        "pinned": verdict == "pinned",
-        "ms": ms,
-        "k0": start["temperature"],
-        "illuminants": [start["illuminant"]],
-        "preset_start": s.darkroom.wb_preset(s.image),
-        "cc_count": s.cc_count(),
-    }
-    s.log.append(
-        f"start: illuminant {start['illuminant']}, temperature "
-        f"{_fmt(start['temperature'])}, x/y {_fmt(start.get('x'))}/"
-        f"{_fmt(start.get('y'))}, WB preset {a['preset_start']}"
-    )
+    a: dict = {"pinned": verdict == "pinned", "ms": ms, "k0": start["temperature"],
+               "illuminants": [start["illuminant"]], "preset_start": s.darkroom.wb_preset(s.image),
+               "cc_count": s.cc_count()}
+    s.log.append(f"start: illuminant {start['illuminant']}, temperature "
+                 f"{_fmt(start['temperature'])}, x/y {_fmt(start.get('x'))}/"
+                 f"{_fmt(start.get('y'))}, WB preset {a['preset_start']}")
     warm, cool = _targets(start["temperature"])
     slots_ok = True
     last = {}
@@ -227,9 +215,8 @@ def _oracle_a(s: _Session) -> dict:
     fresh = s.move("fresh sentinel", round(start["temperature"] + 500.0))
     live = fresh["slots"] == [SLOT] and abs(fresh["floats"][SLOT] - held[SLOT]) > 1.0
     a["illuminants"].append((fresh["params"] or {}).get("illuminant"))
-    a.update(
-        slots_ok=slots_ok, noop_ok=noop_ok, sentinel_live=live, preset=s.darkroom.wb_preset(s.image)
-    )
+    a.update(slots_ok=slots_ok, noop_ok=noop_ok, sentinel_live=live,
+             preset=s.darkroom.wb_preset(s.image))
     return a
 
 
@@ -238,18 +225,12 @@ def _oracle_b(s: _Session, k0: float, cc_count_a: int) -> dict:
     start, _ = s.colorcal()
     if not start:
         raise RuntimeError("no colorcal params at start (B)")
-    b: dict = {
-        "k0": start["temperature"],
-        "illuminants": [start["illuminant"]],
-        "preset_start": s.darkroom.wb_preset(s.image),
-        "cc_count": s.cc_count(),
-    }
+    b: dict = {"k0": start["temperature"], "illuminants": [start["illuminant"]],
+               "preset_start": s.darkroom.wb_preset(s.image), "cc_count": s.cc_count()}
     base, base2 = s.rb(), s.rb()
     floor = noise_floor(base, base, base2)
-    s.log.append(
-        f"start: pristine r/b {base:.4f} and {base2:.4f}, measured floor {floor:.4f}, "
-        f"temperature {_fmt(start['temperature'])}"
-    )
+    s.log.append(f"start: pristine r/b {base:.4f} and {base2:.4f}, measured floor {floor:.4f}, "
+                 f"temperature {_fmt(start['temperature'])}")
     warm, cool = _targets(start["temperature"])
     rbs = []
     landed = True
@@ -259,15 +240,9 @@ def _oracle_b(s: _Session, k0: float, cc_count_a: int) -> dict:
         rbs.append(s.rb())
         s.log.append(f"  r/b base {base:.4f} -> {rbs[-1]:.4f}")
         b["illuminants"].append((got["params"] or {}).get("illuminant"))
-    b.update(
-        base=base,
-        warm=rbs[0],
-        cool=rbs[1],
-        floor=floor,
-        b_landed=landed,
-        contaminated=abs(start["temperature"] - k0) > 1.0 or b["cc_count"] != cc_count_a,
-        preset=s.darkroom.wb_preset(s.image),
-    )
+    b.update(base=base, warm=rbs[0], cool=rbs[1], floor=floor, b_landed=landed,
+             contaminated=abs(start["temperature"] - k0) > 1.0 or b["cc_count"] != cc_count_a,
+             preset=s.darkroom.wb_preset(s.image))
     return b
 
 
@@ -280,30 +255,19 @@ def probe_body(run_dir: Path, body: str, deadline: float) -> tuple[str, str]:
         sessions.append(sa)
         a = sa.run(_oracle_a)
         sa.flush()
-        _record(
-            f"| channelmixerrgb.temperature | `{PATH}` | "
-            f"{'pinned' if a['pinned'] else 'NOT pinned'} | {a['ms']} |"
-        )
+        _record(f"| channelmixerrgb.temperature | `{PATH}` | "
+                f"{'pinned' if a['pinned'] else 'NOT pinned'} | {a['ms']} |")
         sb = _Session(run_dir, body, "B", deadline)
         sessions.append(sb)
         b = sb.run(lambda s: _oracle_b(s, a["k0"], a["cc_count"]))
         sb.flush()
         presets = (a["preset_start"], a["preset"], b["preset_start"], b["preset"])
-        ev = Evidence(
-            pinned=a["pinned"],
-            slots_ok=a["slots_ok"],
-            sentinel_live=a["sentinel_live"],
-            noop_ok=a["noop_ok"],
-            illuminants=tuple(a["illuminants"] + b["illuminants"]),
-            preset=next((p for p in presets if p != 4), 4),
-            contaminated=b["contaminated"],
-            base_rb=b["base"],
-            warm_rb=b["warm"],
-            cool_rb=b["cool"],
-            b_landed=b["b_landed"],
-            floor=b["floor"],
-            clamped="; ".join(filter(None, (x.clamp_note() for x in sessions))),
-        )
+        ev = Evidence(pinned=a["pinned"], slots_ok=a["slots_ok"], sentinel_live=a["sentinel_live"],
+                      noop_ok=a["noop_ok"], illuminants=tuple(a["illuminants"] + b["illuminants"]),
+                      preset=next((p for p in presets if p != 4), 4),
+                      contaminated=b["contaminated"], base_rb=b["base"], warm_rb=b["warm"],
+                      cool_rb=b["cool"], b_landed=b["b_landed"], floor=b["floor"],
+                      clamped="; ".join(filter(None, (x.clamp_note() for x in sessions))))
         verdict, reason = route_verdict(ev)
     except Exception as e:  # noqa: BLE001 -- the verdict must still be recorded
         verdict, reason = "DO_NOT_PROMOTE", f"probe error {type(e).__name__}: {e}"
@@ -311,10 +275,8 @@ def probe_body(run_dir: Path, body: str, deadline: float) -> tuple[str, str]:
         sess.flush()  # a failed run still leaves its per-move evidence
     line = f"COLORCAL_ROUTE_A {body} {verdict} reason={reason}"
     _record(line)
-    _prose(
-        f"- Route A colour calibration probe {time.strftime('%Y-%m-%d %H:%M')}, {body}: "
-        f"{verdict} ({reason}). Isolated library under {run_dir}."
-    )
+    _prose(f"- Route A colour calibration probe {time.strftime('%Y-%m-%d %H:%M')}, {body}: "
+           f"{verdict} ({reason}). Isolated library under {run_dir}.")
     return verdict, reason
 
 
@@ -328,10 +290,8 @@ class ColorCalWarmthHostTest(unittest.TestCase):
         run_dir.mkdir()
         os.environ.setdefault("SCOUTER_JOB", f"colorcal-host-{os.getpid()}")
         deadline = time.monotonic() + TOTAL_BUDGET_S
-        _record(
-            f"\n## Route A color calibration probe ({time.strftime('%Y-%m-%d %H:%M')}, "
-            f"run {run_dir.name})\n"
-        )
+        _record(f"\n## Route A color calibration probe ({time.strftime('%Y-%m-%d %H:%M')}, "
+                f"run {run_dir.name})\n")
         _prose(f"\n### Route A colour calibration probe, run {run_dir.name}\n")
         install = hs.PluginInstall()
         install.install()

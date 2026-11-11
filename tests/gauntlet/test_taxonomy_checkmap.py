@@ -46,24 +46,14 @@ def test_every_request_maps_no_unmapped(tax):
 
 def test_split_and_direction_examples(tax):
     cm = tax.check_map
-    assert checkmap.split_parts("dynamic range compression (shadow up, highlight down)", cm) == [
-        "shadow up",
-        "highlight down",
-    ]
+    assert checkmap.split_parts("dynamic range compression (shadow up, highlight down)", cm) == \
+        ["shadow up", "highlight down"]
     assert checkmap.direction_of("increase, limited", cm)["kind"] == "capped"
     assert checkmap.direction_of("decrease toward 0", cm)["sign"] == -1
     assert checkmap.direction_of("step back by 2", cm)["steps"] == 2
-    plan = checkmap.plan_request(
-        {
-            "id": "x",
-            "intent": "tonal",
-            "expected": {
-                "kind": "edit",
-                "check": {"stat_or_param": "color temp up, mean luminance up", "direction": "both"},
-            },
-        },
-        cm,
-    )
+    plan = checkmap.plan_request({"id": "x", "intent": "tonal", "expected": {
+        "kind": "edit", "check": {"stat_or_param": "color temp up, mean luminance up",
+                                  "direction": "both"}}}, cm)
     assert plan.klass == "in" and plan.capabilities == ("warmer", "brighter")
 
 
@@ -103,7 +93,6 @@ def test_wb_route_a_block_loads_and_resolves(tax):
     assert checkmap.wb_route_a_expect(cmap, "warmer", 2, pinned=True) is None
     assert checkmap.wb_route_a_expect(cmap, "brighter", 4, pinned=True) is None
     from scouter.core import vocab
-
     assert vocab.spec("channelmixerrgb", "temperature") is not None
 
 
@@ -125,20 +114,14 @@ def test_wb_route_a_pinned_edit_builds_the_pinned_expect(tax):
     assert move.tags.get("sign_unverified")
     assert "needs_review" not in move.tags
     assert unchanged.target["keys"] == ["temperature.preset"]
-    assert exp.sidecar == {
-        "changed": True,
-        "key": "channelmixerrgb.temperature",
-        "units": {"channelmixerrgb.temperature": "K"},
-        "allowed": ["channelmixerrgb.x", "channelmixerrgb.y"],
-    }
+    assert exp.sidecar == {"changed": True, "key": "channelmixerrgb.temperature",
+                           "units": {"channelmixerrgb.temperature": "K"},
+                           "allowed": ["channelmixerrgb.x", "channelmixerrgb.y"]}
     # an explicit value skips the sign branch entirely -- and (GR-1) is
     # NEVER tagged: a wrong landed value there is a real product failure.
     exp_val = checkmap.wb_route_a_pinned_edit(route, value=6500.0)
-    assert exp_val.checks[0].target == {
-        "key": "channelmixerrgb.temperature",
-        "value": 6500.0,
-        "unit": "K",
-    }
+    assert exp_val.checks[0].target == {"key": "channelmixerrgb.temperature", "value": 6500.0,
+                                        "unit": "K"}
     assert exp_val.checks[0].tags == {}
 
 
@@ -155,34 +138,18 @@ def test_wb_route_a_pinned_equals_miss_never_scores_needs_review(tax):
     cmap = tax.check_map
     route = checkmap.wb_route_a_expect(cmap, "temperature.temperature", 4, pinned=True)
     exp = checkmap.wb_route_a_pinned_edit(route, value=3300.0)
-    case = Case(
-        id="c",
-        layer="coverage",
-        tier="P0",
-        mode="tool",
-        steps=[Step("darkroom_set", {}, budget_s=3.5, write=True)],
-        expect=exp,
-        body="olympus",
-        frame_role="hero",
-    )
-    policy = Policy(
-        refusal_codes=frozenset(), transient_codes=frozenset(), refusal_markers=(), claim_markers=()
-    )
-    before = {
-        "fingerprint": "a",
-        "params": {"channelmixerrgb.temperature": 6500.0, "temperature.preset": 4},
-    }
-    after = {
-        "fingerprint": "b",
-        "params": {"channelmixerrgb.temperature": 5800.0, "temperature.preset": 4},  # wanted 3300
-    }
-    obs = Observation(
-        calls=[
-            CallRecord("darkroom_set", {}, {"ok": True, "outcome": "ok", "data": {}}, write=True)
-        ],
-        before=before,
-        after=after,
-    )
+    case = Case(id="c", layer="coverage", tier="P0", mode="tool",
+               steps=[Step("darkroom_set", {}, budget_s=3.5, write=True)],
+               expect=exp, body="olympus", frame_role="hero")
+    policy = Policy(refusal_codes=frozenset(), transient_codes=frozenset(),
+                    refusal_markers=(), claim_markers=())
+    before = {"fingerprint": "a", "params": {"channelmixerrgb.temperature": 6500.0,
+                                             "temperature.preset": 4}}
+    after = {"fingerprint": "b", "params": {"channelmixerrgb.temperature": 5800.0,  # wanted 3300
+                                            "temperature.preset": 4}}
+    obs = Observation(calls=[CallRecord("darkroom_set", {}, {"ok": True, "outcome": "ok",
+                                                              "data": {}}, write=True)],
+                      before=before, after=after)
     v = evaluate(case, obs, policy)
     assert v.outcome != "needs_review", v
     assert v.score in ("fail", "partial"), v
@@ -248,10 +215,6 @@ def test_wb_route_a_xmp_offsets_and_tolerance_match_the_product(tax):
     o = r["xmp_offsets"]
     assert o["modversion"] == 3
     assert (o["illuminant"], o["adaptation"], o["x"], o["y"], o["temperature"]) == (
-        fields["illuminant"],
-        fields["adaptation"],
-        fields["x"],
-        fields["y"],
-        fields["temperature"],
-    )
+        fields["illuminant"], fields["adaptation"], fields["x"], fields["y"],
+        fields["temperature"])
     assert r["wb_verify_tolerance"]["value"] == pytest.approx(moves._WB_VERIFY_TOLERANCE)

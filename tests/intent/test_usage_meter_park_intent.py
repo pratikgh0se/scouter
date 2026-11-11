@@ -20,15 +20,11 @@ class UsageMeterParkIntentTest(unittest.TestCase):
         inp, want = ex["input"], ex["expect"]
         now = 1_000_000.0
         path = tmp_path / f"{ex['id']}-usage-window.json"
-        path.write_text(
-            json.dumps(
-                {
-                    "utilization": inp["utilization"],
-                    "reset_at": now + inp["reset_at_offset_s"],
-                    "written_at": now + inp["written_at_offset_s"],
-                }
-            )
-        )
+        path.write_text(json.dumps({
+            "utilization": inp["utilization"],
+            "reset_at": now + inp["reset_at_offset_s"],
+            "written_at": now + inp["written_at_offset_s"],
+        }))
         real_path, agent_budget.USAGE_WINDOW_PATH = agent_budget.USAGE_WINDOW_PATH, path
         try:
             usage_fn = lambda: agent_budget.usage_fraction(now=now)  # noqa: E731
@@ -51,7 +47,6 @@ def _make(ex: dict):
 
         with tempfile.TemporaryDirectory() as d:
             self.run_example(ex, Path(d))
-
     return test
 
 

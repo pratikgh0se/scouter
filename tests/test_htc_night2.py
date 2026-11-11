@@ -83,7 +83,7 @@ class _FakeReposCase(unittest.TestCase):
                 "HTC_REPO": str(self.repo),
                 "HTC_RUNS_ROOT": str(self.runs_root),
                 "HTC_TRIAL": str(self.trial),
-                "HTC_MIN_FREE_GB": "0",  # disk headroom is not under test; CI runners have < 15 GB free
+                "HTC_MIN_FREE_GB": "0",  # disk headroom is not under test; CI has < 15 GB free
                 "PATH": f"{self.fake_bin}:{e['PATH']}",
             }
         )
@@ -240,9 +240,8 @@ class GauntletRunnerRefusalTest(_FakeReposCase):
         stamp = "night2-pattern-regression-stamp"
         self._spawn_dummy_launcher(stamp)
         old = subprocess.run(["pgrep", "-f", r"gauntlet(\.cli)? run --stamp"], capture_output=True)
-        # BSD/macOS `pgrep -l` lists the full command line; procps (Linux) `-l`
-        # lists only the process name and `-a` is the full-command-line flag
-        # (while on macOS `-a` means something else entirely).
+        # BSD/macOS `pgrep -l` lists the full command line; procps (Linux) `-l` lists only
+        # the name and `-a` is its full-command-line flag (on macOS `-a` means something else).
         list_flag = "-fl" if sys.platform == "darwin" else "-fa"
         new = subprocess.run(["pgrep", list_flag, "gauntlet.*run --stamp"], capture_output=True)
         self.assertEqual(old.returncode, 1, "the old pattern should NOT match")

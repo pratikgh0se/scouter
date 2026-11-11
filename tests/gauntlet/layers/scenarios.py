@@ -44,7 +44,8 @@ def cap_step(cap: str, req: dict, cmap: dict, *, bit: bool = False) -> Step:
     if "tool" in spec:
         return step(spec["tool"], 3.5, **spec["args"])
     word = "a bit" if bit else _magnitude(req, cmap, cap)
-    return step("darkroom_say", BUDGET_SAY, phrase=f"{spec['phrase']} {word}".strip())
+    return step("darkroom_say", BUDGET_SAY,
+                phrase=f"{spec['phrase']} {word}".strip())
 
 
 def nearest_phrase(req: dict, tax: Taxonomy) -> tuple[str, str]:
@@ -97,16 +98,9 @@ def served_plan(req: dict, plan: RequestPlan, tax: Taxonomy) -> RequestPlan | No
         for sign, ccap in c["caps"].items():
             if ccap == cap and c["metric"] != "sidecar":
                 sg = int(sign) if sign != "*" else c.get("fixed_sign", 1)
-                part = checkmap.PartCheck(
-                    text=phrase,
-                    concept=concept,
-                    sign=sg,
-                    kind="delta",
-                    metric=c["metric"],
-                    stat=c.get("stat"),
-                    region=c.get("region", "frame"),
-                    capability=cap,
-                )
+                part = checkmap.PartCheck(text=phrase, concept=concept, sign=sg, kind="delta",
+                                          metric=c["metric"], stat=c.get("stat"),
+                                          region=c.get("region", "frame"), capability=cap)
                 return RequestPlan(plan.request_id, "in", (part,), (cap,))
     return None
 
@@ -136,17 +130,9 @@ def confounders(part, parts, skip=frozenset()) -> list[str]:
         pool = _COLOUR_CONCEPTS
     else:
         return []
-    return sorted(
-        {
-            q.concept
-            for q in parts
-            if q is not part
-            and q.capability
-            and q.capability not in skip
-            and q.concept in pool
-            and q.concept != part.concept
-        }
-    )
+    return sorted({q.concept for q in parts
+                   if q is not part and q.capability and q.capability not in skip
+                   and q.concept in pool and q.concept != part.concept})
 
 
 def tag_confounded(chk: Check, part, parts, skip=frozenset()) -> Check:
@@ -167,12 +153,12 @@ def phrase_served(phrase: str) -> bool:
     so that phrase still expects an honest refusal. Same rule as `served_plan`."""
     from scouter.core import phrases, vocab
     from scouter.errors import ScouterError
-
     try:
         res = phrases.resolve(phrase)
     except ScouterError:
         return False
-    return bool(res.moves) and all(vocab.status(phrases.row_for(m)) == "live" for m in res.moves)
+    return bool(res.moves) and all(vocab.status(phrases.row_for(m)) == "live"
+                                   for m in res.moves)
 
 
 def _unserved_modules(req: dict, tax: Taxonomy) -> list[dict]:
@@ -217,63 +203,26 @@ def _workflow(plan: RequestPlan, req: dict) -> tuple[list[Step], Expect]:
         steps += [step("darkroom_undo_last", 3.5) for _ in range(max(1, plan.step_back))]
         return steps, Expect("workflow", [m1_restored([], {})])
     if v == "repeat_more":
-        return (
-            [
-                step("darkroom_say", BUDGET_SAY, phrase="brighter"),
-                step("darkroom_say", BUDGET_SAY, phrase="brighter a bit"),
-            ],
-            Expect(
-                "workflow",
-                [
-                    Check(
-                        "M1",
-                        kind="changed",
-                        sign=1,
-                        target={"key": "exposure.exposure", "unit": "EV", "from": 1, "to": 2},
-                    )
-                ],
-            ),
-        )
+        return ([step("darkroom_say", BUDGET_SAY, phrase="brighter"),
+                 step("darkroom_say", BUDGET_SAY, phrase="brighter a bit")],
+                Expect("workflow", [Check("M1", kind="changed", sign=1, target={
+                    "key": "exposure.exposure", "unit": "EV", "from": 1, "to": 2})]))
     if v == "preset_save":
         name = f"htc-{req['id']}"
-        return (
-            [
-                step("darkroom_say", BUDGET_SAY, phrase="warmer"),
-                step("preset_save", 12.0, name=name, confirm=True),
-            ],
-            Expect(
-                "workflow",
-                [Check("envelope", step=1, target={"path": "ok", "op": "eq", "value": True})],
-            ),
-        )
+        return ([step("darkroom_say", BUDGET_SAY, phrase="warmer"),
+                 step("preset_save", 12.0, name=name, confirm=True)],
+                Expect("workflow", [Check("envelope", step=1, target={
+                    "path": "ok", "op": "eq", "value": True})]))
     if v == "export":
-        return (
-            [
-                step(
-                    "export_run",
-                    60.0,
-                    images=[hero],
-                    preset="{export_preset}",
-                    out_dir="{out_dir}",
-                    confirm=True,
-                )
-            ],
-            Expect(
-                "workflow",
-                [
-                    Check("envelope", step=0, target={"path": "ok", "op": "eq", "value": True}),
-                    Check("extra", target={"path": "export_files", "op": "gte", "value": 1}),
-                ],
-            ),
-        )
+        return ([step("export_run", 60.0, images=[hero], preset="{export_preset}",
+                      out_dir="{out_dir}", confirm=True)],
+                Expect("workflow", [Check("envelope", step=0, target={
+                    "path": "ok", "op": "eq", "value": True}),
+                    Check("extra", target={"path": "export_files", "op": "gte", "value": 1})]))
     if v == "cull":
-        return (
-            [step("cull_propose", 30.0, images=[hero])],
-            Expect(
-                "workflow",
-                [Check("envelope", step=0, target={"path": "ok", "op": "eq", "value": True})],
-            ),
-        )
+        return ([step("cull_propose", 30.0, images=[hero])],
+                Expect("workflow", [Check("envelope", step=0, target={
+                    "path": "ok", "op": "eq", "value": True})]))
     if v == "export_release":
         #: (row 501 item I, Pratik's ruling 501(3), Opus review finding 4):
         #: r0066's "client proof gallery" is the job-level release path
@@ -283,46 +232,24 @@ def _workflow(plan: RequestPlan, req: dict) -> tuple[list[Step], Expect]:
         #: rating-based selection (an empty selection is a `usage` refusal;
         #: the freshly imported corpus frames carry no rating at all) --
         #: every staged job frame is explicitly named instead.
-        return (
-            [
-                step("library_import", 60.0, source="{card}", job_slug="{job_slug}", confirm=True),
-                step(
-                    "export_release",
-                    60.0,
-                    job_slug="{job_slug}",
-                    preset="client-proof",
-                    images="{job_frames}",
-                    confirm=True,
-                ),
-            ],
-            Expect(
-                "workflow",
-                [
+        return ([step("library_import", 60.0, source="{card}", job_slug="{job_slug}",
+                      confirm=True),
+                 step("export_release", 60.0, job_slug="{job_slug}", preset="client-proof",
+                      images="{job_frames}", confirm=True)],
+                Expect("workflow", [
                     Check("envelope", step=1, target={"path": "ok", "op": "eq", "value": True}),
-                    Check(
-                        "envelope", step=1, target={"path": "data.manifest_path", "op": "exists"}
-                    ),
-                    Check(
-                        "envelope",
-                        step=1,
-                        target={"path": "data.exported", "op": "gte", "value": 1},
-                    ),
-                ],
-            ),
-        )
+                    Check("envelope", step=1,
+                         target={"path": "data.manifest_path", "op": "exists"}),
+                    Check("envelope", step=1,
+                         target={"path": "data.exported", "op": "gte", "value": 1})]))
     raise ValueError(f"no workflow plan for {v!r}")
 
 
 def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str) -> Case:
     cmap = tax.check_map
     role = cmap["role_for_problem"][req["problem"]]
-    meta = {
-        "sentence": req["sentence"],
-        "class": plan.klass,
-        "genre": req["genre"],
-        "problem": req["problem"],
-        "followups": list(req["followups"]),
-    }
+    meta = {"sentence": req["sentence"], "class": plan.klass, "genre": req["genre"],
+            "problem": req["problem"], "followups": list(req["followups"])}
     served = served_plan(req, plan, tax)
     if served is not None:
         meta["served_out_class"] = True
@@ -348,11 +275,9 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
         #: capability this request would exercise is one of those, the
         #: request as a whole cannot serve anything and the case becomes an
         #: honest refusal instead of an edit whose stat never moves.
-        wb_refusals = {
-            c: r
-            for c in plan.capabilities
-            if (r := _wb_capability_expect(c, cmap)) is not None and r["expect"] == "typed_error"
-        }
+        wb_refusals = {c: r for c in plan.capabilities
+                      if (r := _wb_capability_expect(c, cmap)) is not None
+                      and r["expect"] == "typed_error"}
         if plan.klass == "partial":
             un = _unserved_modules(req, tax)
             meta["roadmap_key"] = (un or [{"id": "unknown"}])[0]["id"]
@@ -366,18 +291,11 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
                 refused_steps.append((len(steps) - 1, wb_refusals[c]))
         if wb_refusals and len(wb_refusals) == len(plan.capabilities):
             codes = sorted({code for r in wb_refusals.values() for code in r["codes"]})
-            return Case(
-                id=case_id(PREFIX, req["id"], body, "tool"),
-                layer=LAYER,
-                tier=tier,
-                mode="tool",
-                steps=steps,
-                expect=Expect("typed_error", codes=codes),
-                body=body,
-                frame_role=role,
-                source={"file": "requests.json", "id": req["id"], "cluster": req["cluster_id"]},
-                meta=meta,
-            )
+            return Case(id=case_id(PREFIX, req["id"], body, "tool"), layer=LAYER, tier=tier,
+                        mode="tool", steps=steps, expect=Expect("typed_error", codes=codes),
+                        body=body, frame_role=role,
+                        source={"file": "requests.json", "id": req["id"],
+                                "cluster": req["cluster_id"]}, meta=meta)
         # Mixed (some capabilities WB-refused, some not) or none refused:
         # keep the case as an edit, but never assert a stat check for a
         # capability that will not actually move.
@@ -412,13 +330,8 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
             now_served = phrase_served(un_phrase)
             if now_served:
                 meta["served_unserved_module"] = un_phrase
-            checks.append(
-                Check(
-                    "envelope",
-                    step=len(steps) - 1,
-                    target={"path": "ok", "op": "eq", "value": now_served},
-                )
-            )
+            checks.append(Check("envelope", step=len(steps) - 1, target={
+                "path": "ok", "op": "eq", "value": now_served}))
         if undo_follow:
             expect = Expect("workflow", [m1_restored([], {})])
         else:
@@ -433,31 +346,18 @@ def tool_case(req: dict, plan: RequestPlan, tax: Taxonomy, body: str, tier: str)
             if wb_refusals:
                 for idx, r in refused_steps:
                     codes = list(r["codes"])
-                    code_target = (
-                        {"path": "error.code", "op": "eq", "value": codes[0]}
-                        if len(codes) == 1
-                        else {"path": "error.code", "op": "in", "value": codes}
-                    )
-                    checks.append(
-                        Check(
-                            "envelope", step=idx, target={"path": "ok", "op": "eq", "value": False}
-                        )
-                    )
+                    code_target = ({"path": "error.code", "op": "eq", "value": codes[0]} if
+                                   len(codes) == 1 else
+                                   {"path": "error.code", "op": "in", "value": codes})
+                    checks.append(Check("envelope", step=idx, target={
+                        "path": "ok", "op": "eq", "value": False}))
                     checks.append(Check("envelope", step=idx, target=code_target))
                 meta["roadmap_key"] = meta.get("roadmap_key", "wb_route_a")
             expect = Expect("edit", checks, {"changed": True})
-    return Case(
-        id=case_id(PREFIX, req["id"], body, "tool"),
-        layer=LAYER,
-        tier=tier,
-        mode="tool",
-        steps=steps,
-        expect=expect,
-        body=body,
-        frame_role=role,
-        source={"file": "requests.json", "id": req["id"], "cluster": req["cluster_id"]},
-        meta=meta,
-    )
+    return Case(id=case_id(PREFIX, req["id"], body, "tool"), layer=LAYER, tier=tier,
+                mode="tool", steps=steps, expect=expect, body=body, frame_role=role,
+                source={"file": "requests.json", "id": req["id"], "cluster": req["cluster_id"]},
+                meta=meta)
 
 
 #: (row 501 item B, fix round 1, Opus finding 3): the envelope `verb` ids
@@ -527,12 +427,8 @@ STAGE_JOB_REQUEST_IDS = frozenset({"r0066"})
 def agent_case(req: dict, plan: RequestPlan, tax: Taxonomy, tier: str) -> Case:
     cmap = tax.check_map
     role = cmap["role_for_problem"][req["problem"]]
-    meta = {
-        "sentence": req["sentence"],
-        "class": plan.klass,
-        "genre": req["genre"],
-        "followups": list(req["followups"]),
-    }
+    meta = {"sentence": req["sentence"], "class": plan.klass, "genre": req["genre"],
+            "followups": list(req["followups"])}
     if req["id"] in STAGE_JOB_REQUEST_IDS:
         meta["stage_job"] = True
     if plan.klass in ("impossible", "out"):
@@ -571,11 +467,9 @@ def agent_case(req: dict, plan: RequestPlan, tax: Taxonomy, tier: str) -> Case:
         # preset-4 WB refusal applies -- an agent asked to warm/cool/tint an
         # "as-shot" hero should also be scored against a refusal, not a
         # "changed: True" edit whose stat cannot move.
-        wb_refusals = {
-            c: r
-            for c in plan.capabilities
-            if (r := _wb_capability_expect(c, cmap)) is not None and r["expect"] == "typed_error"
-        }
+        wb_refusals = {c: r for c in plan.capabilities
+                      if (r := _wb_capability_expect(c, cmap)) is not None
+                      and r["expect"] == "typed_error"}
         if wb_refusals and len(wb_refusals) == len(plan.capabilities):
             #: Fix round 1 (review I7): `typed_error` looks only at the
             #: agent's LAST tool call (evaluate.py), which is the wrong
@@ -590,11 +484,9 @@ def agent_case(req: dict, plan: RequestPlan, tax: Taxonomy, tier: str) -> Case:
             meta["codes"] = codes
             expect = Expect("refuse")
         else:
-            checks = [
-                tag_confounded(stat_check(p), p, plan.parts, frozenset(wb_refusals))
-                for p in plan.parts
-                if p.capability and p.capability not in wb_refusals
-            ]
+            checks = [tag_confounded(stat_check(p), p, plan.parts, frozenset(wb_refusals))
+                     for p in plan.parts
+                     if p.capability and p.capability not in wb_refusals]
             if wb_refusals:
                 #: Fix round 1 (review I5): a mixed agent request must also
                 #: name the refusal in its own text -- otherwise "brighter
@@ -606,18 +498,10 @@ def agent_case(req: dict, plan: RequestPlan, tax: Taxonomy, tier: str) -> Case:
             expect = Expect("edit", checks, {"changed": True})
         if plan.klass == "partial":
             meta["roadmap_key"] = (_unserved_modules(req, tax) or [{"id": "unknown"}])[0]["id"]
-    return Case(
-        id=case_id(PREFIX_AGENT, req["id"], "olympus", "agent"),
-        layer=LAYER_AGENT,
-        tier=tier,
-        mode="agent",
-        steps=[],
-        expect=expect,
-        body="olympus",
-        frame_role=role,
-        source={"file": "requests.json", "id": req["id"], "cluster": req["cluster_id"]},
-        meta=meta,
-    )
+    return Case(id=case_id(PREFIX_AGENT, req["id"], "olympus", "agent"), layer=LAYER_AGENT,
+                tier=tier, mode="agent", steps=[], expect=expect, body="olympus",
+                frame_role=role, source={"file": "requests.json", "id": req["id"],
+                                         "cluster": req["cluster_id"]}, meta=meta)
 
 
 def generate(tax: Taxonomy) -> tuple[list[Case], list[Case]]:
