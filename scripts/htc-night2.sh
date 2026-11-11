@@ -35,12 +35,15 @@ PIDFILE="$NIGHT/runner.pid"
 exec > >(tee -a "$LOG") 2>&1
 
 say() { echo "[$(date '+%F %T')] $*"; }
+# `pgrep -l` prints the full command line on BSD/macOS but only the process name
+# on procps (Linux), where `-a` does that; on macOS `-a` means something else.
+if [[ "$(uname -s)" == Darwin ]]; then pgrep_list() { pgrep -fl "$@"; }; else pgrep_list() { pgrep -fa "$@"; }; fi
 die() { say "REFUSED: $*"; exit "${2:-5}"; }
 
 # -- (a) preconditions: no darktable at all (from night-2 OR a still-live
 #    night-1 runner), clean tree, disk, corpus ---------------------------
 if pgrep -x darktable >/dev/null || pgrep -f "MacOS/darktable" >/dev/null; then
-  pgrep -fl darktable
+  pgrep_list darktable
   die "a darktable is running; quit it first (this script never signals it)"
 fi
 [[ -z "$(git -C "$REPO" status --porcelain)" ]] || die "repo working tree is not clean"
@@ -66,7 +69,7 @@ fi
 # launcher's argv has "gauntlet" and "run --stamp" NOT adjacent, so the
 # pattern must allow anything in between.
 if pgrep -f "gauntlet.*run --stamp" >/dev/null 2>&1; then
-  pgrep -fl "gauntlet.*run --stamp" || true
+  pgrep_list "gauntlet.*run --stamp" || true
   die "a gauntlet runner (smoke or manual) is already running outside this launcher"
 fi
 
@@ -155,7 +158,7 @@ snap > "$LOG_DIR/originals.after"
 if ! cmp -s "$LOG_DIR/originals.before" "$LOG_DIR/originals.after"; then
   say "ORIGINALS CHANGED under $TRIAL -- see $LOG_DIR/originals.{before,after}"; exit 4
 fi
-if pgrep -x darktable >/dev/null; then say "WARNING: a darktable is still running"; pgrep -fl darktable; fi
+if pgrep -x darktable >/dev/null; then say "WARNING: a darktable is still running"; pgrep_list darktable; fi
 
 final=$rc1; [[ "$rc2" != skipped ]] && final=$rc2
 if (( final == 0 )); then
