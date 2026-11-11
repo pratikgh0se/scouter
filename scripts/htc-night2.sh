@@ -46,7 +46,10 @@ fi
 [[ -z "$(git -C "$REPO" status --porcelain)" ]] || die "repo working tree is not clean"
 [[ "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" == main ]] || die "repo is not on main"
 # POSIX `df -Pk` (BSD-only `df -g` is rejected by GNU df): column 4 is available KiB.
-free_gb=$(df -Pk "$HOME/Pictures" | awk 'NR==2 {print int($4 / 1048576)}')
+# df the nearest existing ancestor: ~/Pictures itself may not exist (non-macOS).
+df_target="$HOME/Pictures"
+while [[ ! -e "$df_target" && "$df_target" != / ]]; do df_target=$(dirname "$df_target"); done
+free_gb=$(df -Pk "$df_target" | awk 'NR==2 {print int($4 / 1048576)}')
 (( free_gb >= 15 )) || die "only ${free_gb} GB free under ~/Pictures (need >= 15)"
 [[ -f "$RUNS_ROOT/corpus.json" ]] || die "corpus.json missing (run the corpus survey)"
 if [[ -e "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then

@@ -68,9 +68,7 @@ def test_survey_roles_and_bench_override(trial, tmp_path):
 
 @pytest.mark.skipif(
     not all(
-        os.path.exists(path)
-        for roles in corpus.EXTRA_ROLES.values()
-        for path in roles.values()
+        os.path.exists(path) for roles in corpus.EXTRA_ROLES.values() for path in roles.values()
     ),
     reason=(
         "needs the local photo corpus copies under ~/Pictures/ScouterScratch/gauntlet "

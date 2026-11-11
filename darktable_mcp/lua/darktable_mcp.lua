@@ -1879,7 +1879,7 @@ local function image_sidecar_path(image)
 end
 
 -- stat(1) is not portable: BSD/macOS spells the format `-f '%Fm %z'`, GNU
--- coreutils (Linux) spells it `-c '%Y %s'` and rejects -f outright. Detected
+-- coreutils (Linux) spells it `-c '%y %s'` and rejects -f outright. Detected
 -- once, from `uname -s`, rather than guessing per call.
 local function stat_format_args()
   local p = io.popen("uname -s 2>/dev/null")
@@ -1888,7 +1888,9 @@ local function stat_format_args()
     uname = (p:read("*a") or ""):gsub("%s+$", "")
     p:close()
   end
-  if uname == "Linux" then return "-c '%Y %s'" end
+  -- %y is the full-precision (nanosecond) mtime; %Y is whole seconds, which
+  -- cannot tell two same-size writes within one second apart.
+  if uname == "Linux" then return "-c '%y %s'" end
   return "-f '%Fm %z'"
 end
 
@@ -1897,8 +1899,8 @@ local STAT_ARGS = stat_format_args()
 -- "<mtime> <size>" for `path`, or nil when it does not exist. Lua has no
 -- stat(2), and whole-second os.time granularity cannot tell two writes in the
 -- same second apart -- which is exactly the resolution a commit needs. stat(1)
--- can (fractional on macOS, whole seconds plus the size on Linux, which is why
--- the size is part of the signature).
+-- can (fractional on macOS and, via %y, on Linux; the size is part of the
+-- signature too).
 local function sidecar_signature(path)
   if type(path) ~= "string" or path == "" then return nil end
   local p = io.popen("stat " .. STAT_ARGS .. " " .. shell_quote(path) .. " 2>/dev/null")
